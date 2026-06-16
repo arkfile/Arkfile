@@ -6,6 +6,15 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=build-config.sh
+source "$SCRIPT_DIR/build-config.sh"
+
+# Absolute paths — VENDOR_C_LIBOPAQUE_DIR is repo-relative; do not use it after cd.
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+LIBOPAQUE_JS_DIR="$REPO_ROOT/$VENDOR_C_LIBOPAQUE_DIR/js"
+LIBSODIUM_JS_DIR="$LIBOPAQUE_JS_DIR/libsodium.js"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -171,11 +180,15 @@ ensure_emscripten() {
         fi
     fi
     
-    # Priority 2: Check if system emcc is available
+    # Priority 2: system emcc only when it matches the pinned emsdk version
     if command -v emcc >/dev/null 2>&1; then
         EMCC_VERSION=$(emcc --version | head -n1)
-        print_status "SUCCESS" "Found system Emscripten: $EMCC_VERSION"
-        return 0
+        CURRENT_VER=$(echo "$EMCC_VERSION" | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1)
+        if [ "$CURRENT_VER" = "$EMSCRIPTEN_VERSION" ]; then
+            print_status "SUCCESS" "Found system Emscripten $EMCC_VERSION"
+            return 0
+        fi
+        print_status "WARNING" "System Emscripten ($CURRENT_VER) differs from target ($EMSCRIPTEN_VERSION); preferring emsdk"
     fi
     
     # Priority 3: Install via emsdk (no sudo needed)
@@ -195,7 +208,7 @@ ensure_emscripten() {
 
 # Update libsodium.js to target version
 update_libsodium_js() {
-    local LIBSODIUM_DIR="vendor/stef/libopaque/js/libsodium.js"
+    local LIBSODIUM_DIR="$LIBSODIUM_JS_DIR"
     
     if [ ! -d "$LIBSODIUM_DIR" ]; then
         print_status "INFO" "libsodium.js not found, will be initialized during build"
@@ -214,7 +227,7 @@ update_libsodium_js() {
     
     if [ "$CURRENT_TAG" = "$LIBSODIUM_JS_VERSION" ]; then
         print_status "SUCCESS" "libsodium.js already at version $LIBSODIUM_JS_VERSION"
-        cd ../../../../..
+        cd "$REPO_ROOT"
         return 0
     fi
     
@@ -227,7 +240,7 @@ update_libsodium_js() {
         print_status "WARNING" "Could not checkout $LIBSODIUM_JS_VERSION, using current version"
     fi
     
-    cd ../../../../..
+    cd "$REPO_ROOT"
     return 0
 }
 
@@ -248,10 +261,28 @@ validate_build_config() {
     print_status "SUCCESS" "Build configuration is secure (no -DNORANDOM)"
 }
 
+# Ensure nested libsodium submodule exists before patching or building.
+ensure_libsodium_js_submodules() {
+    local libsodium_js_dir="$LIBSODIUM_JS_DIR"
+
+    if [ ! -d "$libsodium_js_dir" ]; then
+        print_status "WARNING" "libsodium.js directory missing at $libsodium_js_dir"
+        return 1
+    fi
+
+    print_status "INFO" "Ensuring libsodium.js git submodules are initialized..."
+    if ! run_git_as_user -C "$libsodium_js_dir" submodule update --init --recursive; then
+        print_status "ERROR" "Failed to initialize libsodium.js submodules"
+        return 1
+    fi
+    return 0
+}
+
 # Patch emscripten.sh for compatibility with Emscripten 3.1.74+
 # The upstream libsodium (1.0.18) emscripten.sh uses flags that are incompatible
-# with modern Emscripten's upstream LLVM backend. Rather than modifying the
-# submodule directly, we apply a sed patch at build time.
+# with modern Emscripten's upstream LLVM backend. We patch at build time (not in
+# the submodule commit) because libsodium.js/Makefile runs `git submodule update`
+# and restores the pristine emscripten.sh after any early patch.
 # Flags removed:
 #   -sRUNNING_JS_OPTS=1              - removed from Emscripten, causes "not a valid option" error
 #   --llvm-lto 1                     - no-op with upstream LLVM backend (Emscripten 2.x+)
@@ -259,16 +290,19 @@ validate_build_config() {
 #   -sALIASING_FUNCTION_POINTERS=1   - removed from Emscripten
 #   -sDISABLE_EXCEPTION_CATCHING=1   - now default behavior, flag removed
 patch_emscripten_for_modern_emcc() {
-    local EMSCRIPTEN_SH="vendor/stef/libopaque/js/libsodium.js/libsodium/dist-build/emscripten.sh"
+    local EMSCRIPTEN_SH="$LIBSODIUM_JS_DIR/libsodium/dist-build/emscripten.sh"
 
     if [ ! -f "$EMSCRIPTEN_SH" ]; then
-        print_status "WARNING" "emscripten.sh not found, skipping patch"
-        return 0
+        print_status "WARNING" "emscripten.sh not found at $EMSCRIPTEN_SH (submodules may be missing)"
+        return 1
     fi
 
-    # Check if already patched (idempotent)
-    if grep -q "# ARKFILE-PATCHED" "$EMSCRIPTEN_SH"; then
-        print_status "INFO" "emscripten.sh already patched for modern Emscripten"
+    if ! grep -qE 'RUNNING_JS_OPTS|--llvm-lto 1|AGGRESSIVE_VARIABLE_ELIMINATION|ALIASING_FUNCTION_POINTERS|DISABLE_EXCEPTION_CATCHING' "$EMSCRIPTEN_SH"; then
+        if grep -q "# ARKFILE-PATCHED" "$EMSCRIPTEN_SH"; then
+            print_status "INFO" "emscripten.sh already patched for modern Emscripten"
+        else
+            print_status "INFO" "emscripten.sh already compatible with modern Emscripten"
+        fi
         return 0
     fi
 
@@ -286,32 +320,54 @@ patch_emscripten_for_modern_emcc() {
         -e 's/-s ALIASING_FUNCTION_POINTERS=1//g' \
         -e 's/-sDISABLE_EXCEPTION_CATCHING=1//g' \
         -e 's/-s DISABLE_EXCEPTION_CATCHING=1//g' \
-        -e '1s/^/# ARKFILE-PATCHED for Emscripten 3.x compatibility\n/' \
         "$EMSCRIPTEN_SH"
 
+    if ! grep -q "# ARKFILE-PATCHED" "$EMSCRIPTEN_SH"; then
+        sed -i '1s/^/# ARKFILE-PATCHED for Emscripten 3.x compatibility\n/' "$EMSCRIPTEN_SH"
+    fi
+
     print_status "SUCCESS" "emscripten.sh patched for modern Emscripten"
+    return 0
+}
+
+prepare_libsodium_js_for_build() {
+    if ! ensure_libsodium_js_submodules; then
+        exit 1
+    fi
+    if ! patch_emscripten_for_modern_emcc; then
+        exit 1
+    fi
 }
 
 # Build the WASM library
 build_wasm_library() {
     # Change to the libopaque.js directory
-    cd vendor/stef/libopaque/js
+    cd "$LIBOPAQUE_JS_DIR"
     
     # Clean previous builds
     print_status "INFO" "Cleaning previous WASM builds..."
     make clean-libopaquejs >/dev/null 2>&1 || true
     rm -f libopaque.so  # Also clean the WASM shared library
     
-    # Build libsodium.js dependency if needed
-    if [ ! -f "libsodium.js/libsodium/src/libsodium/.libs/libsodium.a" ]; then
+    # Build libsodium.js sumo output (required by libopaque WASM link).
+    # Check the final .js artifact, not libsodium.a alone — emscripten.sh can leave
+    # a static archive behind while the emcc JS link step still fails.
+    local sumo_js="libsodium.js/libsodium/libsodium-js-sumo/lib/libsodium.js"
+    if [ ! -f "$sumo_js" ]; then
         print_status "INFO" "Building libsodium.js dependency (this may take a few minutes)..."
+        prepare_libsodium_js_for_build
         if ! make libsodium; then
             print_status "ERROR" "Failed to build libsodium.js"
             exit 1
         fi
+        if [ ! -f "$sumo_js" ]; then
+            print_status "ERROR" "libsodium.js build finished but $sumo_js is missing"
+            exit 1
+        fi
         print_status "SUCCESS" "libsodium.js built successfully"
     else
-        print_status "INFO" "libsodium.js already built, skipping"
+        print_status "INFO" "libsodium.js sumo build present, skipping"
+        prepare_libsodium_js_for_build
     fi
     
     # WASM-compatible CFLAGS - same as upstream but without -march=native
@@ -364,15 +420,16 @@ build_wasm_library() {
     print_status "SUCCESS" "libopaque.js WASM library built successfully"
     
     # Return to project root
-    cd ../../../..
+    cd "$REPO_ROOT"
 }
 
 # Copy built files to client directory
 deploy_wasm_files() {
+    cd "$REPO_ROOT"
     print_status "INFO" "Copying WASM library to client directory..."
     mkdir -p client/static/js
-    cp vendor/stef/libopaque/js/dist/libopaque.js client/static/js/
-    cp vendor/stef/libopaque/js/dist/libopaque.debug.js client/static/js/
+    cp "$LIBOPAQUE_JS_DIR/dist/libopaque.js" client/static/js/
+    cp "$LIBOPAQUE_JS_DIR/dist/libopaque.debug.js" client/static/js/
     
     # Verify files were copied
     if [ ! -f "client/static/js/libopaque.js" ]; then
@@ -412,11 +469,8 @@ main() {
     
     # Update libsodium.js to target version
     update_libsodium_js
-    
-    # Patch emscripten.sh for modern Emscripten compatibility (idempotent)
-    patch_emscripten_for_modern_emcc
-    
-    # Build the WASM library
+
+    # Build the WASM library (patches emscripten.sh after submodule init, inside build)
     build_wasm_library
     
     # Deploy to client directory

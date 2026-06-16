@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/84adam/Arkfile/auth"
+	"github.com/84adam/Arkfile/cli/mfa"
 	"github.com/84adam/Arkfile/config"
 	"github.com/84adam/Arkfile/crypto"
 	"github.com/84adam/Arkfile/utils"
@@ -42,7 +43,7 @@ USAGE:
 
 COMMANDS:
     register          Register a new account
-    setup-mfa        Setup Two-Factor Authentication (TOTP)
+    setup-mfa        Setup Two-Factor Authentication (TOTP or security key)
     generate-totp     Generate a TOTP code from a base32 secret (for scripting)
     login             Authenticate with arkfile server
     upload            Encrypt and upload a file (streaming, per-chunk AES-GCM)
@@ -240,8 +241,8 @@ func main() {
 			os.Exit(1)
 		}
 	case "setup-mfa":
-		if err := handleSetupTOTPCommand(client, config, args); err != nil {
-			logError("TOTP setup failed: %v", err)
+		if err := handleSetupMFACommand(client, config, args); err != nil {
+			logError("MFA setup failed: %v", err)
 			os.Exit(1)
 		}
 	case "recover-mfa":
@@ -647,7 +648,7 @@ func handleRegisterCommand(client *HTTPClient, config *ClientConfig, args []stri
 		if err := saveAuthSession(session, config.TokenFile); err != nil {
 			logError("Warning: Failed to save session for TOTP setup: %v", err)
 		} else {
-			fmt.Printf("\nTOTP setup required. Please run: arkfile-client setup-mfa\n")
+			fmt.Printf("\nMFA setup required. Please run: arkfile-client setup-mfa\n")
 		}
 	} else {
 		fmt.Printf("\nPlease login with: arkfile-client login --username %s\n", *usernameFlag)
@@ -656,10 +657,29 @@ func handleRegisterCommand(client *HTTPClient, config *ClientConfig, args []stri
 	return nil
 }
 
-func handleSetupTOTPCommand(client *HTTPClient, config *ClientConfig, args []string) error {
+func clientMFARequester(client *HTTPClient) mfa.Requester {
+	return func(method, endpoint string, payload interface{}, token string) (*mfa.APIResponse, error) {
+		resp, err := client.makeRequest(method, endpoint, payload, token)
+		if err != nil {
+			return nil, err
+		}
+		return &mfa.APIResponse{
+			Success:      resp.Success,
+			Message:      resp.Message,
+			Data:         resp.Data,
+			Token:        resp.Token,
+			RefreshToken: resp.RefreshToken,
+			ExpiresAt:    resp.ExpiresAt,
+			TempToken:    resp.TempToken,
+		}, nil
+	}
+}
+
+func handleSetupMFACommand(client *HTTPClient, config *ClientConfig, args []string) error {
 	fs := flag.NewFlagSet("setup-mfa", flag.ExitOnError)
 	showSecret := fs.Bool("show-secret", false, "Only show the secret (for automation)")
-	verifyCode := fs.String("verify", "", "Verify the setup with a code")
+	verifyCode := fs.String("verify", "", "Verify TOTP setup with a code")
+	mfaMethod := fs.String("mfa-method", "", "Enrollment method: totp or webauthn")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -682,38 +702,65 @@ func handleSetupTOTPCommand(client *HTTPClient, config *ClientConfig, args []str
 		return verifyTOTP(client, config, session, token, *verifyCode)
 	}
 
-	setupResp, err := client.makeRequest("POST", "/api/mfa/setup", nil, token)
+	method := mfa.Method(strings.ToLower(strings.TrimSpace(*mfaMethod)))
+	finish, err := mfa.RunSetup(clientMFARequester(client), mfa.SetupConfig{
+		ServerURL:  config.ServerURL,
+		Token:      token,
+		Method:     method,
+		ShowSecret: *showSecret,
+		OnBackupCodes: func(codes []string) {
+			if *showSecret {
+				for i, c := range codes {
+					switch i {
+					case 0:
+						fmt.Printf("BACKUP_CODE_0:%s\n", c)
+					case 1:
+						fmt.Printf("BACKUP_CODE_1:%s\n", c)
+					}
+				}
+			}
+		},
+		OnComplete: func(resp *mfa.APIResponse) error {
+			if resp.Token != "" {
+				session.AccessToken = resp.Token
+				session.RefreshToken = resp.RefreshToken
+				session.ExpiresAt = resp.ExpiresAt
+				session.TempToken = ""
+			}
+			return saveAuthSession(session, config.TokenFile)
+		},
+	})
 	if err != nil {
-		return fmt.Errorf("failed to initiate TOTP setup: %w", err)
+		return err
 	}
-
-	secret, ok := setupResp.Data["secret"].(string)
-	if !ok {
-		return fmt.Errorf("invalid server response: missing secret")
-	}
-
-	if *showSecret {
-		fmt.Printf("TOTP_SECRET:%s\n", secret)
-		if backupCodes, ok := setupResp.Data["backup_codes"].([]interface{}); ok {
-			printAutomationBackupCodes(backupCodes)
-		}
+	if finish == nil {
 		return nil
 	}
 
-	fmt.Println("=== Two-Factor Authentication Setup ===")
-	fmt.Println("1. Open your authenticator app")
-	fmt.Println("2. Add a new account manually")
-	fmt.Printf("3. Enter this secret key: %s\n", secret)
-	fmt.Println("=======================================")
-
-	fmt.Print("Enter the 6-digit code from your app: ")
-	reader := bufio.NewReader(os.Stdin)
-	code, err := reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("failed to read code: %w", err)
+	enrolledMethod := method
+	if enrolledMethod == "" {
+		enrolledMethod = mfa.MethodTOTP
 	}
+	mfa.PrintSetupComplete(enrolledMethod, stringSliceFromData(finish.Data["backup_codes"]))
+	return nil
+}
 
-	return verifyTOTP(client, config, session, token, strings.TrimSpace(code))
+func stringSliceFromData(v interface{}) []string {
+	arr, ok := v.([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, item := range arr {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func handleSetupTOTPCommand(client *HTTPClient, config *ClientConfig, args []string) error {
+	return handleSetupMFACommand(client, config, args)
 }
 
 // printAutomationBackupCodes emits machine-readable backup code lines for e2e/scripts.
@@ -749,19 +796,9 @@ func verifyTOTP(client *HTTPClient, config *ClientConfig, session *AuthSession, 
 		logError("Warning: Failed to save updated session: %v", err)
 	}
 
-	fmt.Println("TOTP Setup Complete!")
-
+	mfa.PrintSetupComplete(mfa.MethodTOTP, stringSliceFromData(verifyResp.Data["backup_codes"]))
 	if backupCodes, ok := verifyResp.Data["backup_codes"].([]interface{}); ok {
-		fmt.Println("\n=== BACKUP CODES ===")
-		fmt.Println("SAVE THESE CODES IN A SAFE PLACE!")
-		fmt.Println("--------------------")
 		printAutomationBackupCodes(backupCodes)
-		for _, c := range backupCodes {
-			if codeStr, ok := c.(string); ok {
-				fmt.Println(codeStr)
-			}
-		}
-		fmt.Println("--------------------")
 	}
 
 	return nil
@@ -988,52 +1025,23 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 			return nil
 		}
 
-		var mfaCode string
-		useBackup := false
-
-		if *backupCode != "" {
-			if len(*backupCode) != 10 {
-				clearBytes(password)
-				return fmt.Errorf("backup code must be exactly 10 characters")
-			}
-			mfaCode = *backupCode
-			useBackup = true
-		} else if *totpCode != "" {
-			mfaCode = *totpCode
-		} else if *totpSecret != "" {
-			code, err := generateTOTPCode(*totpSecret)
-			if err != nil {
-				clearBytes(password)
-				return fmt.Errorf("failed to generate TOTP code from secret: %w", err)
-			}
-			mfaCode = code
-			logVerbose("Generated TOTP code from secret")
-		} else if *nonInteractive {
-			clearBytes(password)
-			return fmt.Errorf("non-interactive mode: --totp-code, --totp-secret, or --backup-code required")
-		} else {
-			fmt.Print("Enter TOTP code (or backup code with --backup-code): ")
-			reader := bufio.NewReader(os.Stdin)
-			totpInput, err := reader.ReadString('\n')
-			if err != nil {
-				clearBytes(password)
-				return fmt.Errorf("failed to read TOTP code: %w", err)
-			}
-			mfaCode = strings.TrimSpace(totpInput)
-		}
-
-		totpResp, err := client.makeRequest("POST", "/api/mfa/auth", map[string]interface{}{
-			"code":      mfaCode,
-			"is_backup": useBackup,
-		}, loginResp.TempToken)
+		mfaResp, err := mfa.CompleteLogin(clientMFARequester(client), mfa.LoginMFAConfig{
+			ServerURL:      config.ServerURL,
+			MFAMethod:      mfa.ParseMFAMethod(loginResp.Data),
+			TempToken:      loginResp.TempToken,
+			TOTPCode:       *totpCode,
+			TOTPSecret:     *totpSecret,
+			BackupCode:     *backupCode,
+			NonInteractive: *nonInteractive,
+		})
 		if err != nil {
 			clearBytes(password)
-			return fmt.Errorf("TOTP authentication failed: %w", err)
+			return err
 		}
 
-		loginResp.Token = totpResp.Token
-		loginResp.RefreshToken = totpResp.RefreshToken
-		loginResp.ExpiresAt = totpResp.ExpiresAt
+		loginResp.Token = mfaResp.Token
+		loginResp.RefreshToken = mfaResp.RefreshToken
+		loginResp.ExpiresAt = mfaResp.ExpiresAt
 	}
 
 	// Derive the account key for file encryption using Argon2id.

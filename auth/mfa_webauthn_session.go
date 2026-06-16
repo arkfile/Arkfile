@@ -64,7 +64,7 @@ func LoadWebAuthnSession(username string, kind webAuthnSessionKind) (webauthn.Se
 	delete(webAuthnSessions, key)
 
 	if time.Now().UTC().After(entry.expiresAt) {
-		return webAuthn.SessionData{}, fmt.Errorf("webauthn session expired")
+		return webauthn.SessionData{}, fmt.Errorf("webauthn session expired")
 	}
 
 	return entry.data, nil

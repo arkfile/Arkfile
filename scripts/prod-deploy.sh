@@ -953,27 +953,33 @@ fi
 print_status "SUCCESS" "Found Go at: $GO_BINARY"
 export GO_BINARY="$GO_BINARY"
 
-OS_FAMILY=$(detect_os_family)
+OS_FAMILY=$(detect_package_os_family)
 print_status "INFO" "Detected OS family: $OS_FAMILY"
 
 print_status "INFO" "Checking system dependencies..."
 MISSING_DEPS=""
-for cmd in gcc make cmake pkg-config git openssl curl bun; do
+for cmd in gcc make cmake pkg-config git openssl curl bun perl; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         MISSING_DEPS="$MISSING_DEPS $cmd"
     fi
 done
 
 if ! pkg-config --exists libsodium 2>/dev/null; then
-    if [ "$OS_FAMILY" = "debian" ]; then
-        MISSING_DEPS="$MISSING_DEPS libsodium-dev"
-    else
-        MISSING_DEPS="$MISSING_DEPS libsodium-devel"
-    fi
+    case "$OS_FAMILY" in
+        debian) MISSING_DEPS="$MISSING_DEPS libsodium-dev" ;;
+        alpine) MISSING_DEPS="$MISSING_DEPS libsodium-dev" ;;
+        arch)   MISSING_DEPS="$MISSING_DEPS libsodium" ;;
+        *)      MISSING_DEPS="$MISSING_DEPS libsodium-devel" ;;
+    esac
+fi
+
+if [ "$(uname -s)" = "Linux" ] && ! pkg-config --exists libudev 2>/dev/null; then
+    MISSING_DEPS="$MISSING_DEPS $(fido_udev_dev_package_name)"
 fi
 
 if [ -n "$MISSING_DEPS" ]; then
     print_status "ERROR" "Missing required dependencies:$MISSING_DEPS"
+    print_native_build_package_install_hint
     exit 1
 fi
 print_status "SUCCESS" "All required dependencies found"
@@ -1224,7 +1230,7 @@ echo "     sudo cat /opt/arkfile/etc/keys/bootstrap-token.bin | /opt/arkfile/bin
        --server-url https://localhost:8443 --tls-insecure \\
        bootstrap --token-stdin --username ${ADMIN_USERNAME}"
 echo
-echo "  3. Setup TOTP:"
+echo "  3. Setup MFA (TOTP or security key; VPS default is TOTP):"
 echo "     /opt/arkfile/bin/arkfile-admin \\
        --server-url https://localhost:8443 --tls-insecure \\
        setup-mfa"

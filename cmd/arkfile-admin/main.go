@@ -22,6 +22,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/84adam/Arkfile/auth"
+	"github.com/84adam/Arkfile/cli/mfa"
 	"github.com/84adam/Arkfile/config"
 	"github.com/84adam/Arkfile/crypto"
 	"github.com/pquerna/otp/totp"
@@ -35,8 +36,8 @@ USAGE:
 
 NETWORK COMMANDS (Admin API - localhost only):
     bootstrap         Bootstrap the first admin user (requires token)
-    login             Admin login via OPAQUE+TOTP authentication
-    setup-mfa        Setup Two-Factor Authentication (TOTP)
+    login             Admin login via OPAQUE + MFA (TOTP or security key)
+    setup-mfa         Setup Two-Factor Authentication (TOTP or security key)
     logout            Clear admin session
     list-users        List all users
     approve-user      Approve user account
@@ -232,8 +233,8 @@ func main() {
 			os.Exit(1)
 		}
 	case "setup-mfa":
-		if err := handleSetupTOTPCommand(client, config, args); err != nil {
-			logError("TOTP setup failed: %v", err)
+		if err := handleSetupMFACommand(client, config, args); err != nil {
+			logError("MFA setup failed: %v", err)
 			os.Exit(1)
 		}
 	case "logout":
@@ -734,7 +735,7 @@ EXAMPLES:
 		if err := saveAdminSession(session, config.TokenFile); err != nil {
 			logError("Warning: Failed to save session for TOTP setup: %v", err)
 		} else {
-			fmt.Printf("\nTOTP setup required. Session saved.\n")
+			fmt.Printf("\nMFA setup required. Session saved.\n")
 			fmt.Printf("Please run 'arkfile-admin setup-mfa' to complete account setup.\n")
 		}
 	}
@@ -742,27 +743,76 @@ EXAMPLES:
 	return nil
 }
 
-// handleSetupTOTPCommand processes TOTP setup command
-func handleSetupTOTPCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+// handleSetupMFACommand processes MFA setup (TOTP or security key).
+func adminMFARequester(client *HTTPClient) mfa.Requester {
+	return func(method, endpoint string, payload interface{}, token string) (*mfa.APIResponse, error) {
+		resp, err := client.makeRequest(method, endpoint, payload, token)
+		if err != nil {
+			return nil, err
+		}
+		api := &mfa.APIResponse{
+			Success: resp.Success,
+			Message: resp.Message,
+			Data:    resp.Data,
+		}
+		if resp.Data == nil {
+			return api, nil
+		}
+		if t, ok := resp.Data["token"].(string); ok {
+			api.Token = t
+		}
+		if t, ok := resp.Data["refresh_token"].(string); ok {
+			api.RefreshToken = t
+		}
+		if t, ok := resp.Data["temp_token"].(string); ok {
+			api.TempToken = t
+		}
+		if s, ok := resp.Data["expires_at"].(string); ok {
+			if parsed, err := time.Parse(time.RFC3339, s); err == nil {
+				api.ExpiresAt = parsed
+			}
+		}
+		return api, nil
+	}
+}
+
+func adminStringSliceFromData(v interface{}) []string {
+	arr, ok := v.([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, item := range arr {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func handleSetupMFACommand(client *HTTPClient, config *AdminConfig, args []string) error {
 	fs := flag.NewFlagSet("setup-mfa", flag.ExitOnError)
 	var (
-		showSecret = fs.Bool("show-secret", false, "Only show the secret (for automation)")
-		verifyCode = fs.String("verify", "", "Verify the setup with a code")
+		showSecret = fs.Bool("show-secret", false, "Only show the secret key and exit (for automation)")
+		verifyCode = fs.String("verify", "", "Verify TOTP setup with a code (for automation)")
+		mfaMethod  = fs.String("mfa-method", "", "Enrollment method: totp or webauthn")
 	)
 
 	fs.Usage = func() {
 		fmt.Printf(`Usage: arkfile-admin setup-mfa [FLAGS]
 
-Setup Two-Factor Authentication (TOTP) for the account.
+Setup Two-Factor Authentication for the account (TOTP or security key).
 This is usually required immediately after registration.
 
 FLAGS:
-    --show-secret     Only show the secret key and exit (for automation)
-    --verify CODE     Verify the setup with a code (for automation)
-    --help            Show this help message
+    --mfa-method METHOD  totp or webauthn (interactive picker if omitted)
+    --show-secret        Only show the TOTP secret and exit (for automation)
+    --verify CODE        Verify TOTP setup with a code (for automation)
+    --help               Show this help message
 
 EXAMPLES:
     arkfile-admin setup-mfa
+    arkfile-admin setup-mfa --mfa-method webauthn
     arkfile-admin setup-mfa --show-secret
     arkfile-admin setup-mfa --verify 123456
 `)
@@ -772,65 +822,61 @@ EXAMPLES:
 		return err
 	}
 
-	// Load session
 	session, err := loadAdminSession(config.TokenFile)
 	if err != nil {
 		return fmt.Errorf("not logged in (use 'arkfile-admin login' or 'bootstrap'): %w", err)
 	}
 
-	// Determine which token to use
-	// If we have a TempToken, we are in the setup flow
-	// If we have an AccessToken, we might be re-configuring or finishing setup
 	token := session.TempToken
 	if token == "" {
 		token = session.AccessToken
 	}
-
 	if token == "" {
 		return fmt.Errorf("no valid session found. Please register or login first")
 	}
 
-	// If verifying, we skip the setup call and go straight to verification
 	if *verifyCode != "" {
 		return verifyTOTP(client, config, session, token, *verifyCode)
 	}
 
-	// Step 1: Call setup endpoint to get secret
-	setupResp, err := client.makeRequest("POST", "/api/mfa/setup", nil, token)
+	method := mfa.Method(strings.ToLower(strings.TrimSpace(*mfaMethod)))
+	finish, err := mfa.RunSetup(adminMFARequester(client), mfa.SetupConfig{
+		ServerURL:  config.ServerURL,
+		Token:      token,
+		Method:     method,
+		ShowSecret: *showSecret,
+		OnComplete: func(resp *mfa.APIResponse) error {
+			if resp.Token != "" {
+				session.AccessToken = resp.Token
+			}
+			if resp.RefreshToken != "" {
+				session.RefreshToken = resp.RefreshToken
+			}
+			if !resp.ExpiresAt.IsZero() {
+				session.ExpiresAt = resp.ExpiresAt
+			}
+			session.TempToken = ""
+			return saveAdminSession(session, config.TokenFile)
+		},
+	})
 	if err != nil {
-		return fmt.Errorf("failed to initiate TOTP setup: %w", err)
+		return err
 	}
-
-	secret, ok := setupResp.Data["secret"].(string)
-	if !ok {
-		return fmt.Errorf("invalid server response: missing secret")
-	}
-
-	// Output secret
-	if *showSecret {
-		// For automation, print in a parseable format
-		fmt.Printf("TOTP_SECRET:%s\n", secret)
+	if finish == nil {
 		return nil
 	}
 
-	// Interactive mode
-	fmt.Println("=== Two-Factor Authentication Setup ===")
-	fmt.Println("1. Open your authenticator app (Google Authenticator, Ente Auth, Bitwarden Authenticator, etc.)")
-	fmt.Println("2. Add a new account manually")
-	fmt.Printf("3. Enter this secret key: %s\n", secret)
-	fmt.Println("=======================================")
-	fmt.Println()
-
-	// Prompt for code
-	fmt.Print("Enter the 6-digit code from your app: ")
-	reader := bufio.NewReader(os.Stdin)
-	code, err := reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("failed to read code: %w", err)
+	enrolledMethod := method
+	if enrolledMethod == "" {
+		enrolledMethod = mfa.MethodTOTP
 	}
-	code = strings.TrimSpace(code)
+	mfa.PrintSetupComplete(enrolledMethod, adminStringSliceFromData(finish.Data["backup_codes"]))
+	return nil
+}
 
-	return verifyTOTP(client, config, session, token, code)
+// handleSetupTOTPCommand is kept as an alias for compatibility.
+func handleSetupTOTPCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+	return handleSetupMFACommand(client, config, args)
 }
 
 func verifyTOTP(client *HTTPClient, config *AdminConfig, session *AdminSession, token, code string) error {
@@ -862,19 +908,7 @@ func verifyTOTP(client *HTTPClient, config *AdminConfig, session *AdminSession, 
 		logError("Warning: Failed to save updated session: %v", err)
 	}
 
-	fmt.Println("TOTP Setup Complete!")
-
-	// Display backup codes if available
-	if backupCodes, ok := verifyResp.Data["backup_codes"].([]interface{}); ok {
-		fmt.Println("\n=== BACKUP CODES ===")
-		fmt.Println("SAVE THESE CODES IN A SAFE PLACE!")
-		fmt.Println("You can use these to login if you lose your authenticator device.")
-		fmt.Println("--------------------")
-		for _, code := range backupCodes {
-			fmt.Println(code)
-		}
-		fmt.Println("--------------------")
-	}
+	mfa.PrintSetupComplete(mfa.MethodTOTP, adminStringSliceFromData(verifyResp.Data["backup_codes"]))
 
 	return nil
 }
@@ -902,6 +936,7 @@ func handleLoginCommand(client *HTTPClient, config *AdminConfig, args []string) 
 		saveSession    = fs.Bool("save-session", true, "Save session for future use")
 		totpCode       = fs.String("totp-code", "", "TOTP code for non-interactive login")
 		totpSecret     = fs.String("totp-secret", "", "TOTP secret — CLI generates the code internally (for scripted/test use)")
+		backupCode     = fs.String("backup-code", "", "10-character backup code for one-shot emergency login")
 		nonInteractive = fs.Bool("non-interactive", false, "Don't prompt for input")
 	)
 
@@ -915,8 +950,9 @@ FLAGS:
     --save-session      Save session for future use (default: true)
     --totp-code CODE    TOTP code for non-interactive login
     --totp-secret SEC   TOTP secret — CLI generates code internally (for scripted/test use)
+    --backup-code CODE  10-character backup code for emergency login
     --non-interactive   Don't prompt for input
-    --help             Show this help message
+    --help              Show this help message
 
 EXAMPLES:
     arkfile-admin login --username admin
@@ -1024,56 +1060,38 @@ EXAMPLES:
 		if err := saveAdminSession(session, config.TokenFile); err != nil {
 			return fmt.Errorf("failed to save admin session for TOTP setup: %w", err)
 		}
-		fmt.Printf("\nTOTP setup required. Session saved.\n")
+		fmt.Printf("\nMFA setup required. Session saved.\n")
 		fmt.Printf("Please run 'arkfile-admin setup-mfa' to complete account setup.\n")
 		return nil
 	}
 
 	if requiresTOTP {
-		sessionKey, _ := loginResp.Data["session_key"].(string)
 		tempToken, _ := loginResp.Data["temp_token"].(string)
-
-		var userTotpCode string
-		if *totpCode != "" {
-			userTotpCode = *totpCode
-		} else if *totpSecret != "" {
-			code, err := generateTOTPCode(*totpSecret)
-			if err != nil {
-				return fmt.Errorf("failed to generate TOTP code from secret: %w", err)
-			}
-			userTotpCode = code
-			logVerbose("Generated TOTP code from secret")
-		} else if *nonInteractive {
-			return fmt.Errorf("non-interactive mode: --totp-code or --totp-secret required")
-		} else {
-			fmt.Print("Enter TOTP code: ")
-			reader := bufio.NewReader(os.Stdin)
-			input, err := reader.ReadString('\n')
-			if err != nil {
-				return fmt.Errorf("failed to read TOTP code: %w", err)
-			}
-			userTotpCode = strings.TrimSpace(input)
+		if tempToken == "" {
+			return fmt.Errorf("missing temporary MFA token in response")
 		}
 
-		totpReq := map[string]interface{}{
-			"code":        userTotpCode,
-			"session_key": sessionKey,
-			"is_backup":   false,
-		}
-
-		totpResp, err := client.makeRequest("POST", "/api/mfa/auth", totpReq, tempToken)
+		mfaResp, err := mfa.CompleteLogin(adminMFARequester(client), mfa.LoginMFAConfig{
+			ServerURL:      config.ServerURL,
+			MFAMethod:      mfa.ParseMFAMethod(loginResp.Data),
+			TempToken:      tempToken,
+			TOTPCode:       *totpCode,
+			TOTPSecret:     *totpSecret,
+			BackupCode:     *backupCode,
+			NonInteractive: *nonInteractive,
+		})
 		if err != nil {
-			return fmt.Errorf("TOTP authentication failed: %w", err)
+			return err
 		}
 
-		// Get tokens from TOTP response
-		accessToken, _ = totpResp.Data["token"].(string)
-		refreshToken, _ = totpResp.Data["refresh_token"].(string)
-		opaqueExport, _ = totpResp.Data["opaque_export"].(string)
-
-		if expiresStr, ok := totpResp.Data["expires_at"].(string); ok {
+		accessToken = mfaResp.Token
+		refreshToken = mfaResp.RefreshToken
+		if !mfaResp.ExpiresAt.IsZero() {
+			expiresAt = mfaResp.ExpiresAt
+		} else if expiresStr, ok := mfaResp.Data["expires_at"].(string); ok {
 			expiresAt, _ = time.Parse(time.RFC3339, expiresStr)
 		}
+		opaqueExport, _ = mfaResp.Data["opaque_export"].(string)
 	} else {
 		// Get tokens directly from login response
 		accessToken, _ = loginResp.Data["token"].(string)

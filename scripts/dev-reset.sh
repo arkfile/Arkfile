@@ -175,6 +175,7 @@ fix_go_ownership() {
         print_status "INFO" "Fixing Go file ownership for user $SUDO_USER..."
         chown -R "$SUDO_USER:$SUDO_USER" go.mod go.sum 2>/dev/null || true
         [ -d "vendor" ] && chown -R "$SUDO_USER:$SUDO_USER" vendor/ 2>/dev/null || true
+        [ -d "vendor_c" ] && chown -R "$SUDO_USER:$SUDO_USER" vendor_c/ 2>/dev/null || true
         [ -f ".vendor_cache" ] && chown "$SUDO_USER:$SUDO_USER" .vendor_cache 2>/dev/null || true
         [ -d "$BUILD_ROOT" ] && chown -R "$SUDO_USER:$SUDO_USER" "$BUILD_ROOT/" 2>/dev/null || true
         print_status "SUCCESS" "Go file ownership restored"
@@ -831,7 +832,7 @@ echo
 echo -e "${BLUE}Build approach:${NC}"
 echo -e "${GREEN}  Built directly in user directory${NC}"
 echo -e "${GREEN}  Preserves libopaque libraries for faster rebuilds${NC}"
-echo -e "${GREEN}  Uses existing Git submodules and vendor directory${NC}"
+echo -e "${GREEN}  Uses vendor_c/ C sources and Go vendor/ directory${NC}"
 echo
 echo -e "${BLUE}Ready for development testing!${NC}"
 echo -e "${YELLOW}Admin user: arkfile-dev-admin${NC}"

@@ -1,8 +1,8 @@
 package auth
 
 /*
-#cgo CFLAGS: -I../vendor/stef/libopaque/src -I../vendor/stef/liboprf/src
-#cgo LDFLAGS: -L../vendor/stef/libopaque/src -L../vendor/stef/liboprf/src -lopaque -loprf -static
+#cgo CFLAGS: -I../vendor_c/stef/libopaque/src -I../vendor_c/stef/liboprf/src
+#cgo LDFLAGS: -L../vendor_c/stef/libopaque/src -L../vendor_c/stef/liboprf/src -lopaque -loprf
 #cgo pkg-config: libsodium
 #include "opaque_wrapper.h"
 #include <stdlib.h>

@@ -1,7 +1,7 @@
 #include "opaque_wrapper.h"
 #include <string.h>
 #include <stdio.h>
-#include "../vendor/stef/libopaque/src/opaque.h"
+#include "../vendor_c/stef/libopaque/src/opaque.h"
 
 // Arkfile OPAQUE wrapper functions for libopaque - Multi-step protocol only
 

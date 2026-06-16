@@ -13,36 +13,35 @@ obj/
 *.o
 *.a
 go.sum
+# Go module vendor tree (go mod vendor only — no C sources here)
 vendor/*
-!vendor/stef/
-!vendor/stef/libopaque/
-!vendor/stef/liboprf/
-!vendor/jedisct1/
-!vendor/jedisct1/libsodium/
 
-# But ignore compiled artifacts in vendor libraries
-vendor/stef/libopaque/src/*.so
-vendor/stef/libopaque/src/*.o
-vendor/stef/libopaque/src/*.a
-vendor/stef/liboprf/src/*.so
-vendor/stef/liboprf/src/*.o
-vendor/stef/liboprf/src/*.a
-vendor/stef/liboprf/src/noise_xk/*.so
-vendor/stef/liboprf/src/noise_xk/*.o
-vendor/stef/liboprf/src/noise_xk/*.a
+# C/crypto vendor tree (git submodules + on-demand clones; never touched by go mod vendor)
+vendor_c/stef/libopaque/src/*.so
+vendor_c/stef/libopaque/src/*.o
+vendor_c/stef/libopaque/src/*.a
+vendor_c/stef/liboprf/src/*.so
+vendor_c/stef/liboprf/src/*.o
+vendor_c/stef/liboprf/src/*.a
+vendor_c/stef/liboprf/src/noise_xk/*.so
+vendor_c/stef/liboprf/src/noise_xk/*.o
+vendor_c/stef/liboprf/src/noise_xk/*.a
 
-# Vendored libsodium build outputs (Phase D, finding F-06).
-# Source files in the submodule are tracked by the submodule itself; we ignore
-# only its in-tree build artifacts so a fresh clone + submodule init is clean.
-vendor/jedisct1/libsodium/src/libsodium/.libs/
-vendor/jedisct1/libsodium/**/*.lo
-vendor/jedisct1/libsodium/**/Makefile
-vendor/jedisct1/libsodium/**/config.h
-vendor/jedisct1/libsodium/**/config.log
-vendor/jedisct1/libsodium/**/config.status
-vendor/jedisct1/libsodium/**/libtool
-vendor/jedisct1/libsodium/**/stamp-h1
-vendor/jedisct1/libsodium/autom4te.cache/
+# Vendored libsodium build outputs
+vendor_c/jedisct1/libsodium/src/libsodium/.libs/
+vendor_c/jedisct1/libsodium/**/*.lo
+vendor_c/jedisct1/libsodium/**/Makefile
+vendor_c/jedisct1/libsodium/**/config.h
+vendor_c/jedisct1/libsodium/**/config.log
+vendor_c/jedisct1/libsodium/**/config.status
+vendor_c/jedisct1/libsodium/**/libtool
+vendor_c/jedisct1/libsodium/**/stamp-h1
+vendor_c/jedisct1/libsodium/autom4te.cache/
+
+# On-demand FIDO2 source clones (build-libfido2.sh)
+vendor_c/yubico/
+vendor_c/madler/
+vendor_c/openssl/
 *.tmp
 *.swp
 .vscode/

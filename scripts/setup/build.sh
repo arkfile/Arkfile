@@ -48,8 +48,16 @@ fix_vendor_ownership() {
         CURRENT_USER=$(whoami)
         if [ "$VENDOR_OWNER" = "root" ] && [ "$CURRENT_USER" != "root" ] && [ -z "$SUDO_USER" ]; then
             echo -e "${YELLOW}Vendor directory owned by root, fixing with sudo...${NC}"
-            sudo chown -R "$CURRENT_USER:$CURRENT_USER" vendor/ go.mod go.sum 2>/dev/null || true
+            sudo chown -R "$CURRENT_USER:$CURRENT_USER" vendor/ vendor_c/ go.mod go.sum 2>/dev/null || true
             [ -f ".vendor_cache" ] && sudo chown "$CURRENT_USER:$CURRENT_USER" .vendor_cache 2>/dev/null || true
+        fi
+    fi
+    if [ "$EUID" -ne 0 ] && [ -d "vendor_c" ]; then
+        VENDOR_C_OWNER=$(stat -c '%U' vendor_c 2>/dev/null || echo "unknown")
+        CURRENT_USER=$(whoami)
+        if [ "$VENDOR_C_OWNER" = "root" ] && [ "$CURRENT_USER" != "root" ] && [ -z "$SUDO_USER" ]; then
+            echo -e "${YELLOW}vendor_c/ owned by root, fixing with sudo...${NC}"
+            sudo chown -R "$CURRENT_USER:$CURRENT_USER" vendor_c/ 2>/dev/null || true
         fi
     fi
 }
@@ -161,17 +169,7 @@ else
         echo -e "${GREEN}[OK] Vendor directory matches go.sum, skipping sync (preserves compiled libraries)${NC}"
     else
         echo -e "${YELLOW}Dependencies changed or vendor missing, syncing vendor directory...${NC}"
-        
-        # CRITICAL: Backup C library submodules before Go vendor sync
-        C_LIBS_BACKUP=""
-        if [ -d "vendor/stef" ]; then
-            C_LIBS_BACKUP=$(mktemp -d)
-            # Ensure temp backup is cleaned up on exit
-            trap 'rm -rf "$C_LIBS_BACKUP" 2>/dev/null || true' EXIT
-            echo -e "${YELLOW}Backing up C libraries to: $C_LIBS_BACKUP${NC}"
-            cp -r vendor/stef "$C_LIBS_BACKUP/" 2>/dev/null || true
-        fi
-        
+
         if ! run_go_as_user mod vendor; then
             echo -e "${YELLOW}Vendor sync failed, attempting to fix with go mod tidy...${NC}"
             run_go_as_user mod tidy
@@ -182,23 +180,19 @@ else
             fi
         fi
         fix_vendor_ownership
-        
-        # CRITICAL: Restore C library submodules after Go vendor sync
-        if [ -n "$C_LIBS_BACKUP" ] && [ -d "$C_LIBS_BACKUP/stef" ]; then
-            echo -e "${YELLOW}Restoring C libraries from backup...${NC}"
-            mkdir -p vendor/stef
-            cp -r "$C_LIBS_BACKUP/stef/"* vendor/stef/ 2>/dev/null || true
-            rm -rf "$C_LIBS_BACKUP"
-            echo -e "${GREEN}[OK] C libraries restored after vendor sync${NC}"
-        else
-            echo -e "${YELLOW}No C libraries to restore - will initialize via submodules${NC}"
-        fi
-        
+
         # Cache the successful sync (recompute hash since go mod tidy may have changed go.sum)
         CURRENT_HASH=$(sha256sum go.sum | cut -d' ' -f1)
         echo "$CURRENT_HASH" > "$VENDOR_CACHE"
         echo -e "${GREEN}[OK] Vendor directory synced with dependencies${NC}"
     fi
+fi
+
+# C sources live in vendor_c/ and are independent of go mod vendor.
+echo -e "${YELLOW}Ensuring C vendor sources (vendor_c/)...${NC}"
+if ! ./scripts/setup/ensure-vendor-c.sh; then
+    echo -e "${RED}[X] Failed to provision C vendor sources${NC}"
+    exit 1
 fi
 
 # Build static dependencies first
@@ -210,6 +204,11 @@ build_static_dependencies() {
     
     if ! ./scripts/setup/build-libopaque.sh; then
         echo -e "${RED}[X] Failed to build static dependencies${NC}"
+        exit 1
+    fi
+
+    if ! ./scripts/setup/build-libfido2.sh; then
+        echo -e "${RED}[X] Failed to build FIDO2 libraries for CLI${NC}"
         exit 1
     fi
     
@@ -227,47 +226,21 @@ if [ "${SKIP_C_LIBS}" = "true" ]; then
     echo -e "${GREEN}[OK] Skipping C library rebuild (libraries already exist)${NC}"
     
     # Verify static libraries still exist
-    if [ ! -f "vendor/stef/liboprf/src/liboprf.a" ] || [ ! -f "vendor/stef/libopaque/src/libopaque.a" ]; then
+    if [ ! -f "$LIBOPRF_A" ] || [ ! -f "$LIBOPAQUE_A" ]; then
         echo -e "${YELLOW}[WARNING]  Expected static libraries missing, forcing rebuild...${NC}"
         SKIP_C_LIBS="false"
     fi
 fi
 
 if [ "${SKIP_C_LIBS}" != "true" ]; then
-    # Smart source code detection - check for key source files instead of .git directories
-    OPAQUE_SOURCE="vendor/stef/libopaque/src/opaque.c"
-    OPRF_SOURCE="vendor/stef/liboprf/src/oprf.c"
-    
-    if [ -f "$OPAQUE_SOURCE" ] && [ -f "$OPRF_SOURCE" ]; then
+    if [ -f "$OPAQUE_C_SOURCE" ] && [ -f "$OPRF_C_SOURCE" ]; then
         echo -e "${GREEN}[OK] Source code available, building static libraries...${NC}"
-        
-        # Use specialized build script with static linking
         build_static_dependencies
-        
         echo -e "${GREEN}[OK] Static C dependencies built successfully${NC}"
     else
-        echo -e "${YELLOW}[WARNING] Source code missing, checking for source directory availability...${NC}"
-        echo "Missing files: $OPAQUE_SOURCE or $OPRF_SOURCE"
-        
-        # Initialize git submodules with proper ownership preservation
-        if ! git submodule update --init --recursive --force; then
-            echo -e "${RED}[X] Failed to initialize git submodules${NC}"
-            exit 1
-        fi
-        
-        # Fix ownership immediately after any root operations
-        fix_vendor_ownership
-        echo -e "${GREEN}[OK] Git submodules initialized${NC}"
-        
-        # Verify source files are now available
-        if [ -f "$OPAQUE_SOURCE" ] && [ -f "$OPRF_SOURCE" ]; then
-            echo "Building static libopaque and liboprf after source setup..."
-            build_static_dependencies
-            echo -e "${GREEN}[OK] Static C dependencies built successfully${NC}"
-        else
-            echo -e "${RED}[X] Source files still missing after source setup${NC}"
-            exit 1
-        fi
+        echo -e "${RED}[X] C vendor sources missing after ensure-vendor-c.sh${NC}"
+        echo "    Missing: $OPAQUE_C_SOURCE or $OPRF_C_SOURCE"
+        exit 1
     fi
 else
     echo -e "${GREEN}[OK] Using existing static C dependencies${NC}"
@@ -431,34 +404,21 @@ fi
 
 echo -e "${GREEN}[OK] TypeScript frontend built successfully${NC}"
 
-# Build Go binaries with static linking
+# Build Go binaries (server static; CLI mixed linking for FIDO)
 build_go_binaries_static() {
-    echo -e "${YELLOW}Building Go binaries with static linking...${NC}"
+    echo -e "${YELLOW}Building Go binaries...${NC}"
     
-    # Set CGO flags once for all CGO-linked builds.
-    # Phase D, finding F-06: libsodium is now linked against the vendored
-    # static archive at vendor/jedisct1/libsodium/src/libsodium/.libs/libsodium.a
-    # rather than the host system's pkg-config / package-manager installation.
     if [ ! -f "$LIBSODIUM_A" ]; then
         echo -e "${RED}[X] Vendored libsodium archive not found: $LIBSODIUM_A${NC}"
         echo -e "${YELLOW}    The build-libopaque.sh step should have produced this.${NC}"
         exit 1
     fi
-    export CGO_ENABLED=1
-    export CGO_CFLAGS="-I./vendor/stef/libopaque/src -I./vendor/stef/liboprf/src -I./$LIBSODIUM_INCLUDE"
-    export CGO_LDFLAGS="-L./vendor/stef/libopaque/src -L./vendor/stef/liboprf/src -lopaque -loprf $(pwd)/$LIBSODIUM_A"
-    
-    # Reproducible-build flags (Phase D, finding F-05).
-    #   -s -w           strip symbol table and DWARF; smaller binary, fewer host-path leaks.
-    #   -buildid=       empty Go build-id so two clean rebuilds at the same commit produce
-    #                   byte-identical binaries.
-    #   -extldflags     '-static' forces fully static linking against CGO archives.
-    local STATIC_LDFLAGS='-s -w -buildid= -extldflags "-static"'
-    
-    # -trimpath          strip absolute filesystem paths from compiled stack frames
-    #                    (no /home/<user>/... leaks into the binary).
-    # -buildvcs=false    omit VCS info from the binary; supports reproducible builds
-    #                    even when building from a working tree with uncommitted state.
+
+    local REPO_ROOT
+    REPO_ROOT="$(pwd)"
+    local SERVER_LDFLAGS CLI_LDFLAGS
+    SERVER_LDFLAGS="$(server_go_ldflags)"
+    CLI_LDFLAGS="$(cli_go_ldflags)"
     local REPRO_FLAGS='-trimpath -buildvcs=false'
     
     local PROD_BUILD_FLAGS=""
@@ -466,65 +426,71 @@ build_go_binaries_static() {
         PROD_BUILD_FLAGS="-mod=vendor"
     fi
 
+    # Server: OPAQUE only (no libfido2), fully static.
+    export CGO_ENABLED=1
+    export CGO_CFLAGS="$(opaque_cgo_cflags)"
+    export CGO_LDFLAGS="$(opaque_cgo_ldflags "$REPO_ROOT")"
+
     echo "Building arkfile server..."
-    "$GO_BINARY" build -a $PROD_BUILD_FLAGS $REPRO_FLAGS -ldflags "$STATIC_LDFLAGS" -o ${BUILD_DIR}/${APP_NAME} .
+    # shellcheck disable=SC2086
+    "$GO_BINARY" build -a $PROD_BUILD_FLAGS $REPRO_FLAGS -ldflags "$SERVER_LDFLAGS" -o ${BUILD_DIR}/${APP_NAME} .
     echo -e "${GREEN}[OK] arkfile server built${NC}"
+
+    # CLI binaries: OPAQUE + vendored libfido2 for security-key MFA.
+    if ! fido_cache_valid; then
+        echo -e "${YELLOW}FIDO2 libraries missing or stale for this platform; building via build-libfido2.sh...${NC}"
+        if ! ./scripts/setup/build-libfido2.sh; then
+            echo -e "${RED}[X] Failed to build FIDO2 libraries for CLI${NC}"
+            exit 1
+        fi
+    fi
+    export CGO_CFLAGS="$(cli_fido_cgo_cflags)"
+    # shellcheck disable=SC2086
+    export CGO_LDFLAGS="$(cli_fido_cgo_ldflags "$REPO_ROOT")"
     
     echo "Building arkfile-client..."
-    "$GO_BINARY" build -a $PROD_BUILD_FLAGS $REPRO_FLAGS -ldflags "$STATIC_LDFLAGS" -o ${BUILD_DIR}/arkfile-client ./cmd/arkfile-client
+    # shellcheck disable=SC2086
+    "$GO_BINARY" build -a $PROD_BUILD_FLAGS $REPRO_FLAGS -ldflags "$CLI_LDFLAGS" -o ${BUILD_DIR}/arkfile-client ./cmd/arkfile-client
     echo -e "${GREEN}[OK] arkfile-client built${NC}"
     
     echo "Building arkfile-admin..."
-    "$GO_BINARY" build -a $PROD_BUILD_FLAGS $REPRO_FLAGS -ldflags "$STATIC_LDFLAGS" -o ${BUILD_DIR}/arkfile-admin ./cmd/arkfile-admin
+    # shellcheck disable=SC2086
+    "$GO_BINARY" build -a $PROD_BUILD_FLAGS $REPRO_FLAGS -ldflags "$CLI_LDFLAGS" -o ${BUILD_DIR}/arkfile-admin ./cmd/arkfile-admin
     echo -e "${GREEN}[OK] arkfile-admin built${NC}"
     
-    # Reset CGO state
     export CGO_ENABLED=0
     unset CGO_CFLAGS CGO_LDFLAGS
     
-    echo -e "${GREEN}[OK] All Go binaries built with static linking (reproducible flags applied)${NC}"
+    echo -e "${GREEN}[OK] Go binaries built (server static; CLI vendored C static + OS libs dynamic)${NC}"
 }
 
-# Verify static binaries
-verify_static_binaries() {
-    echo -e "${YELLOW}Verifying static binaries...${NC}"
+# Verify server static linking and CLI mixed linking policy.
+verify_built_binaries() {
+    echo -e "${YELLOW}Verifying built binaries...${NC}"
+
+    if ! verify_server_binary_static "${BUILD_DIR}/${APP_NAME}"; then
+        exit 1
+    fi
+
+    if ! verify_cli_binary_linking "${BUILD_DIR}/arkfile-client"; then
+        ldd "${BUILD_DIR}/arkfile-client" 2>&1 || true
+        exit 1
+    fi
+
+    if ! verify_cli_binary_linking "${BUILD_DIR}/arkfile-admin"; then
+        ldd "${BUILD_DIR}/arkfile-admin" 2>&1 || true
+        exit 1
+    fi
     
-    for binary in ${BUILD_DIR}/${APP_NAME} ${BUILD_DIR}/arkfile-client ${BUILD_DIR}/arkfile-admin; do
-        if [ -f "$binary" ]; then
-            # Use appropriate verification for platform
-            if [[ "$OSTYPE" == "freebsd"* ]] || [[ "$OSTYPE" == "openbsd"* ]]; then
-                # BSD systems use different tools
-                if file "$binary" | grep -q "statically linked"; then
-                    echo -e "${GREEN}[OK] $(basename $binary): Static binary verified${NC}"
-                else
-                    echo -e "${RED}[X] $(basename $binary): Dynamic linking detected${NC}"
-                    exit 1
-                fi
-            else
-                # Linux systems (includes Alpine, Debian, Alma, etc.)
-                if ldd "$binary" 2>&1 | grep -q "not a dynamic executable"; then
-                    echo -e "${GREEN}[OK] $(basename $binary): Static binary verified${NC}"
-                else
-                    echo -e "${RED}[X] $(basename $binary): Dynamic linking detected${NC}"
-                    ldd "$binary" 2>&1 || true
-                    exit 1
-                fi
-            fi
-        else
-            echo -e "${RED}[X] Binary not found: $binary${NC}"
-            exit 1
-        fi
-    done
-    
-    echo -e "${GREEN}[OK] All binaries verified as static${NC}"
+    echo -e "${GREEN}[OK] All binaries verified${NC}"
 }
 
-# Build main application with static linking
-echo "Building Go binaries with static linking..."
+# Build main application binaries
+echo "Building Go binaries..."
 build_go_binaries_static
 
-# Verify static linking
-verify_static_binaries
+# Verify binary linking policy
+verify_built_binaries
 
 # Run Go vulnerability check and generate SBOM
 run_security_audits_and_sbom() {

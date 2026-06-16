@@ -278,29 +278,36 @@ go version
 ```bash
 # Debian/Ubuntu
 sudo apt update && sudo apt install -y \
-  curl wget git build-essential pkg-config cmake \
+  curl wget git build-essential pkg-config cmake perl \
   sqlite3 openssl ca-certificates \
-  libsodium-dev tar gzip
+  libsodium-dev libudev-dev tar gzip
 
 # RHEL 9 / AlmaLinux 9 / Rocky Linux 9 (EPEL required for libsodium-devel)
 sudo dnf install -y epel-release
 sudo dnf install -y \
-  curl wget git gcc gcc-c++ make cmake pkgconf \
+  curl wget git gcc gcc-c++ make cmake pkgconf perl \
   sqlite openssl ca-certificates \
-  libsodium-devel tar gzip
+  libsodium-devel systemd-devel tar gzip
 
 # Fedora (EPEL not needed)
 sudo dnf install -y \
-  curl wget git gcc gcc-c++ make cmake pkgconf \
+  curl wget git gcc gcc-c++ make cmake pkgconf perl \
   sqlite openssl ca-certificates \
-  libsodium-devel tar gzip
+  libsodium-devel systemd-devel tar gzip
 
 # Alpine Linux
 sudo apk add --no-cache \
-  curl wget git gcc musl-dev make cmake pkgconf-dev \
+  curl wget git gcc musl-dev make cmake pkgconf-dev perl \
   sqlite openssl ca-certificates \
-  libsodium-dev libsodium-static tar gzip
+  libsodium-dev libsodium-static eudev-dev linux-headers tar gzip
 ```
+
+**CLI MFA / FIDO build notes:**
+- `arkfile-client` and `arkfile-admin` statically link vendored `libfido2`, `libcbor`, `zlib`, OpenSSL `libcrypto`, and the OPAQUE C stack (`libopaque`, `liboprf`, libsodium). The server binary does not link the FIDO stack and remains fully static.
+- **CLI link model (Linux):** vendored C libraries are linked with `-Wl,-Bstatic`; OS libraries (`libudev`, `libc`, `libpthread`, etc.) are linked dynamically via `-Wl,-Bdynamic`. There is no `libudev.a` on glibc distros, so CLIs cannot be fully static when FIDO is enabled.
+- **Build host:** `perl` (OpenSSL configure), `pkg-config`, and Linux **libudev development headers** (`libudev-dev` on Debian, `systemd-devel` on RHEL/Fedora, `eudev-dev` on Alpine) are required when compiling the CLIs.
+- **CLI runtime (Linux):** USB security keys need `libudev.so.1` at runtime. Install the runtime package if missing (`libudev1` / `systemd-libs` / `eudev`).
+- Vendored FIDO libraries install under `/var/tmp/arkfile-build/c-libs/fido/<platform>/` (e.g. `linux-amd64/`); stale caches are rebuilt automatically when the platform stamp changes.
 
 **Development Dependencies (Optional):**
 For development and TypeScript compilation, install additional dependencies:

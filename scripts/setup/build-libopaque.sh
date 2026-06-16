@@ -2,7 +2,7 @@
 # Cross-platform static library build system
 #
 # Phase D, finding F-06: libsodium is vendored from source under
-# vendor/jedisct1/libsodium. This script:
+# vendor_c/jedisct1/libsodium. This script:
 #   1. Builds vendored libsodium statically (./configure && make).
 #   2. Builds noise_xk, liboprf, libopaque statically against the vendored
 #      libsodium include path and static archive.
@@ -17,6 +17,10 @@
 # are excluded from version control via .gitignore.
 
 set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=build-config.sh
+source "$SCRIPT_DIR/build-config.sh"
 
 echo "Arkfile Static Library Build System (vendored libsodium)"
 
@@ -114,9 +118,9 @@ check_go_version() {
 
 # Path to the vendored libsodium submodule (relative to repo root).
 # Kept in sync with LIBSODIUM_DIR in scripts/setup/build-config.sh.
-LIBSODIUM_DIR="vendor/jedisct1/libsodium"
-LIBSODIUM_INCLUDE_DIR="$LIBSODIUM_DIR/src/libsodium/include"
-LIBSODIUM_STATIC_ARCHIVE="$LIBSODIUM_DIR/src/libsodium/.libs/libsodium.a"
+LIBSODIUM_DIR="$LIBSODIUM_DIR"
+LIBSODIUM_INCLUDE_DIR="$LIBSODIUM_INCLUDE"
+LIBSODIUM_STATIC_ARCHIVE="$LIBSODIUM_A"
 
 build_libsodium_vendored() {
     echo "[BUILD] Building vendored libsodium statically..."
@@ -212,8 +216,8 @@ build_static_libraries() {
     export LDFLAGS="-static"
 
     # Vendor directories
-    OPRF_DIR="vendor/stef/liboprf/src"
-    OPAQUE_DIR="vendor/stef/libopaque/src"
+    OPRF_DIR="$LIBOPRF_SRC"
+    OPAQUE_DIR="$LIBOPAQUE_SRC"
 
     # Build noise_xk library first (dependency for liboprf)
     echo "Building noise_xk static library..."
@@ -267,9 +271,9 @@ build_static_libraries() {
 
 # Verify libraries from project root
 verify_static_libraries() {
-    local OPRF_LIB="vendor/stef/liboprf/src/liboprf.a"
-    local OPAQUE_LIB="vendor/stef/libopaque/src/libopaque.a"
-    local SODIUM_LIB="$LIBSODIUM_STATIC_ARCHIVE"
+    local OPRF_LIB="$LIBOPRF_A"
+    local OPAQUE_LIB="$LIBOPAQUE_A"
+    local SODIUM_LIB="$LIBSODIUM_A"
 
     if [ -f "$OPRF_LIB" ] && [ -f "$OPAQUE_LIB" ] && [ -f "$SODIUM_LIB" ]; then
         echo "[FILES] Static libraries verified:"
