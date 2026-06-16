@@ -143,7 +143,7 @@ The CLIs already static-link vendored C for OPAQUE (`libopaque`, `liboprf`, libs
 
 Use `github.com/go-webauthn/webauthn` for server-side WebAuthn ceremony handling and credential verification (see **WebAuthn dependency choices**). TOTP logic moves into `auth/mfa_totp.go` operating on `user_mfa_credentials` rows where `method_type` is `totp`.
 
-WebAuthn registration and authentication use the standard two-step begin/finish pattern. Relying party ID is the site domain. Use non-discoverable credentials (no resident passkeys required). `authenticatorAttachment` `cross-platform` for USB/NFC keys. `userVerification` `preferred` (touch-first; PIN only when the key policy requires it).
+WebAuthn registration and authentication use the standard two-step begin/finish pattern. Relying party ID is the site domain. Use non-discoverable credentials (no resident passkeys required). `authenticatorAttachment` `cross-platform` for USB/NFC keys. `userVerification` `discouraged` (touch-only after password; matches Proton/Bitwarden-style 2FA UX on PIN-configured keys).
 
 Define the WebAuthn encrypted payload schema explicitly before Phase 6: at minimum credential ID, COSE public key, and signCount (plus any fields `go-webauthn` requires for verification). Registration finish writes the initial blob once; authentication finish is always read-modify-write. Document this schema in `docs/security.md` so rotation and future multi-credential work (Phase 9) do not guess at field layout.
 

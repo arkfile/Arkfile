@@ -557,7 +557,7 @@ func handleRegisterCommand(client *HTTPClient, config *ClientConfig, args []stri
 
 	// Validate username before prompting for password
 	if err := utils.ValidateUsername(*usernameFlag); err != nil {
-		return fmt.Errorf("invalid username: %w\n\nUsername requirements: 10-50 characters, allowed: a-z A-Z 0-9 _ - . ,", err)
+		return fmt.Errorf("invalid username: %w\n\nUsername requirements: 10-50 characters, allowed: a-z 0-9 _ - . ,", err)
 	}
 
 	password, err := readPasswordWithStrengthCheck(

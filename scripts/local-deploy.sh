@@ -119,8 +119,8 @@ validate_username() {
         echo "ERROR: Username must be at most 50 characters (got $len)"
         return 1
     fi
-    if ! echo "$username" | grep -qE '^[a-zA-Z0-9_.,-]{10,50}$'; then
-        echo "ERROR: Username can only contain letters, numbers, underscores, hyphens, periods, and commas"
+    if ! echo "$username" | grep -qE '^[a-z0-9_.,-]{10,50}$'; then
+        echo "ERROR: Username can only contain lowercase letters, numbers, underscores, hyphens, periods, and commas"
         return 1
     fi
     # Cannot start or end with special characters
@@ -142,7 +142,7 @@ validate_username() {
 
 if ! validate_username "$ADMIN_USERNAME"; then
     echo ""
-    echo "Username requirements: 10-50 characters, letters/numbers/underscore/hyphen/period/comma"
+    echo "Username requirements: 10-50 characters, lowercase letters/numbers/underscore/hyphen/period/comma"
     echo "Cannot start or end with special characters, no consecutive special characters"
     exit 1
 fi

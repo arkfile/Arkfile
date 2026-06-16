@@ -35,8 +35,36 @@ func TestMapUserVerification(t *testing.T) {
 	if mapUserVerification("discouraged") != OptFalse {
 		t.Fatal("discouraged should map to OptFalse")
 	}
-	if mapUserVerification("preferred") != OptOmit {
-		t.Fatal("preferred should map to OptOmit")
+	if mapUserVerification("preferred") != OptFalse {
+		t.Fatal("preferred should map to OptFalse (touch-only policy)")
+	}
+	if mapUserVerification("") != OptFalse {
+		t.Fatal("empty should map to OptFalse")
+	}
+	if mapUserVerification("unknown") != OptFalse {
+		t.Fatal("unknown should map to OptFalse")
+	}
+}
+
+func TestUvFromCreation(t *testing.T) {
+	if got := uvFromCreation(creationOptions{}); got != "discouraged" {
+		t.Fatalf("nil selection = %q, want discouraged", got)
+	}
+
+	var emptyUV creationOptions
+	if err := json.Unmarshal([]byte(`{"authenticatorSelection":{"userVerification":""}}`), &emptyUV); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := uvFromCreation(emptyUV); got != "discouraged" {
+		t.Fatalf("empty uv = %q, want discouraged", got)
+	}
+
+	var explicit creationOptions
+	if err := json.Unmarshal([]byte(`{"authenticatorSelection":{"userVerification":"discouraged"}}`), &explicit); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := uvFromCreation(explicit); got != "discouraged" {
+		t.Fatalf("explicit discouraged = %q", got)
 	}
 }
 

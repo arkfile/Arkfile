@@ -56,4 +56,4 @@ Each account can enroll one second factor at a time: either TOTP or a hardware s
 
 ## Do I need to enter a PIN on my security key every time I log in?
 
-That depends on your key and how it is configured. Arkfile requests user verification as preferred rather than required. That usually means a single touch on your YubiKey or Nitrokey is enough, similar to Proton Mail or Bitwarden. If your key is configured to require a PIN on every operation, you will be prompted accordingly. Your PIN never leaves the device and is not sent to Arkfile or the server.
+That depends on your key and how it is configured. Arkfile requests user verification as discouraged for both enrollment and login, so a single touch on your YubiKey or Nitrokey is usually enough after you have entered your password, similar to Proton Mail or Bitwarden. Some keys or browsers may still prompt for a PIN in edge cases. Your PIN never leaves the device and is not sent to Arkfile or the server.

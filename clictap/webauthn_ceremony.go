@@ -53,19 +53,14 @@ type credDescriptor struct {
 }
 
 func mapUserVerification(uv string) int {
-	switch strings.ToLower(uv) {
+	switch strings.ToLower(strings.TrimSpace(uv)) {
 	case "required":
 		return OptTrue
-	case "discouraged":
-		return OptFalse
 	default:
-		return OptPreferred()
+		// Arkfile policy: touch-only (discouraged). Treat missing, preferred, and
+		// unknown values as discouraged — never omit UV and let the key default to PIN.
+		return OptFalse
 	}
-}
-
-// OptPreferred returns preferred UV (omit in CTAP, authenticator default).
-func OptPreferred() int {
-	return OptOmit
 }
 
 func mapResidentKey(sel *creationOptions) int {
@@ -185,9 +180,13 @@ func RegisterFromOptions(optionsJSON []byte, origin string) (json.RawMessage, er
 
 func uvFromCreation(opts creationOptions) string {
 	if opts.AuthenticatorSelection == nil {
-		return "preferred"
+		return "discouraged"
 	}
-	return opts.AuthenticatorSelection.UserVerification
+	uv := strings.TrimSpace(opts.AuthenticatorSelection.UserVerification)
+	if uv == "" {
+		return "discouraged"
+	}
+	return uv
 }
 
 // AuthenticateFromOptions performs CTAP authentication and returns PublicKeyCredential JSON.

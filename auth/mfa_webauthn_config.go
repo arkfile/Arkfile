@@ -53,7 +53,7 @@ func GetWebAuthn() (*webauthn.WebAuthn, error) {
 				AuthenticatorAttachment: protocol.CrossPlatform,
 				RequireResidentKey:      &notRequired,
 				ResidentKey:             protocol.ResidentKeyRequirementDiscouraged,
-				UserVerification:        protocol.VerificationPreferred,
+				UserVerification:        protocol.VerificationDiscouraged,
 			},
 		})
 		if webAuthnErr != nil {

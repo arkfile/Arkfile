@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/pquerna/otp/totp"
 )
 
@@ -120,5 +121,8 @@ func TestGetWebAuthnConfig(t *testing.T) {
 	}
 	if w == nil {
 		t.Fatal("GetWebAuthn returned nil")
+	}
+	if w.Config.AuthenticatorSelection.UserVerification != protocol.VerificationDiscouraged {
+		t.Fatalf("expected userVerification discouraged, got %q", w.Config.AuthenticatorSelection.UserVerification)
 	}
 }
