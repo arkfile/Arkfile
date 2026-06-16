@@ -95,6 +95,10 @@ func RegisterRoutes() {
 	mfaGroup.POST("/setup", MFASetup, auth.MFAJWTMiddleware())
 	mfaGroup.POST("/verify", MFARateLimitMiddleware("mfa_verify")(MFAVerify), auth.MFAJWTMiddleware())
 	mfaGroup.POST("/auth", MFARateLimitMiddleware("mfa_auth")(MFAAuth), auth.MFAJWTMiddleware())
+	mfaGroup.POST("/webauthn/register/begin", WebAuthnRegisterBegin, auth.MFAJWTMiddleware())
+	mfaGroup.POST("/webauthn/register/finish", MFARateLimitMiddleware("mfa_verify")(WebAuthnRegisterFinish), auth.MFAJWTMiddleware())
+	mfaGroup.POST("/webauthn/auth/begin", WebAuthnAuthBegin, auth.MFAJWTMiddleware())
+	mfaGroup.POST("/webauthn/auth/finish", MFARateLimitMiddleware("mfa_auth")(WebAuthnAuthFinish), auth.MFAJWTMiddleware())
 
 	// Admin contacts (public - no auth required)
 	Echo.GET("/api/admin-contacts", AdminContactsHandler)

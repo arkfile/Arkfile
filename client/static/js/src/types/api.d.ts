@@ -22,6 +22,7 @@ interface LoginResponse {
   session_key: string;
   auth_method: 'OPAQUE';
   requires_mfa?: boolean;
+  mfa_method?: 'totp' | 'webauthn' | '';
 }
 
 interface RegisterRequest {

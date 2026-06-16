@@ -12,7 +12,6 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/84adam/Arkfile/auth"
-	"github.com/84adam/Arkfile/crypto"
 	"github.com/84adam/Arkfile/database"
 	"github.com/84adam/Arkfile/logging"
 	"github.com/84adam/Arkfile/models"
@@ -407,11 +406,14 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 	database.LogUserAction(request.Username, "registered with OPAQUE (multi-step), TOTP setup required", "")
 	logging.InfoLogger.Printf("OPAQUE user registered (multi-step), TOTP setup required: %s", request.Username)
 
+	pendingMethod, _ := auth.GetPendingMFAMethodType(database.DB, request.Username)
+
 	return JSONResponse(c, http.StatusCreated, "Account created successfully. Two-factor authentication setup is required to complete registration.", map[string]interface{}{
 		"requires_mfa_setup": true,
 		"requires_mfa":       true,
 		"temp_token":          tempToken,
 		"auth_method":         "OPAQUE",
+		"mfa_method":          pendingMethod,
 		"username":            request.Username,
 	})
 }
@@ -586,10 +588,13 @@ func OpaqueAuthFinalize(c echo.Context) error {
 			return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 		}
 		issueTempCookie(c, tempToken)
+		pendingMethod, _ := auth.GetPendingMFAMethodType(database.DB, request.Username)
+
 		return JSONResponse(c, http.StatusOK, "Two-factor authentication setup is required to complete login.", map[string]interface{}{
 			"requires_mfa":       true,
 			"requires_mfa_setup": true,
 			"temp_token":          tempToken,
+			"mfa_method":          pendingMethod,
 		})
 	}
 
@@ -607,10 +612,17 @@ func OpaqueAuthFinalize(c echo.Context) error {
 	database.LogUserAction(request.Username, "OPAQUE auth completed (multi-step), awaiting TOTP", "")
 	logging.InfoLogger.Printf("OPAQUE user authenticated (multi-step), TOTP required: %s", request.Username)
 
-	return JSONResponse(c, http.StatusOK, "OPAQUE authentication successful. TOTP code required.", map[string]interface{}{
+	mfaMethod, err := auth.GetUserMFAMethodType(database.DB, request.Username)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to load MFA method for %s: %v", request.Username, err)
+		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
+	}
+
+	return JSONResponse(c, http.StatusOK, "OPAQUE authentication successful. Second factor required.", map[string]interface{}{
 		"requires_mfa": true,
 		"temp_token":    tempToken,
 		"auth_method":   "OPAQUE",
+		"mfa_method":    mfaMethod,
 	})
 }
 
@@ -771,58 +783,9 @@ func MFAVerify(c echo.Context) error {
 	database.LogUserAction(username, "completed TOTP setup", "")
 	logging.InfoLogger.Printf("TOTP setup completed for user: %s", username)
 
-	// If this is a temporary TOTP token from registration, provide full access tokens
+	// If this is a temporary MFA token from registration, provide full access tokens
 	if isTemporaryToken {
-		// Generate full access token
-		token, expirationTime, err := auth.GenerateFullAccessToken(username)
-		if err != nil {
-			logging.ErrorLogger.Printf("Failed to generate full access token for %s: %v", username, err)
-			return JSONError(c, http.StatusInternalServerError, "Failed to create session")
-		}
-
-		// Generate refresh token
-		refreshToken, err := models.CreateRefreshToken(database.DB, username)
-		if err != nil {
-			logging.ErrorLogger.Printf("Failed to generate refresh token for %s: %v", username, err)
-			return JSONError(c, http.StatusInternalServerError, "Failed to create session")
-		}
-
-		// Get user record for response
-		user, err := models.GetUserByUsername(database.DB, username)
-		if err != nil {
-			logging.ErrorLogger.Printf("Failed to get user record for %s: %v", username, err)
-			return JSONError(c, http.StatusInternalServerError, "Failed to get user details")
-		}
-
-		// Issue session cookies and clear temp cookie.
-		csrfToken, err := GenerateCSRFToken()
-		if err != nil {
-			logging.ErrorLogger.Printf("Failed to generate CSRF token for %s: %v", username, err)
-			return JSONError(c, http.StatusInternalServerError, "Failed to create session")
-		}
-		issueSessionCookies(c, token, refreshToken, csrfToken)
-		c.SetCookie(&http.Cookie{
-			Name: CookieTempToken, Value: "", Path: "/", MaxAge: -1,
-			Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode,
-		})
-
-		logging.InfoLogger.Printf("Registration completed with TOTP setup for user: %s", username)
-
-		return JSONResponse(c, http.StatusOK, "TOTP setup and registration completed successfully", map[string]interface{}{
-			"enabled":       true,
-			"token":         token,
-			"refresh_token": refreshToken,
-			"expires_at":    expirationTime,
-			"auth_method":   "OPAQUE+TOTP",
-			"user": map[string]interface{}{
-				"username":        user.Username,
-				"is_approved":     user.IsApproved,
-				"is_admin":        user.IsAdmin,
-				"total_storage":   user.TotalStorageBytes,
-				"storage_limit":   user.StorageLimitBytes,
-				"storage_used_pc": user.GetStorageUsagePercent(),
-			},
-		})
+		return completeMFARegistrationSetup(c, username, "OPAQUE+TOTP")
 	}
 
 	// Regular TOTP setup completion (not during registration)
@@ -914,98 +877,7 @@ func MFAAuth(c echo.Context) error {
 		database.LogUserAction(username, "authenticated with TOTP", "")
 	}
 
-	// Get user record
-	user, err := models.GetUserByUsername(database.DB, username)
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to get user record for %s: %v", username, err)
-		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
-	}
-
-	// Update last_login timestamp (proof-of-life)
-	now := time.Now()
-	_, err = database.DB.Exec(
-		"UPDATE users SET last_login = ? WHERE username = ?",
-		now, username,
-	)
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to update last_login for %s: %v", username, err)
-		// Non-critical, continue
-	}
-
-	// Proof-of-Life: If an admin logs in, ensure bootstrap token is cleared
-	// This handles both initial bootstrap and "force bootstrap" scenarios
-	if user.IsAdmin {
-		km, err := crypto.GetKeyManager()
-		if err == nil {
-			// Check if token exists before trying to delete (to avoid noise)
-			_, err := km.GetKey("bootstrap_token", "bootstrap")
-			if err == nil {
-				if err := km.DeleteKey("bootstrap_token"); err != nil {
-					logging.ErrorLogger.Printf("Failed to delete bootstrap token: %v", err)
-				} else {
-					logging.InfoLogger.Printf("Bootstrap token deleted after successful admin login")
-				}
-			}
-		}
-	}
-
-	// Generate full access token
-	token, expirationTime, err := auth.GenerateFullAccessToken(username)
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate full access token for %s: %v", username, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to create session")
-	}
-
-	// Generate refresh token
-	refreshToken, err := models.CreateRefreshToken(database.DB, username)
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate refresh token for %s: %v", username, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to create session")
-	}
-
-	// Issue session cookies for browser clients.
-	// CLI clients ignore cookies and use the JSON body tokens via bearer auth.
-	csrfToken, err := GenerateCSRFToken()
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate CSRF token for %s: %v", username, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to create session")
-	}
-	issueSessionCookies(c, token, refreshToken, csrfToken)
-	// Clear temp cookie now that full auth is complete.
-	c.SetCookie(&http.Cookie{
-		Name: CookieTempToken, Value: "", Path: "/", MaxAge: -1,
-		Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode,
-	})
-
-	// Log successful authentication
-	database.LogUserAction(username, "completed TOTP authentication", "")
-	logging.InfoLogger.Printf("TOTP authentication completed for user: %s", username)
-
-	// Log security event for successful login (OPAQUE+TOTP complete)
-	loginEntityID := logging.GetOrCreateEntityID(c)
-	logging.LogSecurityEventWithEntityID(
-		logging.EventOpaqueLoginSuccess,
-		loginEntityID,
-		map[string]interface{}{
-			"username":    username,
-			"auth_method": "OPAQUE+TOTP",
-		},
-	)
-
-	return JSONResponse(c, http.StatusOK, "TOTP authentication completed", map[string]interface{}{
-		"token":         token,
-		"refresh_token": refreshToken,
-		"expires_at":    expirationTime,
-		"auth_method":   "OPAQUE+TOTP",
-		"user": map[string]interface{}{
-			"username":        user.Username,
-			"is_approved":     user.IsApproved,
-			"is_admin":        user.IsAdmin,
-			"total_storage":   user.TotalStorageBytes,
-			"storage_limit":   user.StorageLimitBytes,
-			"storage_used_pc": user.GetStorageUsagePercent(),
-		},
-	})
+	return completeMFALogin(c, username, "OPAQUE+TOTP")
 }
 
 // MFAResetRequest represents the request for TOTP reset
@@ -1157,38 +1029,45 @@ func MFAReset(c echo.Context) error {
 	})
 }
 
-// MFAStatusResponse represents the TOTP status response
+// MFAStatusResponse represents MFA status for a user.
 type MFAStatusResponse struct {
 	Enabled       bool       `json:"enabled"`
 	SetupRequired bool       `json:"setup_required"`
+	MethodType    string     `json:"method_type,omitempty"`
 	LastUsed      *time.Time `json:"last_used,omitempty"`
 	CreatedAt     *time.Time `json:"created_at,omitempty"`
 }
 
-// TOTPStatus returns the TOTP status for a user
+// MFAStatus returns MFA enrollment status for a user.
 func MFAStatus(c echo.Context) error {
-	// Get username from JWT token
 	username := auth.GetUsernameFromToken(c)
 
-	// Check TOTP status
-	totpEnabled, err := auth.IsUserMFAEnabled(database.DB, username)
+	mfaEnabled, err := auth.IsUserMFAEnabled(database.DB, username)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", username, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to check TOTP status")
+		logging.ErrorLogger.Printf("Failed to check MFA status for %s: %v", username, err)
+		return JSONError(c, http.StatusInternalServerError, "Failed to check MFA status")
+	}
+
+	methodType, err := auth.GetUserMFAMethodType(database.DB, username)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to load MFA method for %s: %v", username, err)
+		return JSONError(c, http.StatusInternalServerError, "Failed to check MFA status")
+	}
+	if methodType == "" {
+		methodType, _ = auth.GetPendingMFAMethodType(database.DB, username)
 	}
 
 	response := MFAStatusResponse{
-		Enabled:       totpEnabled,
-		SetupRequired: !totpEnabled,
+		Enabled:       mfaEnabled,
+		SetupRequired: !mfaEnabled,
+		MethodType:    methodType,
 	}
 
-	// If TOTP is enabled, get additional details
-	if totpEnabled {
-		// Note: We don't expose the actual TOTP data, just metadata
+	if mfaEnabled {
 		response.SetupRequired = false
 	}
 
-	return JSONResponse(c, http.StatusOK, "TOTP status retrieved", response)
+	return JSONResponse(c, http.StatusOK, "MFA status retrieved", response)
 }
 
 // GetCurrentUser returns the authenticated user's identity.

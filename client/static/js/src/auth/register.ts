@@ -7,7 +7,7 @@ import { showProgressMessage, hideProgress } from '../ui/progress.js';
 import { getOpaqueClient, storeClientSecret, retrieveClientSecret, clearClientSecret } from '../crypto/opaque.js';
 import { showFileSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
-import { handleTOTPSetupFlow } from './totp-setup.js';
+import { handleMFASetupFlow } from './mfa-setup.js';
 import { validateAccountPassword } from '../crypto/password-validation.js';
 
 export interface RegisterCredentials {
@@ -170,9 +170,10 @@ export class RegistrationManager {
       // Check if TOTP setup is required (new users need to set up 2FA)
       if (registrationData.requires_mfa_setup && registrationData.temp_token) {
         hideProgress();
-        handleTOTPSetupFlow({
+        handleMFASetupFlow({
           tempToken: registrationData.temp_token,
-          username: credentials.username
+          username: credentials.username,
+          mfaMethod: (registrationData.mfa_method || '') as 'totp' | 'webauthn' | '',
         });
         return;
       }

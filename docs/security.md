@@ -204,7 +204,9 @@ The system generates cryptographically secure backup codes during MFA setup. Eac
 - **Path B — Re-enroll with a backup code:** After OPAQUE login, the user consumes a backup code via `POST /api/mfa/recover-with-backup-code`, receives a short-lived `arkfile-mfa-reset` JWT, then calls `POST /api/mfa/reset` to stage new enrollment material and fresh backup codes. The user must complete MFA setup (`/api/mfa/verify`) before gaining full access.
 
 **Credential Storage:**
-TOTP secrets are encrypted with AES-256-GCM under a per-user key derived via HKDF-SHA256 from the Tier-3 user-secret master (`mfa_user` purpose). Backup codes are never stored in cleartext; only Argon2id hashes are persisted.
+TOTP secrets and WebAuthn credential records are encrypted with AES-256-GCM under a per-user key derived via HKDF-SHA256 from the Tier-3 user-secret master (`mfa_user` purpose). Backup codes are never stored in cleartext; only Argon2id hashes are persisted.
+
+**WebAuthn credential blob (`method_type = webauthn`):** The decrypted `credential_data` value is a JSON document matching the `webauthn.Credential` record shape produced by `github.com/go-webauthn/webauthn` (credential ID, COSE public key, attestation metadata, authenticator sign counter, and transport hints). During pending enrollment before the security key ceremony completes, the blob may instead be the literal JSON object `{"pending":true}`. Registration finish writes the full credential record once. Every successful authentication finish must decrypt the blob, verify the assertion (including monotonic `authenticator.signCount`), increment the counter on success, re-encrypt, and update the row in the same transaction as full-token issuance. Tier-3 master rotation re-encrypts this blob opaquely like TOTP secrets.
 
 ### Password Validation and Security Requirements
 

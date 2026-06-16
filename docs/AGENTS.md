@@ -42,7 +42,7 @@ In order to slowly build up the core functionality of the system and prove its c
 
 - `sudo bash scripts/local-deploy.sh --admin-username <name>` - Constructive local/LAN deployment tool. Performs a full recompilation and deploys a usable Arkfile instance with production-like settings: admin bootstrap flow (no hardcoded dev credentials), no WASM trace logging, debug mode off, dev/test API disabled. Use this when deploying a real instance on a local machine or LAN. See `docs/wip/local-deploy.md` for the full design document.
 
-- `sudo bash scripts/prod-deploy.sh --domain <domain> --desec-token <token> --admin-username <name>` - Production VPS deployment tool. First-time deployment for a real domain with Caddy + Let's Encrypt (DNS-01 via deSEC). Uses production-hardened settings: admin bootstrap flow, no debug mode, no dev/test API, no WASM trace logging. Configures firewall, builds Caddy with deSEC DNS module, generates crypto material, and starts all services with health verification. Supports multiple storage backends (local-seaweedfs, wasabi, backblaze, vultr, hetzner, cloudflare-r2, aws-s3, generic-s3).
+- `sudo bash scripts/prod-deploy.sh --domain <domain> --desec-token <token> --admin-username <name>` - Production VPS deployment tool. First-time deployment for a real domain with Caddy + Let's Encrypt (DNS-01 via deSEC). Uses production-hardened settings: admin bootstrap flow, no debug mode, no dev/test API, no WASM trace logging. Configures firewall, builds Caddy with deSEC DNS module, generates crypto material, and starts all services with health verification. Supports multiple storage backends (local-seaweedfs, wasabi, backblaze, vultr, hetzner, cloudflare-r2, aws-s3, generic-s3). See also: `test-deploy.sh`.
 
 - `sudo bash scripts/prod-update.sh` - Production update tool. Rebuilds and redeploys app binaries, TypeScript frontend, and static assets to an existing production deployment WITHOUT touching data, keys, or configuration. Use this to apply code changes to a running production instance. Reads domain and storage config from the existing secrets.env. Does not require re-bootstrapping the admin account.
 
@@ -93,6 +93,10 @@ No emojis in any code, documentation, or responses please. If needed, instead of
 ## Comment/Log/Print Formatting
 
 No "===" or "---" characters for formatting in log/print statements or comments please. Keep comments short and concise and focused on the intended or established functionality of the app in its ideal form. (NOTE: If you find yourself beginning to write something to the effect of "keeping this for backwards compatibility" or "keep this as a fallback" stop and immediately flag this to the developers. Refer to 'Greenfield App' and 'Function Review Sanity Checks' sections for more information.)
+
+## Responses in Chat and Discussions about the Codebase
+
+Use paragraph format as much as possible in responses. Avoid jargon like 'smoke test'/'smoke' (verb), 'hardware spike'/'spike' (verb). 
 
 ## Honesty and Transparency
 

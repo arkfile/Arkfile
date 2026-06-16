@@ -110,11 +110,14 @@ func TestTOTPStatus_Enabled(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// Mock: IsUserMFAEnabled query - actual SQL is:
-	// SELECT enabled, setup_completed FROM user_mfa_credentials WHERE username = ?
+	// Mock: IsUserMFAEnabled query
 	totpSQL := `SELECT enabled, setup_completed FROM user_mfa_credentials WHERE username = \?`
 	totpRows := sqlmock.NewRows([]string{"enabled", "setup_completed"}).AddRow(true, true)
 	mock.ExpectQuery(totpSQL).WithArgs(username).WillReturnRows(totpRows)
+
+	methodSQL := `SELECT method_type, enabled, setup_completed FROM user_mfa_credentials WHERE username = \?`
+	methodRows := sqlmock.NewRows([]string{"method_type", "enabled", "setup_completed"}).AddRow("totp", true, true)
+	mock.ExpectQuery(methodSQL).WithArgs(username).WillReturnRows(methodRows)
 
 	err := MFAStatus(c)
 	require.NoError(t, err)
@@ -144,6 +147,12 @@ func TestTOTPStatus_NotEnabled(t *testing.T) {
 	// Mock: IsUserMFAEnabled - no rows = not enabled
 	totpSQL := `SELECT enabled, setup_completed FROM user_mfa_credentials WHERE username = \?`
 	mock.ExpectQuery(totpSQL).WithArgs(username).WillReturnRows(sqlmock.NewRows([]string{"enabled", "setup_completed"}))
+
+	methodSQL := `SELECT method_type, enabled, setup_completed FROM user_mfa_credentials WHERE username = \?`
+	mock.ExpectQuery(methodSQL).WithArgs(username).WillReturnRows(sqlmock.NewRows([]string{"method_type", "enabled", "setup_completed"}))
+
+	pendingSQL := `SELECT method_type, setup_completed FROM user_mfa_credentials WHERE username = \?`
+	mock.ExpectQuery(pendingSQL).WithArgs(username).WillReturnRows(sqlmock.NewRows([]string{"method_type", "setup_completed"}))
 
 	err := MFAStatus(c)
 	require.NoError(t, err)

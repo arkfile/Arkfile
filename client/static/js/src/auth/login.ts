@@ -13,7 +13,9 @@ import { showProgressMessage, hideProgress } from '../ui/progress.js';
 import { clearAllSessionData, authenticatedFetch } from '../utils/auth.js';
 import { showFileSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
-import { handleTOTPFlow, showTOTPSetupModal } from './totp.js';
+import { handleTOTPFlow } from './totp.js';
+import { handleMFASetupFlow } from './mfa-setup.js';
+import { handleWebAuthnLoginFlow } from './webauthn.js';
 import { getOpaqueClient, storeClientSecret, retrieveClientSecret, clearClientSecret } from '../crypto/opaque.js';
 import {
   deriveFileEncryptionKeyWithCache,
@@ -30,9 +32,10 @@ export interface LoginCredentials {
 export interface LoginResponse {
   token: string;
   refresh_token: string;
-  auth_method: 'OPAQUE';
+  auth_method: 'OPAQUE' | 'OPAQUE+TOTP' | 'OPAQUE+WebAuthn';
   requires_mfa?: boolean;
   requires_mfa_setup?: boolean;
+  mfa_method?: 'totp' | 'webauthn' | '';
   temp_token?: string;
   is_approved?: boolean;
 }
@@ -151,25 +154,29 @@ export class LoginManager {
 
       // Check TOTP FIRST, before any cache/digest operations
       if (loginData.requires_mfa) {
-        // requires_mfa_setup: true means TOTP was never completed during registration.
-        // Route to the setup screen so the user can finish what they started.
+        const mfaMethod = (loginData.mfa_method || '').trim();
+
         if (loginData.requires_mfa_setup) {
-          // Temp token is in the __Host-arkfile-temp cookie (set by server).
-          // Carry the password through the TOTP setup flow so the account key
-          // can be derived after TOTP completes, without storing it on window.
-          handleTOTPFlow({
+          document.querySelector('.modal-overlay')?.remove();
+          handleMFASetupFlow({
+            tempToken: loginData.temp_token!,
+            username: credentials.username,
+            password: credentials.password,
+            mfaMethod: mfaMethod as 'totp' | 'webauthn' | '',
+          });
+          showSuccess('Please complete two-factor authentication setup to finish logging in.');
+          return;
+        }
+
+        if (mfaMethod === 'webauthn') {
+          handleWebAuthnLoginFlow({
             tempToken: loginData.temp_token!,
             username: credentials.username,
             password: credentials.password,
           });
-          // Close the generic code verification modal shown by handleTOTPFlow
-          document.querySelector('.modal-overlay')?.remove();
-          // Launch the comprehensive all-step setup modal instead
-          showTOTPSetupModal();
-          showSuccess('Please complete two-factor authentication setup to finish logging in.');
           return;
         }
-        // requires_mfa (without requires_mfa_setup): TOTP is set up, user needs to enter code.
+
         handleTOTPFlow({
           tempToken: loginData.temp_token!,
           username: credentials.username,

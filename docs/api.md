@@ -88,15 +88,17 @@ Arkfile uses the OPAQUE PAKE (Password-Authenticated Key Exchange) protocol for 
 
 ### 3 - Multi-Factor Authentication (MFA)
 
-Arkfile requires a second factor for all accounts. The first release supports Time-based One-Time Password (TOTP) via an authenticator app. When MFA is enabled, users must complete both OPAQUE authentication and provide a valid second-factor code to access their account.
+Arkfile requires a second factor for all accounts. Users enroll exactly one method: an authenticator app (TOTP) or a security key (WebAuthn). When MFA is enabled, users must complete both OPAQUE authentication and satisfy the enrolled second factor to access their account.
 
-#### MFA Setup and Management (Require Access Token)
+#### MFA Setup and Management (Require Access or MFA Token)
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| POST | `/api/mfa/setup` | Initialize TOTP setup for user account | Access |
-| POST | `/api/mfa/verify` | Complete TOTP setup by verifying a test code | Access |
-| GET | `/api/mfa/status` | Check TOTP enablement status for user | Access |
+| POST | `/api/mfa/setup` | Initialize TOTP setup for user account | Access or MFA Token |
+| POST | `/api/mfa/verify` | Complete TOTP setup by verifying a test code | Access or MFA Token |
+| POST | `/api/mfa/webauthn/register/begin` | Start security-key enrollment; returns WebAuthn options and backup codes | Access or MFA Token |
+| POST | `/api/mfa/webauthn/register/finish` | Complete security-key enrollment with browser credential JSON | Access or MFA Token |
+| GET | `/api/mfa/status` | Check MFA enablement status and enrolled `method_type` | Access |
 | POST | `/api/mfa/reset` | Reset second factor after backup-code recovery | Full Access or Reset Token |
 | POST | `/api/mfa/recover-with-backup-code` | Consume backup code and issue reset token (path B step 1) | MFA Token |
 
@@ -105,14 +107,20 @@ Arkfile requires a second factor for all accounts. The first release supports Ti
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
 | POST | `/api/mfa/auth` | Complete MFA with TOTP code or emergency backup code (`is_backup: true`) | MFA Token |
+| POST | `/api/mfa/webauthn/auth/begin` | Start security-key authentication; returns WebAuthn assertion options | MFA Token |
+| POST | `/api/mfa/webauthn/auth/finish` | Complete security-key authentication with browser credential JSON | MFA Token |
+
+**WebAuthn request bodies:** `register/finish` and `auth/finish` accept `{ "credential": <PublicKeyCredential JSON from browser> }`.
+
+**OPAQUE finalize responses:** When `requires_mfa` or `requires_mfa_setup` is true, responses include `mfa_method`: `"totp"` or `"webauthn"` when enrollment is known (empty when the user has not yet chosen a method).
 
 #### MFA Authentication Flow
 
 When MFA is enabled for a user account, the authentication process involves two steps:
 
-1. **OPAQUE Authentication**: User performs OPAQUE login via `/api/opaque/login/*`. If MFA is required, this returns a temporary MFA token and `requires_mfa: true`.
+1. **OPAQUE Authentication**: User performs OPAQUE login via `/api/opaque/login/*`. If MFA is required, this returns a temporary MFA token, `requires_mfa: true`, and `mfa_method` when enrolled.
 
-2. **MFA Verification**: User provides a TOTP code via `/api/mfa/auth` using the temporary token. Upon success, this returns the full access token and refresh token.
+2. **MFA Verification**: User completes the enrolled method — TOTP via `/api/mfa/auth`, or security key via `/api/mfa/webauthn/auth/begin` then `/api/mfa/webauthn/auth/finish`. Upon success, the server returns the full access token and refresh token.
 
 **Emergency backup code (path A):** POST `/api/mfa/auth` with `is_backup: true` and a 10-character backup code. Issues a full access token without changing the enrolled second factor.
 
