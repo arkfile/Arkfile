@@ -314,7 +314,7 @@ user_mfa_verify_after_reset() {
     safe_exec out code_rc \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure setup-mfa --mfa-method totp --verify "$code"
 
-    if [ $code_rc -ne 0 ] || ! echo "$out" | grep -q "TOTP Setup Complete"; then
+    if [ $code_rc -ne 0 ] || ! echo "$out" | grep -q "MFA setup complete"; then
         error "$test_name failed with output:"
         echo "$out"
         record_test "$test_name" "FAIL"
@@ -373,7 +373,7 @@ user_mfa_enroll_after_deferred_login() {
     safe_exec verify_output verify_exit_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure setup-mfa --mfa-method totp --verify "$code"
 
-    if [ $verify_exit_code -ne 0 ] || ! echo "$verify_output" | grep -q "TOTP Setup Complete"; then
+    if [ $verify_exit_code -ne 0 ] || ! echo "$verify_output" | grep -q "MFA setup complete"; then
         error "MFA verification after admin reset failed:"
         echo "$verify_output"
         record_test "$test_name (verify)" "FAIL"
@@ -830,7 +830,7 @@ run_user_onboarding_mfa_enrollment() {
     safe_exec verify_output verify_exit_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure setup-mfa --mfa-method totp --verify "$code"
 
-    if [ $verify_exit_code -eq 0 ] && echo "$verify_output" | grep -q "TOTP Setup Complete"; then
+    if [ $verify_exit_code -eq 0 ] && echo "$verify_output" | grep -q "MFA setup complete"; then
         record_test "TOTP verification" "PASS"
         echo "$verify_output"
     else

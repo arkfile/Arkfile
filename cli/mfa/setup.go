@@ -92,8 +92,14 @@ func PickMethod(nonInteractive bool, methodFlag Method) (Method, error) {
 	}
 }
 
+// SetupResult is returned after interactive or scripted MFA enrollment.
+type SetupResult struct {
+	Response *APIResponse
+	Method   Method
+}
+
 // RunSetup enrolls TOTP or a security key.
-func RunSetup(req Requester, cfg SetupConfig) (*APIResponse, error) {
+func RunSetup(req Requester, cfg SetupConfig) (*SetupResult, error) {
 	method := cfg.Method
 	if method == "" {
 		var err error
@@ -105,9 +111,17 @@ func RunSetup(req Requester, cfg SetupConfig) (*APIResponse, error) {
 
 	switch method {
 	case MethodWebAuthn:
-		return runWebAuthnSetup(req, cfg)
+		resp, err := runWebAuthnSetup(req, cfg)
+		if err != nil {
+			return nil, err
+		}
+		return &SetupResult{Response: resp, Method: MethodWebAuthn}, nil
 	default:
-		return runTOTPSetup(req, cfg)
+		resp, err := runTOTPSetup(req, cfg)
+		if err != nil {
+			return nil, err
+		}
+		return &SetupResult{Response: resp, Method: MethodTOTP}, nil
 	}
 }
 
@@ -122,9 +136,13 @@ func runWebAuthnSetup(req Requester, cfg SetupConfig) (*APIResponse, error) {
 	}
 
 	if codes := stringSlice(begin.Data["backup_codes"]); len(codes) > 0 {
-		printBackupCodes(codes, cfg.OnBackupCodes, cfg.ShowSecret)
-	} else if cfg.ShowSecret {
-		fmt.Println("BACKUP_CODES: (resume — use codes from prior begin in this session)")
+		emitBackupCodes(codes, cfg)
+	} else if isResumeEnrollment(begin.Data) {
+		if cfg.ShowSecret {
+			fmt.Println("BACKUP_CODES: (resume: use codes from earlier in this session)")
+		} else {
+			fmt.Println("\nBackup codes were issued in an earlier step this session. Use your saved copy.")
+		}
 	}
 
 	fmt.Println("Touch your security key when prompted...")
@@ -164,7 +182,7 @@ func runTOTPSetup(req Requester, cfg SetupConfig) (*APIResponse, error) {
 	}
 
 	if codes := stringSlice(setup.Data["backup_codes"]); len(codes) > 0 {
-		printBackupCodes(codes, cfg.OnBackupCodes, cfg.ShowSecret)
+		emitBackupCodes(codes, cfg)
 	}
 
 	if cfg.ShowSecret {
@@ -308,20 +326,23 @@ func stringSlice(v interface{}) []string {
 	return out
 }
 
-func printBackupCodes(codes []string, hook func([]string), automation bool) {
-	if hook != nil {
-		hook(codes)
+func isResumeEnrollment(data map[string]interface{}) bool {
+	if data == nil {
+		return false
 	}
-	if automation {
-		for i, c := range codes {
-			switch i {
-			case 0:
-				fmt.Printf("BACKUP_CODE_0:%s\n", c)
-			case 1:
-				fmt.Printf("BACKUP_CODE_1:%s\n", c)
-			}
-		}
+	resume, _ := data["resume"].(bool)
+	return resume
+}
+
+func emitBackupCodes(codes []string, cfg SetupConfig) {
+	if cfg.OnBackupCodes != nil {
+		cfg.OnBackupCodes(codes)
 	}
+	if cfg.ShowSecret {
+		PrintAutomationBackupCodes(codes)
+		return
+	}
+	PrintBackupCodes(codes)
 }
 
 // ParseMFAMethod normalizes mfa_method from OPAQUE finalize responses.

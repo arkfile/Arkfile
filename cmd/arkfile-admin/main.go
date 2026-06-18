@@ -776,20 +776,6 @@ func adminMFARequester(client *HTTPClient) mfa.Requester {
 	}
 }
 
-func adminStringSliceFromData(v interface{}) []string {
-	arr, ok := v.([]interface{})
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(arr))
-	for _, item := range arr {
-		if s, ok := item.(string); ok {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
 func handleSetupMFACommand(client *HTTPClient, config *AdminConfig, args []string) error {
 	fs := flag.NewFlagSet("setup-mfa", flag.ExitOnError)
 	var (
@@ -840,7 +826,7 @@ EXAMPLES:
 	}
 
 	method := mfa.Method(strings.ToLower(strings.TrimSpace(*mfaMethod)))
-	finish, err := mfa.RunSetup(adminMFARequester(client), mfa.SetupConfig{
+	result, err := mfa.RunSetup(adminMFARequester(client), mfa.SetupConfig{
 		ServerURL:  config.ServerURL,
 		Token:      token,
 		Method:     method,
@@ -862,15 +848,11 @@ EXAMPLES:
 	if err != nil {
 		return err
 	}
-	if finish == nil {
+	if result == nil || result.Response == nil {
 		return nil
 	}
 
-	enrolledMethod := method
-	if enrolledMethod == "" {
-		enrolledMethod = mfa.MethodTOTP
-	}
-	mfa.PrintSetupComplete(enrolledMethod, adminStringSliceFromData(finish.Data["backup_codes"]))
+	mfa.PrintSetupComplete()
 	return nil
 }
 
@@ -908,7 +890,7 @@ func verifyTOTP(client *HTTPClient, config *AdminConfig, session *AdminSession, 
 		logError("Warning: Failed to save updated session: %v", err)
 	}
 
-	mfa.PrintSetupComplete(mfa.MethodTOTP, adminStringSliceFromData(verifyResp.Data["backup_codes"]))
+	mfa.PrintSetupComplete()
 
 	return nil
 }

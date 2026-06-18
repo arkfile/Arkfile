@@ -26,6 +26,7 @@ require (
 
 require (
 	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc
+	github.com/fxamacker/cbor/v2 v2.9.2
 	github.com/go-webauthn/webauthn v0.17.4
 	golang.org/x/sys v0.45.0
 )
@@ -47,7 +48,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.41.9 // indirect
 	github.com/aws/smithy-go v1.24.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/fxamacker/cbor/v2 v2.9.2 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/go-webauthn/x v0.2.6 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect

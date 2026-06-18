@@ -703,23 +703,11 @@ func handleSetupMFACommand(client *HTTPClient, config *ClientConfig, args []stri
 	}
 
 	method := mfa.Method(strings.ToLower(strings.TrimSpace(*mfaMethod)))
-	finish, err := mfa.RunSetup(clientMFARequester(client), mfa.SetupConfig{
+	result, err := mfa.RunSetup(clientMFARequester(client), mfa.SetupConfig{
 		ServerURL:  config.ServerURL,
 		Token:      token,
 		Method:     method,
 		ShowSecret: *showSecret,
-		OnBackupCodes: func(codes []string) {
-			if *showSecret {
-				for i, c := range codes {
-					switch i {
-					case 0:
-						fmt.Printf("BACKUP_CODE_0:%s\n", c)
-					case 1:
-						fmt.Printf("BACKUP_CODE_1:%s\n", c)
-					}
-				}
-			}
-		},
 		OnComplete: func(resp *mfa.APIResponse) error {
 			if resp.Token != "" {
 				session.AccessToken = resp.Token
@@ -733,30 +721,12 @@ func handleSetupMFACommand(client *HTTPClient, config *ClientConfig, args []stri
 	if err != nil {
 		return err
 	}
-	if finish == nil {
+	if result == nil || result.Response == nil {
 		return nil
 	}
 
-	enrolledMethod := method
-	if enrolledMethod == "" {
-		enrolledMethod = mfa.MethodTOTP
-	}
-	mfa.PrintSetupComplete(enrolledMethod, stringSliceFromData(finish.Data["backup_codes"]))
+	mfa.PrintSetupComplete()
 	return nil
-}
-
-func stringSliceFromData(v interface{}) []string {
-	arr, ok := v.([]interface{})
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(arr))
-	for _, item := range arr {
-		if s, ok := item.(string); ok {
-			out = append(out, s)
-		}
-	}
-	return out
 }
 
 func handleSetupTOTPCommand(client *HTTPClient, config *ClientConfig, args []string) error {
@@ -796,7 +766,7 @@ func verifyTOTP(client *HTTPClient, config *ClientConfig, session *AuthSession, 
 		logError("Warning: Failed to save updated session: %v", err)
 	}
 
-	mfa.PrintSetupComplete(mfa.MethodTOTP, stringSliceFromData(verifyResp.Data["backup_codes"]))
+	mfa.PrintSetupComplete()
 	if backupCodes, ok := verifyResp.Data["backup_codes"].([]interface{}); ok {
 		printAutomationBackupCodes(backupCodes)
 	}
