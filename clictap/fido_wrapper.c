@@ -32,7 +32,8 @@ static fido_opt_t map_opt(int v) {
 
 int wrap_fido_init(void) {
     /* libfido2 1.14+: fido_init() returns void (see fido.h). */
-    fido_init(FIDO_DEBUG);
+    const char *dbg = getenv("ARKFILE_FIDO_DEBUG");
+    fido_init(dbg != NULL && dbg[0] != '\0' ? FIDO_DEBUG : 0);
     return 0;
 }
 
