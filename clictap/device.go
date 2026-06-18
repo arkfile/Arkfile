@@ -72,9 +72,8 @@ func ListDevices() ([]string, error) {
 
 // Attestation holds raw outputs from MakeCredential.
 type Attestation struct {
-	AuthData       []byte
-	CredentialID   []byte
-	AttestationFmt string
+	AuthData     []byte
+	CredentialID []byte
 }
 
 // Assertion holds raw outputs from GetAssertion.
@@ -174,9 +173,7 @@ func MakeCredential(devicePath string, opts MakeCredentialOptions) (*Attestation
 		return nil, fmt.Errorf("security key enrollment failed (touch the key when prompted)")
 	}
 
-	att := &Attestation{
-		AttestationFmt: C.GoString(cOut.attestation_fmt),
-	}
+	att := &Attestation{}
 	if cOut.auth_data_len > 0 {
 		att.AuthData = C.GoBytes(unsafe.Pointer(cOut.auth_data), C.int(cOut.auth_data_len))
 	}

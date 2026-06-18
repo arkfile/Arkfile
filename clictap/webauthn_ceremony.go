@@ -102,12 +102,13 @@ func buildClientDataGet(challengeB64, origin string) []byte {
 	return raw
 }
 
-func buildAttestationObject(fmtName string, authData []byte) ([]byte, error) {
-	if fmtName == "" {
-		fmtName = "none"
-	}
+// buildAttestationObject wraps the raw authenticator data in a "none" attestation
+// object. Arkfile registers with attestationConveyancePreference=none and performs
+// no attestation/MDS validation, so we self-anonymize like a browser does rather
+// than forwarding the authenticator's packed statement (which would fail verification).
+func buildAttestationObject(authData []byte) ([]byte, error) {
 	obj := map[string]interface{}{
-		"fmt":      fmtName,
+		"fmt":      "none",
 		"authData": authData,
 		"attStmt":  map[string]interface{}{},
 	}
@@ -160,7 +161,7 @@ func RegisterFromOptions(optionsJSON []byte, origin string) (json.RawMessage, er
 		return nil, err
 	}
 
-	attObj, err := buildAttestationObject(att.AttestationFmt, att.AuthData)
+	attObj, err := buildAttestationObject(att.AuthData)
 	if err != nil {
 		return nil, err
 	}

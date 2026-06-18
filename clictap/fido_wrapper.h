@@ -33,7 +33,6 @@ typedef struct {
     size_t auth_data_len;
     uint8_t *credential_id;
     size_t credential_id_len;
-    char *attestation_fmt;
 } wrap_fido_attestation;
 
 typedef struct {

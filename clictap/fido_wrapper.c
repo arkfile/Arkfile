@@ -126,18 +126,15 @@ int wrap_fido_make_credential(
         goto cleanup;
     }
 
-    const uint8_t *auth_ptr = fido_cred_authdata_ptr(cred);
-    size_t auth_len = fido_cred_authdata_len(cred);
+    /* fido_cred_authdata_raw_ptr returns the raw authenticator data; the non-raw
+     * accessor wraps it in a CBOR byte string, which would corrupt server parsing. */
+    const uint8_t *auth_ptr = fido_cred_authdata_raw_ptr(cred);
+    size_t auth_len = fido_cred_authdata_raw_len(cred);
     const uint8_t *id_ptr = fido_cred_id_ptr(cred);
     size_t id_len = fido_cred_id_len(cred);
-    const char *fmt = fido_cred_fmt(cred);
 
     if (copy_bytes(&out->auth_data, &out->auth_data_len, auth_ptr, auth_len) != 0) goto cleanup;
     if (copy_bytes(&out->credential_id, &out->credential_id_len, id_ptr, id_len) != 0) goto cleanup;
-    if (fmt != NULL) {
-        out->attestation_fmt = strdup(fmt);
-        if (out->attestation_fmt == NULL) goto cleanup;
-    }
 
     rc = 0;
 
@@ -193,8 +190,9 @@ int wrap_fido_get_assertion(
     }
 
     size_t idx = 0;
-    const uint8_t *auth_ptr = fido_assert_authdata_ptr(assert, idx);
-    size_t auth_len = fido_assert_authdata_len(assert, idx);
+    /* Raw authenticator data (the non-raw accessor returns a CBOR byte string). */
+    const uint8_t *auth_ptr = fido_assert_authdata_raw_ptr(assert, idx);
+    size_t auth_len = fido_assert_authdata_raw_len(assert, idx);
     const uint8_t *sig_ptr = fido_assert_sig_ptr(assert, idx);
     size_t sig_len = fido_assert_sig_len(assert, idx);
     const uint8_t *id_ptr = fido_assert_id_ptr(assert, idx);
@@ -222,7 +220,6 @@ void wrap_fido_attestation_free(wrap_fido_attestation *out) {
     }
     free(out->auth_data);
     free(out->credential_id);
-    free(out->attestation_fmt);
     memset(out, 0, sizeof(*out));
 }
 
