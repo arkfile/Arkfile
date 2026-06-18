@@ -9,6 +9,7 @@ import { showFileSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
 import { handleMFASetupFlow } from './mfa-setup.js';
 import { validateAccountPassword } from '../crypto/password-validation.js';
+import { csrfHeader } from '../utils/auth.js';
 
 export interface RegisterCredentials {
   username: string;
@@ -94,8 +95,10 @@ export class RegistrationManager {
       // Send registration request to server
       const responseStep1 = await fetch('/api/opaque/register/response', {
         method: 'POST',
+        credentials: 'include',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          ...csrfHeader()
         },
         body: JSON.stringify({
           username: credentials.username,
@@ -141,8 +144,10 @@ export class RegistrationManager {
       // Send finalized registration record to server
       const responseStep2 = await fetch('/api/opaque/register/finalize', {
         method: 'POST',
+        credentials: 'include',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          ...csrfHeader()
         },
         body: JSON.stringify({
           session_id: responseData.session_id,

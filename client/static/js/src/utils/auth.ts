@@ -306,6 +306,16 @@ export class AuthManager {
   }
 }
 
+// Returns a headers fragment carrying the CSRF token when a browser session
+// cookie is present, or an empty object otherwise. Used by bootstrap/auth POSTs
+// (OPAQUE login/register, MFA handoff) that issue plain fetches but may run
+// while a stale full-tier cookie still exists in the browser, which would
+// otherwise trip CSRFMiddleware with "CSRF token missing".
+export function csrfHeader(): Record<string, string> {
+  const token = getCsrfToken();
+  return token ? { 'X-CSRF-Token': token } : {};
+}
+
 // Utility function exports
 export const getCsrfTokenExport = getCsrfToken;
 export const isAuthenticated = AuthManager.isAuthenticated.bind(AuthManager);

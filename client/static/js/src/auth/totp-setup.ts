@@ -6,7 +6,7 @@
 import { showError, showSuccess } from '../ui/messages.js';
 import { showProgressMessage, hideProgress } from '../ui/progress.js';
 import { showModal } from '../ui/modals.js';
-import { clearAllSessionData } from '../utils/auth.js';
+import { clearAllSessionData, csrfHeader } from '../utils/auth.js';
 import { showFileSection, showPendingApprovalSection, showAuthSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
 
@@ -104,7 +104,7 @@ async function initiateTOTPSetupForRegistration(_tempToken: string): Promise<TOT
     const response = await fetch('/api/mfa/setup', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
       body: JSON.stringify({}),
     });
     
@@ -317,7 +317,7 @@ async function completeTOTPSetupForRegistration(code: string, flowData: TOTPSetu
     const response = await fetch('/api/mfa/verify', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
       body: JSON.stringify({ code }),
     });
     

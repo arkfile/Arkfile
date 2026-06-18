@@ -294,7 +294,7 @@ input[type="checkbox"] {
     cursor: pointer;
 }
 
-.btn, button, .hero-btn, .share-action-btn, .share-list-refresh, .secondary-button, .danger-button, .btn-primary, .btn-secondary, .logout-btn, .nav-link, .password-toggle-btn, .remove-contact-btn, .cancel-button, .progress-modal .cancel-button {
+.btn, button:not(.password-toggle-btn), .hero-btn, .share-action-btn, .share-list-refresh, .secondary-button, .danger-button, .btn-primary, .btn-secondary, .logout-btn, .nav-link, .remove-contact-btn, .cancel-button, .progress-modal .cancel-button {
     padding: 0.75rem 1.5rem;
     border-radius: 6px;
     cursor: pointer;
@@ -306,7 +306,7 @@ input[type="checkbox"] {
     color: var(--foam-1);
 }
 
-button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .share-list-refresh:hover, .secondary-button:hover, .nav-link:hover {
+button:not(.password-toggle-btn):hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .share-list-refresh:hover, .secondary-button:hover, .nav-link:hover {
     background-color: color-mix(in srgb, var(--current-1) 70%, var(--depth-1));
     transform: translateY(-1px);
     box-shadow: 0 4px 12px color-mix(in srgb, var(--current-1) 30%, transparent);
@@ -317,13 +317,13 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     color: var(--foam-1);
 }
 
-.btn-secondary, .secondary-button, .nav-link, .password-toggle-btn, .remove-contact-btn, .progress-modal .cancel-button {
+.btn-secondary, .secondary-button, .nav-link, .remove-contact-btn, .progress-modal .cancel-button {
     background-color: var(--depth-3);
     color: var(--salt);
     border: 2px solid var(--depth-4);
 }
 
-.btn-secondary:hover, .secondary-button:hover, .nav-link:hover, .password-toggle-btn:hover {
+.btn-secondary:hover, .secondary-button:hover, .nav-link:hover, .remove-contact-btn:hover, .progress-modal .cancel-button:hover {
     background-color: var(--depth-1);
     border-color: var(--current-2);
 }
@@ -2202,34 +2202,53 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     margin-bottom: 0; /* Remove bottom margin when in wrapper */
 }
 
+/* Password visibility toggle (icon control inside text fields; not a primary action button) */
 .password-toggle-btn {
     position: absolute;
     right: 8px;
     top: 50%;
     transform: translateY(-50%);
-    background: none;
-    border: none;
+    box-sizing: border-box;
+    margin: 0;
     padding: 6px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
     cursor: pointer;
-    display: flex;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
     color: var(--foam-2);
-    transition: color 0.2s ease;
+    font: inherit;
+    font-weight: normal;
+    line-height: 1;
+    min-width: 0;
+    min-height: 0;
     width: auto;
     height: auto;
-    min-width: unset;
+    box-shadow: none;
+    transition: color 0.2s ease;
+    -webkit-appearance: none;
+    appearance: none;
 }
 
-.password-toggle-btn:hover {
+.password-toggle-btn:hover,
+.password-toggle-btn:active {
     color: var(--salt);
-    background: none;
+    background: transparent;
+    transform: translateY(-50%);
+    box-shadow: none;
 }
 
 .password-toggle-btn:focus {
+    outline: none;
+}
+
+.password-toggle-btn:focus-visible {
     outline: 2px solid var(--current-1);
     outline-offset: 2px;
-    border-radius: 4px;
+    transform: translateY(-50%);
+    box-shadow: none;
 }
 
 .password-toggle-btn .eye-icon {
@@ -2248,6 +2267,21 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 /* Adjust for password fields with validation feedback */
 .password-section .password-input-wrapper {
     margin-bottom: 0.5rem;
+}
+
+.password-modal-field .password-input-wrapper,
+.share-form-container .password-input-wrapper,
+.password-form .password-input-wrapper,
+.login-form .password-input-wrapper,
+.register-form .password-input-wrapper,
+.upload-section .password-input-wrapper {
+    width: 100%;
+}
+
+.password-input-wrapper .password-modal-input {
+    width: 100%;
+    margin-bottom: 0;
+    padding-right: 45px;
 }
 
 /* Pending Approval Section */

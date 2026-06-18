@@ -10,7 +10,7 @@
 
 import { showError, showSuccess } from '../ui/messages.js';
 import { showProgressMessage, hideProgress } from '../ui/progress.js';
-import { clearAllSessionData, authenticatedFetch } from '../utils/auth.js';
+import { clearAllSessionData, authenticatedFetch, csrfHeader } from '../utils/auth.js';
 import { showFileSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
 import { handleTOTPFlow } from './totp.js';
@@ -76,8 +76,10 @@ export class LoginManager {
       // Send credential request to server
       const responseStep1 = await fetch('/api/opaque/login/response', {
         method: 'POST',
+        credentials: 'include',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          ...csrfHeader()
         },
         body: JSON.stringify({
           username: credentials.username,
@@ -125,8 +127,10 @@ export class LoginManager {
       // Send authentication token to server for verification
       const responseStep2 = await fetch('/api/opaque/login/finalize', {
         method: 'POST',
+        credentials: 'include',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          ...csrfHeader()
         },
         body: JSON.stringify({
           session_id: responseData.session_id,

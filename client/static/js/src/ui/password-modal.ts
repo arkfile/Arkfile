@@ -8,6 +8,7 @@
  */
 
 import type { CacheDurationHours } from '../crypto/account-key-cache.js';
+import { addPasswordToggle } from '../utils/password-toggle.js';
 
 // ============================================================================
 // Types
@@ -382,6 +383,8 @@ export function showPasswordPrompt(options: PasswordPromptOptions): Promise<Pass
       reject(new Error('Failed to create password modal'));
       return;
     }
+
+    addPasswordToggle(input);
     
     // Focus input
     setTimeout(() => input.focus(), 100);

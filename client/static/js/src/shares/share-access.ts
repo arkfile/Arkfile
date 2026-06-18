@@ -26,6 +26,7 @@ import {
   triggerBrowserDownloadFromUrl,
   StreamingDownloadResult,
 } from '../files/streaming-download';
+import { addPasswordToggle } from '../utils/password-toggle';
 
 interface ShareEnvelope {
   share_id: string;
@@ -81,6 +82,11 @@ export class ShareAccessUI {
       e.preventDefault();
       this.handleUnlock();
     });
+
+    const sharePassword = document.getElementById('sharePassword') as HTMLInputElement | null;
+    if (sharePassword) {
+      addPasswordToggle(sharePassword);
+    }
   }
 
   private async handleUnlock(): Promise<void> {

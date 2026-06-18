@@ -5,7 +5,7 @@
 import { showError, showSuccess } from '../ui/messages';
 import { showProgressMessage, hideProgress } from '../ui/progress';
 import { showModal, showTOTPAppsModal } from '../ui/modals';
-import { clearAllSessionData, AuthManager } from '../utils/auth';
+import { clearAllSessionData, AuthManager, csrfHeader } from '../utils/auth';
 import { getAdminContactForDisplay } from '../ui/footer';
 import { showFileSection, showAuthSection, showTOTPSetupSection } from '../ui/sections';
 import { loadFiles } from '../files/list';
@@ -312,6 +312,7 @@ async function submitMFAAuth(code: string, isBackup: boolean): Promise<void> {
       credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
+        ...csrfHeader(),
       },
       body: JSON.stringify({
         code: code,
@@ -373,7 +374,7 @@ async function submitBackupReenroll(code: string): Promise<void> {
     const recoveryResponse = await fetch('/api/mfa/recover-with-backup-code', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
       body: JSON.stringify({ backup_code: code }),
     });
 
@@ -390,7 +391,7 @@ async function submitBackupReenroll(code: string): Promise<void> {
     const resetResponse = await fetch('/api/mfa/reset', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
       body: JSON.stringify({}),
     });
 
@@ -518,7 +519,7 @@ export async function initiateTOTPSetup(): Promise<TOTPSetupData | null> {
     const response = await fetch('/api/mfa/setup', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
       body: JSON.stringify({}),
     });
     
@@ -560,7 +561,7 @@ export async function completeTOTPSetup(code: string): Promise<Record<string, an
     const response = await fetch('/api/mfa/verify', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
       body: JSON.stringify({ code }),
     });
     

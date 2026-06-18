@@ -13,7 +13,7 @@ import type {
 import { showError, showSuccess } from '../ui/messages.js';
 import { showProgressMessage, hideProgress } from '../ui/progress.js';
 import { showModal } from '../ui/modals.js';
-import { clearAllSessionData } from '../utils/auth.js';
+import { clearAllSessionData, csrfHeader } from '../utils/auth.js';
 import { getAdminContactForDisplay } from '../ui/footer.js';
 import { showFileSection, showPendingApprovalSection, showAuthSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
@@ -125,7 +125,7 @@ async function beginWebAuthnEnrollment(
     const response = await fetch('/api/mfa/webauthn/register/begin', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
       body: JSON.stringify({}),
     });
 
@@ -229,7 +229,7 @@ async function finishWebAuthnEnrollment(
     const response = await fetch('/api/mfa/webauthn/register/finish', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
       body: JSON.stringify({ credential }),
     });
 
@@ -399,7 +399,7 @@ async function runBackupSignIn(modal: Element): Promise<void> {
     const response = await fetch('/api/mfa/auth', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
       body: JSON.stringify({ code, is_backup: true }),
     });
     hideProgress();
@@ -442,7 +442,7 @@ async function runWebAuthnLogin(modal: Element): Promise<void> {
     const beginResp = await fetch('/api/mfa/webauthn/auth/begin', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
       body: JSON.stringify({}),
     });
 
@@ -461,7 +461,7 @@ async function runWebAuthnLogin(modal: Element): Promise<void> {
     const finishResp = await fetch('/api/mfa/webauthn/auth/finish', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
       body: JSON.stringify({ credential }),
     });
 

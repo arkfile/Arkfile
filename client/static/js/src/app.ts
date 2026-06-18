@@ -13,6 +13,7 @@ import { loadFiles, displayFiles } from './files/list';
 import { setupLoginForm, login, logout } from './auth/login';
 import { setupRegisterForm, register } from './auth/register';
 import { registerSwDownload } from './files/sw-streaming-download';
+import { addPasswordTogglesInContainer } from './utils/password-toggle';
 
 // Register CSP Trusted Types global default policy to securely handle innerHTML sinks
 if (typeof window !== 'undefined' && (window as any).trustedTypes && (window as any).trustedTypes.createPolicy) {
@@ -393,9 +394,22 @@ class ArkFileApp {
 
     // Password type toggle
     this.setupPasswordTypeToggle();
+    this.setupPasswordToggles();
 
     // TOTP setup functionality
     this.setupTOTPListeners();
+  }
+
+  private setupPasswordToggles(): void {
+    const authSection = document.getElementById('auth-section');
+    if (authSection) {
+      addPasswordTogglesInContainer(authSection);
+    }
+
+    const uploadSection = document.querySelector('.upload-section');
+    if (uploadSection instanceof HTMLElement) {
+      addPasswordTogglesInContainer(uploadSection);
+    }
   }
 
   private setupPasswordTypeToggle(): void {

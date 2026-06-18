@@ -26,6 +26,7 @@ import {
 import { AAD_FIELD_FILENAME, AAD_FIELD_SHA256 } from '../crypto/aad';
 import { ShareCreator, type FileInfo } from '../shares/share-creation';
 import { validateSharePassword } from '../crypto/password-validation';
+import { addPasswordToggle } from '../utils/password-toggle';
 
 // ============================================================================
 // Types
@@ -124,6 +125,8 @@ function promptForSharePassword(): Promise<{ password: string; expiresMinutes: n
     const form = document.getElementById('share-modal-form') as HTMLFormElement;
     const pwInput = document.getElementById('share-password-input') as HTMLInputElement;
     const confirmInput = document.getElementById('share-password-confirm') as HTMLInputElement;
+    addPasswordToggle(pwInput);
+    addPasswordToggle(confirmInput);
     const maxDownloadsInput = document.getElementById('share-max-downloads') as HTMLInputElement;
     const feedbackEl = document.getElementById('share-pw-feedback') as HTMLUListElement;
     const errorEl = document.getElementById('share-modal-error') as HTMLElement;
