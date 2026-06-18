@@ -341,6 +341,7 @@ build_libfido2() {
             -DBUILD_EXAMPLES=OFF \
             -DBUILD_MANPAGES=OFF \
             -DBUILD_TOOLS=OFF \
+            -DBUILD_TESTS=OFF \
             -DCMAKE_INSTALL_PREFIX="$FIDO_PREFIX" \
             -DCRYPTO_BACKEND=openssl \
             "${CMAKE_EXTRA_ARGS[@]}"
