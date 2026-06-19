@@ -75,20 +75,17 @@ func getUserRevocationTimeCached(db *sql.DB, username string) (time.Time, error)
 func parseEitherTierToken(tokenString string) (*jwt.Token, error) {
 	parser := jwt.NewParser(jwt.WithValidMethods([]string{jwt.SigningMethodEdDSA.Alg()}))
 
-	// Try full-tier first (the common case)
-	token, err := parser.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (interface{}, error) {
-		return GetJWTFullPublicKey(), nil
-	})
+	// Try full-tier first (the common case), accepting any version in the
+	// verification set so logout works across a key rotation overlap.
+	token, err := parseEdDSAAnyKey(parser, tokenString, GetJWTFullVerificationKeys())
 	if err == nil && token.Valid {
 		return token, nil
 	}
 
-	// Fall back to temp-tier
-	token, err2 := parser.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (interface{}, error) {
-		return GetJWTTempPublicKey(), nil
-	})
-	if err2 == nil && token.Valid {
-		return token, nil
+	// Fall back to temp-tier.
+	token2, err2 := parseEdDSAAnyKey(parser, tokenString, GetJWTTempVerificationKeys())
+	if err2 == nil && token2.Valid {
+		return token2, nil
 	}
 
 	// Both failed -- return the original full-tier error for diagnostic clarity

@@ -246,7 +246,9 @@ func RegisterRoutes() {
 	// System monitoring - admin endpoints
 	adminGroup.GET("/system/status", AdminSystemStatus)
 	adminGroup.GET("/system/health", AdminSystemHealth)
-	adminGroup.POST("/system/prepare-user-secret-master-rotation", AdminPrepareTier3MasterRotation)
+	adminGroup.POST("/system/prepare-user-secret-master-rotation", AdminPrepareUserSecretMasterRotation)
+	adminGroup.POST("/system/rotate-jwt-keys", AdminRotateJWTKeys)
+	adminGroup.POST("/system/retire-jwt-key-version", AdminRetireJWTKeyVersion)
 	adminGroup.GET("/security/events", AdminSecurityEvents)
 
 	// Storage management - admin endpoints (multi-backend)

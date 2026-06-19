@@ -18,7 +18,7 @@ func setupApplyRotationDB(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	schema := `
-		CREATE TABLE tier3_rotation_mandates (
+		CREATE TABLE user_secret_rotation_mandates (
 			nonce TEXT PRIMARY KEY,
 			admin_username TEXT NOT NULL,
 			expires_at TIMESTAMP NOT NULL,
@@ -42,7 +42,7 @@ func setupApplyRotationDB(t *testing.T) *sql.DB {
 	return db
 }
 
-func seedTier3WrappedRows(t *testing.T, db *sql.DB, oldMaster []byte, username string) {
+func seedUserSecretWrappedRows(t *testing.T, db *sql.DB, oldMaster []byte, username string) {
 	t.Helper()
 	oldMFAKey, err := crypto.DeriveMFAUserKeyFromMaster(oldMaster, username)
 	if err != nil {
@@ -59,7 +59,7 @@ func seedTier3WrappedRows(t *testing.T, db *sql.DB, oldMaster []byte, username s
 		t.Fatal(err)
 	}
 
-	contactKey, err := crypto.DeriveTier3SubkeyFromMaster(oldMaster, []byte("contact_info"))
+	contactKey, err := crypto.DeriveUserSecretSubkeyFromMaster(oldMaster, []byte("contact_info"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func seedTier3WrappedRows(t *testing.T, db *sql.DB, oldMaster []byte, username s
 	}
 }
 
-func TestApplyTier3MasterRotation_FullPath(t *testing.T) {
+func TestApplyUserSecretMasterRotation_FullPath(t *testing.T) {
 	ResetKeysForTest()
 	if err := LoadJWTFullKeys(); err != nil {
 		t.Fatal(err)
@@ -88,26 +88,26 @@ func TestApplyTier3MasterRotation_FullPath(t *testing.T) {
 	defer db.Close()
 
 	oldMaster := make([]byte, 32)
-	copy(oldMaster, []byte("old-tier3-master-key-material!!"))
+	copy(oldMaster, []byte("old-user-secret-master-material"))
 
-	mandate, _, err := IssueTier3RotationMandate(db, "rotation-admin")
+	mandate, _, err := IssueUserSecretRotationMandate(db, "rotation-admin")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	const username = "rotation-user"
-	seedTier3WrappedRows(t, db, oldMaster, username)
+	seedUserSecretWrappedRows(t, db, oldMaster, username)
 
 	tmpDir := t.TempDir()
 	masterPath := filepath.Join(tmpDir, "etc", "keys", "user-secret-master.bin")
 	if err := os.MkdirAll(filepath.Dir(masterPath), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := crypto.WriteTier3MasterFile(masterPath, oldMaster, -1, -1); err != nil {
+	if err := crypto.WriteUserSecretMasterFile(masterPath, oldMaster, -1, -1); err != nil {
 		t.Fatal(err)
 	}
 
-	stats, err := ApplyTier3MasterRotation(ApplyTier3MasterRotationOptions{
+	stats, err := ApplyUserSecretMasterRotation(ApplyUserSecretMasterRotationOptions{
 		BaseDir:          tmpDir,
 		MasterKeyPath:    masterPath,
 		Mandate:          mandate,
@@ -122,7 +122,7 @@ func TestApplyTier3MasterRotation_FullPath(t *testing.T) {
 		t.Fatalf("unexpected stats: %+v", stats)
 	}
 
-	newMaster, err := crypto.ReadTier3MasterFile(masterPath)
+	newMaster, err := crypto.ReadUserSecretMasterFile(masterPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestApplyTier3MasterRotation_FullPath(t *testing.T) {
 	}
 }
 
-func TestApplyTier3MasterRotation_RejectsReplay(t *testing.T) {
+func TestApplyUserSecretMasterRotation_RejectsReplay(t *testing.T) {
 	ResetKeysForTest()
 	if err := LoadJWTFullKeys(); err != nil {
 		t.Fatal(err)
@@ -162,20 +162,20 @@ func TestApplyTier3MasterRotation_RejectsReplay(t *testing.T) {
 	defer db.Close()
 
 	oldMaster := make([]byte, 32)
-	copy(oldMaster, []byte("old-tier3-master-key-material!!"))
+	copy(oldMaster, []byte("old-user-secret-master-material"))
 
-	mandate, _, err := IssueTier3RotationMandate(db, "rotation-admin")
+	mandate, _, err := IssueUserSecretRotationMandate(db, "rotation-admin")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	tmpDir := t.TempDir()
 	masterPath := filepath.Join(tmpDir, "user-secret-master.bin")
-	if err := crypto.WriteTier3MasterFile(masterPath, oldMaster, -1, -1); err != nil {
+	if err := crypto.WriteUserSecretMasterFile(masterPath, oldMaster, -1, -1); err != nil {
 		t.Fatal(err)
 	}
 
-	opts := ApplyTier3MasterRotationOptions{
+	opts := ApplyUserSecretMasterRotationOptions{
 		BaseDir:          tmpDir,
 		MasterKeyPath:    masterPath,
 		Mandate:          mandate,
@@ -184,26 +184,26 @@ func TestApplyTier3MasterRotation_RejectsReplay(t *testing.T) {
 		BackupDirectory:  filepath.Join(tmpDir, "backups"),
 	}
 
-	if _, err := ApplyTier3MasterRotation(opts); err != nil {
+	if _, err := ApplyUserSecretMasterRotation(opts); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ApplyTier3MasterRotation(opts); err == nil {
+	if _, err := ApplyUserSecretMasterRotation(opts); err == nil {
 		t.Fatal("expected replay apply to fail")
 	}
 }
 
-func TestApplyTier3MasterRotation_RejectsInvalidMandate(t *testing.T) {
+func TestApplyUserSecretMasterRotation_RejectsInvalidMandate(t *testing.T) {
 	db := setupApplyRotationDB(t)
 	defer db.Close()
 
 	tmpDir := t.TempDir()
 	masterPath := filepath.Join(tmpDir, "user-secret-master.bin")
 	oldMaster := make([]byte, 32)
-	if err := crypto.WriteTier3MasterFile(masterPath, oldMaster, -1, -1); err != nil {
+	if err := crypto.WriteUserSecretMasterFile(masterPath, oldMaster, -1, -1); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := ApplyTier3MasterRotation(ApplyTier3MasterRotationOptions{
+	_, err := ApplyUserSecretMasterRotation(ApplyUserSecretMasterRotationOptions{
 		MasterKeyPath:    masterPath,
 		Mandate:          "not-a-valid-mandate",
 		DB:               db,

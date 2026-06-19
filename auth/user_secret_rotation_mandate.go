@@ -13,12 +13,12 @@ import (
 )
 
 const (
-	Tier3RotationMandatePurpose = "user-secret-master-rotation"
-	Tier3RotationMandateTTL    = 10 * time.Minute
+	UserSecretRotationMandatePurpose = "user-secret-master-rotation"
+	UserSecretRotationMandateTTL     = 10 * time.Minute
 )
 
-// Tier3RotationMandatePayload is the signed authorization for offline Tier-3 master rotation.
-type Tier3RotationMandatePayload struct {
+// UserSecretRotationMandatePayload is the signed authorization for offline user-secret master rotation.
+type UserSecretRotationMandatePayload struct {
 	Purpose       string `json:"purpose"`
 	AdminUsername string `json:"admin_username"`
 	Nonce         string `json:"nonce"`
@@ -26,8 +26,8 @@ type Tier3RotationMandatePayload struct {
 	ExpiresAt     int64  `json:"expires_at"`
 }
 
-// IssueTier3RotationMandate records a single-use mandate and returns a signed blob for offline apply.
-func IssueTier3RotationMandate(db *sql.DB, adminUsername string) (mandate string, expiresAt time.Time, err error) {
+// IssueUserSecretRotationMandate records a single-use mandate and returns a signed blob for offline apply.
+func IssueUserSecretRotationMandate(db *sql.DB, adminUsername string) (mandate string, expiresAt time.Time, err error) {
 	if adminUsername == "" {
 		return "", time.Time{}, fmt.Errorf("admin username is required")
 	}
@@ -42,10 +42,10 @@ func IssueTier3RotationMandate(db *sql.DB, adminUsername string) (mandate string
 	nonce := hex.EncodeToString(nonceBytes)
 
 	now := time.Now().UTC()
-	expiresAt = now.Add(Tier3RotationMandateTTL)
+	expiresAt = now.Add(UserSecretRotationMandateTTL)
 
 	_, err = db.Exec(`
-		INSERT INTO tier3_rotation_mandates (nonce, admin_username, expires_at)
+		INSERT INTO user_secret_rotation_mandates (nonce, admin_username, expires_at)
 		VALUES (?, ?, ?)`,
 		nonce, adminUsername, expiresAt,
 	)
@@ -53,30 +53,30 @@ func IssueTier3RotationMandate(db *sql.DB, adminUsername string) (mandate string
 		return "", time.Time{}, fmt.Errorf("failed to store rotation mandate: %w", err)
 	}
 
-	payload := Tier3RotationMandatePayload{
-		Purpose:       Tier3RotationMandatePurpose,
+	payload := UserSecretRotationMandatePayload{
+		Purpose:       UserSecretRotationMandatePurpose,
 		AdminUsername: adminUsername,
 		Nonce:         nonce,
 		IssuedAt:      now.Unix(),
 		ExpiresAt:     expiresAt.Unix(),
 	}
 
-	mandate, err = signTier3RotationMandate(payload, GetJWTFullPrivateKey())
+	mandate, err = signUserSecretRotationMandate(payload, GetJWTFullPrivateKey())
 	if err != nil {
 		return "", time.Time{}, err
 	}
 	return mandate, expiresAt, nil
 }
 
-// VerifyTier3RotationMandate validates the mandate signature and payload fields.
-func VerifyTier3RotationMandate(mandate string, publicKey ed25519.PublicKey) (*Tier3RotationMandatePayload, error) {
-	payload, err := parseSignedTier3RotationMandate(mandate, publicKey)
+// VerifyUserSecretRotationMandate validates the mandate signature and payload fields.
+func VerifyUserSecretRotationMandate(mandate string, publicKey ed25519.PublicKey) (*UserSecretRotationMandatePayload, error) {
+	payload, err := parseSignedUserSecretRotationMandate(mandate, publicKey)
 	if err != nil {
 		return nil, err
 	}
 
 	now := time.Now().UTC()
-	if payload.Purpose != Tier3RotationMandatePurpose {
+	if payload.Purpose != UserSecretRotationMandatePurpose {
 		return nil, fmt.Errorf("invalid mandate purpose")
 	}
 	if payload.Nonce == "" || payload.AdminUsername == "" {
@@ -88,10 +88,10 @@ func VerifyTier3RotationMandate(mandate string, publicKey ed25519.PublicKey) (*T
 	return payload, nil
 }
 
-// ConsumeTier3RotationMandate marks a mandate nonce as used.
-func ConsumeTier3RotationMandate(db *sql.DB, nonce string) error {
+// ConsumeUserSecretRotationMandate marks a mandate nonce as used.
+func ConsumeUserSecretRotationMandate(db *sql.DB, nonce string) error {
 	res, err := db.Exec(`
-		UPDATE tier3_rotation_mandates
+		UPDATE user_secret_rotation_mandates
 		SET consumed_at = CURRENT_TIMESTAMP
 		WHERE nonce = ? AND consumed_at IS NULL AND expires_at > CURRENT_TIMESTAMP`,
 		nonce,
@@ -106,7 +106,7 @@ func ConsumeTier3RotationMandate(db *sql.DB, nonce string) error {
 	return nil
 }
 
-func signTier3RotationMandate(payload Tier3RotationMandatePayload, privateKey ed25519.PrivateKey) (string, error) {
+func signUserSecretRotationMandate(payload UserSecretRotationMandatePayload, privateKey ed25519.PrivateKey) (string, error) {
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal mandate payload: %w", err)
@@ -116,7 +116,7 @@ func signTier3RotationMandate(payload Tier3RotationMandatePayload, privateKey ed
 		base64.RawURLEncoding.EncodeToString(sig), nil
 }
 
-func parseSignedTier3RotationMandate(mandate string, publicKey ed25519.PublicKey) (*Tier3RotationMandatePayload, error) {
+func parseSignedUserSecretRotationMandate(mandate string, publicKey ed25519.PublicKey) (*UserSecretRotationMandatePayload, error) {
 	parts := strings.Split(mandate, ".")
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("invalid mandate format")
@@ -132,7 +132,7 @@ func parseSignedTier3RotationMandate(mandate string, publicKey ed25519.PublicKey
 	if !ed25519.Verify(publicKey, payloadJSON, sig) {
 		return nil, fmt.Errorf("invalid mandate signature")
 	}
-	var payload Tier3RotationMandatePayload
+	var payload UserSecretRotationMandatePayload
 	if err := json.Unmarshal(payloadJSON, &payload); err != nil {
 		return nil, fmt.Errorf("invalid mandate payload: %w", err)
 	}

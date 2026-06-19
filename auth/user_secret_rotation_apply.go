@@ -15,8 +15,8 @@ import (
 	"github.com/84adam/Arkfile/crypto"
 )
 
-// ApplyTier3MasterRotationOptions configures offline Tier-3 master rotation.
-type ApplyTier3MasterRotationOptions struct {
+// ApplyUserSecretMasterRotationOptions configures offline user-secret master rotation.
+type ApplyUserSecretMasterRotationOptions struct {
 	BaseDir          string
 	MasterKeyPath    string
 	Mandate          string
@@ -28,9 +28,9 @@ type ApplyTier3MasterRotationOptions struct {
 	MasterKeyGID     int
 }
 
-// ApplyTier3MasterRotation performs mandate-gated Tier-3 master rotation with DB re-encryption.
-func ApplyTier3MasterRotation(opts ApplyTier3MasterRotationOptions) (crypto.Tier3RotationStats, error) {
-	var stats crypto.Tier3RotationStats
+// ApplyUserSecretMasterRotation performs mandate-gated user-secret master rotation with DB re-encryption.
+func ApplyUserSecretMasterRotation(opts ApplyUserSecretMasterRotationOptions) (crypto.UserSecretRotationStats, error) {
+	var stats crypto.UserSecretRotationStats
 
 	if opts.DB == nil {
 		return stats, fmt.Errorf("database handle is required")
@@ -65,16 +65,16 @@ func ApplyTier3MasterRotation(opts ApplyTier3MasterRotationOptions) (crypto.Tier
 		return stats, fmt.Errorf("failed to load JWT verification keys: %w", err)
 	}
 
-	payload, err := VerifyTier3RotationMandate(opts.Mandate, GetJWTFullPublicKey())
+	payload, err := VerifyUserSecretRotationMandate(opts.Mandate, GetJWTFullPublicKey())
 	if err != nil {
 		return stats, err
 	}
 
-	if err := ConsumeTier3RotationMandate(opts.DB, payload.Nonce); err != nil {
+	if err := ConsumeUserSecretRotationMandate(opts.DB, payload.Nonce); err != nil {
 		return stats, err
 	}
 
-	oldMaster, err := crypto.ReadTier3MasterFile(opts.MasterKeyPath)
+	oldMaster, err := crypto.ReadUserSecretMasterFile(opts.MasterKeyPath)
 	if err != nil {
 		return stats, err
 	}
@@ -82,7 +82,7 @@ func ApplyTier3MasterRotation(opts ApplyTier3MasterRotationOptions) (crypto.Tier
 
 	newMaster := make([]byte, 32)
 	if _, err := rand.Read(newMaster); err != nil {
-		return stats, fmt.Errorf("failed to generate new Tier-3 master key: %w", err)
+		return stats, fmt.Errorf("failed to generate new user-secret master key: %w", err)
 	}
 	defer crypto.SecureClear(newMaster)
 
@@ -95,23 +95,23 @@ func ApplyTier3MasterRotation(opts ApplyTier3MasterRotationOptions) (crypto.Tier
 		return stats, fmt.Errorf("failed to backup current master key: %w", err)
 	}
 
-	stats, err = crypto.ReencryptAllTier3WrappedRows(opts.DB, oldMaster, newMaster)
+	stats, err = crypto.ReencryptAllUserSecretWrappedRows(opts.DB, oldMaster, newMaster)
 	if err != nil {
 		return stats, fmt.Errorf("database re-encryption failed: %w", err)
 	}
 
-	if err := crypto.WriteTier3MasterFile(opts.MasterKeyPath, newMaster, opts.MasterKeyUID, opts.MasterKeyGID); err != nil {
-		return stats, fmt.Errorf("failed to install new Tier-3 master key: %w", err)
+	if err := crypto.WriteUserSecretMasterFile(opts.MasterKeyPath, newMaster, opts.MasterKeyUID, opts.MasterKeyGID); err != nil {
+		return stats, fmt.Errorf("failed to install new user-secret master key: %w", err)
 	}
 
-	if err := verifyTier3RotationSample(opts.DB, newMaster); err != nil {
+	if err := verifyUserSecretRotationSample(opts.DB, newMaster); err != nil {
 		return stats, fmt.Errorf("post-rotation verification failed: %w", err)
 	}
 
 	return stats, nil
 }
 
-func verifyTier3RotationSample(db *sql.DB, newMaster []byte) error {
+func verifyUserSecretRotationSample(db *sql.DB, newMaster []byte) error {
 	var username string
 	var credentialData []byte
 	err := db.QueryRow(`SELECT username, credential_data FROM user_mfa_credentials LIMIT 1`).Scan(&username, &credentialData)
@@ -134,7 +134,7 @@ func verifyTier3RotationSample(db *sql.DB, newMaster []byte) error {
 	var dataB64, nonceB64 string
 	err = db.QueryRow(`SELECT encrypted_data, nonce FROM user_contact_info LIMIT 1`).Scan(&dataB64, &nonceB64)
 	if err == nil {
-		key, kerr := crypto.DeriveTier3SubkeyFromMaster(newMaster, []byte("contact_info"))
+		key, kerr := crypto.DeriveUserSecretSubkeyFromMaster(newMaster, []byte("contact_info"))
 		if kerr != nil {
 			return kerr
 		}

@@ -687,7 +687,7 @@ sudo systemctl start arkfile
 # Execute emergency procedures
 ./scripts/maintenance/emergency-procedures.sh
 
-# Tier-3 master rotation — see docs/security.md Key Rotation Procedures
+# User-secret master rotation — see docs/security.md Key Rotation Procedures
 ```
 
 ### Getting Help

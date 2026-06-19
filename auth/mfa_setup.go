@@ -141,7 +141,7 @@ func GetPendingMFASetup(db *sql.DB, username string) (*MFASetup, error) {
 	}, nil
 }
 
-// StoreMFASetup stores enrollment data with Tier-3 encryption and hashed backup codes.
+// StoreMFASetup stores enrollment data with user-secret master encryption and hashed backup codes.
 func StoreMFASetup(db *sql.DB, username string, setup *MFASetup) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -151,7 +151,7 @@ func StoreMFASetup(db *sql.DB, username string, setup *MFASetup) error {
 
 	mfaKey, err := crypto.DeriveMFAUserKey(username)
 	if err != nil {
-		return fmt.Errorf("failed to derive MFA user key in Tier-3: %w", err)
+		return fmt.Errorf("failed to derive MFA user key: %w", err)
 	}
 	defer crypto.SecureZeroMFAKey(mfaKey)
 
@@ -255,7 +255,7 @@ func ResetMFA(db *sql.DB, username, backupCode string) (*MFASetup, error) {
 
 	mfaKey, err := crypto.DeriveMFAUserKey(username)
 	if err != nil {
-		return nil, fmt.Errorf("failed to derive MFA user key in Tier-3: %w", err)
+		return nil, fmt.Errorf("failed to derive MFA user key: %w", err)
 	}
 	defer crypto.SecureZeroMFAKey(mfaKey)
 

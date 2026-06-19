@@ -280,17 +280,17 @@ func (k *KeyHealthCheck) Check() HealthCheck {
 		check.Details["key_directory"] = "exists"
 	}
 
-	tier3Path := filepath.Join(keyDir, "user-secret-master.bin")
-	if _, err := os.Stat(tier3Path); os.IsNotExist(err) {
-		check.Details["tier3_master_key"] = "missing"
+	userSecretMasterPath := filepath.Join(keyDir, "user-secret-master.bin")
+	if _, err := os.Stat(userSecretMasterPath); os.IsNotExist(err) {
+		check.Details["user_secret_master_key"] = "missing"
 		issues++
 	} else {
-		check.Details["tier3_master_key"] = "exists"
+		check.Details["user_secret_master_key"] = "exists"
 	}
 
 	if issues == 0 {
 		check.Status = StatusHealthy
-		check.Message = "Key directory and Tier-3 master key present"
+		check.Message = "Key directory and user-secret master key present"
 	} else if issues == 1 {
 		check.Status = StatusDegraded
 		check.Message = "Key health issue detected"

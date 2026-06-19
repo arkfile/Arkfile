@@ -204,9 +204,9 @@ The system generates cryptographically secure backup codes during MFA setup. Eac
 - **Path B — Re-enroll with a backup code:** After OPAQUE login, the user consumes a backup code via `POST /api/mfa/recover-with-backup-code`, receives a short-lived `arkfile-mfa-reset` JWT, then calls `POST /api/mfa/reset` to stage new enrollment material and fresh backup codes. The user must complete MFA setup (`/api/mfa/verify`) before gaining full access.
 
 **Credential Storage:**
-TOTP secrets and WebAuthn credential records are encrypted with AES-256-GCM under a per-user key derived via HKDF-SHA256 from the Tier-3 user-secret master (`mfa_user` purpose). Backup codes are never stored in cleartext; only Argon2id hashes are persisted.
+TOTP secrets and WebAuthn credential records are encrypted with AES-256-GCM under a per-user key derived via HKDF-SHA256 from the user-secret master (`mfa_user` purpose). Backup codes are never stored in cleartext; only Argon2id hashes are persisted.
 
-**WebAuthn credential blob (`method_type = webauthn`):** The decrypted `credential_data` value is a JSON document matching the `webauthn.Credential` record shape produced by `github.com/go-webauthn/webauthn` (credential ID, COSE public key, attestation metadata, authenticator sign counter, and transport hints). During pending enrollment before the security key ceremony completes, the blob may instead be the literal JSON object `{"pending":true}`. Registration finish writes the full credential record once. Every successful authentication finish must decrypt the blob, verify the assertion (including monotonic `authenticator.signCount`), increment the counter on success, re-encrypt, and update the row in the same transaction as full-token issuance. Tier-3 master rotation re-encrypts this blob opaquely like TOTP secrets.
+**WebAuthn credential blob (`method_type = webauthn`):** The decrypted `credential_data` value is a JSON document matching the `webauthn.Credential` record shape produced by `github.com/go-webauthn/webauthn` (credential ID, COSE public key, attestation metadata, authenticator sign counter, and transport hints). During pending enrollment before the security key ceremony completes, the blob may instead be the literal JSON object `{"pending":true}`. Registration finish writes the full credential record once. Every successful authentication finish must decrypt the blob, verify the assertion (including monotonic `authenticator.signCount`), increment the counter on success, re-encrypt, and update the row in the same transaction as full-token issuance. User-secret master rotation re-encrypts this blob opaquely like TOTP secrets.
 
 ### Password Validation and Security Requirements
 
@@ -351,11 +351,11 @@ Root Security
 
 **Key Rotation Procedures:**
 ```bash
-# Tier-3 User Secret Master key rotation (requires admin MFA + brief downtime)
+# User-secret master key rotation (requires admin MFA + brief downtime)
 arkfile-admin login --username admin
-arkfile-admin rotate-user-secret-master prepare --mandate-file /root/tier3-mandate.txt --confirm
+arkfile-admin rotate-user-secret-master prepare --mandate-file /root/user-secret-rotation-mandate.txt --confirm
 sudo systemctl stop arkfile
-arkfile-admin rotate-user-secret-master apply --mandate-file /root/tier3-mandate.txt --confirm
+arkfile-admin rotate-user-secret-master apply --mandate-file /root/user-secret-rotation-mandate.txt --confirm
 sudo systemctl start arkfile
 
 # Or use the runbook wrapper (delegates to arkfile-admin only):
@@ -365,13 +365,13 @@ sudo ./scripts/maintenance/rotate-user-secret-master.sh
 ./scripts/maintenance/backup-keys.sh
 ```
 
-JWT signing keys are managed in `system_keys` via KeyManager; automated JWT rotation is not yet implemented.
+JWT signing keys are managed in `system_keys` via KeyManager and support online, zero-downtime rotation with a verification overlap. Each tier (temp and full) is versioned; the active signing version is recorded in a `system_keys` metadata row, and every version still present is accepted for verification until its tokens expire. Rotate with `arkfile-admin rotate-jwt-keys rotate --confirm` (issues a new active version for both tiers and reloads the server's in-memory key rings), then `arkfile-admin rotate-jwt-keys retire --version N --confirm` once the access-token lifetime has elapsed to drop the superseded version.
 
-### Tiered Security model and user recovery
-Arkfile partitions system secrets into three separate trust tiers (Tier-1, Tier-2, and Tier-3). Of these, Tier-3 holds user-secret-wrapping master keys (`mfa_user` and `contact_info` purpose keys derived via HKDF-SHA256 from `/opt/arkfile/etc/keys/user-secret-master.bin` file with 0400 owner-only permissions).
+### Server secret hierarchy and user recovery
+Arkfile partitions system secrets into separate trust layers (envelope master, operational, server-identity, and the user-secret master). The user-secret master holds user-secret-wrapping keys (`mfa_user` and `contact_info` purpose keys derived via HKDF-SHA256 from the `/opt/arkfile/etc/keys/user-secret-master.bin` file with 0400 owner-only permissions).
 
 **In-Memory Hardening:**
-- System loader pins the Tier-3 master key using POSIX `mlock` to disable memory swapping of keys to disk storage.
+- System loader pins the user-secret master key using POSIX `mlock` to disable memory swapping of keys to disk storage.
 - Key pages are marked on initialization using `madvise(..., MADV_DONTDUMP)` to ensure they won't leak into core logs.
 - Disables process-wide core dumps entirely using `prctl(PR_SET_DUMPABLE, 0)`.
 
@@ -514,7 +514,7 @@ rqlite -H localhost:4001 \
 **Containment Actions:**
 ```bash
 # Rotate JWT keys immediately
-# Tier-3 rotation only — see Key Rotation Procedures above
+# User-secret master rotation only — see Key Rotation Procedures above
 
 # Revoke all active sessions
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
@@ -754,7 +754,7 @@ rqlite -H localhost:4001 \
 sudo systemctl stop arkfile
 
 # Emergency key rotation
-# Tier-3 rotation only — see Key Rotation Procedures above
+# User-secret master rotation only — see Key Rotation Procedures above
 
 # Security audit
 ./scripts/security-audit.sh

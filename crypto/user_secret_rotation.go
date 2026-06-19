@@ -38,13 +38,13 @@ func ReencryptMFACredentialData(oldMaster, newMaster []byte, username string, en
 
 // ReencryptContactInfo decrypts contact info under oldMaster and re-encrypts under newMaster.
 func ReencryptContactInfo(oldMaster, newMaster []byte, dataB64, nonceB64 string) (newDataB64, newNonceB64 string, err error) {
-	oldKey, err := DeriveTier3SubkeyFromMaster(oldMaster, []byte("contact_info"))
+	oldKey, err := DeriveUserSecretSubkeyFromMaster(oldMaster, []byte("contact_info"))
 	if err != nil {
 		return "", "", err
 	}
 	defer SecureClear(oldKey)
 
-	newKey, err := DeriveTier3SubkeyFromMaster(newMaster, []byte("contact_info"))
+	newKey, err := DeriveUserSecretSubkeyFromMaster(newMaster, []byte("contact_info"))
 	if err != nil {
 		return "", "", err
 	}
@@ -79,15 +79,15 @@ func ReencryptContactInfo(oldMaster, newMaster []byte, dataB64, nonceB64 string)
 		nil
 }
 
-// Tier3RotationStats reports how many rows were re-encrypted.
-type Tier3RotationStats struct {
+// UserSecretRotationStats reports how many rows were re-encrypted.
+type UserSecretRotationStats struct {
 	MFACredentials int
 	ContactInfo    int
 }
 
-// ReencryptAllTier3WrappedRows re-encrypts MFA credentials and contact info in a single transaction.
-func ReencryptAllTier3WrappedRows(db *sql.DB, oldMaster, newMaster []byte) (Tier3RotationStats, error) {
-	var stats Tier3RotationStats
+// ReencryptAllUserSecretWrappedRows re-encrypts MFA credentials and contact info in a single transaction.
+func ReencryptAllUserSecretWrappedRows(db *sql.DB, oldMaster, newMaster []byte) (UserSecretRotationStats, error) {
+	var stats UserSecretRotationStats
 
 	tx, err := db.Begin()
 	if err != nil {
@@ -151,7 +151,7 @@ func ReencryptAllTier3WrappedRows(db *sql.DB, oldMaster, newMaster []byte) (Tier
 	}
 
 	if err := tx.Commit(); err != nil {
-		return stats, fmt.Errorf("failed to commit Tier-3 re-encryption transaction: %w", err)
+		return stats, fmt.Errorf("failed to commit user-secret re-encryption transaction: %w", err)
 	}
 	return stats, nil
 }

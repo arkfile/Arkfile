@@ -34,7 +34,7 @@ func handleRotateUserSecretMasterCommand(client *HTTPClient, config *AdminConfig
 func printRotateUserSecretMasterUsage() {
 	fmt.Print(`Usage: arkfile-admin rotate-user-secret-master <subcommand> [FLAGS]
 
-Safely rotate the Tier-3 user-secret master key with database re-encryption.
+Safely rotate the user-secret master key with database re-encryption.
 
 SUBCOMMANDS:
     prepare    Issue a signed rotation mandate (server must be running)
@@ -42,9 +42,9 @@ SUBCOMMANDS:
 
 EXAMPLES:
     arkfile-admin login --username admin
-    arkfile-admin rotate-user-secret-master prepare --mandate-file /root/tier3-mandate.txt --confirm
+    arkfile-admin rotate-user-secret-master prepare --mandate-file /root/user-secret-rotation-mandate.txt --confirm
     sudo systemctl stop arkfile
-    arkfile-admin rotate-user-secret-master apply --mandate-file /root/tier3-mandate.txt --confirm
+    arkfile-admin rotate-user-secret-master apply --mandate-file /root/user-secret-rotation-mandate.txt --confirm
     sudo systemctl start arkfile
 `)
 }
@@ -58,7 +58,7 @@ func handleRotateUserSecretMasterPrepare(client *HTTPClient, config *AdminConfig
 	}
 
 	if !*confirm {
-		fmt.Print("Issue a Tier-3 rotation mandate? This authorizes offline master key rotation. (yes/no): ")
+		fmt.Print("Issue a user-secret rotation mandate? This authorizes offline master key rotation. (yes/no): ")
 		var response string
 		if _, err := fmt.Scanln(&response); err != nil {
 			return fmt.Errorf("failed to read confirmation: %w", err)
@@ -119,7 +119,7 @@ func handleRotateUserSecretMasterApply(config *AdminConfig, args []string) error
 	}
 
 	if !*confirm {
-		fmt.Print("Apply Tier-3 master rotation using the mandate? The arkfile service must be stopped. (yes/no): ")
+		fmt.Print("Apply user-secret master rotation using the mandate? The arkfile service must be stopped. (yes/no): ")
 		var response string
 		if _, err := fmt.Scanln(&response); err != nil {
 			return fmt.Errorf("failed to read confirmation: %w", err)
@@ -152,7 +152,7 @@ func handleRotateUserSecretMasterApply(config *AdminConfig, args []string) error
 		return fmt.Errorf("failed to initialize key manager: %w", err)
 	}
 
-	stats, err := auth.ApplyTier3MasterRotation(auth.ApplyTier3MasterRotationOptions{
+	stats, err := auth.ApplyUserSecretMasterRotation(auth.ApplyUserSecretMasterRotationOptions{
 		BaseDir:          *baseDir,
 		Mandate:          mandate,
 		DB:               db,
@@ -162,7 +162,7 @@ func handleRotateUserSecretMasterApply(config *AdminConfig, args []string) error
 		return err
 	}
 
-	fmt.Printf("Tier-3 master rotation complete: %d MFA credential(s), %d contact info row(s) re-encrypted\n",
+	fmt.Printf("User-secret master rotation complete: %d MFA credential(s), %d contact info row(s) re-encrypted\n",
 		stats.MFACredentials, stats.ContactInfo)
 	return nil
 }

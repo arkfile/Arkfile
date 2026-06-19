@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/84adam/Arkfile/auth"
 	"github.com/84adam/Arkfile/config"
 	"github.com/84adam/Arkfile/crypto"
 	"github.com/84adam/Arkfile/database"
@@ -86,6 +87,14 @@ func (khm *KeyHealthMonitor) Stop() {
 func (khm *KeyHealthMonitor) PerformHealthCheck() {
 	logging.InfoLogger.Printf("Performing key health check")
 
+	// Resolve the active JWT signing versions so health follows rotation
+	// rather than pinning v1. Fall back to v1 ids if resolution fails.
+	tempJWTKeyID, fullJWTKeyID, err := auth.ActiveJWTKeyIDs()
+	if err != nil {
+		tempJWTKeyID = "jwt_signing_key_temp_v1"
+		fullJWTKeyID = "jwt_signing_key_full_v1"
+	}
+
 	components := []KeyComponent{
 		{
 			Name: "OPAQUE Server Keys",
@@ -95,12 +104,12 @@ func (khm *KeyHealthMonitor) PerformHealthCheck() {
 		{
 			Name: "JWT Signing Key (temp tier, aud=arkfile-mfa)",
 			Type: "jwt_signing",
-			Path: "jwt_signing_key_temp_v1",
+			Path: tempJWTKeyID,
 		},
 		{
 			Name: "JWT Signing Key (full tier, aud=arkfile-api)",
 			Type: "jwt_signing",
-			Path: "jwt_signing_key_full_v1",
+			Path: fullJWTKeyID,
 		},
 		{
 			Name: "Entity ID Master Secret",

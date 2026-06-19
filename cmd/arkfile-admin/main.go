@@ -86,7 +86,8 @@ SYSTEM COMMANDS:
     system-status     System status overview
     health-check      System health check
     verify-storage    Verify S3 storage connectivity (upload/download/delete round-trip)
-    rotate-user-secret-master  Tier-3 user-secret master rotation (prepare|apply)
+    rotate-user-secret-master  User-secret master rotation (prepare|apply)
+    rotate-jwt-keys   JWT signing key rotation (rotate|retire)
     version           Show version information
 
 GLOBAL OPTIONS:
@@ -434,7 +435,12 @@ func main() {
 		printVersion()
 	case "rotate-user-secret-master":
 		if err := handleRotateUserSecretMasterCommand(client, config, args); err != nil {
-			logError("Tier-3 rotation failed: %v", err)
+			logError("User-secret rotation failed: %v", err)
+			os.Exit(1)
+		}
+	case "rotate-jwt-keys":
+		if err := handleRotateJWTKeysCommand(client, config, args); err != nil {
+			logError("JWT key rotation failed: %v", err)
 			os.Exit(1)
 		}
 	default:

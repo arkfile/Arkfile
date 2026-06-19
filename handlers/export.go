@@ -186,9 +186,7 @@ func resolveExportAuth(c echo.Context, fileID string) (string, error) {
 		jwt.WithIssuer(auth.Issuer),
 		jwt.WithExpirationRequired(),
 	)
-	token, err := parser.ParseWithClaims(tokenStr, &ExportTokenClaims{}, func(t *jwt.Token) (interface{}, error) {
-		return auth.GetJWTFullPublicKey(), nil
-	})
+	token, err := auth.ParseEdDSAClaimsAnyFullKey(parser, tokenStr, &ExportTokenClaims{})
 	if err != nil {
 		return "", echo.NewHTTPError(http.StatusUnauthorized, "Invalid or expired export token")
 	}
@@ -236,9 +234,7 @@ func resolveExportAuthFromHeader(c echo.Context) (string, error) {
 		jwt.WithIssuer(auth.Issuer),
 		jwt.WithExpirationRequired(),
 	)
-	token, err := parser.ParseWithClaims(tokenStr, &auth.Claims{}, func(t *jwt.Token) (interface{}, error) {
-		return auth.GetJWTFullPublicKey(), nil
-	})
+	token, err := auth.ParseEdDSAClaimsAnyFullKey(parser, tokenStr, &auth.Claims{})
 	if err != nil {
 		return "", echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
 	}

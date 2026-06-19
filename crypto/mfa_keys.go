@@ -11,20 +11,20 @@ const (
 	MFAUserKeyContext = "ARKFILE_MFA_USER_KEY"
 )
 
-// DeriveMFAUserKey derives a user-specific MFA credential encryption key from the loaded Tier-3 master.
+// DeriveMFAUserKey derives a user-specific MFA credential encryption key from the loaded user-secret master.
 func DeriveMFAUserKey(username string) ([]byte, error) {
-	baseSubkey, err := DeriveTier3Subkey([]byte("mfa_user"))
+	baseSubkey, err := DeriveUserSecretSubkey([]byte("mfa_user"))
 	if err != nil {
-		return nil, fmt.Errorf("failed to derive Tier-3 MFA user subkey: %w", err)
+		return nil, fmt.Errorf("failed to derive MFA user subkey: %w", err)
 	}
 	return deriveMFAUserKeyFromSubkey(baseSubkey, username)
 }
 
-// DeriveMFAUserKeyFromMaster derives a per-user MFA key from an explicit Tier-3 master.
+// DeriveMFAUserKeyFromMaster derives a per-user MFA key from an explicit user-secret master.
 func DeriveMFAUserKeyFromMaster(master []byte, username string) ([]byte, error) {
-	baseSubkey, err := DeriveTier3SubkeyFromMaster(master, []byte("mfa_user"))
+	baseSubkey, err := DeriveUserSecretSubkeyFromMaster(master, []byte("mfa_user"))
 	if err != nil {
-		return nil, fmt.Errorf("failed to derive Tier-3 MFA user subkey: %w", err)
+		return nil, fmt.Errorf("failed to derive MFA user subkey: %w", err)
 	}
 	return deriveMFAUserKeyFromSubkey(baseSubkey, username)
 }

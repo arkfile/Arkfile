@@ -276,6 +276,29 @@ func (km *KeyManager) GetKey(keyID string, keyType string) ([]byte, error) {
 	return km.DecryptSystemKey(encryptedData, nonce, keyType)
 }
 
+// ListKeyIDs returns all key_ids in system_keys that begin with the given prefix.
+// Used to enumerate versioned key families (e.g. all "jwt_signing_key_full_v" rows).
+func (km *KeyManager) ListKeyIDs(prefix string) ([]string, error) {
+	rows, err := km.db.Query("SELECT key_id FROM system_keys WHERE key_id LIKE ?", prefix+"%")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list system_keys by prefix: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 // DeleteKey removes a key from the database.
 func (km *KeyManager) DeleteKey(keyID string) error {
 	_, err := km.db.Exec("DELETE FROM system_keys WHERE key_id = ?", keyID)

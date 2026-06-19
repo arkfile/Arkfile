@@ -9,17 +9,17 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-func TestDeriveTier3SubkeyFromMaster_DomainSeparation(t *testing.T) {
+func TestDeriveUserSecretSubkeyFromMaster_DomainSeparation(t *testing.T) {
 	master := make([]byte, 32)
 	for i := range master {
 		master[i] = byte(i)
 	}
 
-	mfaSub, err := DeriveTier3SubkeyFromMaster(master, []byte("mfa_user"))
+	mfaSub, err := DeriveUserSecretSubkeyFromMaster(master, []byte("mfa_user"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	contactSub, err := DeriveTier3SubkeyFromMaster(master, []byte("contact_info"))
+	contactSub, err := DeriveUserSecretSubkeyFromMaster(master, []byte("contact_info"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,8 +71,8 @@ func TestReencryptMFACredentialData_RoundTrip(t *testing.T) {
 func TestReencryptMFACredentialData_WebAuthnFixture(t *testing.T) {
 	oldMaster := make([]byte, 32)
 	newMaster := make([]byte, 32)
-	copy(oldMaster, []byte("old-tier3-master-key-material!!"))
-	copy(newMaster, []byte("new-tier3-master-key-material!!"))
+	copy(oldMaster, []byte("old-user-secret-master-material"))
+	copy(newMaster, []byte("new-user-secret-master-material"))
 
 	username := "webauthn-user"
 	payload := map[string]interface{}{
@@ -120,7 +120,7 @@ func TestReencryptContactInfo_RoundTrip(t *testing.T) {
 	}
 
 	plaintext := []byte(`{"display_name":"Alice","contacts":[],"notes":""}`)
-	oldKey, err := DeriveTier3SubkeyFromMaster(oldMaster, []byte("contact_info"))
+	oldKey, err := DeriveUserSecretSubkeyFromMaster(oldMaster, []byte("contact_info"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestReencryptContactInfo_RoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	newKey, err := DeriveTier3SubkeyFromMaster(newMaster, []byte("contact_info"))
+	newKey, err := DeriveUserSecretSubkeyFromMaster(newMaster, []byte("contact_info"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestReencryptContactInfo_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestReencryptAllTier3WrappedRows(t *testing.T) {
+func TestReencryptAllUserSecretWrappedRows(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -177,8 +177,8 @@ func TestReencryptAllTier3WrappedRows(t *testing.T) {
 
 	oldMaster := make([]byte, 32)
 	newMaster := make([]byte, 32)
-	copy(oldMaster, []byte("old-tier3-master-key-material!!"))
-	copy(newMaster, []byte("new-tier3-master-key-material!!"))
+	copy(oldMaster, []byte("old-user-secret-master-material"))
+	copy(newMaster, []byte("new-user-secret-master-material"))
 
 	username := "bob"
 	oldKey, _ := DeriveMFAUserKeyFromMaster(oldMaster, username)
@@ -187,7 +187,7 @@ func TestReencryptAllTier3WrappedRows(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	contactKey, _ := DeriveTier3SubkeyFromMaster(oldMaster, []byte("contact_info"))
+	contactKey, _ := DeriveUserSecretSubkeyFromMaster(oldMaster, []byte("contact_info"))
 	encContact, _ := EncryptGCM([]byte(`{"display_name":"Bob","contacts":[],"notes":""}`), contactKey)
 	nonceSize := AesGcmNonceSize()
 	if _, err := db.Exec(
@@ -199,7 +199,7 @@ func TestReencryptAllTier3WrappedRows(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stats, err := ReencryptAllTier3WrappedRows(db, oldMaster, newMaster)
+	stats, err := ReencryptAllUserSecretWrappedRows(db, oldMaster, newMaster)
 	if err != nil {
 		t.Fatal(err)
 	}

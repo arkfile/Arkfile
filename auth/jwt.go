@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -133,11 +134,14 @@ func GenerateFullAccessToken(username string) (string, time.Time, error) {
 	return tokenString, expirationTime, err
 }
 
-// parseTokenWithAudience builds a ParseTokenFunc that validates Ed25519
-// signature with the given public key AND enforces the expected audience
-// claim. Either failure mode produces a generic 401; the caller cannot
+// parseTokenWithAudience builds a ParseTokenFunc that validates the Ed25519
+// signature against any currently accepted verification key for the tier AND
+// enforces the expected audience claim. The key set is resolved per request
+// via keysGetter so that a rotation (which adds a new active key and keeps the
+// previous one for the overlap window) takes effect without re-wiring the
+// middleware. Either failure mode produces a generic 401; the caller cannot
 // distinguish "wrong signature" from "wrong audience" by error shape.
-func parseTokenWithAudience(pubKey interface{}, expectedAudience string) func(c echo.Context, auth string) (interface{}, error) {
+func parseTokenWithAudience(keysGetter func() []ed25519.PublicKey, expectedAudience string) func(c echo.Context, auth string) (interface{}, error) {
 	return func(_ echo.Context, tokenString string) (interface{}, error) {
 		parser := jwt.NewParser(
 			jwt.WithValidMethods([]string{jwt.SigningMethodEdDSA.Alg()}),
@@ -145,9 +149,7 @@ func parseTokenWithAudience(pubKey interface{}, expectedAudience string) func(c 
 			jwt.WithIssuer(Issuer),
 			jwt.WithExpirationRequired(),
 		)
-		token, err := parser.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (interface{}, error) {
-			return pubKey, nil
-		})
+		token, err := parseEdDSAAnyKey(parser, tokenString, keysGetter())
 		if err != nil {
 			return nil, err
 		}
@@ -156,6 +158,50 @@ func parseTokenWithAudience(pubKey interface{}, expectedAudience string) func(c 
 		}
 		return token, nil
 	}
+}
+
+// ParseEdDSAClaimsAnyFullKey parses tokenString into the provided claims using
+// the supplied parser, trying every full-tier verification key. Exposed for
+// callers outside the auth package (e.g. export-token validation) that need
+// rotation-aware verification with custom claim types. The parser should carry
+// any required audience/issuer/expiry options.
+func ParseEdDSAClaimsAnyFullKey(parser *jwt.Parser, tokenString string, claims jwt.Claims) (*jwt.Token, error) {
+	var lastErr error
+	for _, pk := range GetJWTFullVerificationKeys() {
+		pkCopy := pk
+		token, err := parser.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (interface{}, error) {
+			return pkCopy, nil
+		})
+		if err == nil && token.Valid {
+			return token, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("invalid token")
+	}
+	return nil, lastErr
+}
+
+// parseEdDSAAnyKey attempts to parse and validate the token against each
+// provided public key, returning on the first success. It returns the last
+// error encountered if no key validates.
+func parseEdDSAAnyKey(parser *jwt.Parser, tokenString string, pubKeys []ed25519.PublicKey) (*jwt.Token, error) {
+	var lastErr error
+	for _, pk := range pubKeys {
+		pkCopy := pk
+		token, err := parser.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (interface{}, error) {
+			return pkCopy, nil
+		})
+		if err == nil && token.Valid {
+			return token, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("invalid token")
+	}
+	return nil, lastErr
 }
 
 // JWTMiddleware validates full-access tokens (aud=arkfile-api). It verifies
@@ -168,7 +214,7 @@ func JWTMiddleware() echo.MiddlewareFunc {
 		NewClaimsFunc: func(c echo.Context) jwt.Claims {
 			return new(Claims)
 		},
-		ParseTokenFunc: parseTokenWithAudience(GetJWTFullPublicKey(), AudienceAPI),
+		ParseTokenFunc: parseTokenWithAudience(GetJWTFullVerificationKeys, AudienceAPI),
 		ErrorHandler: func(c echo.Context, err error) error {
 			return echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
 		},
@@ -192,7 +238,7 @@ func ResetJWTMiddleware() echo.MiddlewareFunc {
 		NewClaimsFunc: func(c echo.Context) jwt.Claims {
 			return new(Claims)
 		},
-		ParseTokenFunc: parseTokenWithAudience(GetJWTTempPublicKey(), AudienceReset),
+		ParseTokenFunc: parseTokenWithAudience(GetJWTTempVerificationKeys, AudienceReset),
 		ErrorHandler: func(c echo.Context, err error) error {
 			return echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
 		},
@@ -216,10 +262,7 @@ func MFAResetJWTMiddleware() echo.MiddlewareFunc {
 				jwt.WithExpirationRequired(),
 			)
 
-			fullToken, err := parser.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (interface{}, error) {
-				return GetJWTFullPublicKey(), nil
-			})
-			if err == nil && fullToken.Valid {
+			if fullToken, err := parseEdDSAAnyKey(parser, tokenString, GetJWTFullVerificationKeys()); err == nil && fullToken.Valid {
 				claims, ok := fullToken.Claims.(*Claims)
 				if ok && !claims.RequiresMFA && slices.Contains(claims.Audience, AudienceAPI) {
 					return fullToken, nil
@@ -232,10 +275,7 @@ func MFAResetJWTMiddleware() echo.MiddlewareFunc {
 				jwt.WithIssuer(Issuer),
 				jwt.WithExpirationRequired(),
 			)
-			resetToken, err := resetParser.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (interface{}, error) {
-				return GetJWTTempPublicKey(), nil
-			})
-			if err == nil && resetToken.Valid {
+			if resetToken, err := parseEdDSAAnyKey(resetParser, tokenString, GetJWTTempVerificationKeys()); err == nil && resetToken.Valid {
 				return resetToken, nil
 			}
 
@@ -256,7 +296,7 @@ func MFAJWTMiddleware() echo.MiddlewareFunc {
 		NewClaimsFunc: func(c echo.Context) jwt.Claims {
 			return new(Claims)
 		},
-		ParseTokenFunc: parseTokenWithAudience(GetJWTTempPublicKey(), AudienceMFA),
+		ParseTokenFunc: parseTokenWithAudience(GetJWTTempVerificationKeys, AudienceMFA),
 		ErrorHandler: func(c echo.Context, err error) error {
 			return echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
 		},

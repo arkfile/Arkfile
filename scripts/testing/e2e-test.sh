@@ -603,7 +603,7 @@ start_mock_btcpay_server() {
     local e2e_script_dir="$1"
     local go_bin="$2"
     local mock_bin="$TEST_DATA_DIR/btcpay-mock"
-    local mock_log="/tmp/btcpay-mock.log"
+    local mock_log="$TEST_DATA_DIR/btcpay-mock.log"
     local mock_src="$e2e_script_dir/btcpay-mock.go"
     local mock_pid
 

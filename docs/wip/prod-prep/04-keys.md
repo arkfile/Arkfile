@@ -34,35 +34,47 @@ The Go symbol rename maps `Tier3` to `UserSecretMaster` or `UserSecret` accordin
 
 The one rename that is not cosmetic is the HKDF domain-separation label `ARKFILE_TIER3:` in `crypto/user_secret_master.go`, which is mixed into every derived subkey. Renaming it to `ARKFILE_USER_SECRET:` changes the derived keys, so it only takes effect on a fresh deployment where data is regenerated. Under the greenfield assumption this is exactly the intended behavior: the rename lands together with a `dev-reset.sh` (or a clean redeploy of the test and beta environments), and there is no attempt to read data written under the old label. This must be called out in the change so that whoever applies it does not try to hot-patch a populated database and silently lose the ability to decrypt existing MFA and contact rows.
 
-Key files to review and update:
+**Status: COMPLETE.** The full greenfield rename has landed. Every `Tier3`/`Tier-3`/`TIER3` identifier, comment, log/error string, schema object, mandate-file default, and operational-doc reference tied to the user-secret master has been replaced with descriptive names, the HKDF label is now `ARKFILE_USER_SECRET:`, and the two rotation source files plus their three test files were renamed on disk. The only remaining `Tier3` token in the codebase is `floodTier3Threshold` in `handlers/flood_guard.go`, which is an unrelated escalating-penalty concept and was intentionally left untouched; archived planning docs under `docs/wip/archive/` were also left as historical record. `go build`, `go vet`, and the renamed unit tests in `crypto`, `auth`, and `handlers` all pass (`cmd/arkfile-admin` was rename-verified by source but cannot be linked in this environment because the cgo `clictap` package needs `libfido2-dev` headers).
 
-- `crypto/user_secret_master.go` (symbols and the `ARKFILE_TIER3:` HKDF label)
-- `crypto/user_secret_master_linux.go` and `crypto/user_secret_master_other.go` (any symbol references)
-- `crypto/mfa_keys.go` (calls into `DeriveTier3Subkey` / `DeriveTier3SubkeyFromMaster`)
-- `crypto/tier3_rotation.go` -> rename file to `crypto/user_secret_rotation.go`
-- `auth/tier3_rotation_mandate.go` -> rename to `auth/user_secret_rotation_mandate.go`
-- `auth/tier3_rotation_apply.go` -> rename to `auth/user_secret_rotation_apply.go`
-- `handlers/admin_rotation.go` (`AdminPrepareTier3MasterRotation`, the `tier3_master_rotation_prepare` operation string)
-- `handlers/route_config.go` (handler reference; the route path is already descriptive)
-- `monitoring/health_endpoints.go` (`tier3Path` variable, `tier3_master_key` detail key)
-- `cmd/arkfile-admin/rotation_commands.go` (mandate-file examples and help text)
+Files updated (done):
+
+- `crypto/user_secret_master.go` (symbols + `ARKFILE_USER_SECRET:` HKDF label; platform files `crypto/user_secret_master_linux.go` / `crypto/user_secret_master_other.go` needed no symbol changes)
+- `crypto/mfa_keys.go` (`DeriveUserSecretSubkey` / `DeriveUserSecretSubkeyFromMaster` calls)
+- `crypto/tier3_rotation.go` -> renamed to `crypto/user_secret_rotation.go` (`UserSecretRotationStats`, `ReencryptAllUserSecretWrappedRows`)
+- `auth/tier3_rotation_mandate.go` -> renamed to `auth/user_secret_rotation_mandate.go` (`UserSecretRotationMandate*`)
+- `auth/tier3_rotation_apply.go` -> renamed to `auth/user_secret_rotation_apply.go` (`ApplyUserSecretMasterRotation` + options)
+- `handlers/admin_rotation.go` (`AdminPrepareUserSecretMasterRotation`, `user_secret_master_rotation_prepare` operation string)
+- `handlers/route_config.go` (handler reference)
+- `monitoring/health_endpoints.go` (`userSecretMasterPath` variable, `user_secret_master_key` detail key, message text)
+- `main.go` and `cmd/arkfile-admin/main.go` (load call + help/log text)
+- `auth/mfa_setup.go` and `models/contact_info.go` (comments and derive calls)
+- `cmd/arkfile-admin/rotation_commands.go` (mandate-file examples, prompts, help text)
 - `scripts/maintenance/rotate-user-secret-master.sh` (mandate-file default and banner text)
-- `database/unified_schema.sql` (the `tier3_rotation_mandates` table)
-- Tests carrying the old names: `crypto/tier3_rotation_test.go`, `auth/tier3_rotation_apply_test.go`, `auth/tier3_rotation_mandate_test.go`, `handlers/admin_rotation_test.go`, `auth/mfa_admin_reset_test.go`, `handlers/admin_mfa_reset_test.go`
-- `docs/security.md` (the "Tier-1/Tier-2/Tier-3" wording and the rotation procedure block)
+- `scripts/setup/02-setup-directories.sh` (comment text)
+- `database/unified_schema.sql` (table renamed to `user_secret_rotation_mandates`)
+- Renamed/updated tests: `crypto/user_secret_rotation_test.go`, `auth/user_secret_rotation_apply_test.go`, `auth/user_secret_rotation_mandate_test.go`, `handlers/admin_rotation_test.go`, `auth/mfa_admin_reset_test.go`, `handlers/admin_mfa_reset_test.go`, `auth/totp_test.go`, `handlers/auth_test_helpers.go`, `handlers/payments_test_helpers.go`, `handlers/mfa_backup_integration_test.go`
+- Docs: `docs/security.md` (server-secret-layer wording + rotation block), `docs/api.md`, `docs/setup.md`, `docs/scripts-guide.md`, `docs/wip/better-mfa.md`
 
 ## Build-out: JWT signing key rotation
 
-This is the rotation most likely to be performed on a routine schedule, and it is also the lowest-risk one to build, so it should come first. The two Ed25519 signing keys already live in `system_keys` and are loaded by versioned key id (`jwt_signing_key_temp_v1` and `jwt_signing_key_full_v1`). The clean approach is versioned keys with a short verification overlap: introduce a `_v2` key, begin signing newly issued tokens with the new key, and keep the previous key in the set of accepted verification keys until any token signed under it would have expired. Because access tokens are short-lived (about thirty minutes), the overlap window is small, and the worst case if rotation is performed without an overlap is simply that everyone re-authenticates. The verification middleware already distinguishes the temp audience from the full audience; rotation extends that to also try more than one public key per audience during the overlap.
+**Status: COMPLETE.** Versioned, online, zero-downtime rotation with a verification overlap is implemented for both signing tiers. Each tier is a `jwtKeyRing` holding the active signing keypair plus every version still present in `system_keys` as accepted verification keys (active key first for a fast match). The active version per tier is recorded in a `system_keys` metadata row (`jwt_signing_active_version_temp` / `jwt_signing_active_version_full`), and key rows are versioned (`jwt_signing_key_{temp,full}_vN`). Rotation generates the next version for both tiers, repoints the metadata rows, and reloads the in-memory rings so it takes effect without a restart; previous versions keep verifying until their tokens expire, after which they can be retired. All verification paths (the three audience middlewares, the dual-token MFA-reset middleware, logout/revocation, and export-token validation) try the full verification set. Operated via `arkfile-admin rotate-jwt-keys rotate|retire`, backed by `POST /api/admin/system/rotate-jwt-keys` and `POST /api/admin/system/retire-jwt-key-version`. Unit tests cover the overlap (old token still verifies, new token verifies), retirement (old token then fails, new token still verifies), and the refusal to retire the active version. Builds and `auth`/`handlers` tests pass.
 
-Key files to review and update:
+The original design rationale: introduce a `_vN+1` key, begin signing newly issued tokens with it, and keep the previous key in the accepted-verification set until any token signed under it would have expired. Because access tokens are short-lived, the overlap window is small, and the worst case without an overlap is simply that everyone re-authenticates.
 
-- `auth/keys.go` (key loading is hard-wired to the single `_v1` id; this becomes version-aware with a current signing version and a set of accepted verification versions)
-- `auth/jwt.go` (token parsing and audience validation; accept any key in the active verification set)
-- `crypto/key_manager.go` (already supports versioned ids via `GetOrGenerateKey` and `StoreKey`; no structural change expected)
-- `monitoring/key_health.go` (the health component currently pins `_v1` ids; make it report the active set)
-- a new `arkfile-admin` command to trigger a rotation and to retire a superseded key after the overlap, modeled on the existing rotation command structure
-- `docs/security.md` (replace the note that automated JWT rotation is not implemented)
+Files updated (done):
+
+- `auth/keys.go` (replaced the single-`_v1` globals with version-aware `jwtKeyRing`s under a `sync.RWMutex`; added active-version resolution, verification-set getters, `ReloadJWTKeys`, `ActiveJWTKeyVersions`, `ActiveJWTKeyIDs`)
+- `auth/jwt_rotation.go` (new: `RotateJWTSigningKeys`, `RetireJWTKeyVersion`)
+- `auth/jwt.go` (per-request key-set resolution via getters; `parseEdDSAAnyKey` / exported `ParseEdDSAClaimsAnyFullKey`; MFA-reset middleware tries the full then temp verify sets)
+- `auth/token_revocation.go` (`parseEitherTierToken` accepts any version in each tier)
+- `handlers/export.go` (export-token and header-token validation accept any full-tier version)
+- `crypto/key_manager.go` (added `ListKeyIDs(prefix)` to enumerate versioned key families)
+- `monitoring/key_health.go` (resolves the active JWT versions instead of pinning `_v1`)
+- `handlers/admin_rotation.go` + `handlers/route_config.go` (new rotate/retire endpoints)
+- `cmd/arkfile-admin/jwt_rotation_commands.go` + `cmd/arkfile-admin/main.go` (new `rotate-jwt-keys` command)
+- Tests: `auth/jwt_rotation_test.go`
+- Docs: `docs/security.md`, `docs/api.md`
+- Deploy/setup scripts: no change required (rotation reuses the existing `system_keys` table; the active-version rows are created lazily)
 
 ## Build-out: envelope master key rotation
 

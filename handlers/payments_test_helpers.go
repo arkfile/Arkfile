@@ -106,7 +106,7 @@ func setupPaymentsSQLiteDB(t *testing.T) *sql.DB {
 func withPaymentsTestEnv(t *testing.T, btcpayURL string, paymentsEnabled bool) (*sql.DB, func()) {
 	t.Helper()
 	logging.InitFallbackConsoleLogging()
-	crypto.SetTier3MasterForTest(make([]byte, 32))
+	crypto.SetUserSecretMasterForTest(make([]byte, 32))
 
 	db := setupPaymentsSQLiteDB(t)
 	origDB := database.DB

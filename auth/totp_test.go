@@ -14,8 +14,8 @@ import (
 func setupTOTPTestEnvironment(t *testing.T) {
 	os.Setenv("DEBUG_MODE", "true") // Enable debug mode for testing
 
-	// Write / load temporary Tier-3 master key for testing
-	crypto.SetTier3MasterForTest(make([]byte, 32))
+	// Write / load temporary user-secret master key for testing
+	crypto.SetUserSecretMasterForTest(make([]byte, 32))
 }
 
 func setupTOTPTestDB(t *testing.T) *sql.DB {

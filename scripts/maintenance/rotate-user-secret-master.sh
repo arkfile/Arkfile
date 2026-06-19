@@ -1,5 +1,5 @@
 #!/bin/bash
-# rotate-user-secret-master.sh - Tier-3 user-secret master rotation runbook wrapper
+# rotate-user-secret-master.sh - user-secret master rotation runbook wrapper
 #
 # All cryptographic work is performed by arkfile-admin. This script only documents
 # and invokes the safe prepare/apply flow.
@@ -13,7 +13,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-MANDATE_FILE="${MANDATE_FILE:-/root/tier3-rotation-mandate.txt}"
+MANDATE_FILE="${MANDATE_FILE:-/root/user-secret-rotation-mandate.txt}"
 BASE_DIR="${BASE_DIR:-/opt/arkfile}"
 ADMIN_USER="${ADMIN_USER:-admin}"
 
@@ -21,7 +21,7 @@ usage() {
     cat <<EOF
 Usage: sudo $0 [--mandate-file PATH] [--base-dir DIR] [--admin-user USER]
 
-Tier-3 user-secret master rotation (safe path with DB re-encryption).
+User-secret master rotation (safe path with DB re-encryption).
 
 Steps performed:
   1. arkfile-admin rotate-user-secret-master prepare
@@ -34,7 +34,7 @@ Prerequisites:
   - arkfile-admin binary on PATH
 
 Environment overrides:
-  MANDATE_FILE   Path for the signed mandate (default: /root/tier3-rotation-mandate.txt)
+  MANDATE_FILE   Path for the signed mandate (default: /root/user-secret-rotation-mandate.txt)
   BASE_DIR       Arkfile install root (default: /opt/arkfile)
   ADMIN_USER     Admin username for reminders only (default: admin)
 EOF
@@ -59,7 +59,7 @@ if ! command -v arkfile-admin >/dev/null 2>&1; then
     exit 1
 fi
 
-echo -e "${BLUE}=== Tier-3 User Secret Master Rotation ===${NC}"
+echo -e "${BLUE}User-Secret Master Rotation${NC}"
 echo -e "${YELLOW}Ensure you have run: arkfile-admin login --username ${ADMIN_USER}${NC}"
 echo
 
@@ -80,5 +80,5 @@ arkfile-admin rotate-user-secret-master apply \
 echo -e "${BLUE}[4/4] Starting arkfile service...${NC}"
 systemctl start arkfile
 
-echo -e "${GREEN}[OK] Tier-3 rotation complete.${NC}"
+echo -e "${GREEN}[OK] User-secret master rotation complete.${NC}"
 echo "Verify admin login and spot-check MFA/contact info decryption."

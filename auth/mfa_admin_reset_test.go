@@ -62,13 +62,13 @@ func setupAdminResetTestDB(t *testing.T) *sql.DB {
 
 func seedAdminResetUser(t *testing.T, db *sql.DB, username string) {
 	t.Helper()
-	crypto.SetTier3MasterForTest(make([]byte, 32))
+	crypto.SetUserSecretMasterForTest(make([]byte, 32))
 	if _, err := db.Exec(`INSERT INTO users (username, username_folded) VALUES (?, ?)`, username, username); err != nil {
 		t.Fatal(err)
 	}
 
 	oldMaster := make([]byte, 32)
-	copy(oldMaster, []byte("test-tier3-master-key-material!"))
+	copy(oldMaster, []byte("test-user-secret-master-materil"))
 	key, err := crypto.DeriveMFAUserKeyFromMaster(oldMaster, username)
 	if err != nil {
 		t.Fatal(err)
@@ -90,7 +90,7 @@ func seedAdminResetUser(t *testing.T, db *sql.DB, username string) {
 		t.Fatal(err)
 	}
 
-	contactKey, err := crypto.DeriveTier3SubkeyFromMaster(oldMaster, []byte("contact_info"))
+	contactKey, err := crypto.DeriveUserSecretSubkeyFromMaster(oldMaster, []byte("contact_info"))
 	if err != nil {
 		t.Fatal(err)
 	}

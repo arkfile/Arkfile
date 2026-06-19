@@ -17,7 +17,7 @@ func setupMandateTestDB(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	_, err = db.Exec(`
-		CREATE TABLE tier3_rotation_mandates (
+		CREATE TABLE user_secret_rotation_mandates (
 			nonce TEXT PRIMARY KEY,
 			admin_username TEXT NOT NULL,
 			expires_at TIMESTAMP NOT NULL,
@@ -31,8 +31,8 @@ func setupMandateTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-func TestTier3RotationMandate_IssueVerifyConsume(t *testing.T) {
-	crypto.SetTier3MasterForTest(make([]byte, 32))
+func TestUserSecretRotationMandate_IssueVerifyConsume(t *testing.T) {
+	crypto.SetUserSecretMasterForTest(make([]byte, 32))
 	db := setupMandateTestDB(t)
 	defer db.Close()
 
@@ -47,7 +47,7 @@ func TestTier3RotationMandate_IssueVerifyConsume(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mandate, expiresAt, err := IssueTier3RotationMandate(db, "admin")
+	mandate, expiresAt, err := IssueUserSecretRotationMandate(db, "admin")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,24 +55,24 @@ func TestTier3RotationMandate_IssueVerifyConsume(t *testing.T) {
 		t.Fatal("expected non-empty mandate with future expiry")
 	}
 
-	payload, err := VerifyTier3RotationMandate(mandate, GetJWTFullPublicKey())
+	payload, err := VerifyUserSecretRotationMandate(mandate, GetJWTFullPublicKey())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if payload.AdminUsername != "admin" || payload.Purpose != Tier3RotationMandatePurpose {
+	if payload.AdminUsername != "admin" || payload.Purpose != UserSecretRotationMandatePurpose {
 		t.Fatalf("unexpected payload: %+v", payload)
 	}
 
-	if err := ConsumeTier3RotationMandate(db, payload.Nonce); err != nil {
+	if err := ConsumeUserSecretRotationMandate(db, payload.Nonce); err != nil {
 		t.Fatal(err)
 	}
-	if err := ConsumeTier3RotationMandate(db, payload.Nonce); err == nil {
+	if err := ConsumeUserSecretRotationMandate(db, payload.Nonce); err == nil {
 		t.Fatal("expected replay consumption to fail")
 	}
 }
 
-func TestTier3RotationMandate_RejectsTampered(t *testing.T) {
-	crypto.SetTier3MasterForTest(make([]byte, 32))
+func TestUserSecretRotationMandate_RejectsTampered(t *testing.T) {
+	crypto.SetUserSecretMasterForTest(make([]byte, 32))
 	db := setupMandateTestDB(t)
 	defer db.Close()
 
@@ -87,11 +87,11 @@ func TestTier3RotationMandate_RejectsTampered(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mandate, _, err := IssueTier3RotationMandate(db, "admin")
+	mandate, _, err := IssueUserSecretRotationMandate(db, "admin")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := VerifyTier3RotationMandate(mandate+"tampered", GetJWTFullPublicKey()); err == nil {
+	if _, err := VerifyUserSecretRotationMandate(mandate+"tampered", GetJWTFullPublicKey()); err == nil {
 		t.Fatal("expected tampered mandate to fail verification")
 	}
 }

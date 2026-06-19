@@ -19,29 +19,29 @@ func randomHex(n int) string {
 }
 
 var (
-	tier3MasterKey []byte
-	tier3Mlocked   bool
+	userSecretMasterKey     []byte
+	userSecretMasterMlocked bool
 )
 
 const (
-	// Default path for Tier-3 user secret master
-	Tier3MasterKeyPath = "/opt/arkfile/etc/keys/user-secret-master.bin"
+	// Default path for the user-secret master
+	UserSecretMasterPath = "/opt/arkfile/etc/keys/user-secret-master.bin"
 )
 
-// LoadTier3Master loads and memory-hardens the Tier-3 master key.
+// LoadUserSecretMaster loads and memory-hardens the user-secret master key.
 // It is intended to run once at startup.
-func LoadTier3Master() error {
+func LoadUserSecretMaster() error {
 	// Read Master Key
-	file, err := os.Open(Tier3MasterKeyPath)
+	file, err := os.Open(UserSecretMasterPath)
 	if err != nil {
-		return fmt.Errorf("failed to open Tier-3 master key file: %w", err)
+		return fmt.Errorf("failed to open user-secret master key file: %w", err)
 	}
 	defer file.Close()
 
 	key := make([]byte, 32)
 	n, err := io.ReadFull(file, key)
 	if err != nil {
-		return fmt.Errorf("failed to read Tier-3 master key (got %d bytes): %w", n, err)
+		return fmt.Errorf("failed to read user-secret master key (got %d bytes): %w", n, err)
 	}
 
 	// Disable core dumps for the entire process (defense-in-depth / MADV_DONTDUMP / PR_SET_DUMPABLE)
@@ -53,9 +53,9 @@ func LoadTier3Master() error {
 
 	// Try to mlock the key to prevent swapping to disk
 	if err := mLockMemory(key); err == nil {
-		tier3Mlocked = true
+		userSecretMasterMlocked = true
 	} else {
-		fmt.Fprintf(os.Stderr, "Warning: failed to mlock Tier-3 master key: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Warning: failed to mlock user-secret master key: %v\n", err)
 	}
 
 	// Mark page as MADV_DONTDUMP to exclude it from core dumps
@@ -65,96 +65,96 @@ func LoadTier3Master() error {
 		// On Linux we can pass the slice directly.
 		err := mAdviseDontDump(key)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to madvise MADV_DONTDUMP on Tier-3 master key: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Warning: failed to madvise MADV_DONTDUMP on user-secret master key: %v\n", err)
 		}
 	}
 
-	tier3MasterKey = key
+	userSecretMasterKey = key
 	return nil
 }
 
-// DeriveTier3Subkey derives a context-specific key from the loaded Tier-3 master using HKDF-Expand.
-func DeriveTier3Subkey(purpose []byte) ([]byte, error) {
-	if len(tier3MasterKey) == 0 {
-		return nil, fmt.Errorf("Tier-3 master key is not initialized")
+// DeriveUserSecretSubkey derives a context-specific key from the loaded user-secret master using HKDF-Expand.
+func DeriveUserSecretSubkey(purpose []byte) ([]byte, error) {
+	if len(userSecretMasterKey) == 0 {
+		return nil, fmt.Errorf("user-secret master key is not initialized")
 	}
-	return DeriveTier3SubkeyFromMaster(tier3MasterKey, purpose)
+	return DeriveUserSecretSubkeyFromMaster(userSecretMasterKey, purpose)
 }
 
-// DeriveTier3SubkeyFromMaster derives a context-specific Tier-3 subkey from an explicit master.
-func DeriveTier3SubkeyFromMaster(master []byte, purpose []byte) ([]byte, error) {
+// DeriveUserSecretSubkeyFromMaster derives a context-specific user-secret subkey from an explicit master.
+func DeriveUserSecretSubkeyFromMaster(master []byte, purpose []byte) ([]byte, error) {
 	if len(master) != 32 {
-		return nil, fmt.Errorf("Tier-3 master key must be 32 bytes, got %d", len(master))
+		return nil, fmt.Errorf("user-secret master key must be 32 bytes, got %d", len(master))
 	}
 	if len(purpose) == 0 {
-		return nil, fmt.Errorf("Tier-3 subkey purpose cannot be empty")
+		return nil, fmt.Errorf("user-secret subkey purpose cannot be empty")
 	}
 
-	info := append([]byte("ARKFILE_TIER3:"), purpose...)
+	info := append([]byte("ARKFILE_USER_SECRET:"), purpose...)
 	hkdfReader := hkdf.Expand(sha256.New, master, info)
 
 	subkey := make([]byte, 32)
 	if _, err := io.ReadFull(hkdfReader, subkey); err != nil {
-		return nil, fmt.Errorf("failed to expand Tier-3 subkey: %w", err)
+		return nil, fmt.Errorf("failed to expand user-secret subkey: %w", err)
 	}
 
 	return subkey, nil
 }
 
-// ReadTier3MasterFile reads the Tier-3 master key from the given path.
-func ReadTier3MasterFile(path string) ([]byte, error) {
+// ReadUserSecretMasterFile reads the user-secret master key from the given path.
+func ReadUserSecretMasterFile(path string) ([]byte, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open Tier-3 master key file: %w", err)
+		return nil, fmt.Errorf("failed to open user-secret master key file: %w", err)
 	}
 	defer file.Close()
 
 	key := make([]byte, 32)
 	n, err := io.ReadFull(file, key)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read Tier-3 master key (got %d bytes): %w", n, err)
+		return nil, fmt.Errorf("failed to read user-secret master key (got %d bytes): %w", n, err)
 	}
 	return key, nil
 }
 
-// WriteTier3MasterFile atomically writes a Tier-3 master key to path via a temp file in the same directory.
-func WriteTier3MasterFile(path string, key []byte, uid, gid int) error {
+// WriteUserSecretMasterFile atomically writes a user-secret master key to path via a temp file in the same directory.
+func WriteUserSecretMasterFile(path string, key []byte, uid, gid int) error {
 	if len(key) != 32 {
-		return fmt.Errorf("Tier-3 master key must be 32 bytes, got %d", len(key))
+		return fmt.Errorf("user-secret master key must be 32 bytes, got %d", len(key))
 	}
 
 	dir := filepath.Dir(path)
 	tempPath := filepath.Join(dir, ".user-secret-master."+randomHex(8)+".tmp")
 
 	if err := os.WriteFile(tempPath, key, 0400); err != nil {
-		return fmt.Errorf("failed to write temp Tier-3 master key: %w", err)
+		return fmt.Errorf("failed to write temp user-secret master key: %w", err)
 	}
 	if uid >= 0 && gid >= 0 {
 		_ = os.Chown(tempPath, uid, gid)
 	}
 	if err := os.Rename(tempPath, path); err != nil {
 		_ = os.Remove(tempPath)
-		return fmt.Errorf("failed to install Tier-3 master key: %w", err)
+		return fmt.Errorf("failed to install user-secret master key: %w", err)
 	}
 	return nil
 }
 
-// SecureZeroTier3 zeroes out tier3MasterKey from memory (intended for graceful shutdown)
-func SecureZeroTier3() {
-	if len(tier3MasterKey) > 0 {
-		if tier3Mlocked {
-			_ = mUnlockMemory(tier3MasterKey)
-			tier3Mlocked = false
+// SecureZeroUserSecretMaster zeroes out userSecretMasterKey from memory (intended for graceful shutdown)
+func SecureZeroUserSecretMaster() {
+	if len(userSecretMasterKey) > 0 {
+		if userSecretMasterMlocked {
+			_ = mUnlockMemory(userSecretMasterKey)
+			userSecretMasterMlocked = false
 		}
 		// Zero memory
-		for i := range tier3MasterKey {
-			tier3MasterKey[i] = 0
+		for i := range userSecretMasterKey {
+			userSecretMasterKey[i] = 0
 		}
-		tier3MasterKey = nil
+		userSecretMasterKey = nil
 	}
 }
 
-// SetTier3MasterForTest allows unit tests to set a mock/temp master key
-func SetTier3MasterForTest(key []byte) {
-	tier3MasterKey = key
+// SetUserSecretMasterForTest allows unit tests to set a mock/temp master key
+func SetUserSecretMasterForTest(key []byte) {
+	userSecretMasterKey = key
 }

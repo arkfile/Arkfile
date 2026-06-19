@@ -24,7 +24,7 @@ import (
 func setupAdminMFAResetIntegrationDB(t *testing.T) {
 	t.Helper()
 	os.Setenv("DEBUG_MODE", "true")
-	crypto.SetTier3MasterForTest(make([]byte, 32))
+	crypto.SetUserSecretMasterForTest(make([]byte, 32))
 
 	db := openAdminMFAResetTestDB(t)
 	original := database.DB

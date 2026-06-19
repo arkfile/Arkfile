@@ -39,8 +39,8 @@ func setupTestEnv(t *testing.T, method, path string, body io.Reader) (echo.Conte
 		db.Close()
 	})
 
-	// Make sure Tier-3 master is simulated as loaded for handlers tests
-	crypto.SetTier3MasterForTest(make([]byte, 32))
+	// Make sure user-secret master is simulated as loaded for handlers tests
+	crypto.SetUserSecretMasterForTest(make([]byte, 32))
 
 	// Create mock storage and registry
 	mockStorage := &storage.MockObjectStorageProvider{}
