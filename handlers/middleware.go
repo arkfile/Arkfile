@@ -502,12 +502,39 @@ func CookieTokenMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
+// csrfExemptPaths are anonymous pre-authentication endpoints. They establish a
+// brand-new session, so the double-submit CSRF check (which protects existing
+// authenticated sessions) does not apply. Exempting them also ensures a stale
+// or attacker-planted session cookie left in the browser cannot block the
+// register/login flow.
+var csrfExemptPaths = map[string]struct{}{
+	"/api/opaque/register/response":    {},
+	"/api/opaque/register/finalize":    {},
+	"/api/opaque/login/response":       {},
+	"/api/opaque/login/finalize":       {},
+	"/api/admin/login/response":        {},
+	"/api/admin/login/finalize":        {},
+	"/api/bootstrap/register/response": {},
+	"/api/bootstrap/register/finalize": {},
+}
+
+func isCSRFExemptPath(path string) bool {
+	_, ok := csrfExemptPaths[path]
+	return ok
+}
+
 // CSRFMiddleware enforces the double-submit CSRF pattern for browser requests.
 // Applied only when a full-tier Arkfile cookie is present on the request.
 // Safe (GET/HEAD/OPTIONS) methods are exempt.
 // CLI requests (no Arkfile cookie) bypass this middleware entirely.
 func CSRFMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
+		// Anonymous pre-authentication endpoints establish a new session and
+		// must never be gated by CSRF (a stale cookie must not block them).
+		if isCSRFExemptPath(c.Path()) {
+			return next(c)
+		}
+
 		// Only enforce CSRF for browser sessions (full-tier cookie present).
 		// Temp-tier-only sessions are during TOTP handoff; POST to /api/mfa/*
 		// is safe here because TOTP endpoints are protected by MFAJWTMiddleware

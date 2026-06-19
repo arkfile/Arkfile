@@ -22,6 +22,13 @@ if (typeof window !== 'undefined' && (window as any).trustedTypes && (window as 
       createHTML: (string: string) => {
         // Safe pass-through of application static templates and escaped markup
         return string;
+      },
+      createScriptURL: (url: string) => {
+        // Only the same-origin streaming-download Service Worker is permitted.
+        if (url === '/sw-download.js') {
+          return url;
+        }
+        throw new TypeError(`Blocked TrustedScriptURL for disallowed URL: ${url}`);
       }
     });
   } catch (err) {
