@@ -635,7 +635,7 @@ func parsePositiveTopUpUSD(value, name string) (int64, error) {
 // ValidateProductionConfig validates that the configuration is safe for production
 func ValidateProductionConfig() error {
 	if utils.IsProductionEnvironment() {
-		// A-14: ADMIN_DEV_TEST_API_ENABLED grants /api/admin/dev-test/**
+		// ADMIN_DEV_TEST_API_ENABLED grants /api/admin/dev-test/**
 		// which exposes destructive endpoints (user-cleanup, TOTP
 		// decrypt-check, billing tick-now). The route group itself is
 		// gated by this env var in handlers/route_config.go, so a

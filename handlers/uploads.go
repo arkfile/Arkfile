@@ -45,7 +45,7 @@ const maxInProgressUploadSessionsPerUser = 4
 
 // Max allocation defense-in-depth ceiling for appended padding chunk-obscuring bytes.
 // Prevents active database/session tampering from triggering an enormous memory allocation
-// on completing the last chunk upload. Closes finding C-01 (remediation threat-model cap).
+// on completing the last chunk upload.
 const maxPaddingPerChunk = 16 * 1024 * 1024 // 16 MiB
 
 // CreateUploadSession initializes a new chunked upload.
@@ -582,7 +582,7 @@ func UploadChunk(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to read session padded_size")
 	}
 
-	// Reject early if padding size exceeds maxPaddingPerChunk (finding C-01)
+	// Reject early if padding size exceeds maxPaddingPerChunk
 	if paddedSize > totalSize {
 		if paddedSize-totalSize > maxPaddingPerChunk {
 			return JSONErrorCode(c, http.StatusBadRequest, "padding_too_large", "Padding size exceeds maximum allowed limit (16 MiB)")

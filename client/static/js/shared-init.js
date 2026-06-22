@@ -1,7 +1,7 @@
 // Share page initialization
 // Parses share ID from URL and initializes ShareAccessUI
 
-// Register CSP Trusted Types global default policy to securely handle innerHTML sinks (F-17)
+// Register CSP Trusted Types global default policy to securely handle innerHTML sinks
 if (typeof window !== 'undefined' && window.trustedTypes && window.trustedTypes.createPolicy) {
   try {
     window.trustedTypes.createPolicy('default', {

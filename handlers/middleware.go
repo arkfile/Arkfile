@@ -38,8 +38,7 @@ func parseIPAddress(ipStr string) net.IP {
 //
 // It MUST NOT consult c.RealIP(), X-Forwarded-For, or X-Real-IP. Those values
 // are client-controllable (set by any HTTP client) and Echo's default IP
-// extractor walks them; trusting them for authz is exactly the F-01 bug.
-// See: docs/wip/review/00-executive-summary.md (F-01).
+// extractor walks them.
 //
 // main.go pins e.IPExtractor = echo.ExtractIPDirect() which makes c.RealIP()
 // also safe today, but this helper documents the intent at the call site so
@@ -755,8 +754,7 @@ func RequireMFA(next echo.HandlerFunc) echo.HandlerFunc {
 // DEPRECATED for authorization decisions. Use peerAddrIsLoopback(c) instead.
 // This helper takes a net.IP that callers usually obtained from c.RealIP(),
 // which walks X-Forwarded-For under Echo's default extractor and is therefore
-// spoofable. Retained only because it is still used internally and removing
-// it would balloon the F-01 fix diff. See peerAddrIsLoopback for the correct
+// spoofable. See peerAddrIsLoopback for the correct
 // primitive for "is this request coming from loopback?" authz gates.
 func isLocalhostIP(ip net.IP) bool {
 	return ip.IsLoopback() || ip.Equal(net.ParseIP("127.0.0.1")) || ip.Equal(net.ParseIP("::1"))
@@ -767,7 +765,7 @@ func AdminMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		// 1. Localhost validation. We MUST use the kernel-reported transport
 		// peer here, not c.RealIP(), so a remote attacker cannot pass
-		// X-Forwarded-For: 127.0.0.1 and slip past the gate. See F-01.
+		// X-Forwarded-For: 127.0.0.1 and slip past the gate.
 		if !peerAddrIsLoopback(c) {
 			return echo.NewHTTPError(http.StatusForbidden, "Admin endpoints only available from localhost")
 		}

@@ -8,7 +8,7 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// F-01 regression tests.
+// Regression tests.
 //
 // These tests prove that the localhost-only authorization gate on
 // AdminMiddleware ignores client-controlled headers (X-Forwarded-For,
@@ -16,8 +16,6 @@ import (
 // peer address via peerAddrIsLoopback. They also exercise publicClientIP,
 // which is the separate helper used for non-authz client-identity
 // purposes (EntityID HMAC binning, rate-limit keying).
-//
-// See: docs/wip/review/00-executive-summary.md (F-01).
 
 // newTestEchoWithIPExtractor builds an *echo.Echo wired the same way main.go
 // wires the production process: e.IPExtractor pinned to ExtractIPDirect.
@@ -44,7 +42,7 @@ func makeRequest(e *echo.Echo, remoteAddr, xff, arkfilePeer string) echo.Context
 	return e.NewContext(req, rec)
 }
 
-// TestPeerAddrIsLoopback_RejectsForgedXFF proves the F-01 fix.
+// TestPeerAddrIsLoopback_RejectsForgedXFF
 //
 // Scenario: an internet host sends a request with X-Forwarded-For: 127.0.0.1
 // (the forged value) but its real TCP peer is a public IP. The helper MUST
@@ -69,7 +67,7 @@ func TestPeerAddrIsLoopback_RejectsForgedXFF(t *testing.T) {
 			c := makeRequest(e, tc.remoteAddr, tc.xff, "")
 			if peerAddrIsLoopback(c) {
 				t.Fatalf("peerAddrIsLoopback returned true for non-loopback peer %q (XFF=%q). "+
-					"This is the F-01 bug -- the gate must consult the kernel "+
+					"The gate must consult the kernel "+
 					"transport peer, not the X-Forwarded-For header.", tc.remoteAddr, tc.xff)
 			}
 		})
@@ -116,7 +114,7 @@ func TestPeerAddrIsLoopback_RejectsInvalidRemoteAddr(t *testing.T) {
 	}
 }
 
-// TestAdminMiddleware_RejectsForgedXFF is the end-to-end F-01 regression
+// TestAdminMiddleware_RejectsForgedXFF is the end-to-end regression
 // test against the actual middleware. The middleware must return 403 and
 // MUST NOT call the wrapped handler when the kernel peer is non-loopback,
 // regardless of what X-Forwarded-For says.
@@ -133,7 +131,7 @@ func TestAdminMiddleware_RejectsForgedXFF(t *testing.T) {
 	err := wrapped(c)
 
 	if called {
-		t.Fatalf("F-01 REGRESSION: AdminMiddleware invoked the inner handler for a " +
+		t.Fatalf("REGRESSION: AdminMiddleware invoked the inner handler for a " +
 			"remote request that spoofed X-Forwarded-For: 127.0.0.1. The localhost " +
 			"gate must reject this request.")
 	}
@@ -195,7 +193,7 @@ func TestPublicClientIP_IgnoresForgedXFF(t *testing.T) {
 		t.Fatalf("publicClientIP returned nil")
 	}
 	if got.String() != "203.0.113.7" {
-		t.Fatalf("publicClientIP = %v; want 203.0.113.7. F-01 regression: "+
+		t.Fatalf("publicClientIP = %v; want 203.0.113.7. regression: "+
 			"publicClientIP must not honour X-Forwarded-For (which is what "+
 			"e.IPExtractor = ExtractIPDirect prevents).", got)
 	}

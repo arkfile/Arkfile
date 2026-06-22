@@ -214,7 +214,7 @@ func TestCreateUploadSession_FileIDConflictStableError(t *testing.T) {
 // TestUploadChunk_EnforcesPaddingCeiling verifies that UploadChunk rejects a request
 // early when the database indicates a synthesized padded_size - total_size exceeding
 // the maxPaddingPerChunk (16 MiB) cap. This prevents DoS vectors where arbitrary allocations
-// are triggered by tampered DB values or malformed session properties (closes finding C-01).
+// are triggered by tampered DB values or malformed session properties.
 func TestUploadChunk_EnforcesPaddingCeiling(t *testing.T) {
 	username := "padding-test-user"
 	sessionID := "session-with-large-padding"

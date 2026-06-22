@@ -20,7 +20,7 @@ localhost:443 {
 				tls
 				tls_trusted_ca_certs /opt/arkfile/etc/keys/tls/ca/ca.crt
 			}
-		# SECURITY (F-01): strip client-controlled IP-spoofing headers
+		# SECURITY: strip client-controlled IP-spoofing headers
 		# before reverse-proxying. The Go process MUST NOT see any value
 		# the client picked for these. Propagate the real public peer in
 		# a dedicated header that only Caddy is allowed to set, so the

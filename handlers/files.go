@@ -204,7 +204,7 @@ func GetFileEnvelope(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
 	}
 
-	// Check if user is approved for file operations (C-12)
+	// Check if user is approved for file operations
 	user, err := models.GetUserByUsername(database.DB, username)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get user details")

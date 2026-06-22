@@ -279,7 +279,7 @@ describe('decryptShareEnvelope failure cases', () => {
 });
 
 // ============================================================================
-// KDF parameter floor checks (finding D-12)
+// KDF parameter floor checks
 // ============================================================================
 
 describe('KDF floor and envelope validation', () => {

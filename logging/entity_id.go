@@ -286,7 +286,6 @@ func GetCompositeEntityIDForRequest(ip net.IP, r *http.Request) string {
 //
 // The raw IP is HMAC'd through the daily-rotating EntityID layer before any
 // persistence -- it never appears in logs, the DB, or any audit trail.
-// See: docs/wip/review/00-executive-summary.md (F-01).
 func GetOrCreateEntityID(c interface{}) string {
 	// Type assertion for Echo context
 	type ContextWithRealIP interface {

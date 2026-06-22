@@ -110,7 +110,7 @@ func RegisterRoutes() {
 
 	// Session management (OPAQUE sessions)
 	Echo.POST("/api/refresh", RefreshToken)
-	// Logout requires authentication (A-33) to prevent remote DoS or session manipulation.
+	// Logout requires authentication to prevent remote DoS or session manipulation.
 	// It is registered under auth.Echo which applies JWTMiddleware + TokenRevocationMiddleware.
 	auth.Echo.POST("/api/logout", Logout)
 
@@ -159,7 +159,7 @@ func RegisterRoutes() {
 
 	// Share page (serves shared.html for /shared/:id URLs - no authentication required).
 	// To prevent URL enumeration sweeps and timing-attack mapping on this legacy path,
-	// we protect it with the exact same middleware group (D-05).
+	// we protect it with the exact same middleware group.
 	Echo.GET("/shared/:id", ShareEnumerationMiddleware(ShareRateLimitMiddleware(TimingProtectionMiddleware(GetSharedFile))))
 	publicShareGroup.GET("/:id/envelope", GetShareEnvelope)             // Get share envelope for client-side decryption
 	publicShareGroup.GET("/:id/metadata", GetShareDownloadMetadata)     // Get metadata for shared file download
@@ -203,7 +203,7 @@ func RegisterRoutes() {
 	// Admin API endpoints - structured for future expansion.
 	// Stack: JWTMiddleware (validates aud=arkfile-api, rejects temp tokens at signature/audience)
 	//      + RequireFullJWT (defense in depth: rejects requires_mfa=true)
-	//      + RequireMFA (asserts the user has MFA enrolled; E-01 fix)
+	//      + RequireMFA (asserts the user has MFA enrolled)
 	//      + AdminMiddleware (loopback gate, rate limit, admin-flag check, audit log).
 	adminGroup := Echo.Group("/api/admin")
 	adminGroup.Use(auth.JWTMiddleware())

@@ -52,7 +52,7 @@ func AdminOpaqueAuthResponse(c echo.Context) error {
 	}
 
 	if useFake {
-		// Derive fake user record to prevent account / privilege enumeration (A-24)
+		// Derive fake user record to prevent account / privilege enumeration
 		var fakeErr error
 		userRecord, fakeErr = auth.DeriveFakeUserRecord(request.Username)
 		if fakeErr != nil {

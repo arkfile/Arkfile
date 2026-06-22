@@ -600,7 +600,7 @@ func DeleteUser(c echo.Context) error {
 		return JSONError(c, http.StatusInternalServerError, "Failed to delete user's file shares")
 	}
 
-	// E-21 & A-12: Soft-delete user record. Set deleted_at timestamp instead of hard-deleting the row.
+	// Soft-delete user record. Set deleted_at timestamp instead of hard-deleting the row.
 	// This preserves audit records and structural integrity while immediately locking out the user.
 	if _, err := tx.Exec("UPDATE users SET deleted_at = CURRENT_TIMESTAMP WHERE username = ?", targetUsername); err != nil {
 		return JSONError(c, http.StatusInternalServerError, "Failed to soft-delete user record")

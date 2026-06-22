@@ -200,7 +200,7 @@ func AdminSyncStatus(c echo.Context) error {
 
 	// Helper: check if a file is active on a given provider
 	// Uses a subquery pattern: EXISTS (SELECT 1 FROM fsl WHERE file_id=? AND provider_id=? AND status='active')
-	// E-02: To completely guard against any active SQL injection scenarios or dirty injections, we strip inputs down to strictly alphanumeric/hyphens/dashes characters.
+	// To completely guard against any active SQL injection scenarios or dirty injections, we strip inputs down to strictly alphanumeric/hyphens/dashes characters.
 	sanitizeProviderID := func(providerID string) string {
 		var clean []rune
 		for _, r := range providerID {

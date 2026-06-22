@@ -571,7 +571,7 @@ func doChunkedUpload(client *HTTPClient, session *AuthSession, params *ChunkedUp
 
 		// Encrypt the chunk. AAD binds (file_id, chunk_index,
 		// total_chunks) so that the server cannot swap/reorder/truncate
-		// chunks at decrypt time (B-02, B-05, C-02, C-03).
+		// chunks at decrypt time.
 		encryptedChunk, err := encryptChunk(plaintext, params.FEK, params.FileID, chunkIndex, params.ChunkCount)
 		if err != nil {
 			return "", fmt.Errorf("failed to encrypt chunk %d: %w", chunkIndex, err)
@@ -815,7 +815,7 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 // doChunkedDownload streams chunks from the server and decrypts each one.
 // fileID and meta.ChunkCount are bound into the per-chunk AAD so chunk
 // swap / reorder / cross-file substitution / truncation all fail at the
-// AEAD layer (B-02, B-05, C-02, C-03).
+// AEAD layer.
 func doChunkedDownload(client *HTTPClient, session *AuthSession, fileID string, fek []byte, meta ServerFileInfo, outFile *os.File) error {
 	chunkCount := meta.ChunkCount
 	if chunkCount == 0 {
@@ -1199,7 +1199,7 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 		defer clearBytes(sourceKEK)
 	}
 
-	// Unwrap FEK. fileID is bound into the FEK envelope AAD (B-08).
+	// Unwrap FEK. fileID is bound into the FEK envelope AAD
 	fek, _, err := unwrapFEK(fileMeta.EncryptedFEK, sourceKEK, *fileID)
 	if err != nil {
 		return fmt.Errorf("failed to unwrap FEK: %w", err)

@@ -294,7 +294,7 @@ func TestStorageProviderSupport(t *testing.T) {
 	}
 }
 
-// TestValidateProductionConfig_RejectsDevTestAPIInProduction proves A-14:
+// TestValidateProductionConfig_RejectsDevTestAPIInProduction:
 // the server must refuse to start when ENVIRONMENT=production AND
 // ADMIN_DEV_TEST_API_ENABLED is truthy. ValidateProductionConfig is called
 // from main.go BEFORE any handler registration, so the dev/test route group
@@ -373,7 +373,7 @@ func TestValidateProductionConfig_RejectsDevTestAPIInProduction(t *testing.T) {
 			name:         "production + dev-test API false => allowed",
 			environment:  "production",
 			devTestValue: "false",
-			wantErrSub:   "", // no error expected from the A-14 path
+			wantErrSub:   "", // no error expected
 		},
 		{
 			name:         "production + dev-test API unset => allowed",
@@ -402,7 +402,7 @@ func TestValidateProductionConfig_RejectsDevTestAPIInProduction(t *testing.T) {
 					tc.environment, tc.devTestValue)
 			} else {
 				if err == nil {
-					t.Fatalf("A-14 REGRESSION: ValidateProductionConfig accepted env=%q devTest=%q; want error containing %q",
+					t.Fatalf("REGRESSION: ValidateProductionConfig accepted env=%q devTest=%q; want error containing %q",
 						tc.environment, tc.devTestValue, tc.wantErrSub)
 				}
 				assert.Contains(t, err.Error(), tc.wantErrSub,

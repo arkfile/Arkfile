@@ -58,7 +58,7 @@ export LIBOPAQUE_A="$LIBOPAQUE_SRC/libopaque.a"
 export LIBOPRF_A="$LIBOPRF_SRC/liboprf.a"
 export NOISE_XK_A="$LIBOPRF_SRC/noise_xk/liboprf-noiseXK.a"
 
-# Phase D, finding F-06: native libsodium is vendored and built from source.
+# Native libsodium is vendored and built from source.
 export LIBSODIUM_DIR="$VENDOR_C_ROOT/jedisct1/libsodium"
 export LIBSODIUM_INCLUDE="$LIBSODIUM_DIR/src/libsodium/include"
 export LIBSODIUM_A="$LIBSODIUM_DIR/src/libsodium/.libs/libsodium.a"
@@ -570,7 +570,7 @@ clean_build_dir() {
 }
 
 # Check if C libraries exist and are valid.
-# Phase D, finding F-06: also verifies vendored libsodium static archive.
+# Also verifies vendored libsodium static archive.
 c_libs_exist() {
     if [ -f "$LIBOPAQUE_A" ] && [ -f "$LIBOPRF_A" ] && [ -f "$LIBSODIUM_A" ]; then
         # Verify they're actual archive files

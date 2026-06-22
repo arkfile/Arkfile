@@ -347,7 +347,7 @@ export async function decryptShareEnvelope(
       throw new DecryptionError('Invalid share envelope: missing fek or download_token');
     }
 
-    // Validate KDF parameters (finding D-12)
+    // Validate KDF parameters
     if (!envelope.kdf_params) {
       throw new DecryptionError('Invalid share envelope: missing KDF parameters');
     }

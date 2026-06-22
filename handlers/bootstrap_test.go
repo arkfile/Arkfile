@@ -46,7 +46,7 @@ func TestBootstrapRegisterResponse_RejectsForgedXFF(t *testing.T) {
 
 	// Minimal valid-shape JSON body. The handler never gets this far if
 	// the gate works correctly; if it does, we'd see a 400/401 rather
-	// than a 403, which would be the F-01 regression we are testing for.
+	// than a 403, which would be the regression we are testing for.
 	body := []byte(`{"bootstrap_token":"fake","username":"alice","registration_request":"AAAA"}`)
 
 	c := makeBootstrapRequest(e, "203.0.113.7:55555", "127.0.0.1", body)

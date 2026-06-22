@@ -344,7 +344,7 @@ export PATH="${BUN_DIR}:${PATH}"
 pushd client/static/js > /dev/null
 
 # Always ensure dependencies are up to date.
-# --frozen-lockfile (Phase D, finding F-13) refuses to install if package.json
+# --frozen-lockfile refuses to install if package.json
 # and bun.lock disagree. This prevents supply-chain drift on every deploy and
 # enforces that any dependency-version change must be a deliberate, reviewed
 # update to both files.
@@ -605,7 +605,7 @@ else
     exit 1
 fi
 
-# Inject Subresource Integrity (SRI) attributes (Phase D, finding F-04).
+# Inject Subresource Integrity (SRI) attributes
 #
 # We compute sha384 of every shipped client-side script in the build tree and
 # rewrite the deployed HTML copies under ${BUILD_CLIENT}/static/ to add

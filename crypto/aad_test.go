@@ -188,7 +188,7 @@ func TestAADFieldLabels_AreCanonicalStrings(t *testing.T) {
 // =============================================================================
 // TAMPER-DETECTION NEGATIVE TESTS — proves AAD binding actually catches
 // chunk swap / reorder / cross-file substitution / truncation at the
-// AEAD layer (B-02, B-05, C-02, C-03).
+// AEAD layer
 // =============================================================================
 
 func TestChunkSwapDetection(t *testing.T) {
@@ -275,7 +275,7 @@ func TestChunkTruncationDetection(t *testing.T) {
 }
 
 // =============================================================================
-// FEK-ENVELOPE AAD ROUND-TRIP + NEGATIVE TESTS — B-08
+// FEK-ENVELOPE AAD ROUND-TRIP + NEGATIVE TESTS
 // =============================================================================
 
 func TestFEKEnvelopeAAD_RoundTrip(t *testing.T) {
@@ -342,7 +342,7 @@ func TestFEKEnvelopeAAD_KeyTypeFlip_Fails(t *testing.T) {
 }
 
 // =============================================================================
-// METADATA-FIELD AAD ROUND-TRIP + NEGATIVE TESTS — C-19
+// METADATA-FIELD AAD ROUND-TRIP + NEGATIVE TESTS
 // =============================================================================
 
 func TestMetadataFieldAAD_RoundTrip(t *testing.T) {

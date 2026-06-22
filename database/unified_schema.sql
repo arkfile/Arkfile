@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS users (
     is_admin BOOLEAN NOT NULL DEFAULT false,
     last_login TIMESTAMP,
     registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMP DEFAULT NULL          -- E-21: Soft-deletion indicator. NULL means active.
+    deleted_at TIMESTAMP DEFAULT NULL          -- Soft-deletion indicator. NULL means active.
 );
 
 -- File metadata table (core file information with encrypted metadata)
@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS system_keys (
     nonce BLOB NOT NULL,          -- The nonce used for encryption (AES-GCM)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP,         -- Optional (for Bootstrap Token)
-    consumed_at TIMESTAMP         -- Single-use enforcement for bootstrap_token (A-13)
+    consumed_at TIMESTAMP         -- Single-use enforcement for bootstrap_token
 );
 
 -- =====================================================
@@ -112,13 +112,13 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     revoked BOOLEAN DEFAULT FALSE,
     last_used TIMESTAMP,
-    family_id TEXT NOT NULL,               -- A-10: random hex per login; shared across rotation chain
-    superseded_by_hash TEXT,               -- A-10: SHA-256 hex of the next token; NULL while current head
-    family_revoked_at TIMESTAMP,           -- A-10: set on all family rows when reuse is detected
+    family_id TEXT NOT NULL,               -- random hex per login; shared across rotation chain
+    superseded_by_hash TEXT,               -- SHA-256 hex of the next token; NULL while current head
+    family_revoked_at TIMESTAMP,           -- set on all family rows when reuse is detected
     FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 
--- User-wide JWT revocation table (A-09).
+-- User-wide JWT revocation table.
 -- A row here causes TokenRevocationMiddleware to reject any full JWT for the user
 -- whose iat claim is before revoked_at.
 CREATE TABLE IF NOT EXISTS user_jwt_revocations (
@@ -418,7 +418,7 @@ CREATE TABLE IF NOT EXISTS billing_settings (
     updated_by TEXT
 );
 
--- E-05: Persistent system-wide sweep tracking. Prevents duplicated processing
+-- Persistent system-wide sweep tracking. Prevents duplicated processing
 -- and tracks daily run records.
 CREATE TABLE IF NOT EXISTS billing_sweeps (
     sweep_date TEXT PRIMARY KEY,                       -- Format: "YYYY-MM-DD"

@@ -225,7 +225,7 @@ func resolveExportAuthFromHeader(c echo.Context) (string, error) {
 
 	// Parse and validate the standard Arkfile JWT. The parser enforces:
 	//   - Ed25519 signature against the FULL-tier public key
-	//   - aud=arkfile-api (rejects temp post-OPAQUE tokens -- E-19 fix)
+	//   - aud=arkfile-api (rejects temp post-OPAQUE tokens)
 	//   - issuer=arkfile-auth
 	//   - non-expired
 	parser := jwt.NewParser(

@@ -52,7 +52,6 @@ func encryptChunk(plaintext, fek []byte, fileID string, chunkIndex, totalChunks 
 // decryptChunk decrypts a single encrypted chunk with the FEK using
 // AES-256-GCM, verifying the AAD bound at encrypt time. Any mismatch in
 // fileID, chunkIndex, or totalChunks causes AEAD authentication failure
-// (B-02, B-05, C-02, C-03).
 func decryptChunk(ciphertext, fek []byte, fileID string, chunkIndex, totalChunks int64) ([]byte, error) {
 	if len(fek) != 32 {
 		return nil, fmt.Errorf("FEK must be 32 bytes for AES-256")
@@ -72,7 +71,7 @@ func decryptChunk(ciphertext, fek []byte, fileID string, chunkIndex, totalChunks
 // encryptMetadata encrypts filename and SHA-256 hex digest with the
 // account key. AAD binds each ciphertext to (fileID, field_label,
 // ownerUsername) so substituting metadata between files / fields / users
-// is rejected by the AEAD layer (C-19).
+// is rejected by the AEAD layer.
 //
 // Returns base64-encoded values suitable for the server API.
 func encryptMetadata(filename, sha256hex string, accountKey []byte, fileID, ownerUsername string) (encFilenameB64, fnNonceB64, encSHA256B64, shaNonceB64 string, err error) {
@@ -153,7 +152,7 @@ func decryptMetadataField(encDataB64, nonceB64 string, accountKey []byte, fileID
 // 2-byte envelope header [0x01][keyTypeByte]. Returns the base64-encoded
 // result suitable for the server API.
 //
-// Cross-file FEK substitution (B-08) fails at unwrap time because the AAD
+// Cross-file FEK substitution fails at unwrap time because the AAD
 // was bound to a different fileID.
 func wrapFEK(fek, kek []byte, keyType, fileID string) (string, error) {
 	if fileID == "" {

@@ -36,7 +36,7 @@ func TestMain(m *testing.M) {
 
 	// Create system_keys table (required by crypto.InitKeyManager).
 	// Mirrors the production schema in database/unified_schema.sql so that
-	// tests exercising bootstrap-token consumption (A-13) see the same
+	// tests exercising bootstrap-token consumption see the same
 	// consumed_at column the production code writes to.
 	_, err = db.Exec(`
 		CREATE TABLE system_keys (

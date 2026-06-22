@@ -269,7 +269,7 @@ func OpaqueRegisterResponse(c echo.Context) error {
 		return JSONError(c, http.StatusBadRequest, "Invalid username: "+err.Error())
 	}
 
-	// Check if user already exists (A-25) (using folded username search to prevent homograph / collision attacks)
+	// Check if user already exists (using folded username search to prevent homograph / collision attacks)
 	folded := utils.FoldUsername(request.Username)
 	exists, err := models.UserFoldedExists(database.DB, folded)
 	if err == nil && exists {
@@ -464,7 +464,7 @@ func OpaqueAuthResponse(c echo.Context) error {
 	var userRecord []byte
 	if err != nil {
 		if err == sql.ErrNoRows {
-			// Derive fake user record to prevent account enumeration (A-24)
+			// Derive fake user record to prevent account enumeration
 			var fakeErr error
 			userRecord, fakeErr = auth.DeriveFakeUserRecord(request.Username)
 			if fakeErr != nil {

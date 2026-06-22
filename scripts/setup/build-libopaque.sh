@@ -1,7 +1,7 @@
 #!/bin/bash
 # Cross-platform static library build system
 #
-# Phase D, finding F-06: libsodium is vendored from source under
+# libsodium is vendored from source under
 # vendor_c/jedisct1/libsodium. This script:
 #   1. Builds vendored libsodium statically (./configure && make).
 #   2. Builds noise_xk, liboprf, libopaque statically against the vendored
@@ -113,7 +113,7 @@ check_go_version() {
 }
 
 # =============================================================================
-# Vendored libsodium build (Phase D, finding F-06)
+# Vendored libsodium build
 # =============================================================================
 
 # Path to the vendored libsodium submodule (relative to repo root).

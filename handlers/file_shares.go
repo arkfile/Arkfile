@@ -253,7 +253,7 @@ func GetShareEnvelope(c echo.Context) error {
 	}
 
 	// Check if share has been revoked.
-	// To prevent sensitive owner-supplied comments from leaking to anonymous clients (D-04),
+	// To prevent sensitive owner-supplied comments from leaking to anonymous clients,
 	// we only leak standard machine-parsable system-wide categories if they are 'time' or 'exhausted'.
 	// Any other reason gets redacted to a generic "Share has been revoked" message.
 	if share.RevokedAt != nil {
@@ -318,7 +318,7 @@ func RevokeShare(c echo.Context) error {
 	if request.Reason == "" {
 		request.Reason = "manual"
 	} else if request.Reason != "manual" && request.Reason != "owner_request" && request.Reason != "abuse" {
-		// Restrict revoked_reason block to preset list of enums to prevent arbitrary string/PII injections (D-04)
+		// Restrict revoked_reason block to preset list of enums to prevent arbitrary string/PII injections
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid revocation reason")
 	}
 
@@ -644,7 +644,7 @@ func GetShareDownloadMetadata(c echo.Context) error {
 	}
 
 	// Check if share has been revoked.
-	// To prevent sensitive owner-supplied comments from leaking to anonymous clients (D-04),
+	// To prevent sensitive owner-supplied comments from leaking to anonymous clients,
 	// we only leak standard machine-parsable system-wide categories if they are 'time' or 'exhausted'.
 	// Any other reason gets redacted to a generic "Share has been revoked" message.
 	if share.RevokedAt != nil {
@@ -755,7 +755,7 @@ func DownloadShareChunk(c echo.Context) error {
 	}
 
 	// Check if share has been revoked.
-	// To prevent sensitive owner-supplied comments from leaking to anonymous clients (D-04),
+	// To prevent sensitive owner-supplied comments from leaking to anonymous clients,
 	// we only leak standard machine-parsable system-wide categories if they are 'time' or 'exhausted'.
 	// Any other reason gets redacted to a generic "Share has been revoked" message.
 	if share.RevokedAt != nil {
