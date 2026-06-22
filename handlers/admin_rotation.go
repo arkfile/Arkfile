@@ -106,3 +106,31 @@ func AdminPrepareUserSecretMasterRotation(c echo.Context) error {
 		"expires_at": expiresAt.UTC().Format(time.RFC3339),
 	})
 }
+
+// AdminPrepareEnvelopeMasterRotation issues a single-use mandate for offline
+// envelope master key (ARKFILE_MASTER_KEY) rotation.
+func AdminPrepareEnvelopeMasterRotation(c echo.Context) error {
+	adminUsername := auth.GetUsernameFromToken(c)
+
+	mandate, expiresAt, err := auth.IssueEnvelopeRotationMandate(database.DB, adminUsername)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to issue envelope master rotation mandate for %s: %v", adminUsername, err)
+		return JSONError(c, http.StatusInternalServerError, "Failed to issue rotation mandate")
+	}
+
+	logging.LogSecurityEvent(
+		logging.EventKeyRotation,
+		nil,
+		&adminUsername,
+		nil,
+		map[string]interface{}{
+			"operation":  "envelope_master_rotation_prepare",
+			"expires_at": expiresAt.UTC().Format(time.RFC3339),
+		},
+	)
+
+	return JSONResponse(c, http.StatusOK, "Envelope master rotation mandate issued", map[string]interface{}{
+		"mandate":    mandate,
+		"expires_at": expiresAt.UTC().Format(time.RFC3339),
+	})
+}

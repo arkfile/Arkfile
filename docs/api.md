@@ -287,6 +287,7 @@ The admin can export any user's file as an `.arkbackup` bundle for disaster reco
 | GET | `/api/admin/system/status` | Get system status and storage stats | Admin |
 | GET | `/api/admin/system/health` | Get system health status | Admin |
 | POST | `/api/admin/system/prepare-user-secret-master-rotation` | Issue user-secret rotation mandate | Admin + MFA |
+| POST | `/api/admin/system/prepare-envelope-master-rotation` | Issue envelope master key rotation mandate | Admin + MFA |
 | POST | `/api/admin/system/rotate-jwt-keys` | Rotate JWT signing keys (new active version, both tiers) | Admin + MFA |
 | POST | `/api/admin/system/retire-jwt-key-version` | Retire a superseded JWT signing key version | Admin + MFA |
 | GET | `/api/admin/security/events` | Get security event logs | Admin |

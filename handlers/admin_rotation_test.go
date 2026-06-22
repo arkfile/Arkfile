@@ -15,8 +15,8 @@ import (
 	"github.com/84adam/Arkfile/database"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
-	"github.com/pquerna/otp/totp"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/pquerna/otp/totp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -86,6 +86,13 @@ func openRotationTestDB(t *testing.T) *sql.DB {
 			used_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 		CREATE TABLE user_secret_rotation_mandates (
+			nonce TEXT PRIMARY KEY,
+			admin_username TEXT NOT NULL,
+			expires_at TIMESTAMP NOT NULL,
+			consumed_at TIMESTAMP,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE envelope_master_rotation_mandates (
 			nonce TEXT PRIMARY KEY,
 			admin_username TEXT NOT NULL,
 			expires_at TIMESTAMP NOT NULL,
@@ -177,6 +184,37 @@ func TestAdminPrepareUserSecretMasterRotation_Direct_IssuesMandate(t *testing.T)
 	assert.NotEmpty(t, data["expires_at"])
 
 	payload, err := auth.VerifyUserSecretRotationMandate(mandate, auth.GetJWTFullPublicKey())
+	require.NoError(t, err)
+	assert.Equal(t, adminUsername, payload.AdminUsername)
+}
+
+func TestAdminPrepareEnvelopeMasterRotation_Direct_IssuesMandate(t *testing.T) {
+	setupRotationIntegrationDB(t)
+	const adminUsername = "envelope-admin"
+	insertRotationAdminUser(t, database.DB, adminUsername, true)
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/system/prepare-envelope-master-rotation", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	setFullTokenOnContext(t, c, adminUsername)
+
+	err := AdminPrepareEnvelopeMasterRotation(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "Envelope master rotation mandate issued", resp["message"])
+
+	data, ok := resp["data"].(map[string]interface{})
+	require.True(t, ok)
+	mandate, ok := data["mandate"].(string)
+	require.True(t, ok)
+	assert.NotEmpty(t, mandate)
+	assert.NotEmpty(t, data["expires_at"])
+
+	payload, err := auth.VerifyEnvelopeRotationMandate(mandate, auth.GetJWTFullPublicKey())
 	require.NoError(t, err)
 	assert.Equal(t, adminUsername, payload.AdminUsername)
 }

@@ -46,6 +46,7 @@ scripts/
 │   ├── health-check.sh               # System health monitoring
 │   ├── renew-certificates.sh         # Renew TLS certificates
 │   ├── rotate-user-secret-master.sh  # user-secret master rotation runbook wrapper
+│   ├── rotate-envelope-master.sh     # envelope master key rotation runbook wrapper
 │   ├── rotate-opaque-keys.sh         # Rotate OPAQUE server keys
 │   ├── security-audit.sh             # Security auditing
 │   ├── security-cleanup.sh           # Security cleanup utilities
@@ -300,6 +301,11 @@ Exports `MFA_SECRET` and test file paths to `scripts/testing/e2e-playwright.ts`.
 #### `rotate-user-secret-master.sh`
 **Purpose**: User-secret master rotation runbook (delegates to `arkfile-admin`)  
 **Usage**: `sudo ./scripts/maintenance/rotate-user-secret-master.sh`  
+**Requires**: Prior `arkfile-admin login`; brief `arkfile` service stop during apply
+
+#### `rotate-envelope-master.sh`
+**Purpose**: Envelope master key (`ARKFILE_MASTER_KEY`) rotation runbook (delegates to `arkfile-admin`); re-wraps all `system_keys` rows and regenerates the EntityID master  
+**Usage**: `sudo ./scripts/maintenance/rotate-envelope-master.sh`  
 **Requires**: Prior `arkfile-admin login`; brief `arkfile` service stop during apply
 
 **Admin MFA reset (`arkfile-admin reset-user-mfa`):**

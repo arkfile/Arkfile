@@ -361,9 +361,21 @@ sudo systemctl start arkfile
 # Or use the runbook wrapper (delegates to arkfile-admin only):
 sudo ./scripts/maintenance/rotate-user-secret-master.sh
 
+# Envelope master key rotation (re-wraps all system_keys rows; requires admin MFA + brief downtime)
+arkfile-admin login --username admin
+arkfile-admin rotate-envelope-master prepare --mandate-file /root/envelope-rotation-mandate.txt --confirm
+sudo systemctl stop arkfile
+arkfile-admin rotate-envelope-master apply --mandate-file /root/envelope-rotation-mandate.txt --confirm
+sudo systemctl start arkfile
+
+# Or use the runbook wrapper (delegates to arkfile-admin only):
+sudo ./scripts/maintenance/rotate-envelope-master.sh
+
 # OPAQUE key backup (monthly)
 ./scripts/maintenance/backup-keys.sh
 ```
+
+The envelope master key (`ARKFILE_MASTER_KEY` in `secrets.env`) wraps every secret in the `system_keys` table. Its rotation is fully server-side with no user impact: with the service stopped, the apply step decrypts each `system_keys` row under the old master and re-encrypts it under a freshly generated master in a single transaction, then rewrites the `ARKFILE_MASTER_KEY` line in `secrets.env`. Before committing, the new master is written to a root-only (0400) recovery file under `/opt/arkfile/backups/envelope-rotation/` and the whole `secrets.env` is backed up, so a failed swap is always recoverable. After the swap the entire table is verified to decrypt under the new master. The EntityID master is regenerated as part of the same rotation rather than carried forward, which resets the daily rate-limiting/correlation windows (a privacy improvement); no file data, sessions beyond the restart, or user secrets are affected.
 
 JWT signing keys are managed in `system_keys` via KeyManager and support online, zero-downtime rotation with a verification overlap. Each tier (temp and full) is versioned; the active signing version is recorded in a `system_keys` metadata row, and every version still present is accepted for verification until its tokens expire. Rotate with `arkfile-admin rotate-jwt-keys rotate --confirm` (issues a new active version for both tiers and reloads the server's in-memory key rings), then `arkfile-admin rotate-jwt-keys retire --version N --confirm` once the access-token lifetime has elapsed to drop the superseded version.
 

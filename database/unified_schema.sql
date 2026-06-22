@@ -467,6 +467,16 @@ CREATE TABLE IF NOT EXISTS user_secret_rotation_mandates (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Single-use mandates authorizing offline envelope master key rotation
+-- (re-wrapping every system_keys row under a freshly generated ARKFILE_MASTER_KEY).
+CREATE TABLE IF NOT EXISTS envelope_master_rotation_mandates (
+    nonce TEXT PRIMARY KEY,
+    admin_username TEXT NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    consumed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- =====================================================
 -- PHASE 12B: MULTI-BACKEND STORAGE MANAGEMENT
 -- =====================================================

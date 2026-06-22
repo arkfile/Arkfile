@@ -168,7 +168,7 @@ func (e *EntityIDService) getDailyKey(timeWindow string) []byte {
 
 	// Derive key using HKDF-SHA256
 	key := make([]byte, 32)
-	info := []byte("entity_id_v1")
+	info := []byte("entity_id")
 	salt := []byte(timeWindow)
 
 	hkdf := hkdf.New(sha256.New, e.masterSecret, salt, info)
@@ -193,9 +193,9 @@ func (e *EntityIDService) initializeMasterSecret() error {
 		return fmt.Errorf("failed to get KeyManager: %w", err)
 	}
 
-	// Retrieve or generate the 32-byte master key
-	// We use "entity_id_master_key_v1" as the ID and "entity_id" as the type context
-	key, err := km.GetOrGenerateKey("entity_id_master_key_v1", "entity_id", 32)
+	// Retrieve or generate the 32-byte master key. The key_id is the type
+	// context for envelope wrapping derivation; see crypto.EntityIDMasterKeyID.
+	key, err := km.GetOrGenerateKey(crypto.EntityIDMasterKeyID, crypto.EntityIDKeyType, 32)
 	if err != nil {
 		return fmt.Errorf("failed to get/generate entity ID master key: %w", err)
 	}

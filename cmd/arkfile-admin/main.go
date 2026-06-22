@@ -87,6 +87,7 @@ SYSTEM COMMANDS:
     health-check      System health check
     verify-storage    Verify S3 storage connectivity (upload/download/delete round-trip)
     rotate-user-secret-master  User-secret master rotation (prepare|apply)
+    rotate-envelope-master     Envelope master key rotation (prepare|apply)
     rotate-jwt-keys   JWT signing key rotation (rotate|retire)
     version           Show version information
 
@@ -436,6 +437,11 @@ func main() {
 	case "rotate-user-secret-master":
 		if err := handleRotateUserSecretMasterCommand(client, config, args); err != nil {
 			logError("User-secret rotation failed: %v", err)
+			os.Exit(1)
+		}
+	case "rotate-envelope-master":
+		if err := handleRotateEnvelopeMasterCommand(client, config, args); err != nil {
+			logError("Envelope master rotation failed: %v", err)
 			os.Exit(1)
 		}
 	case "rotate-jwt-keys":

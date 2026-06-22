@@ -82,8 +82,16 @@ func (km *KeyManager) DB() *sql.DB {
 
 // deriveWrappingKey derives a specific wrapping key from the Master Key using HKDF.
 func (km *KeyManager) deriveWrappingKey(keyType string) ([]byte, error) {
+	return DeriveWrappingKeyFromMaster(km.masterKey, keyType)
+}
+
+// DeriveWrappingKeyFromMaster derives the per-keytype wrapping key from an
+// arbitrary envelope master key. Exposed so envelope master rotation can derive
+// wrapping keys under both the old and the new master without going through the
+// global KeyManager (which holds only the currently active master).
+func DeriveWrappingKeyFromMaster(master []byte, keyType string) ([]byte, error) {
 	info := []byte(fmt.Sprintf("ARKFILE_%s_KEY_ENCRYPTION", keyType))
-	reader := hkdf.Expand(sha256.New, km.masterKey, info)
+	reader := hkdf.Expand(sha256.New, master, info)
 
 	wrappingKey := make([]byte, 32)
 	if _, err := io.ReadFull(reader, wrappingKey); err != nil {
@@ -94,7 +102,20 @@ func (km *KeyManager) deriveWrappingKey(keyType string) ([]byte, error) {
 
 // EncryptSystemKey encrypts a raw key using the Master Key (via a derived wrapping key).
 func (km *KeyManager) EncryptSystemKey(rawKey []byte, keyType string) ([]byte, []byte, error) {
-	wrappingKey, err := km.deriveWrappingKey(keyType)
+	return EncryptSystemKeyWithMaster(km.masterKey, rawKey, keyType)
+}
+
+// DecryptSystemKey decrypts an encrypted key using the Master Key.
+func (km *KeyManager) DecryptSystemKey(encryptedKey, nonce []byte, keyType string) ([]byte, error) {
+	return DecryptSystemKeyWithMaster(km.masterKey, encryptedKey, nonce, keyType)
+}
+
+// EncryptSystemKeyWithMaster wraps a raw key under a specific envelope master,
+// returning the ciphertext and nonce separately (matching the system_keys
+// storage layout). Used by envelope master rotation to wrap rows under the new
+// master.
+func EncryptSystemKeyWithMaster(master, rawKey []byte, keyType string) ([]byte, []byte, error) {
+	wrappingKey, err := DeriveWrappingKeyFromMaster(master, keyType)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -118,9 +139,10 @@ func (km *KeyManager) EncryptSystemKey(rawKey []byte, keyType string) ([]byte, [
 	return encryptedKey, nonce, nil
 }
 
-// DecryptSystemKey decrypts an encrypted key using the Master Key.
-func (km *KeyManager) DecryptSystemKey(encryptedKey, nonce []byte, keyType string) ([]byte, error) {
-	wrappingKey, err := km.deriveWrappingKey(keyType)
+// DecryptSystemKeyWithMaster unwraps a system key under a specific envelope
+// master. Used by envelope master rotation to decrypt rows under the old master.
+func DecryptSystemKeyWithMaster(master, encryptedKey, nonce []byte, keyType string) ([]byte, error) {
+	wrappingKey, err := DeriveWrappingKeyFromMaster(master, keyType)
 	if err != nil {
 		return nil, err
 	}

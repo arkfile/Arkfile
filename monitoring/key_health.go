@@ -114,7 +114,7 @@ func (khm *KeyHealthMonitor) PerformHealthCheck() {
 		{
 			Name: "Entity ID Master Secret",
 			Type: "entity_id",
-			Path: "/opt/arkfile/etc/keys/entity_id/master.key",
+			Path: crypto.EntityIDMasterKeyID, // lives in system_keys, not on disk
 		},
 		{
 			Name: "TLS Certificate",

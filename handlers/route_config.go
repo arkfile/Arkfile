@@ -247,6 +247,7 @@ func RegisterRoutes() {
 	adminGroup.GET("/system/status", AdminSystemStatus)
 	adminGroup.GET("/system/health", AdminSystemHealth)
 	adminGroup.POST("/system/prepare-user-secret-master-rotation", AdminPrepareUserSecretMasterRotation)
+	adminGroup.POST("/system/prepare-envelope-master-rotation", AdminPrepareEnvelopeMasterRotation)
 	adminGroup.POST("/system/rotate-jwt-keys", AdminRotateJWTKeys)
 	adminGroup.POST("/system/retire-jwt-key-version", AdminRetireJWTKeyVersion)
 	adminGroup.GET("/security/events", AdminSecurityEvents)
