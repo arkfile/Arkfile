@@ -82,6 +82,12 @@ func RegisterRoutes() {
 	Echo.POST("/api/opaque/login/finalize", LoginRateLimitMiddleware(OpaqueAuthFinalize))
 	Echo.GET("/api/opaque/health", OpaqueHealthCheck)
 
+	// OPAQUE re-registration ceremony - reached when an account flagged for
+	// OPAQUE credential rotation signs in. Gated by the short-lived
+	// re-registration handoff token (aud=arkfile-reregistration).
+	Echo.POST("/api/opaque/reregister/response", RegisterRateLimitMiddleware(ReregisterResponse), auth.ReregistrationJWTMiddleware())
+	Echo.POST("/api/opaque/reregister/finalize", RegisterRateLimitMiddleware(ReregisterFinalize), auth.ReregistrationJWTMiddleware())
+
 	// Admin OPAQUE Authentication (Multi-Step Protocol) - separate endpoints with admin verification
 	Echo.POST("/api/admin/login/response", LoginRateLimitMiddleware(AdminOpaqueAuthResponse))
 	Echo.POST("/api/admin/login/finalize", LoginRateLimitMiddleware(AdminOpaqueAuthFinalize))
@@ -228,6 +234,12 @@ func RegisterRoutes() {
 	adminGroup.PUT("/users/:username", UpdateUser)
 	adminGroup.POST("/users/:username/force-logout", AdminForceLogout)
 	adminGroup.POST("/users/:username/reset-mfa", AdminResetUserMFA)
+
+	// OPAQUE credential rotation: flag account(s) for one-time re-registration.
+	// The all-users route is registered before the parameterized route so it is
+	// not shadowed by :username.
+	adminGroup.POST("/users/flag-reregistration-all", AdminFlagAllUsersReregistration)
+	adminGroup.POST("/users/:username/flag-reregistration", AdminFlagUserReregistration)
 
 	// Admin inspection of user files and shares
 	adminGroup.GET("/users/:username/files", AdminListUserFiles)

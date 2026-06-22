@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS users (
     is_admin BOOLEAN NOT NULL DEFAULT false,
     last_login TIMESTAMP,
     registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    requires_reregistration BOOLEAN NOT NULL DEFAULT false,  -- Set when an operator rotates the account's OPAQUE credentials; login routes the user through one-time re-registration.
     deleted_at TIMESTAMP DEFAULT NULL          -- Soft-deletion indicator. NULL means active.
 );
 

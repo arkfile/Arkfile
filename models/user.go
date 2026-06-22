@@ -341,6 +341,58 @@ func (u *User) HasOPAQUEAccount(db *sql.DB) (bool, error) {
 	return count > 0, nil
 }
 
+// UserRequiresReregistration reports whether the account is flagged for a
+// one-time OPAQUE re-registration (set by an operator during OPAQUE credential
+// rotation). Returns false for a missing or soft-deleted user.
+func UserRequiresReregistration(db DBTX, username string) (bool, error) {
+	var flag bool
+	err := db.QueryRow(
+		`SELECT requires_reregistration FROM users WHERE username = ? AND deleted_at IS NULL`,
+		username,
+	).Scan(&flag)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	return flag, nil
+}
+
+// SetUserRequiresReregistration sets or clears the re-registration flag for one
+// account. Setting it is part of an operator-initiated OPAQUE credential
+// rotation; the ceremony clears it on completion.
+func SetUserRequiresReregistration(db DBTX, username string, required bool) error {
+	res, err := db.Exec(
+		`UPDATE users SET requires_reregistration = ? WHERE username = ? AND deleted_at IS NULL`,
+		required, username,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update re-registration flag: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return fmt.Errorf("user not found: %s", username)
+	}
+	return nil
+}
+
+// FlagAllUsersForReregistration sets the re-registration flag on every active
+// account. Used when rotating the OPAQUE server keys for the whole deployment.
+// Returns the number of accounts flagged.
+func FlagAllUsersForReregistration(db DBTX) (int64, error) {
+	res, err := db.Exec(
+		`UPDATE users SET requires_reregistration = true WHERE deleted_at IS NULL`,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to flag all users for re-registration: %w", err)
+	}
+	return res.RowsAffected()
+}
+
 // Delete removes the user and all associated data
 func (u *User) Delete(db *sql.DB) error {
 	// Start transaction for atomic deletion

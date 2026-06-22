@@ -18,11 +18,20 @@ import { handleMFASetupFlow } from './mfa-setup.js';
 import { handleWebAuthnLoginFlow } from './webauthn.js';
 import { getOpaqueClient, storeClientSecret, retrieveClientSecret, clearClientSecret } from '../crypto/opaque.js';
 import {
+  deriveFileEncryptionKey,
   deriveFileEncryptionKeyWithCache,
   cleanupAccountKeyCache,
 } from '../crypto/file-encryption.js';
+import { decryptMetadataField } from '../crypto/metadata-helpers.js';
+import { AAD_FIELD_FILENAME } from '../crypto/aad.js';
 import { promptForCacheOptIn } from '../ui/password-modal.js';
 import { populateDigestCache, clearDigestCache, type RawFileEntry } from '../utils/digest-cache.js';
+import type { ReregistrationVerifier, ReregistrationRequiredData } from '../types/api.js';
+
+// Stable error code the server returns (HTTP 409) when an account has been
+// flagged for a one-time OPAQUE re-registration after an operator-initiated
+// OPAQUE credential rotation.
+const ACCOUNT_REQUIRES_REREGISTRATION = 'account_requires_reregistration';
 
 export interface LoginCredentials {
   username: string;
@@ -88,8 +97,23 @@ export class LoginManager {
       });
 
       if (!responseStep1.ok) {
-        const errorText = await responseStep1.text();
         clearClientSecret('login_secret');
+
+        // A 409 carrying account_requires_reregistration means an operator
+        // rotated this account's OPAQUE credentials. Run the one-time
+        // re-registration ceremony within this same login attempt.
+        if (responseStep1.status === 409) {
+          const errBody = await responseStep1.json().catch(() => null);
+          if (errBody && errBody.error === ACCOUNT_REQUIRES_REREGISTRATION) {
+            await LoginManager.handleReregistration(credentials, (errBody.data || {}) as ReregistrationRequiredData);
+            return;
+          }
+          hideProgress();
+          showError(errBody?.message || 'Authentication failed');
+          return;
+        }
+
+        const errorText = await responseStep1.text();
         hideProgress();
         showError(`Authentication failed: ${errorText}`);
         return;
@@ -156,46 +180,7 @@ export class LoginManager {
 
       hideProgress();
 
-      // Check TOTP FIRST, before any cache/digest operations
-      if (loginData.requires_mfa) {
-        const mfaMethod = (loginData.mfa_method || '').trim();
-
-        if (loginData.requires_mfa_setup) {
-          document.querySelector('.modal-overlay')?.remove();
-          handleMFASetupFlow({
-            tempToken: loginData.temp_token!,
-            username: credentials.username,
-            password: credentials.password,
-            mfaMethod: mfaMethod as 'totp' | 'webauthn' | '',
-          });
-          showSuccess('Please complete two-factor authentication setup to finish logging in.');
-          return;
-        }
-
-        if (mfaMethod === 'webauthn') {
-          handleWebAuthnLoginFlow({
-            tempToken: loginData.temp_token!,
-            username: credentials.username,
-            password: credentials.password,
-          });
-          return;
-        }
-
-        handleTOTPFlow({
-          tempToken: loginData.temp_token!,
-          username: credentials.username,
-          password: credentials.password,
-        });
-        return;
-      }
-
-      // No TOTP required: complete login with post-auth steps
-      await this.completeLogin({
-        token: loginData.token,
-        refresh_token: loginData.refresh_token,
-        auth_method: 'OPAQUE',
-        is_approved: loginData.is_approved,
-      }, credentials.username, credentials.password);
+      await LoginManager.routeAfterOpaque(loginData, credentials);
 
     } catch (error) {
       // Clean up on error
@@ -205,6 +190,202 @@ export class LoginManager {
       showError('Authentication failed');
     } finally {
       LoginManager.loginInProgress = false;
+    }
+  }
+
+  /**
+   * Route to the appropriate next step after a successful OPAQUE exchange,
+   * whether from a normal login finalize or the re-registration ceremony.
+   * Both produce the same response shape (requires_mfa + temp_token, or tokens).
+   */
+  private static async routeAfterOpaque(loginData: any, credentials: LoginCredentials): Promise<void> {
+    // Check MFA FIRST, before any cache/digest operations
+    if (loginData.requires_mfa) {
+      const mfaMethod = (loginData.mfa_method || '').trim();
+
+      if (loginData.requires_mfa_setup) {
+        document.querySelector('.modal-overlay')?.remove();
+        handleMFASetupFlow({
+          tempToken: loginData.temp_token!,
+          username: credentials.username,
+          password: credentials.password,
+          mfaMethod: mfaMethod as 'totp' | 'webauthn' | '',
+        });
+        showSuccess('Please complete two-factor authentication setup to finish logging in.');
+        return;
+      }
+
+      if (mfaMethod === 'webauthn') {
+        handleWebAuthnLoginFlow({
+          tempToken: loginData.temp_token!,
+          username: credentials.username,
+          password: credentials.password,
+        });
+        return;
+      }
+
+      handleTOTPFlow({
+        tempToken: loginData.temp_token!,
+        username: credentials.username,
+        password: credentials.password,
+      });
+      return;
+    }
+
+    // No MFA required: complete login with post-auth steps
+    await LoginManager.completeLogin({
+      token: loginData.token,
+      refresh_token: loginData.refresh_token,
+      auth_method: 'OPAQUE',
+      is_approved: loginData.is_approved,
+    }, credentials.username, credentials.password);
+  }
+
+  /**
+   * Run the one-time OPAQUE re-registration ceremony for a flagged account.
+   *
+   * Invoked from login() when the login response step returns
+   * account_requires_reregistration. The browser carries the short-lived
+   * handoff token via the temp-tier HttpOnly cookie the server set on the 409,
+   * so the ceremony requests need no explicit Authorization header.
+   *
+   * When the user owns files, the entered password is first confirmed against
+   * an account-key-encrypted metadata sample, so a mismatched password can
+   * never be bound to the account and lock the user out of their own files.
+   * On success the ceremony yields the same MFA-pending shape as a normal
+   * login, so we hand off to routeAfterOpaque() and never add a second login.
+   */
+  public static async handleReregistration(
+    credentials: LoginCredentials,
+    data: ReregistrationRequiredData,
+  ): Promise<void> {
+    try {
+      const fileCount = data.file_count ?? 0;
+
+      if (fileCount > 0) {
+        showProgressMessage('Verifying your password against your existing files...');
+        const verified = await LoginManager.verifyReregistrationPassword(credentials, data.verifier);
+        if (!verified) {
+          hideProgress();
+          showError('The password you entered does not match this account\'s existing files. Re-registration was cancelled and no changes were made.');
+          return;
+        }
+      }
+
+      showProgressMessage('Re-registering your account after a security key update...');
+
+      const opaqueClient = await getOpaqueClient();
+      const registrationInit = await opaqueClient.startRegistration({
+        username: credentials.username,
+        password: credentials.password,
+      });
+      storeClientSecret('reregistration_secret', registrationInit.clientSecret);
+
+      const respStep1 = await fetch('/api/opaque/reregister/response', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', ...csrfHeader() },
+        body: JSON.stringify({ registration_request: registrationInit.requestData }),
+      });
+      if (!respStep1.ok) {
+        clearClientSecret('reregistration_secret');
+        hideProgress();
+        const errBody = await respStep1.json().catch(() => null);
+        showError(errBody?.message || 'Re-registration failed. Please try again.');
+        return;
+      }
+
+      const step1 = await respStep1.json();
+      const respData = step1.data;
+      if (!respData || !respData.registration_response || !respData.session_id) {
+        clearClientSecret('reregistration_secret');
+        hideProgress();
+        showError('Invalid server response during re-registration.');
+        return;
+      }
+
+      const clientSecret = retrieveClientSecret('reregistration_secret');
+      if (!clientSecret) {
+        hideProgress();
+        showError('Re-registration session expired. Please try again.');
+        return;
+      }
+
+      const registrationFinalize = await opaqueClient.finalizeRegistration({
+        username: credentials.username,
+        serverResponse: respData.registration_response,
+        clientSecret: clientSecret,
+      });
+      clearClientSecret('reregistration_secret');
+
+      const respStep2 = await fetch('/api/opaque/reregister/finalize', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', ...csrfHeader() },
+        body: JSON.stringify({
+          session_id: respData.session_id,
+          registration_record: registrationFinalize.record,
+        }),
+      });
+
+      if (registrationFinalize.exportKey) {
+        registrationFinalize.exportKey.fill(0);
+      }
+
+      if (!respStep2.ok) {
+        hideProgress();
+        const errBody = await respStep2.json().catch(() => null);
+        showError(errBody?.message || 'Re-registration finalization failed. Please try again.');
+        return;
+      }
+
+      const finalizeResponse = await respStep2.json();
+      const finalizeData = finalizeResponse.data || finalizeResponse;
+
+      hideProgress();
+      // Re-registration preserves MFA enrollment, so this continues straight
+      // into the existing second-factor flow — no extra login round-trip.
+      await LoginManager.routeAfterOpaque(finalizeData, credentials);
+    } catch (error) {
+      clearClientSecret('reregistration_secret');
+      hideProgress();
+      console.error('Re-registration error:', error);
+      showError('Re-registration failed. Please try again.');
+    }
+  }
+
+  /**
+   * Confirm the entered password derives the Account Key that wraps the user's
+   * existing files, using the account-key-encrypted verifier sample the server
+   * returned with the 409. Returns false on any failure so the caller can abort
+   * the ceremony without modifying server-side state.
+   */
+  private static async verifyReregistrationPassword(
+    credentials: LoginCredentials,
+    verifier?: ReregistrationVerifier,
+  ): Promise<boolean> {
+    if (!verifier || !verifier.file_id || !verifier.encrypted_filename || !verifier.filename_nonce) {
+      // Server reported files but provided no usable verifier sample; fail safe.
+      return false;
+    }
+
+    let accountKey: Uint8Array | undefined;
+    try {
+      accountKey = await deriveFileEncryptionKey(credentials.password, credentials.username, 'account');
+      const owner = verifier.owner_username || credentials.username;
+      await decryptMetadataField(
+        verifier.encrypted_filename,
+        verifier.filename_nonce,
+        accountKey,
+        verifier.file_id,
+        AAD_FIELD_FILENAME,
+        owner,
+      );
+      return true;
+    } catch {
+      return false;
+    } finally {
+      if (accountKey) accountKey.fill(0);
     }
   }
 

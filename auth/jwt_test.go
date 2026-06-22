@@ -398,7 +398,7 @@ func TestJWTMiddleware_RejectsTempSignedWithFullKey(t *testing.T) {
 	// Token signed with the full-tier private key but carrying the TEMP
 	// audience. JWTMiddleware expects AudienceAPI, so this must fail.
 	crafted := mintCustomToken(t, &Claims{
-		Username:     "mallory",
+		Username:    "mallory",
 		RequiresMFA: true,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Audience: []string{AudienceMFA},
@@ -456,7 +456,7 @@ func TestRequireFullJWT_RejectsRequiresMFATrue(t *testing.T) {
 	// with requires_mfa=true. JWTMiddleware will accept this (signature OK,
 	// audience OK); RequireFullJWT must reject it.
 	crafted := mintCustomToken(t, &Claims{
-		Username:     "alice",
+		Username:    "alice",
 		RequiresMFA: true,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Audience: []string{AudienceAPI},
@@ -574,6 +574,54 @@ func TestResetJWTMiddleware_RejectsMFAAudience(t *testing.T) {
 	httpErr, ok := err.(*echo.HTTPError)
 	assert.True(t, ok)
 	assert.Equal(t, http.StatusUnauthorized, httpErr.Code)
+}
+
+func TestReregistrationJWTMiddleware_AcceptsReregistrationAudience(t *testing.T) {
+	e := echo.New()
+	handler := ReregistrationJWTMiddleware()(func(c echo.Context) error {
+		return c.String(http.StatusOK, "ok")
+	})
+
+	token, _, err := GenerateReregistrationToken("alice12345")
+	assert.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/opaque/reregister/response", nil)
+	req.Header.Set(echo.HeaderAuthorization, "Bearer "+token)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	assert.NoError(t, handler(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestReregistrationJWTMiddleware_RejectsOtherAudiences(t *testing.T) {
+	e := echo.New()
+	handler := ReregistrationJWTMiddleware()(func(c echo.Context) error {
+		return c.String(http.StatusOK, "should not reach")
+	})
+
+	// A reset-tier token (different audience, same signing key) must be rejected.
+	resetToken, _, err := GenerateTemporaryResetToken("alice12345")
+	assert.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/opaque/reregister/response", nil)
+	req.Header.Set(echo.HeaderAuthorization, "Bearer "+resetToken)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err = handler(c)
+	assert.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	assert.True(t, ok)
+	assert.Equal(t, http.StatusUnauthorized, httpErr.Code)
+}
+
+func TestGenerateReregistrationToken_ClaimsShape(t *testing.T) {
+	token, expiresAt, err := GenerateReregistrationToken("alice12345")
+	assert.NoError(t, err)
+	assert.NotEmpty(t, token)
+	// 15-minute lifetime, within a generous tolerance.
+	assert.WithinDuration(t, time.Now().Add(15*time.Minute), expiresAt, time.Minute)
 }
 
 func TestMFAResetJWTMiddleware_AcceptsResetAndFullTokens(t *testing.T) {

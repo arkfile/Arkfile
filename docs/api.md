@@ -54,7 +54,11 @@ Arkfile uses the OPAQUE PAKE (Password-Authenticated Key Exchange) protocol for 
 |--------|------|---------|------|
 | POST | `/api/opaque/login/response` | OPAQUE login step 1 - server response | Public |
 | POST | `/api/opaque/login/finalize` | OPAQUE login step 2 - finalize and get tokens | Public |
+| POST | `/api/opaque/reregister/response` | OPAQUE re-registration ceremony step 1 (for flagged accounts) | Re-registration handoff token |
+| POST | `/api/opaque/reregister/finalize` | OPAQUE re-registration ceremony step 2 (for flagged accounts) | Re-registration handoff token |
 | GET | `/api/opaque/health` | Health probe for OPAQUE service | Public |
+
+When an operator has flagged an account for OPAQUE credential rotation, `/api/opaque/login/response` returns HTTP `409` with stable error code `account_requires_reregistration`. The response `data` carries a short-lived `reregistration_token` (audience `arkfile-reregistration`), the authoritative `file_count`, and—when the user owns files—a single account-key-encrypted `verifier` sample (`file_id`, `owner_username`, `encrypted_filename`, `filename_nonce`). The client confirms the entered password by test-decrypting the verifier with the derived Account Key before completing the ceremony, then re-binds `opaque_user_data` via the `reregister` endpoints and continues into the normal MFA flow. Files, shares, MFA enrollment, and settings are preserved.
 
 #### Admin Login (Multi-Step OPAQUE)
 
@@ -256,6 +260,8 @@ All admin endpoints require JWT authentication with admin privileges.
 | PUT | `/api/admin/users/:username` | Update user properties (`is_admin`, `is_approved`, `storage_limit_bytes`) | Admin |
 | POST | `/api/admin/users/:username/force-logout` | Revoke all JWT + refresh tokens for a user | Admin |
 | POST | `/api/admin/users/:username/reset-mfa` | Full MFA reset (delete credentials, backup codes, usage logs; force-logout) | Admin + MFA |
+| POST | `/api/admin/users/:username/flag-reregistration` | Flag one account for one-time OPAQUE re-registration (deletes OPAQUE record only; force-logout) | Admin + MFA |
+| POST | `/api/admin/users/flag-reregistration-all` | Flag every active account for OPAQUE re-registration (full-deployment OPAQUE key rotation) | Admin + MFA |
 
 #### User Inspection (Admin)
 

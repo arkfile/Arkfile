@@ -22,11 +22,12 @@ import (
 // JWT audience constants. These are checked at the validator (ParseTokenFunc)
 // in addition to the per-tier signing-key separation.
 const (
-	AudienceMFA    = "arkfile-mfa"
-	AudienceAPI    = "arkfile-api"
-	AudienceExport = "arkfile-export"
-	AudienceReset  = "arkfile-mfa-reset"
-	Issuer         = "arkfile-auth"
+	AudienceMFA            = "arkfile-mfa"
+	AudienceAPI            = "arkfile-api"
+	AudienceExport         = "arkfile-export"
+	AudienceReset          = "arkfile-mfa-reset"
+	AudienceReregistration = "arkfile-reregistration"
+	Issuer                 = "arkfile-auth"
 )
 
 // Echo is the Echo group with authentication middleware applied
@@ -100,6 +101,32 @@ func GenerateTemporaryResetToken(username string) (string, time.Time, error) {
 			NotBefore: jwt.NewNumericDate(time.Now()),
 			Issuer:    Issuer,
 			Audience:  []string{AudienceReset},
+			ID:        tokenID,
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+	tokenString, err := token.SignedString(GetJWTTempPrivateKey())
+	return tokenString, expirationTime, err
+}
+
+// GenerateReregistrationToken creates a short-lived handoff token that authorizes
+// only the OPAQUE re-registration ceremony for the named user. Signed with the
+// temp-tier key; carries aud=arkfile-reregistration. Issued when a login lands on
+// an account an operator has flagged for OPAQUE credential rotation.
+func GenerateReregistrationToken(username string) (string, time.Time, error) {
+	tokenID := uuid.New().String()
+	expirationTime := time.Now().Add(15 * time.Minute)
+
+	claims := &Claims{
+		Username:    username,
+		RequiresMFA: true,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expirationTime),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
+			Issuer:    Issuer,
+			Audience:  []string{AudienceReregistration},
 			ID:        tokenID,
 		},
 	}
@@ -239,6 +266,23 @@ func ResetJWTMiddleware() echo.MiddlewareFunc {
 			return new(Claims)
 		},
 		ParseTokenFunc: parseTokenWithAudience(GetJWTTempVerificationKeys, AudienceReset),
+		ErrorHandler: func(c echo.Context, err error) error {
+			return echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
+		},
+	}
+	return echojwt.WithConfig(config)
+}
+
+// ReregistrationJWTMiddleware validates the OPAQUE re-registration handoff token
+// (aud=arkfile-reregistration). Used only by the re-registration ceremony
+// endpoints. A missing, expired, or wrong-audience token yields a 401 that the
+// ceremony handler maps to the reregistration_token_invalid contract code.
+func ReregistrationJWTMiddleware() echo.MiddlewareFunc {
+	config := echojwt.Config{
+		NewClaimsFunc: func(c echo.Context) jwt.Claims {
+			return new(Claims)
+		},
+		ParseTokenFunc: parseTokenWithAudience(GetJWTTempVerificationKeys, AudienceReregistration),
 		ErrorHandler: func(c echo.Context, err error) error {
 			return echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
 		},

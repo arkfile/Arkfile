@@ -537,32 +537,31 @@ sudo systemctl edit arkfile
 # Add: [Service] Environment="LOG_LEVEL=debug"
 ```
 
-### Key Compromise Response
+### OPAQUE Server Key Rotation (admin-initiated re-registration)
 
-**CRITICAL: OPAQUE Server Key Compromise**
+OPAQUE server keys are the one key layer that cannot be re-wrapped in place: each `opaque_user_data` record is bound to the server key and OPRF seed present at registration, and the server never holds the password needed to re-wrap it. Rotating these keys is therefore a deliberate, guided operation in which affected users transparently re-register their OPAQUE record on their next sign-in. This is a routine administrative task suitable for periodic rotation (for example every 1–2 years); the same procedure also covers the rare case of a suspected key issue.
 
-If OPAQUE server key compromise is suspected:
+Re-registration never deletes the `users` row or any child rows. Files, shares, MFA enrollment, credits, contact info, and settings are all preserved: identity is the username (unchanged), and the Account Key is a deterministic function of username + password, so a user who re-registers with the same password regenerates a byte-identical Account Key and all account-wrapped files and metadata continue to decrypt. The clients confirm the password locally (by test-decrypting an account-key-encrypted metadata sample) before finalizing, so a mismatched password is never bound to the account.
+
+**Rotate for the whole deployment:**
 
 ```bash
-# WARNING: This invalidates ALL user accounts
-# Only execute if absolutely certain of compromise
+# 1. Flag every active account for one-time OPAQUE re-registration.
+#    This deletes only the opaque_user_data records, sets requires_reregistration,
+#    and force-logs-out all sessions. No other user data is touched.
+arkfile-admin flag-user-reregistration --all --confirm
 
-# 1. Immediate service shutdown
-sudo systemctl stop arkfile
-
-# 2. Backup everything
-sudo tar -czf /opt/arkfile/backups/emergency-backup-$(date +%Y%m%d-%H%M%S).tar.gz \
-  /opt/arkfile/var/lib /opt/arkfile/etc/keys
-
-# 3. Generate new OPAQUE server key
+# 2. Generate new OPAQUE server keys.
 ./scripts/setup/03-setup-opaque-keys.sh --force
 
-# 4. Clear all user authentication data
-rqlite -H localhost:4001 \
-  "DELETE FROM opaque_registrations; DELETE FROM opaque_server_keys;"
+# 3. Restart the service.
+sudo systemctl restart arkfile
+```
 
-# 5. Notify all users of required re-registration
-echo "ALL USERS MUST RE-REGISTER - OPAQUE KEY ROTATED DUE TO SECURITY INCIDENT"
+On their next login, each user is met with a clear, structured prompt (HTTP 409 `account_requires_reregistration`) and is guided through the re-registration ceremony within the same login attempt, continuing into their existing MFA. To rotate a single account instead, use:
+
+```bash
+arkfile-admin flag-user-reregistration --username USER --confirm
 ```
 
 ## Audit Trails  

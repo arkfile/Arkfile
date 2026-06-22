@@ -50,6 +50,7 @@ NETWORK COMMANDS (Admin API - localhost only):
     delete-user       Delete a user and all associated data
     force-logout      Force-logout a user (revoke all tokens)
     reset-user-mfa    Clear all MFA enrollment for a user (full reset)
+    flag-user-reregistration  Flag account(s) for one-time OPAQUE re-registration
     list-files        List files owned by a user
     list-shares       List shares owned by a user
     delete-file       Delete a specific file by ID
@@ -304,6 +305,11 @@ func main() {
 	case "reset-user-mfa":
 		if err := handleResetUserMFACommand(client, config, args); err != nil {
 			logError("Reset user MFA failed: %v", err)
+			os.Exit(1)
+		}
+	case "flag-user-reregistration":
+		if err := handleFlagUserReregistrationCommand(client, config, args); err != nil {
+			logError("Flag user re-registration failed: %v", err)
 			os.Exit(1)
 		}
 	case "list-files":

@@ -3175,6 +3175,103 @@ run_report() {
 # Ensure agent is stopped on exit (covers error paths too)
 trap stop_agent EXIT
 
+# OPAQUE re-registration: an operator flags the existing user for a one-time
+# OPAQUE credential rotation, then the user re-registers transparently within a
+# single login attempt and their existing file remains decryptable. Reuses the
+# user and file from the Files phase and adds no extra login/logout cycles
+# beyond the one re-registration login (plus one rejected wrong-password login).
+run_opaque_reregistration() {
+    group "OPAQUE re-registration (admin-initiated credential rotation)"
+
+    if [ -z "${UPLOADED_FILE_ID:-}" ] || [ -z "${UPLOADED_FILE_SHA256:-}" ]; then
+        error "Re-registration test requires an uploaded file from the Files phase"
+        record_test "OPAQUE re-registration preconditions" "FAIL"
+        return 0
+    fi
+    if [ -z "${TEST_USER_TOTP_SECRET:-}" ]; then
+        error "Re-registration test requires the user's TOTP secret"
+        record_test "OPAQUE re-registration preconditions" "FAIL"
+        return 0
+    fi
+
+    # Operator flags the account: deletes only the OPAQUE record, sets
+    # requires_reregistration, and force-logs-out the user. Files, shares, MFA
+    # enrollment, and settings are all preserved.
+    admin_login_with_totp "Admin login (re-registration flag)" >/dev/null
+
+    scenario "Flagging $TEST_USERNAME for OPAQUE re-registration"
+    local flag_out flag_code
+    safe_exec flag_out flag_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        flag-user-reregistration --username "$TEST_USERNAME" --confirm
+    if [ $flag_code -eq 0 ]; then
+        record_test "Admin flag-user-reregistration" "PASS"
+    else
+        error "flag-user-reregistration failed:"; echo "$flag_out"
+        record_test "Admin flag-user-reregistration" "FAIL"
+        return 0
+    fi
+
+    # Negative: a WRONG password must be rejected by the client's pre-finalize
+    # password-match check (the user owns files), leaving the account flagged
+    # and unchanged so the correct password can still re-register afterward.
+    scenario "Re-registration rejects an incorrect password (no changes made)"
+    local bad_out bad_code
+    safe_exec bad_out bad_code bash -c "printf '%s\n' 'WrongPassword2026!DoesNotMatch' | $CLIENT \
+        --server-url '$SERVER_URL' \
+        --tls-insecure \
+        --username '$TEST_USERNAME' \
+        login \
+        --totp-secret '$TEST_USER_TOTP_SECRET' \
+        --non-interactive"
+    if [ $bad_code -ne 0 ] && echo "$bad_out" | grep -qi "does not match"; then
+        record_test "Re-registration wrong-password rejected" "PASS"
+    else
+        error "Wrong-password re-registration was not rejected as expected:"; echo "$bad_out"
+        record_test "Re-registration wrong-password rejected" "FAIL"
+    fi
+
+    # Positive: the correct password runs the ceremony inline and continues
+    # straight into the existing MFA flow within the same login attempt.
+    scenario "Re-registering $TEST_USERNAME with the correct password"
+    wait_for_totp_window
+    local rr_out rr_code
+    safe_exec rr_out rr_code bash -c "printf '%s\n' '$TEST_PASSWORD' | $CLIENT \
+        --server-url '$SERVER_URL' \
+        --tls-insecure \
+        --username '$TEST_USERNAME' \
+        login \
+        --totp-secret '$TEST_USER_TOTP_SECRET' \
+        --save-session \
+        --cache-key"
+    if [ $rr_code -eq 0 ] && echo "$rr_out" | grep -q "Login successful"; then
+        record_test "OPAQUE re-registration + login" "PASS"
+    else
+        error "Re-registration login failed:"; echo "$rr_out"
+        record_test "OPAQUE re-registration + login" "FAIL"
+        return 0
+    fi
+
+    # The existing file must remain decryptable with the same password, proving
+    # the Account Key (and therefore all account-wrapped data) is unchanged.
+    scenario "Verifying the existing file still decrypts after re-registration"
+    local rr_dl="$TEST_DATA_DIR/reregistration-download.bin"
+    local dl_out dl_code
+    safe_exec dl_out dl_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+        download --file-id "$UPLOADED_FILE_ID" --output "$rr_dl"
+    if [ $dl_code -eq 0 ]; then
+        record_test "Post-re-registration file download" "PASS"
+    else
+        error "Post-re-registration download failed:"; echo "$dl_out"
+        record_test "Post-re-registration file download" "FAIL"
+    fi
+    assert_sha256_matches "$rr_dl" "$UPLOADED_FILE_SHA256" "Post-re-registration content integrity"
+    rm -f "$rr_dl"
+
+    success "OPAQUE re-registration flow complete"
+}
+
 main() {
     echo -e "${CYAN}  ARKFILE E2E GO CLI CLIENT TEST      ${NC}"
     echo ""
@@ -3202,6 +3299,7 @@ main() {
         run_user_onboarding_admin_approval
         run_user_authentication
         run_files_standard
+        run_opaque_reregistration
         run_files_custom_password
         run_shares
         run_admin_operations

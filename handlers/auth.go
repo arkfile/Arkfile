@@ -414,10 +414,10 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 	return JSONResponse(c, http.StatusCreated, "Account created successfully. Two-factor authentication setup is required to complete registration.", map[string]interface{}{
 		"requires_mfa_setup": true,
 		"requires_mfa":       true,
-		"temp_token":          tempToken,
-		"auth_method":         "OPAQUE",
-		"mfa_method":          pendingMethod,
-		"username":            request.Username,
+		"temp_token":         tempToken,
+		"auth_method":        "OPAQUE",
+		"mfa_method":         pendingMethod,
+		"username":           request.Username,
 	})
 }
 
@@ -464,6 +464,19 @@ func OpaqueAuthResponse(c echo.Context) error {
 	var userRecord []byte
 	if err != nil {
 		if err == sql.ErrNoRows {
+			// An operator-initiated OPAQUE credential rotation deletes the
+			// account's OPAQUE record and flags it for re-registration. When a
+			// flagged account reaches the (now empty) record lookup, route the
+			// client into the one-time re-registration ceremony instead of the
+			// enumeration-resistant fake-record path.
+			flagged, flagErr := models.UserRequiresReregistration(database.DB, request.Username)
+			if flagErr != nil {
+				logging.ErrorLogger.Printf("Failed to check re-registration flag for %s: %v", request.Username, flagErr)
+				return JSONError(c, http.StatusInternalServerError, "Authentication failed")
+			}
+			if flagged {
+				return respondAccountRequiresReregistration(c, request.Username)
+			}
 			// Derive fake user record to prevent account enumeration
 			var fakeErr error
 			userRecord, fakeErr = auth.DeriveFakeUserRecord(request.Username)
@@ -596,8 +609,8 @@ func OpaqueAuthFinalize(c echo.Context) error {
 		return JSONResponse(c, http.StatusOK, "Two-factor authentication setup is required to complete login.", map[string]interface{}{
 			"requires_mfa":       true,
 			"requires_mfa_setup": true,
-			"temp_token":          tempToken,
-			"mfa_method":          pendingMethod,
+			"temp_token":         tempToken,
+			"mfa_method":         pendingMethod,
 		})
 	}
 
@@ -623,9 +636,9 @@ func OpaqueAuthFinalize(c echo.Context) error {
 
 	return JSONResponse(c, http.StatusOK, "OPAQUE authentication successful. Second factor required.", map[string]interface{}{
 		"requires_mfa": true,
-		"temp_token":    tempToken,
-		"auth_method":   "OPAQUE",
-		"mfa_method":    mfaMethod,
+		"temp_token":   tempToken,
+		"auth_method":  "OPAQUE",
+		"mfa_method":   mfaMethod,
 	})
 }
 

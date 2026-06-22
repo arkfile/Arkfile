@@ -124,7 +124,7 @@ type Response struct {
 	Error               string                 `json:"error"`
 	TempToken           string                 `json:"temp_token"`
 	SessionKey          string                 `json:"session_key"`
-	RequiresMFA        bool                   `json:"requires_mfa"`
+	RequiresMFA         bool                   `json:"requires_mfa"`
 	Token               string                 `json:"token"`
 	RefreshToken        string                 `json:"refresh_token"`
 	ExpiresAt           time.Time              `json:"expires_at"`
@@ -924,55 +924,69 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 		"username":           *usernameFlag,
 		"credential_request": encodeBase64(credentialRequest),
 	}, "")
+
+	// A 409 carrying account_requires_reregistration means an operator rotated
+	// this account's OPAQUE credentials. Run the one-time re-registration
+	// ceremony inline; on success it yields the same MFA-pending response shape
+	// as a normal login finalize, so the rest of this function is unchanged.
+	var loginResp *Response
 	if err != nil {
-		clearBytes(password)
-		return fmt.Errorf("OPAQUE authentication failed: %w", err)
-	}
+		if authResp != nil && authResp.Error == reregistrationRequiredCode {
+			loginResp, err = client.performReregistration(*usernameFlag, password, authResp)
+			if err != nil {
+				clearBytes(password)
+				return err
+			}
+		} else {
+			clearBytes(password)
+			return fmt.Errorf("OPAQUE authentication failed: %w", err)
+		}
+	} else {
+		credentialResponseB64, ok := authResp.Data["credential_response"].(string)
+		if !ok {
+			clearBytes(password)
+			return fmt.Errorf("invalid server response: missing credential_response")
+		}
 
-	credentialResponseB64, ok := authResp.Data["credential_response"].(string)
-	if !ok {
-		clearBytes(password)
-		return fmt.Errorf("invalid server response: missing credential_response")
-	}
+		sessionID, ok := authResp.Data["session_id"].(string)
+		if !ok || sessionID == "" {
+			sessionID = authResp.SessionID
+		}
+		if sessionID == "" {
+			clearBytes(password)
+			return fmt.Errorf("invalid server response: missing session_id")
+		}
 
-	sessionID, ok := authResp.Data["session_id"].(string)
-	if !ok || sessionID == "" {
-		sessionID = authResp.SessionID
-	}
-	if sessionID == "" {
-		clearBytes(password)
-		return fmt.Errorf("invalid server response: missing session_id")
-	}
+		credentialResponse, decErr := decodeBase64(credentialResponseB64)
+		if decErr != nil {
+			clearBytes(password)
+			return fmt.Errorf("failed to decode credential response: %w", decErr)
+		}
 
-	credentialResponse, err := decodeBase64(credentialResponseB64)
-	if err != nil {
-		clearBytes(password)
-		return fmt.Errorf("failed to decode credential response: %w", err)
-	}
+		serverID, idErr := client.fetchOpaqueServerID()
+		if idErr != nil {
+			clearBytes(password)
+			return fmt.Errorf("failed to fetch OPAQUE server identity: %w", idErr)
+		}
 
-	serverID, err := client.fetchOpaqueServerID()
-	if err != nil {
-		clearBytes(password)
-		return fmt.Errorf("failed to fetch OPAQUE server identity: %w", err)
-	}
+		// sk is the OPAQUE session key -- used only to prove authentication to the server.
+		// It has no role in file encryption and is discarded after login finalize.
+		sk, authU, _, recErr := auth.ClientRecoverCredentials(clientSecret, credentialResponse, *usernameFlag, serverID)
+		if recErr != nil {
+			clearBytes(password)
+			return fmt.Errorf("incorrect password or account not found")
+		}
+		defer clearBytes(sk)
 
-	// sk is the OPAQUE session key -- used only to prove authentication to the server.
-	// It has no role in file encryption and is discarded after login finalize.
-	sk, authU, _, err := auth.ClientRecoverCredentials(clientSecret, credentialResponse, *usernameFlag, serverID)
-	if err != nil {
-		clearBytes(password)
-		return fmt.Errorf("incorrect password or account not found")
-	}
-	defer clearBytes(sk)
-
-	loginResp, err := client.makeRequest("POST", "/api/opaque/login/finalize", map[string]string{
-		"session_id": sessionID,
-		"username":   *usernameFlag,
-		"auth_u":     encodeBase64(authU),
-	}, "")
-	if err != nil {
-		clearBytes(password)
-		return fmt.Errorf("OPAQUE authentication finalization failed: %w", err)
+		loginResp, err = client.makeRequest("POST", "/api/opaque/login/finalize", map[string]string{
+			"session_id": sessionID,
+			"username":   *usernameFlag,
+			"auth_u":     encodeBase64(authU),
+		}, "")
+		if err != nil {
+			clearBytes(password)
+			return fmt.Errorf("OPAQUE authentication finalization failed: %w", err)
+		}
 	}
 
 	// Handle MFA second factor

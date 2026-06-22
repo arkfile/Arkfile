@@ -25,6 +25,25 @@ interface LoginResponse {
   mfa_method?: 'totp' | 'webauthn' | '';
 }
 
+// OPAQUE re-registration (returned with HTTP 409 + error
+// "account_requires_reregistration" when an operator has rotated an account's
+// OPAQUE credentials). The verifier is one account-key-encrypted metadata
+// sample the client uses to confirm the password still opens the user's files
+// before re-registering; it is present only when the account owns files.
+interface ReregistrationVerifier {
+  file_id: string;
+  owner_username: string;
+  encrypted_filename: string;
+  filename_nonce: string;
+}
+
+interface ReregistrationRequiredData {
+  reregistration_token?: string;
+  expires_at?: string;
+  file_count?: number;
+  verifier?: ReregistrationVerifier;
+}
+
 interface RegisterRequest {
   email: string;
   password: string;
@@ -276,6 +295,8 @@ export type {
   ApiResponse,
   LoginRequest,
   LoginResponse,
+  ReregistrationVerifier,
+  ReregistrationRequiredData,
   RegisterRequest,
   RegisterResponse,
   TOTPLoginRequest,

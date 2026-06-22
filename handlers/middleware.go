@@ -511,6 +511,8 @@ var csrfExemptPaths = map[string]struct{}{
 	"/api/opaque/register/finalize":    {},
 	"/api/opaque/login/response":       {},
 	"/api/opaque/login/finalize":       {},
+	"/api/opaque/reregister/response":  {},
+	"/api/opaque/reregister/finalize":  {},
 	"/api/admin/login/response":        {},
 	"/api/admin/login/finalize":        {},
 	"/api/bootstrap/register/response": {},
