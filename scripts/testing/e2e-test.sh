@@ -250,9 +250,10 @@ user_mfa_reenroll_via_backup() {
 
     local out code
     safe_exec out code $CLIENT --server-url "$SERVER_URL" --tls-insecure \
-        recover-mfa --code "$reenroll_code"
+        recover-mfa --code "$reenroll_code" \
+        --method-type totp --non-interactive --show-secret
 
-    if [ $code -ne 0 ] || ! echo "$out" | grep -q "TOTP Reset Complete"; then
+    if [ $code -ne 0 ] || ! echo "$out" | grep -q "MFA Reset Complete"; then
         error "$test_name failed with output:"
         echo "$out"
         record_test "$test_name" "FAIL"
