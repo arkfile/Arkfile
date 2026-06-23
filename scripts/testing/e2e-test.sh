@@ -845,14 +845,12 @@ run_user_onboarding_mfa_enrollment() {
 run_dual_mfa_api_checks() {
     group "Dual MFA — credential API checks"
 
-    scenario "List enrolled MFA credentials after TOTP enrollment"
+    scenario "List enrolled MFA credentials after admin approval"
 
+    # Requires RequireApproved: login fresh after approval, not the pre-approval MFA setup session.
+    user_login_with_totp "Login after approval for MFA credential checks"
     local user_token
     user_token=$(jq -r '.access_token // empty' "$HOME/.arkfile-session.json" 2>/dev/null)
-    if [ -z "$user_token" ]; then
-        user_login_with_totp "Login before dual MFA API checks"
-        user_token=$(jq -r '.access_token // empty' "$HOME/.arkfile-session.json" 2>/dev/null)
-    fi
 
     if [ -z "$user_token" ]; then
         error "No access token available for MFA credential checks"
@@ -861,15 +859,19 @@ run_dual_mfa_api_checks() {
         return
     fi
 
-    local creds_out creds_code
-    safe_exec creds_out creds_code \
-        curl -s -k -H "Authorization: Bearer $user_token" "$SERVER_URL/api/mfa/credentials"
+    local creds_body creds_http creds_out
+    creds_body=$(mktemp)
+    creds_http=$(curl -sk -o "$creds_body" -w '%{http_code}' \
+        -H "Authorization: Bearer $user_token" \
+        "$SERVER_URL/api/mfa/credentials")
+    creds_out=$(cat "$creds_body")
+    rm -f "$creds_body"
 
-    if [ $creds_code -eq 0 ] && echo "$creds_out" | grep -q 'totp'; then
+    if [ "$creds_http" = "200" ] && echo "$creds_out" | grep -q 'totp'; then
         record_test "MFA credentials list includes TOTP" "PASS"
         info "Credentials: $creds_out"
     else
-        error "Expected TOTP credential in list: $creds_out"
+        error "Expected HTTP 200 with TOTP credential; got HTTP $creds_http: $creds_out"
         record_test "MFA credentials list includes TOTP" "FAIL"
     fi
 
@@ -3345,8 +3347,8 @@ main() {
         run_platform_bootstrap_protection
         run_user_onboarding_registration
         run_user_onboarding_mfa_enrollment
-        run_dual_mfa_api_checks
         run_user_onboarding_admin_approval
+        run_dual_mfa_api_checks
         run_user_authentication
         run_files_standard
         run_opaque_reregistration
