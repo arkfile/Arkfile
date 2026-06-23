@@ -76,6 +76,31 @@ func ClearWebAuthnSessionsForUser(username string) {
 	defer webAuthnSessionMu.Unlock()
 	delete(webAuthnSessions, webAuthnSessionKey(username, webAuthnSessionRegister))
 	delete(webAuthnSessions, webAuthnSessionKey(username, webAuthnSessionAuth))
+	delete(webAuthnAuthCredentialIDs, username)
+}
+
+var webAuthnAuthCredentialIDs = map[string]string{}
+
+// SaveWebAuthnAuthCredentialID remembers which credential is being authenticated.
+func SaveWebAuthnAuthCredentialID(username, credentialID string) error {
+	if credentialID == "" {
+		return fmt.Errorf("credential id is required")
+	}
+	webAuthnSessionMu.Lock()
+	defer webAuthnSessionMu.Unlock()
+	webAuthnAuthCredentialIDs[username] = credentialID
+	return nil
+}
+
+// LoadWebAuthnAuthCredentialID returns the credential id for an in-flight auth ceremony.
+func LoadWebAuthnAuthCredentialID(username string) (string, error) {
+	webAuthnSessionMu.Lock()
+	defer webAuthnSessionMu.Unlock()
+	id, ok := webAuthnAuthCredentialIDs[username]
+	if !ok {
+		return "", fmt.Errorf("webauthn auth credential not found")
+	}
+	return id, nil
 }
 
 // MarshalWebAuthnOptions JSON-encodes protocol options for API responses.

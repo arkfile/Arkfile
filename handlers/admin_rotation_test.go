@@ -70,14 +70,18 @@ func openRotationTestDB(t *testing.T) *sql.DB {
 			reason TEXT
 		);
 		CREATE TABLE user_mfa_credentials (
-			username TEXT PRIMARY KEY,
+			credential_id TEXT PRIMARY KEY,
+			username TEXT NOT NULL,
 			method_type TEXT NOT NULL DEFAULT 'totp',
-			label TEXT,
 			credential_data BLOB NOT NULL,
 			enabled BOOLEAN DEFAULT FALSE,
 			setup_completed BOOLEAN DEFAULT FALSE,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			last_used DATETIME,
+			UNIQUE (username, method_type)
+		);
+		CREATE TABLE user_mfa_lockout (
+			username TEXT PRIMARY KEY,
 			failed_attempts_in_window INTEGER NOT NULL DEFAULT 0,
 			window_started_at DATETIME,
 			last_failed_attempt_at DATETIME

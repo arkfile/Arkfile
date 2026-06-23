@@ -8,7 +8,7 @@ Arkfile currently requires TOTP as the sole second factor. This project adds FID
 
 ## Non-goals (first release)
 
-Multi-method enrollment (more than one second factor per account) is deferred. The long-term cap of three total methods remains the target architecture, but the first release enforces exactly one method per user: either TOTP or a hardware security key. Passkey/platform authenticators (Touch ID, Windows Hello as primary factor) are out of scope. Email-based recovery remains out of scope. Password reset remains out of scope.
+Multi-method enrollment is implemented for up to **two** methods per account (one TOTP + one WebAuthn). A future cap of three total methods remains possible but is not shipped in this release. Passkey/platform authenticators (Touch ID, Windows Hello as primary factor) are out of scope. Email-based recovery remains out of scope. Password reset remains out of scope.
 
 ## Current codebase assessment (pre-implementation sanity check)
 
@@ -337,7 +337,7 @@ Use whole phase numbers only. Each phase should leave tests green before startin
 
 **Phase 8: COMPLETE** Sitewide Contact Admin + FAQ footer; fix admin-contacts API consumption in `list.ts`; MFA login recovery hint; publish FAQ page from `docs/user-faq.md` (`client/static/faq.html`, opens in new tab); update homepage feature card for TOTP and hardware security keys.
 
-**Phase 9 (future):** Multi-method enrollment up to three credentials per account with private device labels. Schema: `credential_id` primary key, multiple rows per username. Add credential-scoped admin reset (`--credential-id` or `--label`), admin credential listing endpoint, and logged-in user self-service remove for own credentials. Backup codes remain account-level.
+**Phase 9: COMPLETE** Dual MFA enrollment (max two methods: one TOTP + one WebAuthn). Schema: `credential_id` primary key, `UNIQUE(username, method_type)`, account-level `user_mfa_lockout`. User-private encrypted WebAuthn labels (`user_label` in credential blob). Self-service credential list/remove/label/regenerate backup codes; add-second-factor endpoints; login method picker when both enrolled. Backup codes regenerate on first enrollment, path B / factor replacement, admin full reset, and explicit user regenerate — but not when adding the complementary second factor or removing one factor while another remains. Admin credential-scoped reset by `credential_id` only (no label exposure). **Requires `dev-reset.sh` after deploy** (greenfield schema; no in-place migration).
 
 ## Other notes
 

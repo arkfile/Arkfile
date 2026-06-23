@@ -25,46 +25,7 @@ func setupTOTPTestDB(t *testing.T) *sql.DB {
 		t.Fatalf("Failed to open test database: %v", err)
 	}
 
-	// Create the required tables for TOTP testing
-	schema := `
-		CREATE TABLE user_mfa_credentials (
-			username TEXT PRIMARY KEY,
-			method_type TEXT NOT NULL DEFAULT 'totp',
-			label TEXT,
-			credential_data BLOB NOT NULL,
-			enabled BOOLEAN DEFAULT FALSE,
-			setup_completed BOOLEAN DEFAULT FALSE,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			last_used DATETIME,
-			failed_attempts_in_window INTEGER NOT NULL DEFAULT 0,
-			window_started_at DATETIME,
-			last_failed_attempt_at DATETIME
-		);
-
-		CREATE TABLE user_mfa_backup_codes (
-			username TEXT NOT NULL,
-			code_index INTEGER NOT NULL,
-			code_hash BLOB NOT NULL,
-			used_at TIMESTAMP,
-			PRIMARY KEY (username, code_index),
-			UNIQUE (username, code_hash)
-		);
-
-		CREATE TABLE mfa_usage_log (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			username TEXT NOT NULL,
-			code_hash TEXT NOT NULL,
-			window_start INTEGER NOT NULL,
-			used_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		);
-
-		CREATE TABLE mfa_backup_usage (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			username TEXT NOT NULL,
-			code_hash TEXT NOT NULL,
-			used_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		);
-	`
+	schema := MFATestSchemaDDL
 
 	if _, err := db.Exec(schema); err != nil {
 		t.Fatalf("Failed to create test schema: %v", err)
@@ -483,7 +444,7 @@ func driveFailures(t *testing.T, db *sql.DB, username string, n int) {
 		// After each failure, back-date last_failed_attempt_at so the soft backoff
 		// does not block subsequent attempts in this loop.
 		_, dbErr := db.Exec(
-			`UPDATE user_mfa_credentials SET last_failed_attempt_at = ? WHERE username = ?`,
+			`UPDATE user_mfa_lockout SET last_failed_attempt_at = ? WHERE username = ?`,
 			time.Now().Add(-2*time.Hour), username,
 		)
 		if dbErr != nil {
@@ -689,7 +650,7 @@ func TestTOTPLockout_ClearOnSuccess(t *testing.T) {
 
 	// Submit a valid code (back-date last_failed first so backoff doesn't block).
 	_, dbErr := db.Exec(
-		`UPDATE user_mfa_credentials SET last_failed_attempt_at = ? WHERE username = ?`,
+		`UPDATE user_mfa_lockout SET last_failed_attempt_at = ? WHERE username = ?`,
 		time.Now().Add(-2*time.Hour), username,
 	)
 	if dbErr != nil {
@@ -704,24 +665,14 @@ func TestTOTPLockout_ClearOnSuccess(t *testing.T) {
 		t.Fatalf("valid code should succeed: %v", err)
 	}
 
-	// Verify columns are cleared.
-	var failedAttempts int
-	var windowStarted, lastFailed sql.NullString
-	err = db.QueryRow(
-		`SELECT failed_attempts_in_window, window_started_at, last_failed_attempt_at
-		 FROM user_mfa_credentials WHERE username = ?`, username,
-	).Scan(&failedAttempts, &windowStarted, &lastFailed)
+	// Verify lockout row is cleared (successful auth deletes the row).
+	var lockoutCount int
+	err = db.QueryRow(`SELECT COUNT(*) FROM user_mfa_lockout WHERE username = ?`, username).Scan(&lockoutCount)
 	if err != nil {
 		t.Fatalf("query lockout state: %v", err)
 	}
-	if failedAttempts != 0 {
-		t.Fatalf("expected failed_attempts=0 after success, got %d", failedAttempts)
-	}
-	if windowStarted.Valid && windowStarted.String != "" {
-		t.Fatalf("expected window_started_at=NULL after success, got %q", windowStarted.String)
-	}
-	if lastFailed.Valid && lastFailed.String != "" {
-		t.Fatalf("expected last_failed_attempt_at=NULL after success, got %q", lastFailed.String)
+	if lockoutCount != 0 {
+		t.Fatalf("expected lockout row removed after success, got count=%d", lockoutCount)
 	}
 }
 
@@ -736,11 +687,14 @@ func TestTOTPLockout_WindowResetAfter24h(t *testing.T) {
 
 	// Manually set a window that started 25 hours ago with hard-cap failures.
 	staleWindow := time.Now().Add(-25 * time.Hour)
-	_, err := db.Exec(
-		`UPDATE user_mfa_credentials
-		 SET failed_attempts_in_window = ?, window_started_at = ?, last_failed_attempt_at = ?
-		 WHERE username = ?`,
-		mfaHardCapThreshold+5, staleWindow, staleWindow, username,
+	_, err := db.Exec(`
+		INSERT INTO user_mfa_lockout (username, failed_attempts_in_window, window_started_at, last_failed_attempt_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(username) DO UPDATE SET
+			failed_attempts_in_window = excluded.failed_attempts_in_window,
+			window_started_at = excluded.window_started_at,
+			last_failed_attempt_at = excluded.last_failed_attempt_at`,
+		username, mfaHardCapThreshold+5, staleWindow, staleWindow,
 	)
 	if err != nil {
 		t.Fatalf("setup stale window: %v", err)

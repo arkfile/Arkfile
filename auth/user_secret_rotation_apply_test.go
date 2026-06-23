@@ -26,7 +26,9 @@ func setupApplyRotationDB(t *testing.T) *sql.DB {
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		);
 		CREATE TABLE user_mfa_credentials (
-			username TEXT PRIMARY KEY,
+			credential_id TEXT PRIMARY KEY,
+			username TEXT NOT NULL,
+			method_type TEXT NOT NULL DEFAULT 'totp',
 			credential_data BLOB NOT NULL
 		);
 		CREATE TABLE user_contact_info (
@@ -53,8 +55,8 @@ func seedUserSecretWrappedRows(t *testing.T, db *sql.DB, oldMaster []byte, usern
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(
-		`INSERT INTO user_mfa_credentials (username, credential_data) VALUES (?, ?)`,
-		username, encMFA,
+		`INSERT INTO user_mfa_credentials (credential_id, username, method_type, credential_data) VALUES (?, ?, 'totp', ?)`,
+		"cred-rotation", username, encMFA,
 	); err != nil {
 		t.Fatal(err)
 	}

@@ -13,6 +13,7 @@ import { loadFiles } from '../files/list.js';
 export interface TOTPSetupFlowData {
   tempToken: string;
   username: string;
+  addSecondFactor?: boolean;
 }
 
 export interface TOTPSetupData {
@@ -85,7 +86,7 @@ export function handleTOTPSetupFlow(data: TOTPSetupFlowData): void {
   }
 
   // Fetch TOTP setup data from server
-  initiateTOTPSetupForRegistration(data.tempToken).then(setupData => {
+  initiateTOTPSetupForRegistration(data).then(setupData => {
     if (setupData) {
       showTOTPSetupUI(modalContent, setupData, data);
     } else {
@@ -98,10 +99,12 @@ export function handleTOTPSetupFlow(data: TOTPSetupFlowData): void {
 /**
  * Fetch TOTP setup data from server using temp token
  */
-async function initiateTOTPSetupForRegistration(_tempToken: string): Promise<TOTPSetupData | null> {
+async function initiateTOTPSetupForRegistration(flowData: TOTPSetupFlowData): Promise<TOTPSetupData | null> {
   try {
-    // Temp token is in __Host-arkfile-temp cookie; credentials:'include' sends it automatically.
-    const response = await fetch('/api/mfa/setup', {
+    const setupPath = flowData.addSecondFactor
+      ? '/api/mfa/credentials/totp/add'
+      : '/api/mfa/setup';
+    const response = await fetch(setupPath, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json', ...csrfHeader() },
@@ -110,13 +113,12 @@ async function initiateTOTPSetupForRegistration(_tempToken: string): Promise<TOT
     
     if (response.ok) {
       const responseData = await response.json();
-      // Handle both direct response and wrapped response
       const data = responseData.data || responseData;
       return {
         secret: data.secret,
         qr_code_url: data.qr_code_url,
         qr_code_image: data.qr_code_image || '',
-        backup_codes: data.backup_codes,
+        backup_codes: data.backup_codes || [],
         manual_entry: data.manual_entry
       };
     } else {
@@ -169,7 +171,7 @@ function showTOTPSetupUI(modalContent: Element, setupData: TOTPSetupData, flowDa
       </p>
     </div>
     
-    <div class="backup-codes-section">
+    <div class="backup-codes-section" ${setupData.backup_codes.length === 0 ? 'style="display:none;"' : ''}>
       <p class="backup-warning">
         <strong>[!] Important:</strong> Save these backup codes in a secure location.
       </p>
@@ -192,7 +194,7 @@ function showTOTPSetupUI(modalContent: Element, setupData: TOTPSetupData, flowDa
         <input type="text" id="totp-setup-code" class="totp-input" maxlength="6" placeholder="000000">
       </div>
       <p style="font-size: 0.9rem; color: var(--foam-2); text-align: center;">
-        Enter the 6-digit code from your authenticator app to complete registration.
+        Enter the 6-digit code from your authenticator app to complete ${flowData.addSecondFactor ? 'enrollment' : 'registration'}.
       </p>
     </div>
     
@@ -208,7 +210,7 @@ function showTOTPSetupUI(modalContent: Element, setupData: TOTPSetupData, flowDa
       cursor: pointer;
       font-size: 1rem;
       transition: background-color 0.3s ease;
-    ">Complete Registration</button>
+    ">${flowData.addSecondFactor ? 'Complete Setup' : 'Complete Registration'}</button>
   `;
 
   // Add event listeners
@@ -323,17 +325,21 @@ async function completeTOTPSetupForRegistration(code: string, flowData: TOTPSetu
     
     if (response.ok) {
       const responseData = await response.json();
-      // Handle both direct response and wrapped response
       const data = responseData.data || responseData;
-      
-      // Full-access cookies are issued by the server on /api/mfa/verify.
-      // Clean up
+
       if (typeof window !== 'undefined') {
         delete window.totpSetupData;
       }
       document.querySelector('.modal-overlay')?.remove();
-      
       hideProgress();
+
+      if (flowData.addSecondFactor) {
+        showSuccess('Authenticator app enrolled.');
+        const { loadMFASettingsPanel } = await import('./mfa-settings.js');
+        await loadMFASettingsPanel();
+        return;
+      }
+      
       showSuccess('Registration complete! Welcome to Arkfile.');
       
       // Check if user is approved - if not, show pending approval section

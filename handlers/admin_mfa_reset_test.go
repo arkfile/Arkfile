@@ -52,14 +52,18 @@ func openAdminMFAResetTestDB(t *testing.T) *sql.DB {
 			last_login TIMESTAMP
 		);
 		CREATE TABLE user_mfa_credentials (
-			username TEXT PRIMARY KEY,
+			credential_id TEXT PRIMARY KEY,
+			username TEXT NOT NULL,
 			method_type TEXT NOT NULL DEFAULT 'totp',
-			label TEXT,
 			credential_data BLOB NOT NULL,
 			enabled BOOLEAN DEFAULT FALSE,
 			setup_completed BOOLEAN DEFAULT FALSE,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			last_used DATETIME,
+			UNIQUE (username, method_type)
+		);
+		CREATE TABLE user_mfa_lockout (
+			username TEXT PRIMARY KEY,
 			failed_attempts_in_window INTEGER NOT NULL DEFAULT 0,
 			window_started_at DATETIME,
 			last_failed_attempt_at DATETIME
@@ -212,7 +216,7 @@ func TestAdminResetUserMFA_Stack_RejectsWithoutConfirm(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
-func TestAdminResetUserMFA_Stack_RejectsCredentialScopedFields(t *testing.T) {
+func TestAdminResetUserMFA_Stack_ScopedResetByCredentialID(t *testing.T) {
 	setupAdminMFAResetIntegrationDB(t)
 	const adminUsername = "reset-admin"
 	const targetUsername = "reset-target"
@@ -221,19 +225,27 @@ func TestAdminResetUserMFA_Stack_RejectsCredentialScopedFields(t *testing.T) {
 	seedTargetMFA(t, adminUsername)
 	seedTargetMFA(t, targetUsername)
 
+	var credentialID string
+	require.NoError(t, database.DB.QueryRow(
+		`SELECT credential_id FROM user_mfa_credentials WHERE username = ? AND method_type = 'totp'`,
+		targetUsername,
+	).Scan(&credentialID))
+
 	token, _, err := auth.GenerateFullAccessToken(adminUsername)
 	require.NoError(t, err)
 
 	rec, err := invokeAdminMFAReset(t, targetUsername, token, map[string]interface{}{
 		"confirm":       true,
-		"credential_id": "lost-yubikey",
+		"credential_id": credentialID,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var resp map[string]interface{}
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	assert.Equal(t, "credential_scoped_reset_unsupported", resp["error"])
+	var remaining int
+	require.NoError(t, database.DB.QueryRow(
+		`SELECT COUNT(*) FROM user_mfa_credentials WHERE username = ?`, targetUsername,
+	).Scan(&remaining))
+	assert.Equal(t, 0, remaining)
 }
 
 func TestAdminResetUserMFA_Stack_AdminResetsTarget(t *testing.T) {

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/84adam/Arkfile/crypto"
 	"github.com/84adam/Arkfile/logging"
 )
 
@@ -38,14 +37,7 @@ func ValidateBackupCode(db *sql.DB, username, code string) error {
 
 	for _, codeIndex := range perm {
 		salt := deriveBackupCodeSalt(username, codeIndex)
-		candHash, err := crypto.DeriveArgon2IDKey(
-			[]byte(code),
-			salt,
-			crypto.UnifiedArgonSecure.KeyLen,
-			crypto.UnifiedArgonSecure.Memory,
-			crypto.UnifiedArgonSecure.Time,
-			crypto.UnifiedArgonSecure.Threads,
-		)
+		candHash, err := deriveBackupCodeHash(code, salt)
 		if err != nil {
 			continue
 		}
@@ -103,7 +95,9 @@ func ValidateBackupCode(db *sql.DB, username, code string) error {
 		}
 	}
 
-	_, err = db.Exec("UPDATE user_mfa_credentials SET last_used = ? WHERE username = ?",
+	_, err = db.Exec(`
+		UPDATE user_mfa_credentials SET last_used = ?
+		WHERE username = ? AND setup_completed = 1`,
 		time.Now().UTC(), username)
 	if err != nil && logging.ErrorLogger != nil {
 		logging.ErrorLogger.Printf("Failed to update MFA last_used after backup code: %v", err)

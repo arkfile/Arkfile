@@ -110,14 +110,20 @@ func TestTOTPStatus_Enabled(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// Mock: IsUserMFAEnabled query
-	totpSQL := `SELECT enabled, setup_completed FROM user_mfa_credentials WHERE username = \?`
-	totpRows := sqlmock.NewRows([]string{"enabled", "setup_completed"}).AddRow(true, true)
-	mock.ExpectQuery(totpSQL).WithArgs(username).WillReturnRows(totpRows)
+	// Mock: HasCompletedMFA
+	countSQL := `SELECT COUNT\(\*\) FROM user_mfa_credentials WHERE username = \? AND enabled = 1 AND setup_completed = 1`
+	countRows := sqlmock.NewRows([]string{"count"}).AddRow(1)
+	mock.ExpectQuery(countSQL).WithArgs(username).WillReturnRows(countRows)
 
-	methodSQL := `SELECT method_type, enabled, setup_completed FROM user_mfa_credentials WHERE username = \?`
-	methodRows := sqlmock.NewRows([]string{"method_type", "enabled", "setup_completed"}).AddRow("totp", true, true)
+	methodSQL := `SELECT credential_id, method_type, credential_data FROM user_mfa_credentials WHERE username = \? AND enabled = 1 AND setup_completed = 1 ORDER BY created_at ASC`
+	methodRows := sqlmock.NewRows([]string{"credential_id", "method_type", "credential_data"}).
+		AddRow("cred-1", "totp", []byte("encrypted"))
 	mock.ExpectQuery(methodSQL).WithArgs(username).WillReturnRows(methodRows)
+
+	listSQL := `SELECT credential_id, method_type, credential_data, created_at, last_used FROM user_mfa_credentials WHERE username = \? AND setup_completed = 1 ORDER BY created_at ASC`
+	listRows := sqlmock.NewRows([]string{"credential_id", "method_type", "credential_data", "created_at", "last_used"}).
+		AddRow("cred-1", "totp", []byte("encrypted"), time.Now(), nil)
+	mock.ExpectQuery(listSQL).WithArgs(username).WillReturnRows(listRows)
 
 	err := MFAStatus(c)
 	require.NoError(t, err)
@@ -144,15 +150,18 @@ func TestTOTPStatus_NotEnabled(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// Mock: IsUserMFAEnabled - no rows = not enabled
-	totpSQL := `SELECT enabled, setup_completed FROM user_mfa_credentials WHERE username = \?`
-	mock.ExpectQuery(totpSQL).WithArgs(username).WillReturnRows(sqlmock.NewRows([]string{"enabled", "setup_completed"}))
+	// Mock: HasCompletedMFA - no completed rows
+	countSQL := `SELECT COUNT\(\*\) FROM user_mfa_credentials WHERE username = \? AND enabled = 1 AND setup_completed = 1`
+	mock.ExpectQuery(countSQL).WithArgs(username).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 
-	methodSQL := `SELECT method_type, enabled, setup_completed FROM user_mfa_credentials WHERE username = \?`
-	mock.ExpectQuery(methodSQL).WithArgs(username).WillReturnRows(sqlmock.NewRows([]string{"method_type", "enabled", "setup_completed"}))
+	methodSQL := `SELECT credential_id, method_type, credential_data FROM user_mfa_credentials WHERE username = \? AND enabled = 1 AND setup_completed = 1 ORDER BY created_at ASC`
+	mock.ExpectQuery(methodSQL).WithArgs(username).WillReturnRows(sqlmock.NewRows([]string{"credential_id", "method_type", "credential_data"}))
 
-	pendingSQL := `SELECT method_type, setup_completed FROM user_mfa_credentials WHERE username = \?`
-	mock.ExpectQuery(pendingSQL).WithArgs(username).WillReturnRows(sqlmock.NewRows([]string{"method_type", "setup_completed"}))
+	pendingSQL := `SELECT method_type FROM user_mfa_credentials WHERE username = \? AND setup_completed = 0 ORDER BY created_at DESC LIMIT 1`
+	mock.ExpectQuery(pendingSQL).WithArgs(username).WillReturnRows(sqlmock.NewRows([]string{"method_type"}))
+
+	listSQL := `SELECT credential_id, method_type, credential_data, created_at, last_used FROM user_mfa_credentials WHERE username = \? AND setup_completed = 1 ORDER BY created_at ASC`
+	mock.ExpectQuery(listSQL).WithArgs(username).WillReturnRows(sqlmock.NewRows([]string{"credential_id", "method_type", "credential_data", "created_at", "last_used"}))
 
 	err := MFAStatus(c)
 	require.NoError(t, err)

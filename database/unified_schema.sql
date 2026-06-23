@@ -143,14 +143,20 @@ CREATE TABLE IF NOT EXISTS revoked_tokens (
 -- =====================================================
 
 CREATE TABLE IF NOT EXISTS user_mfa_credentials (
-    username TEXT PRIMARY KEY,
-    method_type TEXT NOT NULL DEFAULT 'totp',
-    label TEXT,
+    credential_id TEXT PRIMARY KEY,
+    username TEXT NOT NULL,
+    method_type TEXT NOT NULL CHECK (method_type IN ('totp', 'webauthn')),
     credential_data BLOB NOT NULL,
-    enabled BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    setup_completed BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_used TIMESTAMP,
-    setup_completed BOOLEAN DEFAULT FALSE,
+    UNIQUE (username, method_type),
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS user_mfa_lockout (
+    username TEXT PRIMARY KEY,
     failed_attempts_in_window INTEGER NOT NULL DEFAULT 0,
     window_started_at TIMESTAMP,
     last_failed_attempt_at TIMESTAMP,
@@ -759,8 +765,14 @@ SELECT
     u.last_login,
     CASE WHEN oud.username IS NOT NULL THEN 1 ELSE 0 END as has_opaque_account,
     CASE WHEN mc.username IS NOT NULL THEN 1 ELSE 0 END as has_mfa,
-    mc.enabled as mfa_enabled,
-    mc.setup_completed as mfa_setup_completed
+    mc.mfa_enabled,
+    mc.mfa_setup_completed
 FROM users u
 LEFT JOIN opaque_user_data oud ON u.username = oud.username
-LEFT JOIN user_mfa_credentials mc ON u.username = mc.username;
+LEFT JOIN (
+    SELECT username,
+           MAX(CASE WHEN enabled = 1 AND setup_completed = 1 THEN 1 ELSE 0 END) as mfa_enabled,
+           MAX(CASE WHEN enabled = 1 AND setup_completed = 1 THEN 1 ELSE 0 END) as mfa_setup_completed
+    FROM user_mfa_credentials
+    GROUP BY username
+) mc ON u.username = mc.username;

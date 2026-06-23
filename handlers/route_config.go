@@ -127,6 +127,15 @@ func RegisterRoutes() {
 	mfaProtectedGroup.Use(auth.RequireFullJWT)
 	mfaProtectedGroup.Use(RequireMFA)
 
+	// MFA credential management (full session required)
+	mfaProtectedGroup.GET("/api/mfa/credentials", ListMFACredentials)
+	mfaProtectedGroup.DELETE("/api/mfa/credentials/:credential_id", DeleteMFACredential)
+	mfaProtectedGroup.PATCH("/api/mfa/credentials/:credential_id/label", UpdateMFACredentialLabel)
+	mfaProtectedGroup.POST("/api/mfa/backup-codes/regenerate", RegenerateMFABackupCodes)
+	mfaProtectedGroup.POST("/api/mfa/credentials/totp/add", MFASetup)
+	mfaProtectedGroup.POST("/api/mfa/credentials/webauthn/register/begin", WebAuthnRegisterBegin)
+	mfaProtectedGroup.POST("/api/mfa/credentials/webauthn/register/finish", MFARateLimitMiddleware("mfa_verify")(WebAuthnRegisterFinish))
+
 	// Token revocation - require MFA
 	mfaProtectedGroup.POST("/api/revoke-token", RevokeToken)
 	mfaProtectedGroup.POST("/api/auth/revoke-all", RevokeAllTokens)
@@ -234,6 +243,7 @@ func RegisterRoutes() {
 	adminGroup.PUT("/users/:username", UpdateUser)
 	adminGroup.POST("/users/:username/force-logout", AdminForceLogout)
 	adminGroup.POST("/users/:username/reset-mfa", AdminResetUserMFA)
+	adminGroup.GET("/users/:username/mfa-credentials", AdminListUserMFACredentials)
 
 	// OPAQUE credential rotation: flag account(s) for one-time re-registration.
 	// The all-users route is registered before the parameterized route so it is

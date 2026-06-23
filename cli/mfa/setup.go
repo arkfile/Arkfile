@@ -47,6 +47,8 @@ type SetupConfig struct {
 	ServerURL      string
 	Token          string
 	Method         Method
+	Label          string
+	AddSecond      bool
 	ShowSecret     bool
 	VerifyCode     string
 	NonInteractive bool
@@ -58,6 +60,7 @@ type SetupConfig struct {
 type LoginMFAConfig struct {
 	ServerURL      string
 	MFAMethod      Method
+	CredentialID   string
 	TempToken      string
 	TOTPCode       string
 	TOTPSecret     string
@@ -126,7 +129,14 @@ func RunSetup(req Requester, cfg SetupConfig) (*SetupResult, error) {
 }
 
 func runWebAuthnSetup(req Requester, cfg SetupConfig) (*APIResponse, error) {
-	begin, err := req("POST", "/api/mfa/webauthn/register/begin", map[string]interface{}{}, cfg.Token)
+	beginPath := "/api/mfa/webauthn/register/begin"
+	finishPath := "/api/mfa/webauthn/register/finish"
+	if cfg.AddSecond {
+		beginPath = "/api/mfa/credentials/webauthn/register/begin"
+		finishPath = "/api/mfa/credentials/webauthn/register/finish"
+	}
+
+	begin, err := req("POST", beginPath, map[string]interface{}{}, cfg.Token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start security key enrollment: %w", err)
 	}
@@ -152,8 +162,9 @@ func runWebAuthnSetup(req Requester, cfg SetupConfig) (*APIResponse, error) {
 		return nil, err
 	}
 
-	finish, err := req("POST", "/api/mfa/webauthn/register/finish", map[string]interface{}{
+	finish, err := req("POST", finishPath, map[string]interface{}{
 		"credential": json.RawMessage(credential),
+		"label":      cfg.Label,
 	}, cfg.Token)
 	if err != nil {
 		return nil, fmt.Errorf("security key enrollment verification failed: %w", err)
@@ -171,7 +182,12 @@ func runTOTPSetup(req Requester, cfg SetupConfig) (*APIResponse, error) {
 		return req("POST", "/api/mfa/verify", map[string]string{"code": cfg.VerifyCode}, cfg.Token)
 	}
 
-	setup, err := req("POST", "/api/mfa/setup", nil, cfg.Token)
+	setupPath := "/api/mfa/setup"
+	if cfg.AddSecond {
+		setupPath = "/api/mfa/credentials/totp/add"
+	}
+
+	setup, err := req("POST", setupPath, nil, cfg.Token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initiate TOTP setup: %w", err)
 	}
@@ -240,7 +256,11 @@ func CompleteLogin(req Requester, cfg LoginMFAConfig) (*APIResponse, error) {
 }
 
 func completeWebAuthnLogin(req Requester, cfg LoginMFAConfig) (*APIResponse, error) {
-	begin, err := req("POST", "/api/mfa/webauthn/auth/begin", map[string]interface{}{}, cfg.TempToken)
+	beginBody := map[string]interface{}{}
+	if cfg.CredentialID != "" {
+		beginBody["credential_id"] = cfg.CredentialID
+	}
+	begin, err := req("POST", "/api/mfa/webauthn/auth/begin", beginBody, cfg.TempToken)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start security key authentication: %w", err)
 	}
@@ -257,7 +277,8 @@ func completeWebAuthnLogin(req Requester, cfg LoginMFAConfig) (*APIResponse, err
 	}
 
 	finish, err := req("POST", "/api/mfa/webauthn/auth/finish", map[string]interface{}{
-		"credential": json.RawMessage(credential),
+		"credential":    json.RawMessage(credential),
+		"credential_id": cfg.CredentialID,
 	}, cfg.TempToken)
 	if err != nil {
 		return nil, fmt.Errorf("security key authentication failed: %w", err)
@@ -343,6 +364,85 @@ func emitBackupCodes(codes []string, cfg SetupConfig) {
 		return
 	}
 	PrintBackupCodes(codes)
+}
+
+// PickLoginMethod resolves which enrolled factor to use at login.
+func PickLoginMethod(nonInteractive bool, methods []map[string]string, methodFlag Method, credentialIDFlag string) (Method, string, error) {
+	if credentialIDFlag != "" {
+		for _, m := range methods {
+			if m["credential_id"] == credentialIDFlag {
+				return Method(strings.TrimSpace(m["type"])), credentialIDFlag, nil
+			}
+		}
+		return "", "", fmt.Errorf("credential id %q not found in enrolled methods", credentialIDFlag)
+	}
+
+	if methodFlag == MethodTOTP || methodFlag == MethodWebAuthn {
+		return methodFlag, "", nil
+	}
+
+	if len(methods) == 0 {
+		return MethodTOTP, "", nil
+	}
+	if len(methods) == 1 {
+		return Method(strings.TrimSpace(methods[0]["type"])), methods[0]["credential_id"], nil
+	}
+
+	if nonInteractive {
+		return "", "", fmt.Errorf("non-interactive mode: multiple MFA methods enrolled; pass --mfa-method and --credential-id when needed")
+	}
+
+	fmt.Println("Choose second factor:")
+	for i, m := range methods {
+		label := strings.TrimSpace(m["type"])
+		if label == "webauthn" {
+			if l := strings.TrimSpace(m["label"]); l != "" {
+				label = "security key: " + l
+			} else {
+				label = "security key"
+			}
+		} else {
+			label = "authenticator app (TOTP)"
+		}
+		fmt.Printf("  %d) %s\n", i+1, label)
+	}
+	fmt.Print("Enter number: ")
+	reader := bufio.NewReader(os.Stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return "", "", err
+	}
+	choice := strings.TrimSpace(line)
+	idx := 0
+	if _, scanErr := fmt.Sscanf(choice, "%d", &idx); scanErr != nil || idx < 1 || idx > len(methods) {
+		return "", "", fmt.Errorf("invalid method selection")
+	}
+	selected := methods[idx-1]
+	return Method(strings.TrimSpace(selected["type"])), selected["credential_id"], nil
+}
+
+// ParseMFAMethods reads mfa_methods from OPAQUE finalize responses.
+func ParseMFAMethods(data map[string]interface{}) []map[string]string {
+	raw, ok := data["mfa_methods"].([]interface{})
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	out := make([]map[string]string, 0, len(raw))
+	for _, item := range raw {
+		entry, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		method := map[string]string{"type": strings.TrimSpace(fmt.Sprint(entry["type"]))}
+		if id, _ := entry["credential_id"].(string); id != "" {
+			method["credential_id"] = id
+		}
+		if label, _ := entry["label"].(string); label != "" {
+			method["label"] = label
+		}
+		out = append(out, method)
+	}
+	return out
 }
 
 // ParseMFAMethod normalizes mfa_method from OPAQUE finalize responses.

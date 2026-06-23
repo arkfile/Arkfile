@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"bytes"
 	"testing"
 	"time"
 
@@ -22,7 +21,7 @@ func TestWebAuthnPendingBlobRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decrypt pending blob: %v", err)
 	}
-	if !bytes.Equal(plaintext, webAuthnPendingBlob) {
+	if !bytesEqual(plaintext, webAuthnPendingBlob) {
 		t.Fatal("pending blob round-trip mismatch")
 	}
 }
@@ -35,7 +34,7 @@ func TestStoreWebAuthnPendingSetup(t *testing.T) {
 	username := "webauthn-enroll-user"
 	codes := []string{"ABCDEFGHIJ", "KLMNOPQRST"}
 
-	if err := StoreWebAuthnPendingSetup(db, username, codes); err != nil {
+	if _, err := StoreWebAuthnPendingSetup(db, username, codes, true); err != nil {
 		t.Fatalf("StoreWebAuthnPendingSetup: %v", err)
 	}
 
@@ -56,12 +55,12 @@ func TestStoreWebAuthnPendingSetup(t *testing.T) {
 	}
 }
 
-func TestWebAuthnRegisterBegin_RejectsWhenAlreadyEnabled(t *testing.T) {
+func TestWebAuthnRegisterBegin_AllowsSecondMethodWhenTOTPEnrolled(t *testing.T) {
 	setupTOTPTestEnvironment(t)
 	db := setupTOTPTestDB(t)
 	defer db.Close()
 
-	username := "enabled-webauthn-user"
+	username := "dual-method-user"
 	setup, err := GenerateMFASetup(username)
 	if err != nil {
 		t.Fatalf("GenerateMFASetup: %v", err)
@@ -78,9 +77,12 @@ func TestWebAuthnRegisterBegin_RejectsWhenAlreadyEnabled(t *testing.T) {
 		t.Fatalf("CompleteMFASetup: %v", err)
 	}
 
-	_, _, err = WebAuthnRegisterBegin(db, username)
-	if err == nil || err.Error() != "MFA already enabled" {
-		t.Fatalf("expected MFA already enabled error, got %v", err)
+	_, codes, _, err := WebAuthnRegisterBegin(db, username)
+	if err != nil {
+		t.Fatalf("WebAuthnRegisterBegin after TOTP: %v", err)
+	}
+	if len(codes) != 0 {
+		t.Fatalf("expected no backup codes when adding second method, got %d", len(codes))
 	}
 }
 
@@ -99,7 +101,7 @@ func TestGetUserMFAMethodType_PendingWebAuthn(t *testing.T) {
 		t.Fatalf("expected empty method, got %q", method)
 	}
 
-	if err := StoreWebAuthnPendingSetup(db, username, []string{"ABCDEFGHIJ"}); err != nil {
+	if _, err := StoreWebAuthnPendingSetup(db, username, []string{"ABCDEFGHIJ"}, true); err != nil {
 		t.Fatalf("StoreWebAuthnPendingSetup: %v", err)
 	}
 
@@ -109,6 +111,25 @@ func TestGetUserMFAMethodType_PendingWebAuthn(t *testing.T) {
 	}
 	if pending != MFAMethodWebAuthn {
 		t.Fatalf("expected pending webauthn, got %q", pending)
+	}
+}
+
+func TestValidateWebAuthnUserLabel(t *testing.T) {
+	if err := ValidateWebAuthnUserLabel("Desk Nitrokey"); err != nil {
+		t.Fatalf("valid label rejected: %v", err)
+	}
+	if err := ValidateWebAuthnUserLabel(""); err != nil {
+		t.Fatalf("empty label should be allowed: %v", err)
+	}
+	long := make([]byte, 65)
+	for i := range long {
+		long[i] = 'A'
+	}
+	if err := ValidateWebAuthnUserLabel(string(long)); err == nil {
+		t.Fatal("expected length error")
+	}
+	if err := ValidateWebAuthnUserLabel("café"); err == nil {
+		t.Fatal("expected non-ascii rejection")
 	}
 }
 

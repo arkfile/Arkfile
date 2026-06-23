@@ -24,7 +24,7 @@ func ValidateTOTPCode(db *sql.DB, username, code string) error {
 		return err
 	}
 
-	mfaData, err := getMFAData(db, username)
+	mfaData, err := getMFADataByMethod(db, username, MFAMethodTOTP)
 	if err != nil {
 		return fmt.Errorf("failed to get MFA data: %w", err)
 	}
@@ -78,53 +78,37 @@ func ValidateTOTPCode(db *sql.DB, username, code string) error {
 		}
 	}
 
-	_, err = db.Exec("UPDATE user_mfa_credentials SET last_used = ? WHERE username = ?",
-		time.Now(), username)
-	if err != nil && logging.ErrorLogger != nil {
-		logging.ErrorLogger.Printf("Failed to update MFA last_used: %v", err)
-	}
+	updateMethodLastUsed(db, username, MFAMethodTOTP)
 
 	return nil
 }
 
-// IsUserMFAEnabled reports whether the user has completed MFA enrollment.
-func IsUserMFAEnabled(db *sql.DB, username string) (bool, error) {
-	var enabled bool
-	var setupCompleted bool
-
-	err := db.QueryRow(`
-		SELECT enabled, setup_completed 
-		FROM user_mfa_credentials 
-		WHERE username = ?`,
-		username,
-	).Scan(&enabled, &setupCompleted)
-
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return false, nil
-		}
-		return false, fmt.Errorf("failed to check MFA status: %w", err)
-	}
-
-	return enabled && setupCompleted, nil
-}
-
 // CanDecryptMFASecret checks whether a user's MFA credential blob decrypts (dev diagnostic helper).
 func CanDecryptMFASecret(db *sql.DB, username string) (present bool, decryptable bool, enabled bool, setupCompleted bool, err error) {
-	mfaData, err := getMFAData(db, username)
+	row, err := GetCredentialByMethod(db, username, MFAMethodTOTP)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return false, false, false, false, nil
+			row, err = GetCredentialByMethod(db, username, MFAMethodWebAuthn)
 		}
-		return false, false, false, false, err
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return false, false, false, false, nil
+			}
+			return false, false, false, false, err
+		}
 	}
 
 	present = true
-	enabled = mfaData.Enabled
-	setupCompleted = mfaData.SetupCompleted
+	enabled = row.Enabled
+	setupCompleted = row.SetupCompleted
 
-	_, decryptErr := decryptTOTPSecret(mfaData.SecretEncrypted, username)
-	decryptable = (decryptErr == nil)
+	if row.MethodType == MFAMethodTOTP {
+		_, decryptErr := decryptTOTPSecret(row.CredentialData, username)
+		decryptable = decryptErr == nil
+	} else {
+		_, decryptErr := loadWebAuthnCredentialFromRow(username, row.CredentialData)
+		decryptable = decryptErr == nil
+	}
 
 	return present, decryptable, enabled, setupCompleted, nil
 }
@@ -172,44 +156,6 @@ func logTOTPUsage(db *sql.DB, username, code string, testTime time.Time) error {
 		username, codeHash, windowStart,
 	)
 	return err
-}
-
-func getMFAData(db *sql.DB, username string) (*MFAData, error) {
-	var data MFAData
-	var createdAtStr string
-	var lastUsedStr sql.NullString
-
-	err := db.QueryRow(`
-		SELECT credential_data, enabled, setup_completed, created_at, last_used
-		FROM user_mfa_credentials 
-		WHERE username = ?`,
-		username,
-	).Scan(&data.SecretEncrypted, &data.Enabled, &data.SetupCompleted, &createdAtStr, &lastUsedStr)
-	if err != nil {
-		return nil, err
-	}
-
-	if decodedSecret, err := decodeBase64IfNeeded(data.SecretEncrypted); err == nil {
-		data.SecretEncrypted = decodedSecret
-	}
-
-	if createdAtStr != "" {
-		if parsedTime, parseErr := time.Parse("2006-01-02 15:04:05", createdAtStr); parseErr == nil {
-			data.CreatedAt = parsedTime
-		} else if parsedTime, parseErr := time.Parse(time.RFC3339, createdAtStr); parseErr == nil {
-			data.CreatedAt = parsedTime
-		}
-	}
-
-	if lastUsedStr.Valid && lastUsedStr.String != "" {
-		if parsedTime, parseErr := time.Parse("2006-01-02 15:04:05", lastUsedStr.String); parseErr == nil {
-			data.LastUsed = &parsedTime
-		} else if parsedTime, parseErr := time.Parse(time.RFC3339, lastUsedStr.String); parseErr == nil {
-			data.LastUsed = &parsedTime
-		}
-	}
-
-	return &data, nil
 }
 
 func decryptTOTPSecret(encrypted []byte, username string) (string, error) {

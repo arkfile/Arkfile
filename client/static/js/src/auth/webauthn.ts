@@ -19,7 +19,7 @@ import { showFileSection, showPendingApprovalSection, showAuthSection } from '..
 import { loadFiles } from '../files/list.js';
 import { LoginManager } from './login.js';
 import type { MFASetupFlowData } from './mfa-method.js';
-import { isTorBrowser, isWebAuthnAvailable } from './mfa-method.js';
+import { isTorBrowser, isWebAuthnAvailable, validateWebAuthnLabelInput } from './mfa-method.js';
 
 const BACKUP_CODES_STORAGE_KEY = 'arkfile_mfa_backup_codes';
 
@@ -122,7 +122,9 @@ async function beginWebAuthnEnrollment(
   flowData: MFASetupFlowData,
 ): Promise<void> {
   try {
-    const response = await fetch('/api/mfa/webauthn/register/begin', {
+    const response = await fetch(flowData.addSecondFactor
+      ? '/api/mfa/credentials/webauthn/register/begin'
+      : '/api/mfa/webauthn/register/begin', {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json', ...csrfHeader() },
@@ -193,6 +195,18 @@ function showWebAuthnSetupUI(
       font-size: 1rem;
       margin-bottom: 0.5rem;
     ">Register Security Key</button>
+    <label for="webauthn-label-input" style="display:block; margin: 0.75rem 0 0.35rem; color: var(--foam-2); font-size: 0.9rem;">
+      Private key label (optional, ASCII, max 64)
+    </label>
+    <input id="webauthn-label-input" type="text" maxlength="64" placeholder="e.g. Desk Nitrokey" style="
+      width: 100%;
+      padding: 0.65rem;
+      margin-bottom: 0.75rem;
+      border: 1px solid var(--depth-4);
+      border-radius: 4px;
+      background: var(--depth-2);
+      color: var(--salt);
+    ">
     <button id="webauthn-enroll-cancel" type="button" style="
       width: 100%;
       padding: 0.75rem;
@@ -213,7 +227,7 @@ function showWebAuthnSetupUI(
   });
 
   document.getElementById('webauthn-enroll-btn')?.addEventListener('click', async () => {
-    await finishWebAuthnEnrollment(modal, flowData, options);
+    await finishWebAuthnEnrollment(modal, flowData, options, backupCodes);
   });
 }
 
@@ -221,16 +235,27 @@ async function finishWebAuthnEnrollment(
   modal: Element,
   flowData: MFASetupFlowData,
   options: PublicKeyCredentialCreationOptionsJSON,
+  backupCodes: string[],
 ): Promise<void> {
+  const labelInput = document.getElementById('webauthn-label-input') as HTMLInputElement | null;
+  const label = labelInput?.value?.trim() || '';
+  const labelError = validateWebAuthnLabelInput(label);
+  if (labelError) {
+    showError(labelError);
+    return;
+  }
+
   try {
     showProgressMessage('Waiting for security key...');
     const credential = await startRegistration({ optionsJSON: options });
 
-    const response = await fetch('/api/mfa/webauthn/register/finish', {
+    const response = await fetch(flowData.addSecondFactor
+      ? '/api/mfa/credentials/webauthn/register/finish'
+      : '/api/mfa/webauthn/register/finish', {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json', ...csrfHeader() },
-      body: JSON.stringify({ credential }),
+      body: JSON.stringify({ credential, label }),
     });
 
     hideProgress();
@@ -262,6 +287,13 @@ async function finishWebAuthnEnrollment(
       return;
     }
 
+    if (flowData.addSecondFactor) {
+      showSuccess('Security key enrolled.');
+      const { loadMFASettingsPanel } = await import('./mfa-settings.js');
+      await loadMFASettingsPanel();
+      return;
+    }
+
     showSuccess('Security key enrolled successfully.');
     showFileSection();
     await loadFiles();
@@ -284,6 +316,8 @@ export interface WebAuthnLoginFlowData {
   tempToken: string;
   username: string;
   password?: string;
+  credentialId?: string;
+  label?: string;
 }
 
 let _pendingWebAuthnLogin: WebAuthnLoginFlowData | null = null;
@@ -317,6 +351,7 @@ export function handleWebAuthnLoginFlow(data: WebAuthnLoginFlowData): void {
 
   modalContent.innerHTML = `
     <h3 style="margin: 0 0 1rem 0;">Security Key Required</h3>
+    ${flowData.label ? `<p style="margin: 0 0 0.75rem 0; color: var(--foam-2); font-size: 0.95rem; text-align: center;">Using: ${flowData.label}</p>` : ''}
     <p style="margin: 0 0 1.25rem 0; color: var(--foam-2); font-size: 0.95rem; text-align: center;">
       Insert or tap your security key when prompted.
     </p>
@@ -443,7 +478,7 @@ async function runWebAuthnLogin(modal: Element): Promise<void> {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json', ...csrfHeader() },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ credential_id: flowData.credentialId || '' }),
     });
 
     if (!beginResp.ok) {
@@ -462,7 +497,10 @@ async function runWebAuthnLogin(modal: Element): Promise<void> {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json', ...csrfHeader() },
-      body: JSON.stringify({ credential }),
+      body: JSON.stringify({
+        credential,
+        credential_id: flowData.credentialId || '',
+      }),
     });
 
     hideProgress();

@@ -25,29 +25,7 @@ func setupAdminResetTestDB(t *testing.T) *sql.DB {
 			is_admin BOOLEAN DEFAULT FALSE,
 			deleted_at TIMESTAMP
 		);
-		CREATE TABLE user_mfa_credentials (
-			username TEXT PRIMARY KEY,
-			credential_data BLOB NOT NULL,
-			enabled BOOLEAN DEFAULT FALSE,
-			setup_completed BOOLEAN DEFAULT FALSE
-		);
-		CREATE TABLE user_mfa_backup_codes (
-			username TEXT NOT NULL,
-			code_index INTEGER NOT NULL,
-			code_hash BLOB NOT NULL,
-			PRIMARY KEY (username, code_index)
-		);
-		CREATE TABLE mfa_usage_log (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			username TEXT NOT NULL,
-			code_hash TEXT NOT NULL,
-			window_start INTEGER NOT NULL
-		);
-		CREATE TABLE mfa_backup_usage (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			username TEXT NOT NULL,
-			code_hash TEXT NOT NULL
-		);
+	` + MFATestSchemaDDL + `
 		CREATE TABLE user_contact_info (
 			username TEXT PRIMARY KEY,
 			encrypted_data BLOB NOT NULL,
@@ -77,7 +55,7 @@ func seedAdminResetUser(t *testing.T, db *sql.DB, username string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO user_mfa_credentials (username, credential_data, enabled, setup_completed) VALUES (?, ?, 1, 1)`, username, enc); err != nil {
+	if _, err := db.Exec(`INSERT INTO user_mfa_credentials (credential_id, username, method_type, credential_data, enabled, setup_completed) VALUES (?, ?, 'totp', ?, 1, 1)`, newCredentialID(), username, enc); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO user_mfa_backup_codes (username, code_index, code_hash) VALUES (?, 0, ?)`, username, []byte("hash")); err != nil {

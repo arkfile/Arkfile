@@ -200,9 +200,7 @@ func writeBootstrapTokenFile(tokenHex string) error {
 		curGID := os.Getgid()
 		if curUID != uid || curGID != gid {
 			if curUID == 0 {
-				if err := os.Chown(tmpPath, uid, gid); err != nil {
-					log.Printf("Warning: failed to chown bootstrap token temp file to arkfile user: %v", err)
-				}
+				_ = os.Chown(tmpPath, uid, gid)
 			}
 			// non-root + mismatched target: kernel guarantees EPERM; no-op.
 		}

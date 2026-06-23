@@ -38,6 +38,8 @@ NETWORK COMMANDS (Admin API - localhost only):
     bootstrap         Bootstrap the first admin user (requires token)
     login             Admin login via OPAQUE + MFA (TOTP or security key)
     setup-mfa         Setup Two-Factor Authentication (TOTP or security key)
+    mfa               Manage your enrolled second factors (list, remove, backup codes)
+    recover-mfa       Self-service MFA recovery with a backup code (path B)
     logout            Clear admin session
     list-users        List all users
     approve-user      Approve user account
@@ -49,7 +51,8 @@ NETWORK COMMANDS (Admin API - localhost only):
     update-user       Update user properties (admin, approved, storage)
     delete-user       Delete a user and all associated data
     force-logout      Force-logout a user (revoke all tokens)
-    reset-user-mfa    Clear all MFA enrollment for a user (full reset)
+    reset-user-mfa    Clear MFA enrollment for a user (full or credential-scoped reset)
+    list-user-mfa     List a user's MFA credentials (admin metadata only; no labels)
     flag-user-reregistration  Flag account(s) for one-time OPAQUE re-registration
     list-files        List files owned by a user
     list-shares       List shares owned by a user
@@ -241,6 +244,16 @@ func main() {
 			logError("MFA setup failed: %v", err)
 			os.Exit(1)
 		}
+	case "mfa":
+		if err := handleMFACommand(client, config, args); err != nil {
+			logError("MFA command failed: %v", err)
+			os.Exit(1)
+		}
+	case "recover-mfa":
+		if err := handleRecoverMFACommand(client, config, args); err != nil {
+			logError("MFA recovery failed: %v", err)
+			os.Exit(1)
+		}
 	case "logout":
 		if err := handleLogoutCommand(config, args); err != nil {
 			logError("Logout failed: %v", err)
@@ -306,6 +319,11 @@ func main() {
 	case "reset-user-mfa":
 		if err := handleResetUserMFACommand(client, config, args); err != nil {
 			logError("Reset user MFA failed: %v", err)
+			os.Exit(1)
+		}
+	case "list-user-mfa":
+		if err := handleListUserMFACommand(client, config, args); err != nil {
+			logError("List user MFA failed: %v", err)
 			os.Exit(1)
 		}
 	case "flag-user-reregistration":
@@ -806,6 +824,8 @@ func handleSetupMFACommand(client *HTTPClient, config *AdminConfig, args []strin
 		showSecret = fs.Bool("show-secret", false, "Only show the secret key and exit (for automation)")
 		verifyCode = fs.String("verify", "", "Verify TOTP setup with a code (for automation)")
 		mfaMethod  = fs.String("mfa-method", "", "Enrollment method: totp or webauthn")
+		addSecond  = fs.Bool("add-second", false, "Add a complementary second factor while logged in")
+		label      = fs.String("label", "", "Optional private label for a security key (max 64 printable ASCII)")
 	)
 
 	fs.Usage = func() {
@@ -816,13 +836,16 @@ This is usually required immediately after registration.
 
 FLAGS:
     --mfa-method METHOD  totp or webauthn (interactive picker if omitted)
+    --add-second         Add the complementary second factor (no new backup codes)
+    --label TEXT         Optional private security key label
     --show-secret        Only show the TOTP secret and exit (for automation)
     --verify CODE        Verify TOTP setup with a code (for automation)
     --help               Show this help message
 
 EXAMPLES:
     arkfile-admin setup-mfa
-    arkfile-admin setup-mfa --mfa-method webauthn
+    arkfile-admin setup-mfa --mfa-method webauthn --label "Bootstrap key"
+    arkfile-admin setup-mfa --add-second --mfa-method totp
     arkfile-admin setup-mfa --show-secret
     arkfile-admin setup-mfa --verify 123456
 `)
@@ -854,6 +877,8 @@ EXAMPLES:
 		ServerURL:  config.ServerURL,
 		Token:      token,
 		Method:     method,
+		Label:      strings.TrimSpace(*label),
+		AddSecond:  *addSecond,
 		ShowSecret: *showSecret,
 		OnComplete: func(resp *mfa.APIResponse) error {
 			if resp.Token != "" {
@@ -943,6 +968,8 @@ func handleLoginCommand(client *HTTPClient, config *AdminConfig, args []string) 
 		totpCode       = fs.String("totp-code", "", "TOTP code for non-interactive login")
 		totpSecret     = fs.String("totp-secret", "", "TOTP secret — CLI generates the code internally (for scripted/test use)")
 		backupCode     = fs.String("backup-code", "", "10-character backup code for one-shot emergency login")
+		mfaMethod      = fs.String("mfa-method", "", "Second factor method for login: totp or webauthn")
+		credentialID   = fs.String("credential-id", "", "WebAuthn credential id when multiple security keys are enrolled")
 		nonInteractive = fs.Bool("non-interactive", false, "Don't prompt for input")
 	)
 
@@ -957,6 +984,8 @@ FLAGS:
     --totp-code CODE    TOTP code for non-interactive login
     --totp-secret SEC   TOTP secret — CLI generates code internally (for scripted/test use)
     --backup-code CODE  10-character backup code for emergency login
+    --mfa-method METHOD Second factor for login: totp or webauthn
+    --credential-id ID  WebAuthn credential id when choosing a specific key
     --non-interactive   Don't prompt for input
     --help              Show this help message
 
@@ -1077,9 +1106,21 @@ EXAMPLES:
 			return fmt.Errorf("missing temporary MFA token in response")
 		}
 
+		methods := mfa.ParseMFAMethods(loginResp.Data)
+		chosenMethod, chosenCredentialID, pickErr := mfa.PickLoginMethod(
+			*nonInteractive,
+			methods,
+			mfa.Method(strings.ToLower(strings.TrimSpace(*mfaMethod))),
+			strings.TrimSpace(*credentialID),
+		)
+		if pickErr != nil {
+			return pickErr
+		}
+
 		mfaResp, err := mfa.CompleteLogin(adminMFARequester(client), mfa.LoginMFAConfig{
 			ServerURL:      config.ServerURL,
-			MFAMethod:      mfa.ParseMFAMethod(loginResp.Data),
+			MFAMethod:      chosenMethod,
+			CredentialID:   chosenCredentialID,
 			TempToken:      tempToken,
 			TOTPCode:       *totpCode,
 			TOTPSecret:     *totpSecret,

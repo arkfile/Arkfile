@@ -144,11 +144,11 @@ func SetupDevAdminTOTP(db *sql.DB, user *models.User, totpSecret string) error {
 
 	// Store TOTP data in database (schema has no backup_codes_encrypted column)
 	_, err = db.Exec(`
-		INSERT OR REPLACE INTO user_mfa_credentials (
-			username, method_type, credential_data,
+		INSERT INTO user_mfa_credentials (
+			credential_id, username, method_type, credential_data,
 			enabled, setup_completed, created_at, last_used
-		) VALUES (?, 'totp', ?, ?, ?, ?, ?)`,
-		user.Username, secretEncrypted,
+		) VALUES (?, ?, 'totp', ?, ?, ?, ?, ?)`,
+		newCredentialID(), user.Username, secretEncrypted,
 		true, true, time.Now().UTC(), nil,
 	)
 

@@ -586,21 +586,24 @@ func OpaqueAuthFinalize(c echo.Context) error {
 		// Continue - session will expire naturally
 	}
 
-	// Check if user has TOTP enabled
-	totpEnabled, err := auth.IsUserMFAEnabled(database.DB, request.Username)
+	// Check if user has MFA enabled
+	mfaEnabled, err := auth.IsUserMFAEnabled(database.DB, request.Username)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", request.Username, err)
+		logging.ErrorLogger.Printf("Failed to check MFA status for %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 	}
 
-	// MANDATORY TOTP: All users must complete TOTP setup to access the app.
-	// If TOTP is not yet set up, issue a temp token and return requires_mfa_setup: true
-	// so the client can redirect the user to finish TOTP setup rather than showing a hard error.
-	if !totpEnabled {
-		logging.InfoLogger.Printf("User %s authenticated via OPAQUE but TOTP setup is incomplete; redirecting to setup", request.Username)
+	requiresSetup, mfaMethods, singleMethod, err := auth.BuildMFALoginResponse(database.DB, request.Username)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to build MFA login response for %s: %v", request.Username, err)
+		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
+	}
+
+	if !mfaEnabled {
+		logging.InfoLogger.Printf("User %s authenticated via OPAQUE but MFA setup is incomplete; redirecting to setup", request.Username)
 		tempToken, _, err := auth.GenerateTemporaryMFAToken(request.Username)
 		if err != nil {
-			logging.ErrorLogger.Printf("Failed to generate TOTP setup token for %s: %v", request.Username, err)
+			logging.ErrorLogger.Printf("Failed to generate MFA setup token for %s: %v", request.Username, err)
 			return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 		}
 		issueTempCookie(c, tempToken)
@@ -608,38 +611,34 @@ func OpaqueAuthFinalize(c echo.Context) error {
 
 		return JSONResponse(c, http.StatusOK, "Two-factor authentication setup is required to complete login.", map[string]interface{}{
 			"requires_mfa":       true,
-			"requires_mfa_setup": true,
+			"requires_mfa_setup": requiresSetup,
 			"temp_token":         tempToken,
 			"mfa_method":         pendingMethod,
 		})
 	}
 
-	// Generate temporary token that requires TOTP completion
 	tempToken, _, err := auth.GenerateTemporaryMFAToken(request.Username)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for %s: %v", request.Username, err)
+		logging.ErrorLogger.Printf("Failed to generate temporary MFA token for %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 	}
 
-	// Issue temp cookie for browser clients.
 	issueTempCookie(c, tempToken)
 
-	// Log partial authentication
-	database.LogUserAction(request.Username, "OPAQUE auth completed (multi-step), awaiting TOTP", "")
-	logging.InfoLogger.Printf("OPAQUE user authenticated (multi-step), TOTP required: %s", request.Username)
+	database.LogUserAction(request.Username, "OPAQUE auth completed (multi-step), awaiting MFA", "")
+	logging.InfoLogger.Printf("OPAQUE user authenticated (multi-step), MFA required: %s", request.Username)
 
-	mfaMethod, err := auth.GetUserMFAMethodType(database.DB, request.Username)
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to load MFA method for %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
-	}
-
-	return JSONResponse(c, http.StatusOK, "OPAQUE authentication successful. Second factor required.", map[string]interface{}{
+	resp := map[string]interface{}{
 		"requires_mfa": true,
 		"temp_token":   tempToken,
 		"auth_method":  "OPAQUE",
-		"mfa_method":   mfaMethod,
-	})
+		"mfa_method":   singleMethod,
+	}
+	if len(mfaMethods) > 1 {
+		resp["mfa_methods"] = mfaMethods
+	}
+
+	return JSONResponse(c, http.StatusOK, "OPAQUE authentication successful. Second factor required.", resp)
 }
 
 // OpaqueHealthCheck verifies that the OPAQUE system is functioning properly
@@ -695,15 +694,18 @@ func MFASetup(c echo.Context) error {
 	// Get username from JWT token
 	username := auth.GetUsernameFromToken(c)
 
-	// Check if user already has TOTP enabled
-	totpEnabled, err := auth.IsUserMFAEnabled(database.DB, username)
-	if err != nil && err.Error() != "sql: no rows in result set" {
+	// Check if user already has TOTP enrolled or pending
+	hasTOTP, err := auth.HasMethodRow(database.DB, username, auth.MFAMethodTOTP)
+	if err != nil {
 		logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to check TOTP status")
 	}
 
-	if totpEnabled {
-		return JSONError(c, http.StatusConflict, "TOTP already enabled for this user")
+	if hasTOTP {
+		completed, _ := auth.HasCompletedMethodType(database.DB, username, auth.MFAMethodTOTP)
+		if completed {
+			return JSONError(c, http.StatusConflict, "TOTP already enabled for this user")
+		}
 	}
 
 	// Check for an existing pending (unverified) setup to avoid regenerating the secret.
@@ -734,7 +736,15 @@ func MFASetup(c echo.Context) error {
 	}
 
 	// Store TOTP setup in database
-	if err := auth.StoreMFASetup(database.DB, username, setup); err != nil {
+	issueCodes, err := auth.ShouldIssueBackupCodes(database.DB, username)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to evaluate backup code policy for %s: %v", username, err)
+		return JSONError(c, http.StatusInternalServerError, "Failed to generate TOTP setup")
+	}
+	if !issueCodes {
+		setup.BackupCodes = nil
+	}
+	if err := auth.StoreMFASetupWithPolicy(database.DB, username, setup, issueCodes); err != nil {
 		logging.ErrorLogger.Printf("Failed to store TOTP setup for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to store TOTP setup")
 	}
@@ -896,17 +906,19 @@ func MFAAuth(c echo.Context) error {
 	return completeMFALogin(c, username, "OPAQUE+TOTP")
 }
 
-// MFAResetRequest represents the request for TOTP reset
+// MFAResetRequest represents the request for MFA reset during recovery.
 type MFAResetRequest struct {
 	BackupCode string `json:"backup_code"`
+	MethodType string `json:"method_type"`
 }
 
-// MFAResetResponse represents the response for TOTP reset
+// MFAResetResponse represents the response for MFA factor reset during recovery.
 type MFAResetResponse struct {
-	Secret      string   `json:"secret"`
-	QRCodeURL   string   `json:"qr_code_url"`
+	MethodType  string   `json:"method_type"`
+	Secret      string   `json:"secret,omitempty"`
+	QRCodeURL   string   `json:"qr_code_url,omitempty"`
 	BackupCodes []string `json:"backup_codes"`
-	ManualEntry string   `json:"manual_entry"`
+	ManualEntry string   `json:"manual_entry,omitempty"`
 	Message     string   `json:"message"`
 	TempToken   string   `json:"temp_token"`
 }
@@ -1012,10 +1024,17 @@ func MFAReset(c echo.Context) error {
 		return JSONError(c, http.StatusBadRequest, "Valid backup code is required (10 characters)")
 	}
 
-	// Reset TOTP (this generates new setup and saves hashed backup codes)
-	setup, err := auth.ResetMFA(database.DB, username, request.BackupCode)
+	methodType := request.MethodType
+	if methodType == "" {
+		methodType, _ = auth.GetUserMFAMethodType(database.DB, username)
+	}
+	if methodType == "" {
+		methodType = auth.MFAMethodTOTP
+	}
+
+	setup, err := auth.ResetMFAMethod(database.DB, username, methodType, request.BackupCode)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to reset TOTP for %s: %v", username, err)
+		logging.ErrorLogger.Printf("Failed to reset MFA for %s: %v", username, err)
 		entityID := logging.GetOrCreateEntityID(c)
 		if recordErr := recordAuthFailedAttempt("mfa_reset", entityID); recordErr != nil {
 			logging.ErrorLogger.Printf("Failed to record MFA reset failure: %v", recordErr)
@@ -1023,35 +1042,49 @@ func MFAReset(c echo.Context) error {
 		return JSONError(c, http.StatusUnauthorized, "Invalid backup code or TOTP reset failed")
 	}
 
-	// Log TOTP reset
-	database.LogUserAction(username, "reset TOTP", "")
-	logging.InfoLogger.Printf("SECURITY: TOTP reset complete for user: %s", username)
+	// Log MFA reset
+	actionDetail := methodType + " reset"
+	database.LogUserAction(username, "reset MFA", actionDetail)
+	logging.InfoLogger.Printf("SECURITY: MFA %s reset complete for user: %s", methodType, username)
 
-	// Issue MFA-tier temp token so /api/mfa/verify can complete re-enrollment.
+	// Issue MFA-tier temp token so enrollment can complete after reset.
 	mfaToken, _, err := auth.GenerateTemporaryMFAToken(username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate MFA verify token after reset for %s: %v", username, err)
-		return JSONError(c, http.StatusInternalServerError, "TOTP reset succeeded but verify session could not be created")
+		return JSONError(c, http.StatusInternalServerError, "MFA reset succeeded but verify session could not be created")
 	}
 	issueTempCookie(c, mfaToken)
 
-	return JSONResponse(c, http.StatusOK, "TOTP has been reset successfully. Please update your authenticator app immediately with the new secret.", MFAResetResponse{
+	if methodType == auth.MFAMethodWebAuthn {
+		msg := "Security key reset staged. Enroll your replacement key before your session expires."
+		return JSONResponse(c, http.StatusOK, msg, MFAResetResponse{
+			MethodType:  auth.MFAMethodWebAuthn,
+			BackupCodes: setup.BackupCodes,
+			Message:     msg,
+			TempToken:   mfaToken,
+		})
+	}
+
+	msg := "TOTP has been reset successfully. Please update your authenticator app immediately with the new secret."
+	return JSONResponse(c, http.StatusOK, msg, MFAResetResponse{
+		MethodType:  auth.MFAMethodTOTP,
 		Secret:      setup.Secret,
 		QRCodeURL:   setup.QRCodeURL,
 		BackupCodes: setup.BackupCodes,
 		ManualEntry: setup.ManualEntry,
-		Message:     "TOTP has been reset successfully. Please update your authenticator app immediately with the new secret.",
+		Message:     msg,
 		TempToken:   mfaToken,
 	})
 }
 
 // MFAStatusResponse represents MFA status for a user.
 type MFAStatusResponse struct {
-	Enabled       bool       `json:"enabled"`
-	SetupRequired bool       `json:"setup_required"`
-	MethodType    string     `json:"method_type,omitempty"`
-	LastUsed      *time.Time `json:"last_used,omitempty"`
-	CreatedAt     *time.Time `json:"created_at,omitempty"`
+	Enabled       bool                          `json:"enabled"`
+	SetupRequired bool                          `json:"setup_required"`
+	MethodType    string                        `json:"method_type,omitempty"`
+	Credentials   []auth.MFACredentialSummary   `json:"credentials,omitempty"`
+	LastUsed      *time.Time                    `json:"last_used,omitempty"`
+	CreatedAt     *time.Time                    `json:"created_at,omitempty"`
 }
 
 // MFAStatus returns MFA enrollment status for a user.
@@ -1073,10 +1106,17 @@ func MFAStatus(c echo.Context) error {
 		methodType, _ = auth.GetPendingMFAMethodType(database.DB, username)
 	}
 
+	credentials, err := auth.ListUserCredentialSummaries(database.DB, username)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to list MFA credentials for %s: %v", username, err)
+		return JSONError(c, http.StatusInternalServerError, "Failed to check MFA status")
+	}
+
 	response := MFAStatusResponse{
 		Enabled:       mfaEnabled,
 		SetupRequired: !mfaEnabled,
 		MethodType:    methodType,
+		Credentials:   credentials,
 	}
 
 	if mfaEnabled {

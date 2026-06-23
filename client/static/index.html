@@ -267,6 +267,14 @@
                         <p><strong>Session Security:</strong> For maximum security, you can revoke access from all devices. This will sign you out everywhere.</p>
                         <button type="button" id="revoke-sessions-btn" class="danger-button">Revoke All Sessions</button>
                     </div>
+                    <div class="setting-item">
+                        <p><strong>Two-Factor Authentication:</strong> You may enroll up to two methods (one authenticator app and one security key). Security key labels are private to your account.</p>
+                        <div id="mfa-settings-list"></div>
+                        <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 0.75rem;">
+                            <button type="button" id="mfa-add-second-btn" class="secondary-button">Add second factor</button>
+                            <button type="button" id="mfa-regenerate-backup-btn" class="secondary-button">Regenerate backup codes</button>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Contact info panel (hidden by default) -->

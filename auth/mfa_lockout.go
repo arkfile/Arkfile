@@ -69,11 +69,14 @@ func getMFALockoutState(db *sql.DB, username string) (mfaLockoutState, error) {
 
 	err := db.QueryRow(`
 		SELECT failed_attempts_in_window, window_started_at, last_failed_attempt_at
-		FROM user_mfa_credentials
+		FROM user_mfa_lockout
 		WHERE username = ?`, username,
 	).Scan(&failedAttempts, &windowStartedStr, &lastFailedStr)
 
 	if err != nil {
+		if err == sql.ErrNoRows {
+			return s, nil
+		}
 		return s, err
 	}
 
@@ -114,12 +117,14 @@ func recordMFAFailure(db *sql.DB, username string, now time.Time) (mfaLockoutSta
 	}
 
 	_, err = db.Exec(`
-		UPDATE user_mfa_credentials
-		SET failed_attempts_in_window = ?,
-		    window_started_at = ?,
-		    last_failed_attempt_at = ?
-		WHERE username = ?`,
-		newAttempts, newWindowStart, now, username,
+		INSERT INTO user_mfa_lockout (
+			username, failed_attempts_in_window, window_started_at, last_failed_attempt_at
+		) VALUES (?, ?, ?, ?)
+		ON CONFLICT(username) DO UPDATE SET
+			failed_attempts_in_window = excluded.failed_attempts_in_window,
+			window_started_at = excluded.window_started_at,
+			last_failed_attempt_at = excluded.last_failed_attempt_at`,
+		username, newAttempts, newWindowStart, now,
 	)
 	if err != nil {
 		return cur, err
@@ -133,13 +138,7 @@ func recordMFAFailure(db *sql.DB, username string, now time.Time) (mfaLockoutSta
 }
 
 func clearMFAFailures(db *sql.DB, username string) error {
-	_, err := db.Exec(`
-		UPDATE user_mfa_credentials
-		SET failed_attempts_in_window = 0,
-		    window_started_at = NULL,
-		    last_failed_attempt_at = NULL
-		WHERE username = ?`, username,
-	)
+	_, err := db.Exec(`DELETE FROM user_mfa_lockout WHERE username = ?`, username)
 	return err
 }
 
@@ -151,7 +150,7 @@ func emitMFALockoutEvent(_ *sql.DB, username, eventType, detail string) {
 
 func checkMFALockout(db *sql.DB, username string, now time.Time) error {
 	lockState, err := getMFALockoutState(db, username)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil {
 		return fmt.Errorf("failed to check MFA lockout state: %w", err)
 	}
 

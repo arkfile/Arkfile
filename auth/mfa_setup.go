@@ -54,16 +54,7 @@ func GenerateMFASetup(username string) (*MFASetup, error) {
 
 // GetPendingMFASetup retrieves an existing pending (unverified) TOTP setup for a user.
 func GetPendingMFASetup(db *sql.DB, username string) (*MFASetup, error) {
-	var secretEncrypted []byte
-	var setupCompleted bool
-
-	err := db.QueryRow(`
-		SELECT credential_data, setup_completed
-		FROM user_mfa_credentials
-		WHERE username = ?`,
-		username,
-	).Scan(&secretEncrypted, &setupCompleted)
-
+	row, err := GetCredentialByMethod(db, username, MFAMethodTOTP)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -71,54 +62,28 @@ func GetPendingMFASetup(db *sql.DB, username string) (*MFASetup, error) {
 		return nil, fmt.Errorf("failed to query pending MFA setup: %w", err)
 	}
 
-	if setupCompleted {
+	if row.SetupCompleted {
 		return nil, nil
 	}
 
-	if decoded, err := decodeBase64IfNeeded(secretEncrypted); err == nil {
-		secretEncrypted = decoded
-	}
-
-	secret, err := decryptTOTPSecret(secretEncrypted, username)
+	secret, err := decryptTOTPSecret(row.CredentialData, username)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt pending TOTP secret: %w", err)
 	}
 
-	backupCodes, err := generateBackupCodesResilient(BackupCodeCount)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate fresh backup codes for pending setup: %w", err)
-	}
-
-	tx, err := db.Begin()
+	var backupCodes []string
+	issueCodes, err := ShouldIssueBackupCodes(db, username)
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
-
-	_, _ = tx.Exec("DELETE FROM user_mfa_backup_codes WHERE username = ?", username)
-	for i, code := range backupCodes {
-		salt := deriveBackupCodeSalt(username, i)
-		hash, err := crypto.DeriveArgon2IDKey(
-			[]byte(code),
-			salt,
-			crypto.UnifiedArgonSecure.KeyLen,
-			crypto.UnifiedArgonSecure.Memory,
-			crypto.UnifiedArgonSecure.Time,
-			crypto.UnifiedArgonSecure.Threads,
-		)
+	if issueCodes {
+		backupCodes, err = generateBackupCodesResilient(BackupCodeCount)
 		if err != nil {
+			return nil, fmt.Errorf("failed to generate fresh backup codes for pending setup: %w", err)
+		}
+		if err := storeBackupCodes(db, username, backupCodes, true); err != nil {
 			return nil, err
 		}
-		_, err = tx.Exec(
-			`INSERT INTO user_mfa_backup_codes (username, code_index, code_hash) VALUES (?, ?, ?)`,
-			username, i, hash,
-		)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
 	}
 
 	qrURL := fmt.Sprintf("otpauth://totp/%s:%s?secret=%s&issuer=%s&digits=%d&period=%d",
@@ -141,8 +106,17 @@ func GetPendingMFASetup(db *sql.DB, username string) (*MFASetup, error) {
 	}, nil
 }
 
-// StoreMFASetup stores enrollment data with user-secret master encryption and hashed backup codes.
+// StoreMFASetup stores TOTP enrollment data with optional backup code issuance.
 func StoreMFASetup(db *sql.DB, username string, setup *MFASetup) error {
+	return StoreMFASetupWithPolicy(db, username, setup, true)
+}
+
+// StoreMFASetupWithPolicy stores TOTP enrollment and optionally persists backup codes.
+func StoreMFASetupWithPolicy(db *sql.DB, username string, setup *MFASetup, issueBackupCodes bool) error {
+	if err := CanAddMFAMethod(db, username, MFAMethodTOTP); err != nil {
+		return err
+	}
+
 	tx, err := db.Begin()
 	if err != nil {
 		return err
@@ -161,38 +135,20 @@ func StoreMFASetup(db *sql.DB, username string, setup *MFASetup) error {
 	}
 
 	_, err = tx.Exec(`
-		INSERT OR REPLACE INTO user_mfa_credentials (
-			username, method_type, credential_data,
+		INSERT INTO user_mfa_credentials (
+			credential_id, username, method_type, credential_data,
 			enabled, setup_completed, created_at
-		) VALUES (?, 'totp', ?, ?, ?, ?)`,
-		username, secretEncrypted,
+		) VALUES (?, ?, 'totp', ?, ?, ?, ?)`,
+		newCredentialID(), username, secretEncrypted,
 		false, false, time.Now().UTC(),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to store MFA config: %w", err)
 	}
 
-	_, _ = tx.Exec("DELETE FROM user_mfa_backup_codes WHERE username = ?", username)
-	for i, code := range setup.BackupCodes {
-		salt := deriveBackupCodeSalt(username, i)
-		hash, err := crypto.DeriveArgon2IDKey(
-			[]byte(code),
-			salt,
-			crypto.UnifiedArgonSecure.KeyLen,
-			crypto.UnifiedArgonSecure.Memory,
-			crypto.UnifiedArgonSecure.Time,
-			crypto.UnifiedArgonSecure.Threads,
-		)
-		if err != nil {
-			return fmt.Errorf("failed to hash backup code: %w", err)
-		}
-
-		_, err = tx.Exec(`
-			INSERT INTO user_mfa_backup_codes (username, code_index, code_hash) VALUES (?, ?, ?)`,
-			username, i, hash,
-		)
-		if err != nil {
-			return fmt.Errorf("failed to save hashed backup code: %w", err)
+	if issueBackupCodes && len(setup.BackupCodes) > 0 {
+		if err := storeBackupCodesTx(tx, username, setup.BackupCodes, true); err != nil {
+			return err
 		}
 	}
 
@@ -203,9 +159,9 @@ func StoreMFASetup(db *sql.DB, username string, setup *MFASetup) error {
 	return nil
 }
 
-// CompleteMFASetup validates a test code and enables MFA for the user.
+// CompleteMFASetup validates a test code and enables TOTP for the user.
 func CompleteMFASetup(db *sql.DB, username, testCode string) error {
-	mfaData, err := getMFAData(db, username)
+	mfaData, err := getMFADataByMethod(db, username, MFAMethodTOTP)
 	if err != nil {
 		return fmt.Errorf("failed to get MFA data: %w", err)
 	}
@@ -224,9 +180,9 @@ func CompleteMFASetup(db *sql.DB, username, testCode string) error {
 	}
 
 	_, err = db.Exec(`
-		UPDATE user_mfa_credentials 
-		SET enabled = true, setup_completed = true 
-		WHERE username = ?`,
+		UPDATE user_mfa_credentials
+		SET enabled = true, setup_completed = true
+		WHERE username = ? AND method_type = 'totp'`,
 		username,
 	)
 	if err != nil {
@@ -240,14 +196,30 @@ func CompleteMFASetup(db *sql.DB, username, testCode string) error {
 	return nil
 }
 
-// ResetMFA stages a new TOTP secret and fresh backup codes; verify must complete before MFA is active.
+// ResetMFA stages a new TOTP secret and fresh backup codes for path B recovery.
 func ResetMFA(db *sql.DB, username, backupCode string) (*MFASetup, error) {
+	return ResetMFAMethod(db, username, MFAMethodTOTP, backupCode)
+}
+
+// ResetMFAMethod replaces one MFA method type during recovery.
+func ResetMFAMethod(db *sql.DB, username, methodType, backupCode string) (*MFASetup, error) {
 	if backupCode != "" {
 		if err := ValidateBackupCode(db, username, backupCode); err != nil {
 			return nil, fmt.Errorf("invalid backup code: %w", err)
 		}
 	}
 
+	switch methodType {
+	case MFAMethodTOTP:
+		return resetTOTPMethod(db, username)
+	case MFAMethodWebAuthn:
+		return resetWebAuthnMethod(db, username)
+	default:
+		return nil, fmt.Errorf("unsupported MFA method type for reset")
+	}
+}
+
+func resetTOTPMethod(db *sql.DB, username string) (*MFASetup, error) {
 	setup, err := GenerateMFASetup(username)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate new MFA setup: %w", err)
@@ -271,37 +243,26 @@ func ResetMFA(db *sql.DB, username, backupCode string) (*MFASetup, error) {
 	defer tx.Rollback()
 
 	_, err = tx.Exec(`
-		UPDATE user_mfa_credentials 
-		SET credential_data = ?, created_at = ?, enabled = false, setup_completed = false
-		WHERE username = ?`,
-		secretEncrypted, time.Now().UTC(), username,
+		DELETE FROM user_mfa_credentials WHERE username = ? AND method_type = 'totp'`,
+		username,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to update MFA data: %w", err)
+		return nil, fmt.Errorf("failed to clear existing TOTP credential: %w", err)
 	}
 
-	_, _ = tx.Exec("DELETE FROM user_mfa_backup_codes WHERE username = ?", username)
-	for i, code := range setup.BackupCodes {
-		salt := deriveBackupCodeSalt(username, i)
-		hash, err := crypto.DeriveArgon2IDKey(
-			[]byte(code),
-			salt,
-			crypto.UnifiedArgonSecure.KeyLen,
-			crypto.UnifiedArgonSecure.Memory,
-			crypto.UnifiedArgonSecure.Time,
-			crypto.UnifiedArgonSecure.Threads,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to hash backup code during reset: %w", err)
-		}
+	_, err = tx.Exec(`
+		INSERT INTO user_mfa_credentials (
+			credential_id, username, method_type, credential_data,
+			enabled, setup_completed, created_at
+		) VALUES (?, ?, 'totp', ?, ?, ?, ?)`,
+		newCredentialID(), username, secretEncrypted, false, false, time.Now().UTC(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to store reset TOTP credential: %w", err)
+	}
 
-		_, err = tx.Exec(`
-			INSERT INTO user_mfa_backup_codes (username, code_index, code_hash) VALUES (?, ?, ?)`,
-			username, i, hash,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to insert fresh reset backup code: %w", err)
-		}
+	if err := storeBackupCodesTx(tx, username, setup.BackupCodes, true); err != nil {
+		return nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -309,10 +270,57 @@ func ResetMFA(db *sql.DB, username, backupCode string) (*MFASetup, error) {
 	}
 
 	if logging.InfoLogger != nil {
-		logging.InfoLogger.Printf("SECURITY: MFA reset for user: %s", username)
+		logging.InfoLogger.Printf("SECURITY: MFA TOTP reset for user: %s", username)
 	}
 
 	return setup, nil
+}
+
+func resetWebAuthnMethod(db *sql.DB, username string) (*MFASetup, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec(`DELETE FROM user_mfa_credentials WHERE username = ? AND method_type = 'webauthn'`, username)
+	if err != nil {
+		return nil, fmt.Errorf("failed to clear webauthn credential: %w", err)
+	}
+
+	encrypted, err := encryptWebAuthnBlob(username, webAuthnPendingBlob)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = tx.Exec(`
+		INSERT INTO user_mfa_credentials (
+			credential_id, username, method_type, credential_data,
+			enabled, setup_completed, created_at
+		) VALUES (?, ?, 'webauthn', ?, ?, ?, ?)`,
+		newCredentialID(), username, encrypted, false, false, time.Now().UTC(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to store pending webauthn reset row: %w", err)
+	}
+
+	codes, err := generateBackupCodesResilient(BackupCodeCount)
+	if err != nil {
+		return nil, err
+	}
+	if err := storeBackupCodesTx(tx, username, codes, true); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	if logging.InfoLogger != nil {
+		logging.InfoLogger.Printf("SECURITY: MFA WebAuthn reset for user: %s", username)
+	}
+
+	return &MFASetup{BackupCodes: codes}, nil
 }
 
 func generateQRCodeDataURI(content string) (string, error) {
@@ -344,4 +352,45 @@ func formatManualEntry(secret string) string {
 		formatted += string(char)
 	}
 	return formatted
+}
+
+// RemoveUserCredential deletes one credential and clears backup codes if none remain completed.
+func RemoveUserCredential(db *sql.DB, username, credentialID string) (bool, error) {
+	row, err := GetCredentialByID(db, username, credentialID)
+	if err != nil {
+		return false, err
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM user_mfa_credentials WHERE username = ? AND credential_id = ?`, username, credentialID); err != nil {
+		return false, err
+	}
+
+	var remaining int
+	if err := tx.QueryRow(`
+		SELECT COUNT(*) FROM user_mfa_credentials
+		WHERE username = ? AND enabled = 1 AND setup_completed = 1`,
+		username,
+	).Scan(&remaining); err != nil {
+		return false, err
+	}
+
+	clearAllBackupCodes := remaining == 0
+	if clearAllBackupCodes {
+		if _, err := tx.Exec(`DELETE FROM user_mfa_backup_codes WHERE username = ?`, username); err != nil {
+			return false, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+
+	_ = row
+	return clearAllBackupCodes, nil
 }

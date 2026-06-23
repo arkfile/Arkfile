@@ -92,7 +92,9 @@ When an operator has flagged an account for OPAQUE credential rotation, `/api/op
 
 ### 3 - Multi-Factor Authentication (MFA)
 
-Arkfile requires a second factor for all accounts. Users enroll exactly one method: an authenticator app (TOTP) or a security key (WebAuthn). When MFA is enabled, users must complete both OPAQUE authentication and satisfy the enrolled second factor to access their account.
+Arkfile requires a second factor for all accounts. Each user may enroll up to **two** methods: one authenticator app (TOTP) and one security key (WebAuthn). At login the user completes OPAQUE authentication, then satisfies **one** enrolled second factor. When both are enrolled, the client shows a method picker (`mfa_methods` in OPAQUE finalize responses).
+
+Security key labels are optional, user-private (encrypted inside `credential_data`), and never exposed to administrators. Backup codes are account-level (10 codes); they are regenerated on first enrollment, factor replacement (path B / reset), admin full reset, and explicit user regenerate — but **not** when adding the complementary second factor or when removing one factor while another remains.
 
 #### MFA Setup and Management (Require Access or MFA Token)
 
@@ -102,8 +104,15 @@ Arkfile requires a second factor for all accounts. Users enroll exactly one meth
 | POST | `/api/mfa/verify` | Complete TOTP setup by verifying a test code | Access or MFA Token |
 | POST | `/api/mfa/webauthn/register/begin` | Start security-key enrollment; returns WebAuthn options and backup codes | Access or MFA Token |
 | POST | `/api/mfa/webauthn/register/finish` | Complete security-key enrollment with browser credential JSON | Access or MFA Token |
-| GET | `/api/mfa/status` | Check MFA enablement status and enrolled `method_type` | Access |
-| POST | `/api/mfa/reset` | Reset second factor after backup-code recovery | Full Access or Reset Token |
+| GET | `/api/mfa/status` | Check MFA enablement, enrolled methods, and pending setup | Access |
+| GET | `/api/mfa/credentials` | List enrolled MFA credentials (includes user-private WebAuthn labels) | Access |
+| DELETE | `/api/mfa/credentials/:credential_id` | Remove one enrolled factor; force-logout all sessions | Access |
+| PATCH | `/api/mfa/credentials/:credential_id/label` | Update user-private security key label | Access |
+| POST | `/api/mfa/backup-codes/regenerate` | Replace all backup codes (explicit user action) | Access |
+| POST | `/api/mfa/credentials/totp/add` | Start TOTP enrollment as a second factor (no new backup codes) | Access |
+| POST | `/api/mfa/credentials/webauthn/register/begin` | Start security-key enrollment as a second factor | Access |
+| POST | `/api/mfa/credentials/webauthn/register/finish` | Complete second-factor security-key enrollment | Access |
+| POST | `/api/mfa/reset` | Reset one factor after backup-code recovery (`method_type`: `totp` or `webauthn`) | Full Access or Reset Token |
 | POST | `/api/mfa/recover-with-backup-code` | Consume backup code and issue reset token (path B step 1) | MFA Token |
 
 #### MFA Authentication (Require MFA Token)
@@ -113,6 +122,20 @@ Arkfile requires a second factor for all accounts. Users enroll exactly one meth
 | POST | `/api/mfa/auth` | Complete MFA with TOTP code or emergency backup code (`is_backup: true`) | MFA Token |
 | POST | `/api/mfa/webauthn/auth/begin` | Start security-key authentication; returns WebAuthn assertion options | MFA Token |
 | POST | `/api/mfa/webauthn/auth/finish` | Complete security-key authentication with browser credential JSON | MFA Token |
+
+**CLI parity (`arkfile-client` / `arkfile-admin`):**
+
+| Command | Purpose |
+|---------|---------|
+| `setup-mfa [--add-second] [--mfa-method totp\|webauthn] [--label TEXT]` | First enrollment or add complementary second factor |
+| `mfa list` | List your enrolled methods (includes WebAuthn labels) |
+| `mfa remove --credential-id ID --confirm` | Remove one factor (force-logout) |
+| `mfa regenerate-backup-codes --confirm` | Explicit backup code rotation |
+| `mfa set-label --credential-id ID --label TEXT` | Rename your security key label |
+| `recover-mfa [--method-type totp\|webauthn] [--code CODE]` | Path B factor replacement |
+| `login --mfa-method … [--credential-id …]` | Dual-method login picker (interactive if omitted) |
+| `arkfile-admin list-user-mfa --username USER` | Admin credential metadata (no labels) |
+| `arkfile-admin reset-user-mfa --username USER [--credential-id ID] --confirm` | Full or scoped admin reset |
 
 **WebAuthn request bodies:** `register/finish` and `auth/finish` accept `{ "credential": <PublicKeyCredential JSON from browser> }`.
 

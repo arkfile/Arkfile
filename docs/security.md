@@ -206,7 +206,7 @@ The system generates cryptographically secure backup codes during MFA setup. Eac
 **Credential Storage:**
 TOTP secrets and WebAuthn credential records are encrypted with AES-256-GCM under a per-user key derived via HKDF-SHA256 from the user-secret master (`mfa_user` purpose). Backup codes are never stored in cleartext; only Argon2id hashes are persisted.
 
-**WebAuthn credential blob (`method_type = webauthn`):** The decrypted `credential_data` value is a JSON document matching the `webauthn.Credential` record shape produced by `github.com/go-webauthn/webauthn` (credential ID, COSE public key, attestation metadata, authenticator sign counter, and transport hints). During pending enrollment before the security key ceremony completes, the blob may instead be the literal JSON object `{"pending":true}`. Registration finish writes the full credential record once. Every successful authentication finish must decrypt the blob, verify the assertion (including monotonic `authenticator.signCount`), increment the counter on success, re-encrypt, and update the row in the same transaction as full-token issuance. User-secret master rotation re-encrypts this blob opaquely like TOTP secrets.
+**WebAuthn credential blob (`method_type = webauthn`):** The decrypted `credential_data` value is a versioned JSON envelope `{ "v": 1, "credential": { ... }, "user_label": "..." }` where `credential` matches the `webauthn.Credential` record shape and `user_label` is an optional user-private printable-ASCII label (max 64 characters) never exposed to administrators. During pending enrollment before the security key ceremony completes, the blob may instead be the literal JSON object `{"pending":true}`.
 
 ### Password Validation and Security Requirements
 

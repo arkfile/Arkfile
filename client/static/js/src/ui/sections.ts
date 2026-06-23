@@ -133,7 +133,11 @@ export function hideTOTPSetupSection(): void {
 export function toggleSecuritySettings(): void {
   const securityPanel = document.getElementById('security-settings');
   if (securityPanel) {
+    const opening = securityPanel.classList.contains('hidden');
     securityPanel.classList.toggle('hidden');
+    if (opening) {
+      void import('../auth/mfa-settings.js').then(({ loadMFASettingsPanel }) => loadMFASettingsPanel());
+    }
   }
 }
 

@@ -11,25 +11,32 @@ import (
 )
 
 type webAuthnCredentialRequest struct {
-	// Accept the PublicKeyCredential JSON from the browser verbatim.
-	Credential json.RawMessage `json:"credential"`
+	Credential   json.RawMessage `json:"credential"`
+	Label        string          `json:"label,omitempty"`
+	CredentialID string          `json:"credential_id,omitempty"`
+}
+
+type webAuthnAuthBeginRequest struct {
+	CredentialID string `json:"credential_id,omitempty"`
 }
 
 // WebAuthnRegisterBegin starts security-key enrollment.
 func WebAuthnRegisterBegin(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
 
-	options, backupCodes, err := auth.WebAuthnRegisterBegin(database.DB, username)
+	options, backupCodes, credentialID, err := auth.WebAuthnRegisterBegin(database.DB, username)
 	if err != nil {
 		logging.ErrorLogger.Printf("WebAuthn register begin failed for %s: %v", username, err)
-		if err.Error() == "MFA already enabled" {
+		if err.Error() == "maximum number of MFA methods reached" ||
+			err.Error() == "webauthn already enrolled or pending setup" {
 			return JSONError(c, http.StatusConflict, err.Error())
 		}
 		return JSONError(c, http.StatusBadRequest, "Failed to start security key enrollment")
 	}
 
 	resp := map[string]interface{}{
-		"options": options,
+		"options":       options,
+		"credential_id": credentialID,
 	}
 	if len(backupCodes) > 0 {
 		resp["backup_codes"] = backupCodes
@@ -50,7 +57,7 @@ func WebAuthnRegisterFinish(c echo.Context) error {
 		return JSONError(c, http.StatusBadRequest, "Invalid credential payload")
 	}
 
-	if err := auth.WebAuthnRegisterFinish(database.DB, username, req.Credential); err != nil {
+	if err := auth.WebAuthnRegisterFinish(database.DB, username, req.CredentialID, req.Label, req.Credential); err != nil {
 		logging.ErrorLogger.Printf("WebAuthn register finish failed for %s: %v", username, err)
 		entityID := logging.GetOrCreateEntityID(c)
 		if recordErr := recordAuthFailedAttempt("mfa_verify", entityID); recordErr != nil {
@@ -76,7 +83,10 @@ func WebAuthnAuthBegin(c echo.Context) error {
 		return JSONError(c, http.StatusBadRequest, "Token does not require MFA")
 	}
 
-	options, err := auth.WebAuthnAuthBegin(database.DB, username)
+	var req webAuthnAuthBeginRequest
+	_ = c.Bind(&req)
+
+	options, err := auth.WebAuthnAuthBegin(database.DB, username, req.CredentialID)
 	if err != nil {
 		logging.ErrorLogger.Printf("WebAuthn auth begin failed for %s: %v", username, err)
 		return JSONError(c, http.StatusBadRequest, "Failed to start security key authentication")
@@ -100,7 +110,7 @@ func WebAuthnAuthFinish(c echo.Context) error {
 		return JSONError(c, http.StatusBadRequest, "Invalid credential payload")
 	}
 
-	if err := auth.WebAuthnAuthFinish(database.DB, username, req.Credential); err != nil {
+	if err := auth.WebAuthnAuthFinish(database.DB, username, req.CredentialID, req.Credential); err != nil {
 		logging.ErrorLogger.Printf("WebAuthn auth finish failed for %s: %v", username, err)
 		entityID := logging.GetOrCreateEntityID(c)
 		if recordErr := recordAuthFailedAttempt("mfa_auth", entityID); recordErr != nil {

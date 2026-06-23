@@ -161,7 +161,9 @@ func TestReencryptAllUserSecretWrappedRows(t *testing.T) {
 
 	schema := `
 		CREATE TABLE user_mfa_credentials (
-			username TEXT PRIMARY KEY,
+			credential_id TEXT PRIMARY KEY,
+			username TEXT NOT NULL,
+			method_type TEXT NOT NULL DEFAULT 'totp',
 			credential_data BLOB NOT NULL
 		);
 		CREATE TABLE user_contact_info (
@@ -183,7 +185,7 @@ func TestReencryptAllUserSecretWrappedRows(t *testing.T) {
 	username := "bob"
 	oldKey, _ := DeriveMFAUserKeyFromMaster(oldMaster, username)
 	encMFA, _ := EncryptGCM([]byte("SECRET123"), oldKey)
-	if _, err := db.Exec(`INSERT INTO user_mfa_credentials (username, credential_data) VALUES (?, ?)`, username, encMFA); err != nil {
+	if _, err := db.Exec(`INSERT INTO user_mfa_credentials (credential_id, username, method_type, credential_data) VALUES (?, ?, 'totp', ?)`, "cred-1", username, encMFA); err != nil {
 		t.Fatal(err)
 	}
 

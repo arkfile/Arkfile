@@ -6,56 +6,62 @@ import (
 )
 
 const (
-	MFAMethodTOTP      = "totp"
-	MFAMethodWebAuthn  = "webauthn"
+	MFAMethodTOTP     = "totp"
+	MFAMethodWebAuthn = "webauthn"
 )
 
-// GetUserMFAMethodType returns the enrolled method_type for a user with completed MFA.
-// Returns empty string when MFA is not enabled or no row exists.
+// GetUserMFAMethodType returns one enrolled method when exactly one is completed.
 func GetUserMFAMethodType(db *sql.DB, username string) (string, error) {
-	var methodType string
-	var enabled bool
-	var setupCompleted bool
-
-	err := db.QueryRow(`
-		SELECT method_type, enabled, setup_completed
-		FROM user_mfa_credentials
-		WHERE username = ?`, username,
-	).Scan(&methodType, &enabled, &setupCompleted)
+	methods, err := ListCompletedLoginMethods(db, username)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return "", nil
-		}
-		return "", fmt.Errorf("failed to load MFA method: %w", err)
+		return "", fmt.Errorf("failed to load MFA methods: %w", err)
 	}
-
-	if !enabled || !setupCompleted {
+	if len(methods) != 1 {
 		return "", nil
 	}
-
-	return methodType, nil
+	return methods[0].Type, nil
 }
 
 // GetPendingMFAMethodType returns method_type for an in-progress enrollment row.
 func GetPendingMFAMethodType(db *sql.DB, username string) (string, error) {
 	var methodType string
-	var setupCompleted bool
 
 	err := db.QueryRow(`
-		SELECT method_type, setup_completed
+		SELECT method_type
 		FROM user_mfa_credentials
-		WHERE username = ?`, username,
-	).Scan(&methodType, &setupCompleted)
+		WHERE username = ? AND setup_completed = 0
+		ORDER BY created_at DESC
+		LIMIT 1`, username,
+	).Scan(&methodType)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return "", nil
 		}
 		return "", fmt.Errorf("failed to load pending MFA method: %w", err)
 	}
+	return methodType, nil
+}
 
-	if setupCompleted {
-		return "", nil
+// BuildMFALoginResponse builds login metadata after OPAQUE password auth.
+func BuildMFALoginResponse(db *sql.DB, username string) (requiresSetup bool, methods []MFALoginMethod, singleMethod string, err error) {
+	completed, err := CountCompletedMethods(db, username)
+	if err != nil {
+		return false, nil, "", err
+	}
+	if completed == 0 {
+		pending, pendingErr := GetPendingMFAMethodType(db, username)
+		if pendingErr != nil {
+			return false, nil, "", pendingErr
+		}
+		return true, nil, pending, nil
 	}
 
-	return methodType, nil
+	methods, err = ListCompletedLoginMethods(db, username)
+	if err != nil {
+		return false, nil, "", err
+	}
+	if len(methods) == 1 {
+		singleMethod = methods[0].Type
+	}
+	return false, methods, singleMethod, nil
 }

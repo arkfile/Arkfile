@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -45,44 +44,40 @@ func decryptWebAuthnBlob(username string, encrypted []byte) ([]byte, error) {
 	return plaintext, nil
 }
 
-func loadWebAuthnCredential(db *sql.DB, username string) (*webauthn.Credential, error) {
-	mfaData, err := getMFAData(db, username)
+func loadWebAuthnCredential(db *sql.DB, username, credentialID string) (*webauthn.Credential, error) {
+	row, err := GetCredentialByID(db, username, credentialID)
 	if err != nil {
 		return nil, err
 	}
-
-	plaintext, err := decryptWebAuthnBlob(username, mfaData.SecretEncrypted)
-	if err != nil {
-		return nil, err
+	if row.MethodType != MFAMethodWebAuthn {
+		return nil, fmt.Errorf("credential is not a security key enrollment")
 	}
-
-	if bytes.Equal(plaintext, webAuthnPendingBlob) {
-		return nil, fmt.Errorf("webauthn enrollment still pending")
-	}
-
-	var cred webauthn.Credential
-	if err := json.Unmarshal(plaintext, &cred); err != nil {
-		return nil, fmt.Errorf("parse webauthn credential: %w", err)
-	}
-	return &cred, nil
+	return loadWebAuthnCredentialFromRow(username, row.CredentialData)
 }
 
-func saveWebAuthnCredential(db *sql.DB, username string, cred *webauthn.Credential, enabled, setupCompleted bool) error {
-	raw, err := json.Marshal(cred)
+func loadWebAuthnCredentialByMethod(db *sql.DB, username string) (*webauthn.Credential, string, error) {
+	row, err := GetCredentialByMethod(db, username, MFAMethodWebAuthn)
 	if err != nil {
-		return fmt.Errorf("marshal webauthn credential: %w", err)
+		return nil, "", err
 	}
+	cred, err := loadWebAuthnCredentialFromRow(username, row.CredentialData)
+	if err != nil {
+		return nil, "", err
+	}
+	return cred, row.CredentialID, nil
+}
 
-	encrypted, err := encryptWebAuthnBlob(username, raw)
+func saveWebAuthnCredential(db *sql.DB, username, credentialID string, cred *webauthn.Credential, userLabel string, enabled, setupCompleted bool) error {
+	encrypted, err := encodeWebAuthnCredentialBlob(username, cred, userLabel)
 	if err != nil {
 		return err
 	}
 
 	_, err = db.Exec(`
 		UPDATE user_mfa_credentials
-		SET credential_data = ?, enabled = ?, setup_completed = ?, method_type = ?
-		WHERE username = ?`,
-		encrypted, enabled, setupCompleted, MFAMethodWebAuthn, username,
+		SET credential_data = ?, enabled = ?, setup_completed = ?
+		WHERE username = ? AND credential_id = ?`,
+		encrypted, enabled, setupCompleted, username, credentialID,
 	)
 	if err != nil {
 		return fmt.Errorf("update webauthn credential: %w", err)
@@ -90,54 +85,59 @@ func saveWebAuthnCredential(db *sql.DB, username string, cred *webauthn.Credenti
 	return nil
 }
 
-// StoreWebAuthnPendingSetup creates a pending webauthn enrollment row with backup codes.
-func StoreWebAuthnPendingSetup(db *sql.DB, username string, backupCodes []string) error {
+// StoreWebAuthnPendingSetup creates a pending webauthn enrollment row.
+func StoreWebAuthnPendingSetup(db *sql.DB, username string, backupCodes []string, issueBackupCodes bool) (string, error) {
+	if err := CanAddMFAMethod(db, username, MFAMethodWebAuthn); err != nil {
+		return "", err
+	}
+
 	tx, err := db.Begin()
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer tx.Rollback()
 
 	encrypted, err := encryptWebAuthnBlob(username, webAuthnPendingBlob)
 	if err != nil {
-		return err
+		return "", err
 	}
 
+	credentialID := newCredentialID()
 	_, err = tx.Exec(`
-		INSERT OR REPLACE INTO user_mfa_credentials (
-			username, method_type, credential_data,
+		INSERT INTO user_mfa_credentials (
+			credential_id, username, method_type, credential_data,
 			enabled, setup_completed, created_at
-		) VALUES (?, ?, ?, ?, ?, ?)`,
-		username, MFAMethodWebAuthn, encrypted,
+		) VALUES (?, ?, 'webauthn', ?, ?, ?, ?)`,
+		credentialID, username, encrypted,
 		false, false, time.Now().UTC(),
 	)
 	if err != nil {
-		return fmt.Errorf("store pending webauthn row: %w", err)
+		return "", fmt.Errorf("store pending webauthn row: %w", err)
 	}
 
-	_, _ = tx.Exec("DELETE FROM user_mfa_backup_codes WHERE username = ?", username)
-	for i, code := range backupCodes {
-		salt := deriveBackupCodeSalt(username, i)
-		hash, err := crypto.DeriveArgon2IDKey(
-			[]byte(code),
-			salt,
-			crypto.UnifiedArgonSecure.KeyLen,
-			crypto.UnifiedArgonSecure.Memory,
-			crypto.UnifiedArgonSecure.Time,
-			crypto.UnifiedArgonSecure.Threads,
-		)
-		if err != nil {
-			return fmt.Errorf("hash backup code: %w", err)
-		}
-
-		_, err = tx.Exec(`
-			INSERT INTO user_mfa_backup_codes (username, code_index, code_hash) VALUES (?, ?, ?)`,
-			username, i, hash,
-		)
-		if err != nil {
-			return fmt.Errorf("store backup code: %w", err)
+	if issueBackupCodes && len(backupCodes) > 0 {
+		if err := storeBackupCodesTx(tx, username, backupCodes, true); err != nil {
+			return "", err
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return credentialID, nil
+}
+
+func getPendingWebAuthnCredentialID(db *sql.DB, username string) (string, error) {
+	row, err := GetCredentialByMethod(db, username, MFAMethodWebAuthn)
+	if err != nil {
+		return "", err
+	}
+	if row.SetupCompleted {
+		return "", fmt.Errorf("webauthn already completed")
+	}
+	return row.CredentialID, nil
+}
+
+func marshalCredentialForDebug(cred *webauthn.Credential) ([]byte, error) {
+	return json.Marshal(cred)
 }

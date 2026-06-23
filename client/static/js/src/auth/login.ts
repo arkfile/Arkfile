@@ -16,6 +16,7 @@ import { loadFiles } from '../files/list.js';
 import { handleTOTPFlow } from './totp.js';
 import { handleMFASetupFlow } from './mfa-setup.js';
 import { handleWebAuthnLoginFlow } from './webauthn.js';
+import { showMFALoginMethodPicker, type MFALoginMethodOption } from './mfa-method.js';
 import { getOpaqueClient, storeClientSecret, retrieveClientSecret, clearClientSecret } from '../crypto/opaque.js';
 import {
   deriveFileEncryptionKey,
@@ -45,8 +46,15 @@ export interface LoginResponse {
   requires_mfa?: boolean;
   requires_mfa_setup?: boolean;
   mfa_method?: 'totp' | 'webauthn' | '';
+  mfa_methods?: MFALoginMethodOption[];
   temp_token?: string;
   is_approved?: boolean;
+}
+
+export interface MFALoginMethodOption {
+  type: 'totp' | 'webauthn';
+  credential_id?: string;
+  label?: string;
 }
 
 export class LoginManager {
@@ -201,6 +209,14 @@ export class LoginManager {
   private static async routeAfterOpaque(loginData: any, credentials: LoginCredentials): Promise<void> {
     // Check MFA FIRST, before any cache/digest operations
     if (loginData.requires_mfa) {
+      if (Array.isArray(loginData.mfa_methods) && loginData.mfa_methods.length > 1) {
+        document.querySelector('.modal-overlay')?.remove();
+        showMFALoginMethodPicker(loginData.mfa_methods as MFALoginMethodOption[], (choice) => {
+          LoginManager.startChosenMFALogin(choice, loginData.temp_token!, credentials);
+        });
+        return;
+      }
+
       const mfaMethod = (loginData.mfa_method || '').trim();
 
       if (loginData.requires_mfa_setup) {
@@ -220,6 +236,7 @@ export class LoginManager {
           tempToken: loginData.temp_token!,
           username: credentials.username,
           password: credentials.password,
+          credentialId: loginData.mfa_methods?.find((m: MFALoginMethodOption) => m.type === 'webauthn')?.credential_id,
         });
         return;
       }
@@ -239,6 +256,28 @@ export class LoginManager {
       auth_method: 'OPAQUE',
       is_approved: loginData.is_approved,
     }, credentials.username, credentials.password);
+  }
+
+  static startChosenMFALogin(
+    choice: MFALoginMethodOption,
+    tempToken: string,
+    credentials: LoginCredentials,
+  ): void {
+    if (choice.type === 'webauthn') {
+      handleWebAuthnLoginFlow({
+        tempToken,
+        username: credentials.username,
+        password: credentials.password,
+        credentialId: choice.credential_id,
+        label: choice.label,
+      });
+      return;
+    }
+    handleTOTPFlow({
+      tempToken,
+      username: credentials.username,
+      password: credentials.password,
+    });
   }
 
   /**

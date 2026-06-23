@@ -842,6 +842,55 @@ run_user_onboarding_mfa_enrollment() {
     success "MFA enrollment complete"
 }
 
+run_dual_mfa_api_checks() {
+    group "Dual MFA — credential API checks"
+
+    scenario "List enrolled MFA credentials after TOTP enrollment"
+
+    local user_token
+    user_token=$(jq -r '.access_token // empty' "$HOME/.arkfile-session.json" 2>/dev/null)
+    if [ -z "$user_token" ]; then
+        user_login_with_totp "Login before dual MFA API checks"
+        user_token=$(jq -r '.access_token // empty' "$HOME/.arkfile-session.json" 2>/dev/null)
+    fi
+
+    if [ -z "$user_token" ]; then
+        error "No access token available for MFA credential checks"
+        record_test "MFA credentials list includes TOTP" "FAIL"
+        record_test "Add-second TOTP rejected when TOTP enrolled" "FAIL"
+        return
+    fi
+
+    local creds_out creds_code
+    safe_exec creds_out creds_code \
+        curl -s -k -H "Authorization: Bearer $user_token" "$SERVER_URL/api/mfa/credentials"
+
+    if [ $creds_code -eq 0 ] && echo "$creds_out" | grep -q 'totp'; then
+        record_test "MFA credentials list includes TOTP" "PASS"
+        info "Credentials: $creds_out"
+    else
+        error "Expected TOTP credential in list: $creds_out"
+        record_test "MFA credentials list includes TOTP" "FAIL"
+    fi
+
+    local add_out add_code
+    safe_exec add_out add_code \
+        curl -s -k -o /dev/null -w '%{http_code}' -X POST \
+        -H "Authorization: Bearer $user_token" \
+        -H "Content-Type: application/json" \
+        -d '{}' \
+        "$SERVER_URL/api/mfa/credentials/totp/add"
+
+    if [ "$add_out" = "409" ]; then
+        record_test "Add-second TOTP rejected when TOTP enrolled" "PASS"
+    else
+        error "Expected HTTP 409 when adding duplicate TOTP, got: $add_out"
+        record_test "Add-second TOTP rejected when TOTP enrolled" "FAIL"
+    fi
+
+    info "WebAuthn add-second and dual-method login require hardware key; skipped in automated e2e"
+}
+
 run_user_onboarding_admin_approval() {
     group "User onboarding — admin approval"
     scenario "Listing all users (admin)"
@@ -3296,6 +3345,7 @@ main() {
         run_platform_bootstrap_protection
         run_user_onboarding_registration
         run_user_onboarding_mfa_enrollment
+        run_dual_mfa_api_checks
         run_user_onboarding_admin_approval
         run_user_authentication
         run_files_standard

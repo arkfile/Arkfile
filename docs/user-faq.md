@@ -8,7 +8,7 @@ Arkfile is a privacy-first file vault. Your files and file metadata are encrypte
 
 ## What is two-factor authentication and why is it required?
 
-Every Arkfile account must complete two-factor authentication before gaining full access. After you enter your password, you must also prove possession of a second factor. This is either a TOTP code from an authenticator app such as Ente Auth, Aegis, or Bitwarden Authenticator, or a hardware security key such as a YubiKey or Nitrokey. You choose one method at enrollment. Two-factor authentication protects your account even if someone learns your password, because they would still need your phone or security key to sign in.
+Every Arkfile account must complete two-factor authentication before gaining full access. After you enter your password, you must also prove possession of a second factor. You may enroll up to two methods: an authenticator app (TOTP) such as Ente Auth, Aegis, or Bitwarden Authenticator, and/or a hardware security key such as a YubiKey or Nitrokey. At sign-in you use one enrolled method; if both are enrolled, you choose which to use. You may optionally label your security key for your own reference; that label is encrypted and visible only to you, not to instance administrators.
 
 ## What are backup codes and why do they matter?
 

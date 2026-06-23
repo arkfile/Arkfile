@@ -277,6 +277,8 @@ class ArkFileApp {
     // Security settings toggle
     const securityToggle = document.getElementById('security-settings-toggle');
     if (securityToggle) {
+      const { wireMFASettingsPanel } = await import('./auth/mfa-settings.js');
+      wireMFASettingsPanel();
       securityToggle.addEventListener('click', async (e) => {
         e.preventDefault();
         const { toggleSecuritySettings } = await import('./ui/sections');

@@ -20,7 +20,11 @@ export function handleMFASetupFlow(data: MFASetupFlowData): void {
   const method = (data.mfaMethod || '').trim() as MFAMethod | '';
 
   if (method === 'totp') {
-    handleTOTPSetupFlow({ tempToken: data.tempToken, username: data.username });
+    handleTOTPSetupFlow({
+      tempToken: data.tempToken,
+      username: data.username,
+      addSecondFactor: data.addSecondFactor,
+    });
     return;
   }
 
@@ -31,9 +35,13 @@ export function handleMFASetupFlow(data: MFASetupFlowData): void {
 
   showMFAMethodPicker((selected) => {
     if (selected === 'totp') {
-      handleTOTPSetupFlow({ tempToken: data.tempToken, username: data.username });
+      handleTOTPSetupFlow({
+        tempToken: data.tempToken,
+        username: data.username,
+        addSecondFactor: data.addSecondFactor,
+      });
     } else {
       handleWebAuthnSetupFlow({ ...data, mfaMethod: 'webauthn' });
     }
-  });
+  }, { addSecondFactor: data.addSecondFactor });
 }

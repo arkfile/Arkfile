@@ -23,6 +23,20 @@ interface LoginResponse {
   auth_method: 'OPAQUE';
   requires_mfa?: boolean;
   mfa_method?: 'totp' | 'webauthn' | '';
+  mfa_methods?: MFALoginMethodOption[];
+}
+
+interface MFALoginMethodOption {
+  type: 'totp' | 'webauthn';
+  credential_id?: string;
+  label?: string;
+}
+
+interface MFACredentialSummary {
+  credential_id: string;
+  method_type: 'totp' | 'webauthn';
+  created_at?: string;
+  label?: string;
 }
 
 // OPAQUE re-registration (returned with HTTP 409 + error
@@ -295,6 +309,8 @@ export type {
   ApiResponse,
   LoginRequest,
   LoginResponse,
+  MFALoginMethodOption,
+  MFACredentialSummary,
   ReregistrationVerifier,
   ReregistrationRequiredData,
   RegisterRequest,
