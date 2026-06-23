@@ -4,7 +4,7 @@
  * Updated for new home page with proper event listeners
  */
 
-import { validateToken, isAuthenticated, clearAllSessionData, startAutoRefresh, stopAutoRefresh, ServiceUnavailableError } from './utils/auth';
+import { validateToken, isAuthenticated, clearAllSessionData, startAutoRefresh, stopAutoRefresh, refreshToken, ServiceUnavailableError } from './utils/auth';
 import { lockAccountKey, registerAccountKeyCleanupHandlers } from './crypto/account-key-cache';
 import { initSitewideFooters } from './ui/footer';
 import { showError, showSuccess } from './ui/messages';
@@ -80,7 +80,18 @@ class ArkFileApp {
       }).catch((err) => {
         console.warn('[arkfile] SW registration error:', err);
       });
-      
+
+      const {
+        hasBillingCheckoutReturnParams,
+        captureBillingCheckoutParams,
+        resumePendingBillingCheckout,
+      } = await import('./ui/billing');
+
+      // Preserve checkout return params before auth routing strips or ignores them.
+      if (hasBillingCheckoutReturnParams()) {
+        captureBillingCheckoutParams();
+      }
+
       // Check if we're on the home page or app page
       if (this.isHomePage()) {
         this.setupHomePageListeners();
@@ -94,8 +105,25 @@ class ArkFileApp {
             showFileSection();
             startAutoRefresh();
             await this.loadUserFiles();
-            const { handleBillingCheckoutReturn } = await import('./ui/billing');
-            await handleBillingCheckoutReturn();
+            await resumePendingBillingCheckout();
+          } else {
+            await refreshToken();
+            if (await validateToken()) {
+              this.showApp();
+              showFileSection();
+              startAutoRefresh();
+              await this.loadUserFiles();
+              await resumePendingBillingCheckout();
+            }
+          }
+        } else if (captureBillingCheckoutParams()) {
+          await refreshToken();
+          if (await validateToken()) {
+            this.showApp();
+            showFileSection();
+            startAutoRefresh();
+            await this.loadUserFiles();
+            await resumePendingBillingCheckout();
           }
         }
       } else {
@@ -277,8 +305,9 @@ class ArkFileApp {
     // Security settings toggle
     const securityToggle = document.getElementById('security-settings-toggle');
     if (securityToggle) {
-      const { wireMFASettingsPanel } = await import('./auth/mfa-settings.js');
-      wireMFASettingsPanel();
+      void import('./auth/mfa-settings.js').then(({ wireMFASettingsPanel }) => {
+        wireMFASettingsPanel();
+      });
       securityToggle.addEventListener('click', async (e) => {
         e.preventDefault();
         const { toggleSecuritySettings } = await import('./ui/sections');
@@ -598,15 +627,30 @@ class ArkFileApp {
             showFileSection();
             startAutoRefresh();
             await this.loadUserFiles();
-            const { handleBillingCheckoutReturn } = await import('./ui/billing');
-            await handleBillingCheckoutReturn();
+            const { resumePendingBillingCheckout } = await import('./ui/billing');
+            await resumePendingBillingCheckout();
           }
         } else {
-          // Token is invalid, clear storage and show auth
-          console.warn('Stored token is invalid, clearing and showing auth');
-          clearAllSessionData();
-          showAuthSection();
-          showError('Your session has expired (30 minutes). Please log in again.');
+          const refreshed = await refreshToken();
+          if (refreshed && (await validateToken())) {
+            const { getCurrentUser } = await import('./utils/auth.js');
+            const currentUser = await getCurrentUser();
+            if (currentUser && !currentUser.is_approved) {
+              const { showPendingApprovalSection } = await import('./ui/sections.js');
+              showPendingApprovalSection();
+            } else {
+              showFileSection();
+              startAutoRefresh();
+              await this.loadUserFiles();
+              const { resumePendingBillingCheckout } = await import('./ui/billing');
+              await resumePendingBillingCheckout();
+            }
+          } else {
+            console.warn('Stored token is invalid, clearing and showing auth');
+            clearAllSessionData();
+            showAuthSection();
+            showError('Your session has expired (30 minutes). Please log in again.');
+          }
         }
       } catch (error) {
         // Network error or other issue

@@ -6,7 +6,7 @@ The integration is implemented end-to-end with Go unit tests, shell-based e2e te
 
 ## Status
 
-As of June 2026 the BTCPay payments integration is complete and verified in the codebase. Settlement credits the user and marks the invoice `paid` atomically via `billing.SettlePaymentInvoice`. Ledger rows use `transaction_type = 'payment'` (with a schema migration for existing databases and a "Top-up" label in the billing UI). CSP allows the configured BTCPay origin in `frame-src` for embedded checkout. Admin `payments reconcile` and per-invoice sync repair paid invoices that lack matching ledger credits. Startup validation rejects enabled payments with missing or invalid BTCPay configuration. External-tab checkout return is handled in the SPA through `handleBillingCheckoutReturn` in `billing.ts`, wired from `app.ts`. Verification on a clean dev environment is `dev-reset.sh`, then `scripts/testing/e2e-test.sh` and `scripts/testing/e2e-playwright.sh`; as of this writing both suites pass in full.
+As of June 2026 the BTCPay payments integration is complete and verified in the codebase. Settlement credits the user and marks the invoice `paid` atomically via `billing.SettlePaymentInvoice`. Ledger rows use `transaction_type = 'payment'` (with a schema migration for existing databases and a "Top-up" label in the billing UI). CSP allows the configured BTCPay origin in `frame-src` for embedded checkout. Admin `payments reconcile` and per-invoice sync repair paid invoices that lack matching ledger credits. Startup validation rejects enabled payments with missing or invalid BTCPay configuration. External-tab checkout return is handled in the SPA through `resumePendingBillingCheckout` in `billing.ts`, wired from `app.ts` and after login in `login.ts`. Verification on a clean dev environment is `dev-reset.sh`, then `scripts/testing/e2e-test.sh` and `scripts/testing/e2e-playwright.sh`; as of this writing both suites pass in full.
 
 ## Purpose and Architectural Alignment
 
@@ -20,7 +20,7 @@ The operator deploys and maintains a BTCPay Server instance. Arkfile communicate
 
 Settlement is webhook-driven. BTCPay signs payloads with SHA256 HMAC using a shared secret; Arkfile verifies the `BTCPay-Sig` header (`payments/webhooks.go`), matches the event to a local invoice, and settles through `billing.SettlePaymentInvoice`, which credits the user and marks the invoice `paid` in one transaction. The provider invoice ID is stored as the `credit_transactions.transaction_id`, giving idempotent protection against duplicate credits on replay. Webhook handlers accept `InvoiceSettled` and `InvoiceCompleted` events.
 
-For CLI users, the server returns a checkout URL when an invoice is created; the user completes payment in a browser. No client-side polling is required because the webhook applies the credit server-side once settlement is confirmed. Users who open checkout in an external tab are redirected back to `/billing?success=true&invoice=...`; the SPA opens the billing panel, polls invoice status, and strips the query string.
+For CLI users, the server returns a checkout URL when an invoice is created; the user completes payment in a browser. No client-side polling is required because the webhook applies the credit server-side once settlement is confirmed. Users who open checkout in an external tab are redirected back to `/?success=true&invoice=...`; the SPA opens the billing panel, polls invoice status, and strips the query string. Invoice creation also extends the browser session (refresh-token rotation) so checkout starts with a fresh JWT window.
 
 ## Quota Gating and Overdrawn Policy
 
@@ -74,7 +74,7 @@ If an invoice is already `paid` but lacks a matching credit row (recovery path f
 
 ## HTTP API
 
-`POST /api/billing/invoice` accepts `{"amount_usd": "20.00"}` (the `provider` field is not required; BTCPay is the only supported provider and is implied). The handler validates the amount against `ARKFILE_MIN_TOP_UP_USD` and `ARKFILE_MAX_TOP_UP_USD`, generates a local invoice ID (`inv_` prefix plus UUID), calls BTCPay to create the remote invoice with metadata linking back to the local ID, persists a `pending` row, and returns `invoice_id`, `checkout_url`, and `provider: "btcpay"`. A redirect URL of `/billing?success=true&invoice=...` is passed to BTCPay for external-tab checkout flows.
+`POST /api/billing/invoice` accepts `{"amount_usd": "20.00"}` (the `provider` field is not required; BTCPay is the only supported provider and is implied). The handler validates the amount against `ARKFILE_MIN_TOP_UP_USD` and `ARKFILE_MAX_TOP_UP_USD`, generates a local invoice ID (`inv_` prefix plus UUID), calls BTCPay to create the remote invoice with metadata linking back to the local ID (BTCPay checkout `expirationMinutes` defaults to 60), persists a `pending` row, extends the authenticated browser session via refresh-token rotation, and returns `invoice_id`, `checkout_url`, and `provider: "btcpay"`. A redirect URL of `/?success=true&invoice=...` is passed to BTCPay for external-tab checkout flows.
 
 `GET /api/billing/invoice/:invoice_id` returns the local invoice record for the authenticated owner. `POST /api/webhooks/btcpay` is unauthenticated; it requires a valid `BTCPay-Sig` header and processes settlement events as described above.
 
@@ -84,7 +84,7 @@ Admin endpoints support invoice inspection, filtered listing (`?user=`, `?status
 
 The billing panel follows the same inline-panel pattern as security settings and contact info. When payments are enabled, the top-up modal collects a USD amount, creates an invoice via the API, and replaces the form with a full-width iframe pointing at BTCPay's checkout page. BTCPay's invoice UI supports iframe embedding when the operator's BTCPay origin is allowed in CSP `frame-src`.
 
-External-tab checkout returns to `/billing?success=true&invoice=...`. On load, `handleBillingCheckoutReturn()` in `billing.ts` opens the billing panel, polls `GET /api/billing/invoice/:invoice_id` until status is `paid` or attempts are exhausted, shows a confirmation message, and strips the query string.
+External-tab checkout returns to `/?success=true&invoice=...`. On load, `resumePendingBillingCheckout()` in `billing.ts` captures the invoice id (also stored in `sessionStorage` when the top-up modal creates an invoice), attempts a session refresh if needed, opens the billing panel, polls `GET /api/billing/invoice/:invoice_id` for up to about three minutes, and shows a message matched to the outcome (`paid`, still pending, or expired/failed). Tab visibility changes trigger a session refresh while the Arkfile tab is open.
 
 ## Administration
 
@@ -114,7 +114,7 @@ Go unit tests cover the BTCPay client (`payments/btcpay_test.go`), webhook signa
 
 Shell e2e tests run as `run_payments` in `scripts/testing/e2e-test.sh`, after `run_billing`. The payments phase starts a mock BTCPay server (`scripts/testing/btcpay-mock.go`), logs in the test user and confirms `GET /api/credits` exposes payments config, creates an invoice via `POST /api/billing/invoice` and verifies it appears in `arkfile-admin payments list`, sends a signed webhook to settle the invoice, confirms the invoice transitions to `paid` and the user ledger contains a "Payment top-up via btcpay" row with `transaction_type = 'payment'` (asserted with `jq` against `arkfile-admin billing show --user`, since admin CLI `--json` pretty-prints), and replays the webhook to confirm the response is idempotent and the balance is unchanged.
 
-Playwright (`scripts/testing/e2e-playwright.ts`) runs after the shell e2e suite. One test opens the billing panel and verifies balance, usage grid, and transaction history (including gift and usage rows written by `run_billing`). A second test opens the top-up modal, mocks `POST /api/billing/invoice`, and confirms the checkout iframe embeds the returned URL.
+Playwright (`scripts/testing/e2e-playwright.ts`) runs after the shell e2e suite. One test opens the billing panel and verifies balance, usage grid, and transaction history (including gift and usage rows written by `run_billing`). A second test opens the top-up modal, mocks `POST /api/billing/invoice`, and confirms the checkout iframe embeds the returned URL. A third test navigates to `/?success=true&invoice=...` with a mocked paid invoice status and verifies the billing panel opens.
 
 ## Honest Trade-offs
 

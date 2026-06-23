@@ -10,12 +10,12 @@
 
 import { showError, showSuccess } from '../ui/messages.js';
 import { showProgressMessage, hideProgress } from '../ui/progress.js';
-import { clearAllSessionData, authenticatedFetch, csrfHeader } from '../utils/auth.js';
+import { clearAllSessionData, authenticatedFetch, csrfHeader, startAutoRefresh } from '../utils/auth.js';
 import { showFileSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
 import { handleTOTPFlow } from './totp.js';
 import { handleMFASetupFlow } from './mfa-setup.js';
-import { handleWebAuthnLoginFlow } from './webauthn.js';
+import { handleWebAuthnLoginFlow, buildWebAuthnLoginFlowData } from './webauthn.js';
 import { showMFALoginMethodPicker, type MFALoginMethodOption } from './mfa-method.js';
 import { getOpaqueClient, storeClientSecret, retrieveClientSecret, clearClientSecret } from '../crypto/opaque.js';
 import {
@@ -51,11 +51,7 @@ export interface LoginResponse {
   is_approved?: boolean;
 }
 
-export interface MFALoginMethodOption {
-  type: 'totp' | 'webauthn';
-  credential_id?: string;
-  label?: string;
-}
+export type { MFALoginMethodOption } from './mfa-method.js';
 
 export class LoginManager {
   private static loginInProgress = false;
@@ -232,12 +228,16 @@ export class LoginManager {
       }
 
       if (mfaMethod === 'webauthn') {
-        handleWebAuthnLoginFlow({
+        const webauthnMethod = loginData.mfa_methods?.find(
+          (m: MFALoginMethodOption) => m.type === 'webauthn',
+        );
+        handleWebAuthnLoginFlow(buildWebAuthnLoginFlowData({
           tempToken: loginData.temp_token!,
           username: credentials.username,
           password: credentials.password,
-          credentialId: loginData.mfa_methods?.find((m: MFALoginMethodOption) => m.type === 'webauthn')?.credential_id,
-        });
+          credentialId: webauthnMethod?.credential_id,
+          label: webauthnMethod?.label,
+        }));
         return;
       }
 
@@ -264,13 +264,13 @@ export class LoginManager {
     credentials: LoginCredentials,
   ): void {
     if (choice.type === 'webauthn') {
-      handleWebAuthnLoginFlow({
+      handleWebAuthnLoginFlow(buildWebAuthnLoginFlowData({
         tempToken,
         username: credentials.username,
         password: credentials.password,
         credentialId: choice.credential_id,
         label: choice.label,
-      });
+      }));
       return;
     }
     handleTOTPFlow({
@@ -510,6 +510,15 @@ export class LoginManager {
         await initializeShareList();
       } catch (err) {
         console.warn('Failed to initialize share list:', err);
+      }
+
+      startAutoRefresh();
+
+      try {
+        const { resumePendingBillingCheckout } = await import('../ui/billing.js');
+        await resumePendingBillingCheckout();
+      } catch (err) {
+        console.warn('Failed to resume pending billing checkout:', err);
       }
 
     } catch (error) {

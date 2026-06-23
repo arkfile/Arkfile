@@ -68,7 +68,7 @@ cd /var/lib/almapay/btcpayserver-docker
 Export generation variables. This example uses mainnet Bitcoin (pruned), Monero, no in-stack Lightning daemon, and no integrated nginx:
 
 ```bash
-export BTCPAY_HOST="btcpayserver.example.com"
+export BTCPAY_HOST="pay.example.com"
 export BTCPAY_PROTOCOL="https"
 export BTCPAYGEN_CRYPTO1="btc"
 export BTCPAYGEN_CRYPTO2="xmr"

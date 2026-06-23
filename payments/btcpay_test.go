@@ -21,9 +21,12 @@ func TestBTCPayClient_CreateInvoice(t *testing.T) {
 
 		// Decode body
 		var payload struct {
-			Amount   string            `json:"amount"`
-			Currency string            `json:"currency"`
+			Amount   string `json:"amount"`
+			Currency string `json:"currency"`
 			Metadata map[string]string `json:"metadata"`
+			Checkout struct {
+				ExpirationMinutes int `json:"expirationMinutes"`
+			} `json:"checkout"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatalf("failed to decode request body: %v", err)
@@ -37,6 +40,9 @@ func TestBTCPayClient_CreateInvoice(t *testing.T) {
 		}
 		if payload.Metadata["invoice_id"] != "inv_test123" {
 			t.Errorf("expected metadata invoice_id inv_test123, got: %s", payload.Metadata["invoice_id"])
+		}
+		if payload.Checkout.ExpirationMinutes != DefaultInvoiceExpirationMinutes {
+			t.Errorf("expected expirationMinutes %d, got: %d", DefaultInvoiceExpirationMinutes, payload.Checkout.ExpirationMinutes)
 		}
 
 		// Send success response

@@ -79,6 +79,7 @@ let _cachedUser: CurrentUserInfo | null = null;
 export class AuthManager {
   // Auto-refresh timer: fires slightly before the 30-minute JWT TTL.
   private static autoRefreshTimer: number | null = null;
+  private static visibilityRefreshAttached = false;
   // 25 minutes — fires with 5 minutes to spare before the 30-minute JWT TTL.
   private static readonly AUTO_REFRESH_INTERVAL = 25 * 60 * 1000;
 
@@ -224,6 +225,7 @@ export class AuthManager {
   // Auto-refresh timer management
   public static startAutoRefresh(): void {
     this.stopAutoRefresh();
+    this.attachVisibilityRefresh();
     this.autoRefreshTimer = window.setInterval(async () => {
       if (this.isAuthenticated()) {
         const success = await this.refreshToken();
@@ -232,6 +234,19 @@ export class AuthManager {
         }
       }
     }, this.AUTO_REFRESH_INTERVAL);
+  }
+
+  /** Refresh the session when the user returns to this tab (e.g. from BTCPay checkout). */
+  public static attachVisibilityRefresh(): void {
+    if (this.visibilityRefreshAttached || typeof document === 'undefined') {
+      return;
+    }
+    this.visibilityRefreshAttached = true;
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && this.isAuthenticated()) {
+        void this.refreshToken();
+      }
+    });
   }
 
   public static stopAutoRefresh(): void {

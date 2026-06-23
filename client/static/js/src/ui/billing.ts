@@ -23,7 +23,7 @@
  *   .billing-tx-table, .billing-tx-amount[.negative], .billing-tx-balance[.negative]
  */
 
-import { authenticatedFetch } from '../utils/auth';
+import { authenticatedFetch, refreshToken, isAuthenticated, validateToken } from '../utils/auth';
 
 /** Toggle the billing panel visibility, loading data on open. */
 export async function toggleBillingPanel(): Promise<void> {
@@ -349,20 +349,69 @@ function formatTransactionType(type: string): string {
   return type;
 }
 
+/** sessionStorage key for an in-progress top-up awaiting settlement. */
+export const PENDING_INVOICE_STORAGE_KEY = 'arkfile_pending_invoice';
+
+/** Poll attempts and interval after external-tab checkout return (~3 minutes). */
+const CHECKOUT_RETURN_POLL_ATTEMPTS = 90;
+const CHECKOUT_RETURN_POLL_INTERVAL_MS = 2000;
+
 /**
- * Handle return from an external BTCPay checkout tab (/billing?success=true&invoice=...).
- * Opens the billing panel, polls invoice status, and strips checkout query parameters.
+ * True when the current URL carries BTCPay external-tab checkout return params.
  */
-export async function handleBillingCheckoutReturn(): Promise<boolean> {
+export function hasBillingCheckoutReturnParams(): boolean {
+  const url = new URL(window.location.href);
+  return url.searchParams.get('success') === 'true' && !!url.searchParams.get('invoice');
+}
+
+/** Persist invoice id from checkout return URL and strip query parameters. */
+export function captureBillingCheckoutParams(): string | null {
   const url = new URL(window.location.href);
   const success = url.searchParams.get('success') === 'true';
   const invoiceID = url.searchParams.get('invoice');
-  if (!success || !invoiceID) {
+  if (success && invoiceID) {
+    sessionStorage.setItem(PENDING_INVOICE_STORAGE_KEY, invoiceID);
+    window.history.replaceState({}, '', url.pathname + url.hash);
+    return invoiceID;
+  }
+  return sessionStorage.getItem(PENDING_INVOICE_STORAGE_KEY);
+}
+
+function clearPendingInvoiceStorage(): void {
+  sessionStorage.removeItem(PENDING_INVOICE_STORAGE_KEY);
+}
+
+function resolvePendingInvoiceID(): string | null {
+  return captureBillingCheckoutParams();
+}
+
+async function ensureSessionForBillingPoll(): Promise<boolean> {
+  if (isAuthenticated()) {
+    const valid = await validateToken();
+    if (valid) {
+      return true;
+    }
+  }
+  const refreshed = await refreshToken();
+  if (!refreshed) {
+    return false;
+  }
+  return validateToken();
+}
+
+/**
+ * Resume a pending top-up after login or on return from an external BTCPay tab.
+ * Opens the billing panel, polls invoice status, and shows an honest outcome message.
+ */
+export async function resumePendingBillingCheckout(): Promise<boolean> {
+  const invoiceID = resolvePendingInvoiceID();
+  if (!invoiceID) {
     return false;
   }
 
-  const cleanPath = url.pathname === '/billing' ? '/' : url.pathname;
-  window.history.replaceState({}, '', cleanPath + url.hash);
+  if (!(await ensureSessionForBillingPoll())) {
+    return false;
+  }
 
   const panel = document.getElementById('billing-panel');
   if (panel) {
@@ -375,15 +424,40 @@ export async function handleBillingCheckoutReturn(): Promise<boolean> {
     content.innerHTML = '<p>Confirming payment…</p>';
   }
 
-  await pollInvoiceStatus(invoiceID, 30, 2000);
+  const outcome = await pollInvoiceStatus(invoiceID, CHECKOUT_RETURN_POLL_ATTEMPTS, CHECKOUT_RETURN_POLL_INTERVAL_MS);
   await loadBilling();
 
-  const { showSuccess } = await import('./messages');
-  showSuccess('Payment received. Your balance has been updated.');
+  const { showSuccess, showError } = await import('./messages');
+
+  if (outcome === 'paid') {
+    clearPendingInvoiceStorage();
+    showSuccess('Payment received. Your balance has been updated.');
+    return true;
+  }
+
+  if (outcome === 'expired' || outcome === 'failed') {
+    clearPendingInvoiceStorage();
+    showError(`Payment invoice ${outcome}. No balance was credited.`);
+    return true;
+  }
+
+  showSuccess(
+    'Payment submitted. Your balance updates automatically once BTCPay confirms settlement. Check Billing again in a few minutes.',
+  );
   return true;
 }
 
-async function pollInvoiceStatus(invoiceID: string, maxAttempts: number, intervalMs: number): Promise<void> {
+export async function handleBillingCheckoutReturn(): Promise<boolean> {
+  return resumePendingBillingCheckout();
+}
+
+type InvoicePollOutcome = 'paid' | 'pending' | 'expired' | 'failed';
+
+async function pollInvoiceStatus(
+  invoiceID: string,
+  maxAttempts: number,
+  intervalMs: number,
+): Promise<InvoicePollOutcome> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const response = await authenticatedFetch(
@@ -394,14 +468,27 @@ async function pollInvoiceStatus(invoiceID: string, maxAttempts: number, interva
         const result = await response.json();
         const data = (result.data || result) as { status?: string };
         if (data.status === 'paid') {
-          return;
+          return 'paid';
         }
+        if (data.status === 'expired') {
+          return 'expired';
+        }
+        if (data.status === 'failed') {
+          return 'failed';
+        }
+      } else if (response.status === 401) {
+        const refreshed = await refreshToken();
+        if (refreshed) {
+          continue;
+        }
+        return 'pending';
       }
     } catch (err) {
       console.warn('Invoice status poll failed:', err);
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
+  return 'pending';
 }
 
 /** Show the Top Up payment modal and handle invoice generation + iframe embedding. */
@@ -576,6 +663,10 @@ function showTopUpModal(cfg: PaymentsConfig): void {
 
       const res = await response.json();
       const invoiceData = res.data;
+
+      if (invoiceData?.invoice_id) {
+        sessionStorage.setItem(PENDING_INVOICE_STORAGE_KEY, String(invoiceData.invoice_id));
+      }
 
       // Replace form/body content with an iframe
       body.innerHTML = '';

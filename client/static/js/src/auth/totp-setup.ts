@@ -16,6 +16,22 @@ export interface TOTPSetupFlowData {
   addSecondFactor?: boolean;
 }
 
+/** Assemble TOTP setup input without assigning undefined to optional fields. */
+export function buildTOTPSetupFlowData(params: {
+  tempToken: string;
+  username: string;
+  addSecondFactor?: boolean | undefined;
+}): TOTPSetupFlowData {
+  const result: TOTPSetupFlowData = {
+    tempToken: params.tempToken,
+    username: params.username,
+  };
+  if (params.addSecondFactor === true) {
+    result.addSecondFactor = true;
+  }
+  return result;
+}
+
 export interface TOTPSetupData {
   secret: string;
   qr_code_url: string;

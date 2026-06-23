@@ -72,7 +72,7 @@ func CreateInvoiceHandler(c echo.Context) error {
 	}
 
 	invoiceID := "inv_" + strings.ReplaceAll(uuid.New().String(), "-", "")
-	redirectURL := fmt.Sprintf("%s/billing?success=true&invoice=%s", cfg.Server.BaseURL, invoiceID)
+	redirectURL := fmt.Sprintf("%s/?success=true&invoice=%s", cfg.Server.BaseURL, invoiceID)
 
 	provInv, err := provider.CreateInvoice(context.Background(), invoiceID, amountMicrocents, redirectURL)
 	if err != nil {
@@ -92,6 +92,10 @@ func CreateInvoiceHandler(c echo.Context) error {
 	if err := models.CreatePaymentInvoice(database.DB, invoice); err != nil {
 		logging.ErrorLogger.Printf("Failed to save payment invoice %s to DB: %v", invoiceID, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to persist payment request")
+	}
+
+	if err := ExtendAuthenticatedSession(c); err != nil {
+		logging.InfoLogger.Printf("Invoice %s created for %s; session extension skipped: %v", invoiceID, username, err)
 	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{

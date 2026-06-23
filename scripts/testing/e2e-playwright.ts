@@ -1193,6 +1193,42 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     console.log('[OK] Billing top-up modal and checkout iframe test complete');
   });
 
+  test('External-tab checkout return opens billing panel and confirms paid invoice', async () => {
+    const testInvoiceID = 'inv_playwright_return';
+
+    await sharedPage.route(`**/api/billing/invoice/${testInvoiceID}`, async (route) => {
+      if (route.request().method() !== 'GET') {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: {
+            invoice_id: testInvoiceID,
+            status: 'paid',
+            amount_usd_microcents: 1000000000,
+            provider: 'btcpay',
+          },
+        }),
+      });
+    });
+
+    await sharedPage.goto(`/?success=true&invoice=${testInvoiceID}`, { waitUntil: 'networkidle' });
+
+    await sharedPage.waitForSelector('#billing-panel:not(.hidden)', { timeout: 15000 });
+    await sharedPage.waitForSelector('.billing-panel-section', { timeout: 15000 });
+
+    const urlAfter = sharedPage.url();
+    expect(urlAfter).not.toContain('success=true');
+    expect(urlAfter).not.toContain(`invoice=${testInvoiceID}`);
+
+    await sharedPage.unroute(`**/api/billing/invoice/${testInvoiceID}`);
+    console.log('[OK] Billing checkout return test complete');
+  });
+
   // --------------------------------------------------------------------------
   // Phase 13: Logout + Post-Logout Checks
   // --------------------------------------------------------------------------

@@ -17,6 +17,10 @@ type BTCPayClient struct {
 	HTTPClient *http.Client
 }
 
+// DefaultInvoiceExpirationMinutes is passed to BTCPay on invoice creation so
+// checkout remains open long enough for on-chain and external-tab flows.
+const DefaultInvoiceExpirationMinutes = 60
+
 func NewBTCPayClient(baseURL, storeID, apiKey string) *BTCPayClient {
 	baseURL = strings.TrimSuffix(baseURL, "/")
 	return &BTCPayClient{
@@ -36,8 +40,9 @@ func (c *BTCPayClient) CreateInvoice(ctx context.Context, invoiceID string, amou
 			"invoice_id": invoiceID,
 		},
 		"checkout": map[string]interface{}{
-			"speedPolicy": "HighSpeed",
-			"redirectURL": redirectURL,
+			"speedPolicy":         "HighSpeed",
+			"redirectURL":         redirectURL,
+			"expirationMinutes":   DefaultInvoiceExpirationMinutes,
 		},
 	}
 	bodyBytes, err := json.Marshal(payload)

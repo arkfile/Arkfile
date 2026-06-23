@@ -2,7 +2,7 @@
  * Unified MFA enrollment entry point after OPAQUE registration or login resume.
  */
 
-import { handleTOTPSetupFlow } from './totp-setup.js';
+import { buildTOTPSetupFlowData, handleTOTPSetupFlow } from './totp-setup.js';
 import { handleWebAuthnSetupFlow } from './webauthn.js';
 import {
   showMFAMethodPicker,
@@ -12,6 +12,18 @@ import {
 
 export type { MFASetupFlowData, MFAMethod };
 
+function totpSetupFromFlow(data: MFASetupFlowData) {
+  return buildTOTPSetupFlowData({
+    tempToken: data.tempToken,
+    username: data.username,
+    addSecondFactor: data.addSecondFactor,
+  });
+}
+
+function methodPickerOptions(data: MFASetupFlowData): { addSecondFactor?: boolean } {
+  return data.addSecondFactor === true ? { addSecondFactor: true } : {};
+}
+
 /**
  * Begin MFA enrollment. Shows a method picker unless the server or caller
  * already specified totp or webauthn (e.g. pending enrollment resume).
@@ -20,11 +32,7 @@ export function handleMFASetupFlow(data: MFASetupFlowData): void {
   const method = (data.mfaMethod || '').trim() as MFAMethod | '';
 
   if (method === 'totp') {
-    handleTOTPSetupFlow({
-      tempToken: data.tempToken,
-      username: data.username,
-      addSecondFactor: data.addSecondFactor,
-    });
+    handleTOTPSetupFlow(totpSetupFromFlow(data));
     return;
   }
 
@@ -35,13 +43,9 @@ export function handleMFASetupFlow(data: MFASetupFlowData): void {
 
   showMFAMethodPicker((selected) => {
     if (selected === 'totp') {
-      handleTOTPSetupFlow({
-        tempToken: data.tempToken,
-        username: data.username,
-        addSecondFactor: data.addSecondFactor,
-      });
+      handleTOTPSetupFlow(totpSetupFromFlow(data));
     } else {
       handleWebAuthnSetupFlow({ ...data, mfaMethod: 'webauthn' });
     }
-  }, { addSecondFactor: data.addSecondFactor });
+  }, methodPickerOptions(data));
 }

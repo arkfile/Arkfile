@@ -320,6 +320,30 @@ export interface WebAuthnLoginFlowData {
   label?: string;
 }
 
+/** Assemble login flow input without assigning undefined to optional fields. */
+export function buildWebAuthnLoginFlowData(params: {
+  tempToken: string;
+  username: string;
+  password?: string | undefined;
+  credentialId?: string | undefined;
+  label?: string | undefined;
+}): WebAuthnLoginFlowData {
+  const result: WebAuthnLoginFlowData = {
+    tempToken: params.tempToken,
+    username: params.username,
+  };
+  if (params.password !== undefined) {
+    result.password = params.password;
+  }
+  if (params.credentialId !== undefined) {
+    result.credentialId = params.credentialId;
+  }
+  if (params.label !== undefined) {
+    result.label = params.label;
+  }
+  return result;
+}
+
 let _pendingWebAuthnLogin: WebAuthnLoginFlowData | null = null;
 
 /**
@@ -351,7 +375,7 @@ export function handleWebAuthnLoginFlow(data: WebAuthnLoginFlowData): void {
 
   modalContent.innerHTML = `
     <h3 style="margin: 0 0 1rem 0;">Security Key Required</h3>
-    ${flowData.label ? `<p style="margin: 0 0 0.75rem 0; color: var(--foam-2); font-size: 0.95rem; text-align: center;">Using: ${flowData.label}</p>` : ''}
+    ${data.label ? `<p style="margin: 0 0 0.75rem 0; color: var(--foam-2); font-size: 0.95rem; text-align: center;">Using: ${data.label}</p>` : ''}
     <p style="margin: 0 0 1.25rem 0; color: var(--foam-2); font-size: 0.95rem; text-align: center;">
       Insert or tap your security key when prompted.
     </p>
