@@ -90,6 +90,7 @@ SYSTEM COMMANDS:
     rotate-user-secret-master  User-secret master rotation (prepare|apply)
     rotate-envelope-master     Envelope master key rotation (prepare|apply)
     rotate-jwt-keys   JWT signing key rotation (rotate|retire)
+    rotate-opaque-keys OPAQUE server key rotation (rotate|replace-keys)
     version           Show version information
 
 GLOBAL OPTIONS:
@@ -453,6 +454,11 @@ func main() {
 	case "rotate-jwt-keys":
 		if err := handleRotateJWTKeysCommand(client, config, args); err != nil {
 			logError("JWT key rotation failed: %v", err)
+			os.Exit(1)
+		}
+	case "rotate-opaque-keys":
+		if err := handleRotateOpaqueKeysCommand(client, config, args); err != nil {
+			logError("OPAQUE key rotation failed: %v", err)
 			os.Exit(1)
 		}
 	default:

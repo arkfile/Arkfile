@@ -308,17 +308,17 @@ Exports `MFA_SECRET` and test file paths to `scripts/testing/e2e-playwright.ts`.
 **Usage**: `sudo ./scripts/maintenance/rotate-envelope-master.sh`  
 **Requires**: Prior `arkfile-admin login`; brief `arkfile` service stop during apply
 
+#### `rotate-opaque-keys.sh`
+**Purpose**: OPAQUE server key rotation runbook (delegates to `arkfile-admin rotate-opaque-keys rotate`)  
+**Usage**: `bash scripts/maintenance/rotate-opaque-keys.sh`  
+**Requires**: Prior `arkfile-admin login`; no service restart (keys reload in-process)
+
 **Admin MFA reset (`arkfile-admin reset-user-mfa`):**
 - **Purpose**: Clear all MFA enrollment for a locked-out user (last resort after backup-code paths fail)
 - **Usage**: `arkfile-admin reset-user-mfa --username USER --confirm`
 - **Requires**: Prior `arkfile-admin login` (admin + MFA); localhost admin API access
 - **Flags**: `--acknowledge-no-contact-info` when the user has no saved contact info on file
 - **Effect**: Deletes MFA credentials, backup codes, and usage logs; force-logouts all sessions; user must complete MFA setup on next login. Contact info is preserved.
-
-#### `rotate-opaque-keys.sh` **OPAQUE KEY ROTATION** (WIP)
-**Purpose**: Rotate OPAQUE server keys with user migration support  
-**Location**: `./scripts/maintenance/rotate-opaque-keys.sh`  
-**Rotates**: OPAQUE server keys; may require users to re-register(!)
 
 #### `renew-certificates.sh`
 **Purpose**: Renew TLS certificates  

@@ -543,20 +543,31 @@ OPAQUE server keys are the one key layer that cannot be re-wrapped in place: eac
 
 Re-registration never deletes the `users` row or any child rows. Files, shares, MFA enrollment, credits, contact info, and settings are all preserved: identity is the username (unchanged), and the Account Key is a deterministic function of username + password, so a user who re-registers with the same password regenerates a byte-identical Account Key and all account-wrapped files and metadata continue to decrypt. The clients confirm the password locally (by test-decrypting an account-key-encrypted metadata sample) before finalizing, so a mismatched password is never bound to the account.
 
-**Rotate for the whole deployment:**
+**Rotate for the whole deployment (recommended atomic flow):**
 
 ```bash
-# 1. Flag every active account for one-time OPAQUE re-registration.
-#    This deletes only the opaque_user_data records, sets requires_reregistration,
-#    and force-logs-out all sessions. No other user data is touched.
+# Flags every active account, clears opaque_user_data, replaces server keys,
+# reloads them in the running service, and force-logs-out all sessions.
+# ORDER IS LOAD-BEARING: do not replace OPAQUE server keys before flagging
+# accounts, or users will see a generic authentication failure instead of the
+# guided re-registration prompt.
+arkfile-admin rotate-opaque-keys rotate --confirm
+```
+
+Or use the runbook wrapper: `bash scripts/maintenance/rotate-opaque-keys.sh`
+
+**Two-step flow (only if you need to separate flagging from key replacement):**
+
+```bash
+# Step 1: Flag every active account FIRST.
 arkfile-admin flag-user-reregistration --all --confirm
 
-# 2. Generate new OPAQUE server keys.
-./scripts/setup/03-setup-opaque-keys.sh --force
-
-# 3. Restart the service.
-sudo systemctl restart arkfile
+# Step 2: Replace server keys only after every account is flagged and
+# opaque_user_data is empty. This step refuses to run if ordering is wrong.
+arkfile-admin rotate-opaque-keys replace-keys --confirm
 ```
+
+Do not run key replacement before step 1. The `replace-keys` subcommand enforces that every active account is flagged and that no `opaque_user_data` rows remain; the atomic `rotate` subcommand performs both steps in the correct order automatically.
 
 On their next login, each user is met with a clear, structured prompt (HTTP 409 `account_requires_reregistration`) and is guided through the re-registration ceremony within the same login attempt, continuing into their existing MFA. To rotate a single account instead, use:
 

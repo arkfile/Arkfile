@@ -108,7 +108,7 @@ This subsystem is complete and only needs the rename above. For completeness, th
 > - **Handoff token.** `auth.AudienceReregistration = "arkfile-reregistration"`, `auth.GenerateReregistrationToken` (15-minute temp-tier token), and `auth.ReregistrationJWTMiddleware`.
 > - **Login branch.** `OpaqueAuthResponse` detects a flagged account at the (empty) record lookup and returns HTTP 409 `account_requires_reregistration` via `respondAccountRequiresReregistration` (`handlers/reregistration.go`), carrying the handoff token, `file_count`, and—when the user owns files—one account-key-encrypted `verifier` sample. It also sets the temp cookie (and clears stale full/refresh cookies) so the browser ceremony carries the token automatically.
 > - **Ceremony.** `POST /api/opaque/reregister/response` and `POST /api/opaque/reregister/finalize` (gated by `ReregistrationJWTMiddleware`, rate-limited, CSRF-exempt) reuse the OPAQUE registration internals, replace only the `opaque_user_data` row in place, clear the flag, and continue into the existing MFA flow.
-> - **Admin.** `POST /api/admin/users/:username/flag-reregistration` and `POST /api/admin/users/flag-reregistration-all` (`handlers/admin_reregistration.go`) delete only the OPAQUE record, set the flag, and force-logout. CLI: `arkfile-admin flag-user-reregistration --username USER --confirm` or `--all --confirm`.
+> - **Admin.** `POST /api/admin/users/:username/flag-reregistration` and `POST /api/admin/users/flag-reregistration-all` (`handlers/admin_reregistration.go`) delete only the OPAQUE record, set the flag, and force-logout. CLI: `arkfile-admin flag-user-reregistration --username USER --confirm` or `--all --confirm`. **Server key replacement:** `auth/opaque_rotation.go` overwrites `opaque_server_private_key` and `opaque_oprf_seed`, verifies the material changed, and reloads in-memory keys via `ReloadOpaqueServerKeys`. Operated via `arkfile-admin rotate-opaque-keys rotate|replace-keys` (atomic flag-all + replace, or guarded replace-only), backed by `POST /api/admin/system/rotate-opaque-keys` and `POST /api/admin/system/replace-opaque-keys`, with runbook wrapper `scripts/maintenance/rotate-opaque-keys.sh`.
 > - **Clients.** `arkfile-client` (`performReregistration` in `cmd/arkfile-client/reregistration.go`) and the web app (`LoginManager.handleReregistration` in `client/static/js/src/auth/login.ts`) recognize the 409, run the ceremony inline within the same login attempt (no extra login round-trip), and—when the user owns files—confirm the password by test-decrypting the verifier sample before finalizing, aborting with a clear message on mismatch so no wrong-password record is ever bound.
 > - **Tests.** Go: `auth/jwt_test.go` (handoff-token claims + `ReregistrationJWTMiddleware` audience acceptance/rejection), `models/reregistration_test.go` (flag helpers, soft-delete handling, `--all` scope), `handlers/reregistration_test.go` (admin single/`--all` flagging deletes only the OPAQUE record and preserves the user row, the 409 verifier-present/absent contract, and the ceremony's unflagged-account rejection), and `cmd/arkfile-client/reregistration_test.go` (pre-finalize password-match verifier accept/reject and fail-safe on missing/incomplete verifier). TS: `client/static/js/src/__tests__/reregistration-verifier.test.ts` (verifier decision rule + AAD binding to file/owner). E2E: `run_opaque_reregistration` in `scripts/testing/e2e-test.sh` reuses the existing user and file to flag, reject a wrong password, re-register inline, and prove the existing file still decrypts. All Go suites (`auth`, `models`, `handlers`, `cmd/arkfile-client`) and the full TS suite (372 tests) pass; both CLIs build with the vendored libfido2 CGO flags.
 
@@ -197,48 +197,3 @@ A fully transparent rotation that avoids any operator action is possible later b
 JWT signing key rotation should be built first because it is the rotation most likely to be exercised routinely and carries the least risk. The envelope master key rotation should follow, since it protects the highest-leverage secret and its tooling can be modeled directly on the existing user-secret master flow. EntityID master rotation is a small addition once the envelope re-wrap plumbing exists. The greenfield rename should land on its own, paired with a fresh deploy so the HKDF label change takes effect cleanly. The OPAQUE break-glass re-registration flow is the largest piece because it spans the server, the web app, and both Go CLIs, and it should be scheduled deliberately with the error-contract and the client password-match verification treated as first-class requirements rather than afterthoughts, so that a flagged account is always met with clear guidance instead of a bare failure.
 
 ---
-
-# FOLLOW-UP: RECOMMENDATIONS FROM OPUS 4.8
-
-## 1. The actual OPAQUE-server-key replacement has no tooling (the biggest real gap)
-
-This is the important one. All the re-registration machinery is built and tested, but the operation it exists to *accompany* — actually replacing `opaque_server_private_key` and `opaque_oprf_seed` — has no command, no script, and no working runbook step.
-
-- `auth.SetupServerKeys` only ever calls `km.GetOrGenerateKey(...)` (`auth/opaque.go:116,122`), which returns the existing key if present. There is **no** force/overwrite path, unlike the other three layers which all got real commands (`rotate-jwt-keys`, `rotate-envelope-master`, `rotate-user-secret-master`).
-- `docs/security.md:554-555` documents the runbook step as `./scripts/setup/03-setup-opaque-keys.sh --force` — **but that script does not exist.** The only OPAQUE scripts are `build-libopaque.sh` / `build-libopaque-wasm.sh`. So the published procedure points at a nonexistent file.
-
-Net effect: an operator who follows the doc today cannot actually rotate the OPAQUE keys. The only way to do it currently is manual `system_keys` surgery (delete the two rows so they regenerate on restart), which isn't documented. I'd treat "build a `rotate-opaque-keys` command or `03-setup-opaque-keys.sh --force`, plus a verification that the rows were actually replaced" as the main remaining work item.
-
-## 2. Ordering hazard in the rotation runbook
-
-Even once a regeneration tool exists, the sequence matters and isn't called out. If you regenerate the OPAQUE keys *before* flagging accounts, every existing login hits the fake-record dead-end (`DeriveFakeUserRecord`) instead of the 409 re-registration prompt — i.e., the exact "indistinguishable from wrong password" failure this whole feature was built to avoid (doc §"The core problem to fix"). `docs/security.md:549-555` happens to list flag-first, key-gen-second, which is correct, but the *why* (ordering is load-bearing) and a guard against doing it backwards aren't documented. Worth an explicit warning, or ideally folding both steps into one guarded command.
-
-## 3. No schema-migration path for `requires_reregistration`
-
-`database/database.go:115` applies `unified_schema.sql` wholesale, and the tables are `CREATE TABLE IF NOT EXISTS`. So adding the `requires_reregistration` column (`unified_schema.sql:21`) only takes effect on a **fresh** database — an existing beta/test DB will silently keep the old `users` table without the column, and every query touching it will error at runtime. This is consistent with the project's greenfield/`dev-reset.sh` posture, but unlike the HKDF-label reset (which the doc explicitly flags at line 35), this column's reset/`ALTER TABLE` requirement isn't documented anywhere. If any environment with data-to-keep exists, it needs a one-off `ALTER TABLE users ADD COLUMN ...`.
-
-## 4. The admin command diverges from its own spec (undocumented)
-
-The design (lines 181, 185) explicitly says `flag-user-reregistration` should be modeled on `reset-user-mfa`: display on-file contact info first, require out-of-band identity verification, and require `--acknowledge-no-contact-info` when none exists. The as-built command (`cmd/arkfile-admin/reregistration_commands.go`) does **none** of that — it's just `--username/--all/--confirm`.
-
-I actually think the simplification is *defensible* (re-registration can't lock a user out the way an attacker-triggered MFA reset could, because the client-side verifier protects them), but right now the doc and the code disagree. You should either add the contact-info/acknowledge ergonomics to the single-user path, or record in the doc that they were deliberately dropped and why.
-
-## 5. The doc has become internally stale / self-contradictory
-
-- The **inventory table** (lines 11-20) still says "Rotation today: **None**" for the envelope master, operational secrets, and server-identity secrets, and line 20 says "Everything else in the table currently has no rotation path." That's now false — all of those are marked COMPLETE later in the same document. The Current-State section should be refreshed or it will mislead a future reader.
-- Line 13 still names the JWT keys `jwt_signing_key_temp_v1` / `_full_v1`, but JWT rotation moved to `_vN` versioning.
-- Line 125 references `crypto.DeriveTier3Subkey([]byte("contact_info"))` — ironically a leftover `Tier3` name that the rename section (§Greenfield rename) was specifically about eliminating. Should be `DeriveUserSecretSubkey`.
-
-## 6. Test coverage gaps (consistent with what I flagged earlier)
-
-- **Web app has zero automated end-to-end coverage** — `e2e-test.sh` is CLI-only. The browser ceremony (`handleReregistration`, the temp-cookie/full-cookie handoff, the explanatory screen and messages, the in-situ TS verifier) is only unit-tested. A Playwright pass or at least a written manual-QA checklist would close the highest-risk untested surface.
-- Untested branches even server-side: the `file_count == 0` skip-verify path, an expired/invalid handoff token (`reregistration_token_invalid`), the `--all` flow end-to-end (unit-only today), cleanup of orphaned `reregistration` OPAQUE sessions if a user abandons the ceremony, and rate-limit behavior on the ceremony endpoints.
-
-## 7. Observability (nice-to-have)
-
-For an `--all` rotation, operators will want to see how many accounts are still pending re-registration (a simple `COUNT(*) WHERE requires_reregistration`), and confirmation that `flag` + `finalize` emit audit/security-log events wired to the real logger in production. Neither is mentioned. The health monitor still annotates OPAQUE keys as "never rotated" (`docs/security.md:341`), which after this work is slightly misleading.
-
----
-
-### Bottom line
-The cryptographically hard part (clean in-place re-registration that preserves all user data + client-side password verification) is genuinely done and well-tested. What's missing is mostly the **operational wrapper around it**: the OPAQUE-key-regeneration tool that the whole feature accompanies (#1) is the only true functional hole, followed by the migration/ordering operational notes (#2, #3) and reconciling the doc with what was actually built (#4, #5). I'd consider #1 a must-fix before claiming the OPAQUE-rotation capability is real, and the rest as cleanup/hardening.

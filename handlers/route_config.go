@@ -262,6 +262,8 @@ func RegisterRoutes() {
 	adminGroup.POST("/system/prepare-envelope-master-rotation", AdminPrepareEnvelopeMasterRotation)
 	adminGroup.POST("/system/rotate-jwt-keys", AdminRotateJWTKeys)
 	adminGroup.POST("/system/retire-jwt-key-version", AdminRetireJWTKeyVersion)
+	adminGroup.POST("/system/rotate-opaque-keys", AdminRotateOpaqueKeys)
+	adminGroup.POST("/system/replace-opaque-keys", AdminReplaceOpaqueKeys)
 	adminGroup.GET("/security/events", AdminSecurityEvents)
 
 	// Storage management - admin endpoints (multi-backend)

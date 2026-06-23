@@ -296,6 +296,8 @@ The admin can export any user's file as an `.arkbackup` bundle for disaster reco
 | POST | `/api/admin/system/prepare-envelope-master-rotation` | Issue envelope master key rotation mandate | Admin + MFA |
 | POST | `/api/admin/system/rotate-jwt-keys` | Rotate JWT signing keys (new active version, both tiers) | Admin + MFA |
 | POST | `/api/admin/system/retire-jwt-key-version` | Retire a superseded JWT signing key version | Admin + MFA |
+| POST | `/api/admin/system/rotate-opaque-keys` | Atomic OPAQUE server key rotation (flag all + replace keys + force-logout) | Admin + MFA |
+| POST | `/api/admin/system/replace-opaque-keys` | Replace OPAQUE server keys only (requires all accounts flagged first) | Admin + MFA |
 | GET | `/api/admin/security/events` | Get security event logs | Admin |
 
 #### Storage Management (Multi-Backend)

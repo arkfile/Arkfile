@@ -48,8 +48,26 @@ func openRotationTestDB(t *testing.T) *sql.DB {
 			approved_by TEXT,
 			approved_at TIMESTAMP,
 			is_admin BOOLEAN DEFAULT FALSE,
+			requires_reregistration BOOLEAN NOT NULL DEFAULT false,
 			deleted_at TIMESTAMP,
 			last_login TIMESTAMP
+		);
+		CREATE TABLE opaque_user_data (
+			username TEXT PRIMARY KEY,
+			opaque_user_record BLOB NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE refresh_tokens (
+			id TEXT PRIMARY KEY,
+			username TEXT NOT NULL,
+			token_hash TEXT,
+			expires_at TIMESTAMP,
+			revoked BOOLEAN DEFAULT FALSE
+		);
+		CREATE TABLE user_jwt_revocations (
+			username TEXT PRIMARY KEY,
+			revoked_at TIMESTAMP NOT NULL,
+			reason TEXT
 		);
 		CREATE TABLE user_mfa_credentials (
 			username TEXT PRIMARY KEY,
@@ -438,4 +456,56 @@ func TestAdminRetireJWTKeyVersion_Direct_Success(t *testing.T) {
 	var resp map[string]interface{}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	assert.Equal(t, "JWT signing key version retired", resp["message"])
+}
+
+func TestAdminRotateOpaqueKeys_Direct_Success(t *testing.T) {
+	setupRotationIntegrationDB(t)
+	const adminUsername = "opaque-rotate-direct-admin"
+	insertRotationAdminUser(t, database.DB, adminUsername, true)
+	insertRotationAdminUser(t, database.DB, "opaque-rotate-user", false)
+
+	auth.ResetOpaqueServerKeysForTest()
+	require.NoError(t, auth.SetupServerKeys(database.DB))
+
+	rec := invokeAdminJWTDirect(t, AdminRotateOpaqueKeys, adminUsername, []byte(`{"confirm":true}`))
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "OPAQUE server keys rotated", resp["message"])
+
+	data, ok := resp["data"].(map[string]interface{})
+	require.True(t, ok)
+	flagged, ok := data["users_flagged"].(float64)
+	require.True(t, ok)
+	assert.GreaterOrEqual(t, int(flagged), 2)
+	assert.NotEmpty(t, data["private_key_fingerprint"])
+}
+
+func TestAdminReplaceOpaqueKeys_RejectsWhenNotFlagged(t *testing.T) {
+	setupRotationIntegrationDB(t)
+	const adminUsername = "opaque-replace-guard-admin"
+	insertRotationAdminUser(t, database.DB, adminUsername, true)
+	insertRotationAdminUser(t, database.DB, "opaque-unflagged-user", false)
+
+	auth.ResetOpaqueServerKeysForTest()
+	require.NoError(t, auth.SetupServerKeys(database.DB))
+
+	rec := invokeAdminJWTDirect(t, AdminReplaceOpaqueKeys, adminUsername, []byte(`{"confirm":true}`))
+	assert.Equal(t, http.StatusConflict, rec.Code)
+}
+
+func TestAdminReplaceOpaqueKeys_Direct_SuccessAfterFlagAll(t *testing.T) {
+	setupRotationIntegrationDB(t)
+	const adminUsername = "opaque-replace-ok-admin"
+	insertRotationAdminUser(t, database.DB, adminUsername, true)
+
+	auth.ResetOpaqueServerKeysForTest()
+	require.NoError(t, auth.SetupServerKeys(database.DB))
+
+	_, err := auth.RotateOpaqueServerKeysDeployment(database.DB)
+	require.NoError(t, err)
+
+	rec := invokeAdminJWTDirect(t, AdminReplaceOpaqueKeys, adminUsername, []byte(`{"confirm":true}`))
+	assert.Equal(t, http.StatusOK, rec.Code)
 }

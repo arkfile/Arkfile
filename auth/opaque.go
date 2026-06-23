@@ -40,12 +40,15 @@ func OpaqueServerID() string {
 
 // DeriveFakeUserRecord deterministically generates a fake 256-byte OPAQUE user record for a non-existent username
 func DeriveFakeUserRecord(username string) ([]byte, error) {
-	if serverKeys == nil || len(serverKeys.OPRFSeed) == 0 {
+	opaqueKeysMu.RLock()
+	sk := serverKeys
+	opaqueKeysMu.RUnlock()
+	if sk == nil || len(sk.OPRFSeed) == 0 {
 		return nil, fmt.Errorf("opaque server keys not loaded")
 	}
 
 	info := []byte("arkfile-fake-user-record:" + username)
-	reader := hkdf.Expand(sha256.New, serverKeys.OPRFSeed, info)
+	reader := hkdf.Expand(sha256.New, sk.OPRFSeed, info)
 
 	fakeRecord := make([]byte, OPAQUE_USER_RECORD_LEN)
 	if _, err := io.ReadFull(reader, fakeRecord); err != nil {
@@ -59,10 +62,13 @@ func DeriveFakeUserRecord(username string) ([]byte, error) {
 // the matching public key from this private key during the protocol, so there is
 // no separate stored public key.
 func GetServerPrivateKey() ([]byte, error) {
-	if serverKeys == nil {
+	opaqueKeysMu.RLock()
+	sk := serverKeys
+	opaqueKeysMu.RUnlock()
+	if sk == nil {
 		return nil, fmt.Errorf("server keys not loaded")
 	}
-	return serverKeys.ServerPrivateKey, nil
+	return sk.ServerPrivateKey, nil
 }
 
 // IsOPAQUEAvailable checks if OPAQUE operations are available
@@ -87,56 +93,110 @@ type OPAQUEServerKeys struct {
 
 // serverKeys holds the loaded server keys for reuse
 var (
-	serverKeys     *OPAQUEServerKeys
-	opaqueKeysOnce sync.Once
-	opaqueKeysErr  error
+	opaqueKeysMu sync.RWMutex
+	serverKeys   *OPAQUEServerKeys
 )
 
-// SetupServerKeys generates and stores server key material if it doesn't already exist.
-// This function is safe for multi-instance deployments - it uses sync.Once to ensure
-// only one goroutine per instance attempts key generation, and handles INSERT conflicts
-// gracefully when multiple instances race to create keys.
+// Opaque server key ids in system_keys (shared with rotation tooling).
+const (
+	OpaqueServerPrivateKeyID = "opaque_server_private_key"
+	OpaqueOPRFSeedKeyID      = "opaque_oprf_seed"
+	OpaqueKeyType            = "opaque"
+)
+
+const (
+	opaqueServerPrivateKeySize = 32 // crypto_scalarmult_SCALARBYTES
+	opaqueOPRFSeedSize         = 32 // crypto_core_ristretto255_SCALARBYTES
+)
+
+// SetupServerKeys loads server key material from system_keys, generating it on
+// first use. Safe for multi-instance deployments when combined with the
+// KeyManager's insert-once semantics for initial key creation.
 func SetupServerKeys(db *sql.DB) error {
-	opaqueKeysOnce.Do(func() {
-		km, err := crypto.GetKeyManager()
-		if err != nil {
-			opaqueKeysErr = fmt.Errorf("failed to get KeyManager: %w", err)
-			return
-		}
+	opaqueKeysMu.RLock()
+	loaded := serverKeys != nil
+	opaqueKeysMu.RUnlock()
+	if loaded {
+		return nil
+	}
+	_, err := loadOpaqueServerKeysFromDB()
+	return err
+}
 
-		// libsodium constants (32 bytes each)
-		const (
-			serverPrivateKeySize = 32 // crypto_scalarmult_SCALARBYTES
-			oprfSeedSize         = 32 // crypto_core_ristretto255_SCALARBYTES
-		)
+func loadOpaqueServerKeysFromDB() (*OPAQUEServerKeys, error) {
+	km, err := crypto.GetKeyManager()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get KeyManager: %w", err)
+	}
 
-		// Only the private key and OPRF seed are persisted. libopaque derives
-		// the server public key from the private key during the protocol, so
-		// there is no separate public key to generate or store.
-		serverPrivateKey, err := km.GetOrGenerateKey("opaque_server_private_key", "opaque", serverPrivateKeySize)
-		if err != nil {
-			opaqueKeysErr = fmt.Errorf("failed to get/generate opaque server private key: %w", err)
-			return
-		}
+	serverPrivateKey, err := km.GetOrGenerateKey(OpaqueServerPrivateKeyID, OpaqueKeyType, opaqueServerPrivateKeySize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get/generate opaque server private key: %w", err)
+	}
 
-		oprfSeed, err := km.GetOrGenerateKey("opaque_oprf_seed", "opaque", oprfSeedSize)
-		if err != nil {
-			opaqueKeysErr = fmt.Errorf("failed to get/generate opaque oprf seed: %w", err)
-			return
-		}
+	oprfSeed, err := km.GetOrGenerateKey(OpaqueOPRFSeedKeyID, OpaqueKeyType, opaqueOPRFSeedSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get/generate opaque oprf seed: %w", err)
+	}
 
-		serverKeys = &OPAQUEServerKeys{
-			ServerPrivateKey: serverPrivateKey,
-			OPRFSeed:         oprfSeed,
-			CreatedAt:        time.Now(),
-		}
+	keys := &OPAQUEServerKeys{
+		ServerPrivateKey: serverPrivateKey,
+		OPRFSeed:         oprfSeed,
+		CreatedAt:        time.Now(),
+	}
 
+	opaqueKeysMu.Lock()
+	if serverKeys == nil {
+		serverKeys = keys
 		if logging.InfoLogger != nil {
 			logging.InfoLogger.Println("Loaded OPAQUE server keys into memory")
 		}
-	})
+	} else {
+		keys = serverKeys
+	}
+	opaqueKeysMu.Unlock()
+	return keys, nil
+}
 
-	return opaqueKeysErr
+// ReloadOpaqueServerKeys reloads OPAQUE server key material from system_keys
+// without a restart. Used after an operator replaces the server private key
+// and OPRF seed during a deployment-wide rotation.
+func ReloadOpaqueServerKeys() error {
+	km, err := crypto.GetKeyManager()
+	if err != nil {
+		return fmt.Errorf("failed to get KeyManager: %w", err)
+	}
+
+	priv, err := km.GetKey(OpaqueServerPrivateKeyID, OpaqueKeyType)
+	if err != nil {
+		return fmt.Errorf("failed to load opaque server private key: %w", err)
+	}
+	seed, err := km.GetKey(OpaqueOPRFSeedKeyID, OpaqueKeyType)
+	if err != nil {
+		return fmt.Errorf("failed to load opaque oprf seed: %w", err)
+	}
+	if len(priv) != opaqueServerPrivateKeySize {
+		return fmt.Errorf("invalid opaque server private key length: got %d, want %d", len(priv), opaqueServerPrivateKeySize)
+	}
+	if len(seed) != opaqueOPRFSeedSize {
+		return fmt.Errorf("invalid opaque oprf seed length: got %d, want %d", len(seed), opaqueOPRFSeedSize)
+	}
+
+	opaqueKeysMu.Lock()
+	serverKeys = &OPAQUEServerKeys{
+		ServerPrivateKey: priv,
+		OPRFSeed:         seed,
+		CreatedAt:        time.Now(),
+	}
+	opaqueKeysMu.Unlock()
+	return nil
+}
+
+// ResetOpaqueServerKeysForTest clears the in-memory OPAQUE keys. DO NOT USE IN PRODUCTION.
+func ResetOpaqueServerKeysForTest() {
+	opaqueKeysMu.Lock()
+	serverKeys = nil
+	opaqueKeysMu.Unlock()
 }
 
 // storeOPAQUEUserData stores user data with hex encoding for database compatibility
@@ -192,9 +252,13 @@ func GetOPAQUEServer() (bool, error) {
 
 // ValidateOPAQUESetup validates that the libopaque setup is properly configured
 func ValidateOPAQUESetup(db *sql.DB) error {
-	// Check if server keys are loaded
-	if serverKeys == nil {
-		return SetupServerKeys(db)
+	opaqueKeysMu.RLock()
+	loaded := serverKeys != nil
+	opaqueKeysMu.RUnlock()
+	if !loaded {
+		if err := SetupServerKeys(db); err != nil {
+			return err
+		}
 	}
 
 	// Check opaque_user_data table exists
