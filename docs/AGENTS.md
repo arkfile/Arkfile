@@ -22,6 +22,8 @@ When users (file owners) choose to share files with others (anonymous recipients
 
 There are no production deployments of this app anywhere at present. For the most part, "backwards compatibility" is not needed at this stage when refactoring. The focus for now is on fixing and proving the correct implementation of the system as it is designed and intended. Be wary and flag it to the developers anytime you come across deprecated/disabled/stub/bad/backwards-compatibility functions or comments, or any technical debt that could make it harder to work with this codebase in the future. There is a test/demo server currently at `test.arkfile.net` with early beta testers using it.
 
+We are aiming to solidy the app now for our first production deployment.
+
 ## Function Review Sanity Checks
 
 As you are implementing, updating or reviewing existing functions, go through the following mental checklist:
