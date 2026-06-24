@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/84adam/Arkfile/auth"
-	"github.com/84adam/Arkfile/crypto"
-	"github.com/84adam/Arkfile/database"
+	"github.com/arkfile/Arkfile/auth"
+	"github.com/arkfile/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/database"
 )
 
 func handleRotateEnvelopeMasterCommand(client *HTTPClient, config *AdminConfig, args []string) error {

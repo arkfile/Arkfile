@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/84adam/Arkfile/auth"
+	"github.com/arkfile/Arkfile/auth"
 	jwt "github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

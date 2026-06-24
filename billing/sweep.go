@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/84adam/Arkfile/logging"
-	"github.com/84adam/Arkfile/models"
+	"github.com/arkfile/Arkfile/logging"
+	"github.com/arkfile/Arkfile/models"
 )
 
 // SweepAllUsers performs the daily settlement: drains every nonzero

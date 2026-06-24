@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/84adam/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/crypto"
 )
 
 // ApplyUserSecretMasterRotationOptions configures offline user-secret master rotation.

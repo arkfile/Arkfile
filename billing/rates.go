@@ -8,9 +8,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/84adam/Arkfile/config"
-	"github.com/84adam/Arkfile/logging"
-	"github.com/84adam/Arkfile/models"
+	"github.com/arkfile/Arkfile/config"
+	"github.com/arkfile/Arkfile/logging"
+	"github.com/arkfile/Arkfile/models"
 )
 
 // Rate is the fully-resolved billing rate, ready for use by TickUser.

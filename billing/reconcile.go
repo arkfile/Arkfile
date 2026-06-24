@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/84adam/Arkfile/models"
+	"github.com/arkfile/Arkfile/models"
 )
 
 // ReconcilePaidInvoices finds paid invoices missing a matching credit_transactions row

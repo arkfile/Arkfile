@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/84adam/Arkfile/database"
-	"github.com/84adam/Arkfile/storage"
+	"github.com/arkfile/Arkfile/database"
+	"github.com/arkfile/Arkfile/storage"
 )
 
 // TestTaskRunner_ConcurrencyLimit verifies that the semaphore channel capacity

@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/84adam/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/crypto"
 )
 
 // ShouldIssueBackupCodes reports whether a setup flow should generate and persist new backup codes.

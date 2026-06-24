@@ -15,16 +15,16 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 
-	"github.com/84adam/Arkfile/auth"
-	"github.com/84adam/Arkfile/billing"
-	"github.com/84adam/Arkfile/config"
-	"github.com/84adam/Arkfile/crypto"
-	"github.com/84adam/Arkfile/database"
-	"github.com/84adam/Arkfile/handlers"
-	"github.com/84adam/Arkfile/logging"
-	"github.com/84adam/Arkfile/models"
-	"github.com/84adam/Arkfile/storage"
-	"github.com/84adam/Arkfile/utils"
+	"github.com/arkfile/Arkfile/auth"
+	"github.com/arkfile/Arkfile/billing"
+	"github.com/arkfile/Arkfile/config"
+	"github.com/arkfile/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/database"
+	"github.com/arkfile/Arkfile/handlers"
+	"github.com/arkfile/Arkfile/logging"
+	"github.com/arkfile/Arkfile/models"
+	"github.com/arkfile/Arkfile/storage"
+	"github.com/arkfile/Arkfile/utils"
 )
 
 func setupRoutes(e *echo.Echo) {

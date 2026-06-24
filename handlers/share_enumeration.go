@@ -7,7 +7,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/84adam/Arkfile/logging"
+	"github.com/arkfile/Arkfile/logging"
 )
 
 // Share enumeration detection and rate limiting.

@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/84adam/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/crypto"
 )
 
 // BootstrapTokenPath is the on-disk delivery channel for the bootstrap token.

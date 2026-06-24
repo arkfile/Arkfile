@@ -15,9 +15,9 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/84adam/Arkfile/auth"
-	"github.com/84adam/Arkfile/database"
-	"github.com/84adam/Arkfile/models"
+	"github.com/arkfile/Arkfile/auth"
+	"github.com/arkfile/Arkfile/database"
+	"github.com/arkfile/Arkfile/models"
 )
 
 // AdminGetBillingPrice returns the current customer price and the derived

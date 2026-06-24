@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/84adam/Arkfile/logging"
+	"github.com/arkfile/Arkfile/logging"
 	"github.com/google/uuid"
 )
 

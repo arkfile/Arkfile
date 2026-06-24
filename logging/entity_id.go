@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/84adam/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/crypto"
 	"golang.org/x/crypto/hkdf"
 )
 

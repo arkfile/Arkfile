@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/84adam/Arkfile/crypto"
-	"github.com/84adam/Arkfile/logging"
+	"github.com/arkfile/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/logging"
 	"github.com/boombuler/barcode"
 	"github.com/boombuler/barcode/qr"
 )

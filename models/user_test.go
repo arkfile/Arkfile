@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/84adam/Arkfile/config" // Import config package
+	"github.com/arkfile/Arkfile/config" // Import config package
 )
 
 // TestMain sets up necessary environment variables for config loading before running tests

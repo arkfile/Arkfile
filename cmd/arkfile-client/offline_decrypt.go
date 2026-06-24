@@ -13,7 +13,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/84adam/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/crypto"
 )
 
 // bundleMeta matches the JSON metadata schema in the .arkbackup bundle.

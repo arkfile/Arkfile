@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/84adam/Arkfile/cli/mfa"
+	"github.com/arkfile/Arkfile/cli/mfa"
 )
 
 func handleMFACommand(client *HTTPClient, config *ClientConfig, args []string) error {

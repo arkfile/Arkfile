@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/84adam/Arkfile/crypto"
-	"github.com/84adam/Arkfile/logging"
-	"github.com/84adam/Arkfile/models"
-	"github.com/84adam/Arkfile/utils"
+	"github.com/arkfile/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/logging"
+	"github.com/arkfile/Arkfile/models"
+	"github.com/arkfile/Arkfile/utils"
 	"github.com/pquerna/otp/totp"
 )
 

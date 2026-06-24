@@ -8,8 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/84adam/Arkfile/auth"
-	"github.com/84adam/Arkfile/database"
+	"github.com/arkfile/Arkfile/auth"
+	"github.com/arkfile/Arkfile/database"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 	_ "github.com/mattn/go-sqlite3"

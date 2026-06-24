@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/84adam/Arkfile/database"
-	"github.com/84adam/Arkfile/logging"
-	"github.com/84adam/Arkfile/models"
-	"github.com/84adam/Arkfile/storage"
+	"github.com/arkfile/Arkfile/database"
+	"github.com/arkfile/Arkfile/logging"
+	"github.com/arkfile/Arkfile/models"
+	"github.com/arkfile/Arkfile/storage"
 )
 
 // TaskRunner manages background copy tasks with concurrency control and cancellation.

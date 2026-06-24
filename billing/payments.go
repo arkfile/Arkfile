@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/84adam/Arkfile/logging"
-	"github.com/84adam/Arkfile/models"
+	"github.com/arkfile/Arkfile/logging"
+	"github.com/arkfile/Arkfile/models"
 )
 
 // ProcessPayment credits a user's balance for a provider-settled top-up.

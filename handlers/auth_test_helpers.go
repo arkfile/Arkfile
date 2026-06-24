@@ -5,10 +5,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/84adam/Arkfile/crypto"
-	"github.com/84adam/Arkfile/database"
-	"github.com/84adam/Arkfile/logging"
-	"github.com/84adam/Arkfile/storage"
+	"github.com/arkfile/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/database"
+	"github.com/arkfile/Arkfile/logging"
+	"github.com/arkfile/Arkfile/storage"
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/labstack/echo/v4"
 )

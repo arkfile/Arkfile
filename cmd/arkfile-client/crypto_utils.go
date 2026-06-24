@@ -26,7 +26,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/84adam/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/crypto"
 	"github.com/pquerna/otp/totp"
 )
 

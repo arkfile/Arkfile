@@ -16,9 +16,9 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/84adam/Arkfile/auth"
-	"github.com/84adam/Arkfile/models"
-	"github.com/84adam/Arkfile/storage"
+	"github.com/arkfile/Arkfile/auth"
+	"github.com/arkfile/Arkfile/models"
+	"github.com/arkfile/Arkfile/storage"
 )
 
 // Test DeleteFile

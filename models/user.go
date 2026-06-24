@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/84adam/Arkfile/logging"
-	"github.com/84adam/Arkfile/utils"
+	"github.com/arkfile/Arkfile/logging"
+	"github.com/arkfile/Arkfile/utils"
 )
 
 // DBTX is an interface for database operations that can be handled

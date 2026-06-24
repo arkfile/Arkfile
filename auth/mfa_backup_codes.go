@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/84adam/Arkfile/logging"
+	"github.com/arkfile/Arkfile/logging"
 )
 
 // ValidateBackupCode validates and consumes a hashed backup code (method-agnostic).

@@ -3,7 +3,7 @@ package billing
 import (
 	"testing"
 
-	"github.com/84adam/Arkfile/models"
+	"github.com/arkfile/Arkfile/models"
 )
 
 func TestReconcilePaidInvoices_RepairsOrphans(t *testing.T) {

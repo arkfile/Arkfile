@@ -3,9 +3,9 @@ package handlers
 import (
 	"net/http"
 
-	"github.com/84adam/Arkfile/auth"
-	"github.com/84adam/Arkfile/config"
-	"github.com/84adam/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/auth"
+	"github.com/arkfile/Arkfile/config"
+	"github.com/arkfile/Arkfile/crypto"
 	"github.com/labstack/echo/v4"
 )
 

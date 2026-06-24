@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/84adam/Arkfile/crypto"
-	"github.com/84adam/Arkfile/logging"
+	"github.com/arkfile/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/logging"
 )
 
 // ContactInfo represents the plaintext contact information structure

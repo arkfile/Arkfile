@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/84adam/Arkfile/database"
-	"github.com/84adam/Arkfile/models"
+	"github.com/arkfile/Arkfile/database"
+	"github.com/arkfile/Arkfile/models"
 )
 
 // buildBillingProjection assembles the `current_usage` and `credits_runway`

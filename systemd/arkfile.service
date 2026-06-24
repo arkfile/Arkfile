@@ -1,6 +1,6 @@
 [Unit]
 Description=Arkfile Private File Vault Service
-Documentation=https://github.com/84adam/Arkfile
+Documentation=https://github.com/arkfile/Arkfile
 After=network.target
 Wants=network.target
 StartLimitIntervalSec=60

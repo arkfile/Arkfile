@@ -736,7 +736,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/84adam/Arkfile/cmd/arkfile-cli/crypto"
+	"github.com/arkfile/Arkfile/cmd/arkfile-cli/crypto"
 )
 
 // FileMetadata contains information needed for download

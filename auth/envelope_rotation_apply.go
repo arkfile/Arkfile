@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/84adam/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/crypto"
 )
 
 const masterKeyEnvName = "ARKFILE_MASTER_KEY"

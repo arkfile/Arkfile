@@ -13,13 +13,13 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/84adam/Arkfile/auth"
-	"github.com/84adam/Arkfile/config"
-	arkcrypto "github.com/84adam/Arkfile/crypto"
-	"github.com/84adam/Arkfile/database"
-	"github.com/84adam/Arkfile/logging"
-	"github.com/84adam/Arkfile/storage"
-	"github.com/84adam/Arkfile/utils"
+	"github.com/arkfile/Arkfile/auth"
+	"github.com/arkfile/Arkfile/config"
+	arkcrypto "github.com/arkfile/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/database"
+	"github.com/arkfile/Arkfile/logging"
+	"github.com/arkfile/Arkfile/storage"
+	"github.com/arkfile/Arkfile/utils"
 )
 
 // ShareRequest represents a file sharing request (Argon2id-based anonymous shares)

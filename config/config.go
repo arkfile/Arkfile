@@ -12,7 +12,7 @@ import (
 
 	"github.com/joho/godotenv"
 
-	"github.com/84adam/Arkfile/utils"
+	"github.com/arkfile/Arkfile/utils"
 )
 
 // hostFromBaseURL extracts the bare hostname from a BASE_URL value, stripping

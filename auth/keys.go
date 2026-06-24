@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/84adam/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/crypto"
 )
 
 // Two-tier, versioned JWT signing keys.

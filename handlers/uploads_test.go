@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/84adam/Arkfile/auth"
+	"github.com/arkfile/Arkfile/auth"
 )
 
 // validTestFileID is a canonical lowercase UUIDv4 with RFC4122 variant

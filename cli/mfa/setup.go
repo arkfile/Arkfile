@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/84adam/Arkfile/clictap"
+	"github.com/arkfile/Arkfile/clictap"
 	"github.com/pquerna/otp/totp"
 )
 

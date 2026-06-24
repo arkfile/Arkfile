@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/84adam/Arkfile/config"
+	"github.com/arkfile/Arkfile/config"
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/go-webauthn/webauthn/protocol"
 )

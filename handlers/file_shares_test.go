@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/84adam/Arkfile/auth"
-	"github.com/84adam/Arkfile/config"
+	"github.com/arkfile/Arkfile/auth"
+	"github.com/arkfile/Arkfile/config"
 	"github.com/DATA-DOG/go-sqlmock"
 	jwt "github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"

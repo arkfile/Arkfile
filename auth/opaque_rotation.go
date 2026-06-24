@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/84adam/Arkfile/crypto"
-	"github.com/84adam/Arkfile/models"
+	"github.com/arkfile/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/models"
 )
 
 // OpaqueRotationResult reports the outcome of a deployment-wide OPAQUE key

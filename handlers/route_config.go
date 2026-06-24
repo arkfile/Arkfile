@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/84adam/Arkfile/auth"
-	"github.com/84adam/Arkfile/database"
+	"github.com/arkfile/Arkfile/auth"
+	"github.com/arkfile/Arkfile/database"
 	"github.com/labstack/echo/v4"
 )
 

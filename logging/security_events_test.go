@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/84adam/Arkfile/database"
+	"github.com/arkfile/Arkfile/database"
 	_ "github.com/mattn/go-sqlite3" // SQLite driver for tests
 )
 

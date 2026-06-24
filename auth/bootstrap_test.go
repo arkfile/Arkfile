@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/84adam/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/crypto"
 	"github.com/stretchr/testify/assert"
 )
 

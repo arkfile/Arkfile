@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/84adam/Arkfile/config"
+	"github.com/arkfile/Arkfile/config"
 )
 
 // TestOpaqueServerID verifies the single source of truth for the OPAQUE server

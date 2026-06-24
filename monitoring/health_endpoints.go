@@ -11,8 +11,8 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/84adam/Arkfile/config"
-	"github.com/84adam/Arkfile/logging"
+	"github.com/arkfile/Arkfile/config"
+	"github.com/arkfile/Arkfile/logging"
 )
 
 // HealthStatus represents the overall health status

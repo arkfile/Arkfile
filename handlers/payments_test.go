@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/84adam/Arkfile/billing"
-	"github.com/84adam/Arkfile/models"
+	"github.com/arkfile/Arkfile/billing"
+	"github.com/arkfile/Arkfile/models"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

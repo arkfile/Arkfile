@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/84adam/Arkfile/models"
+	"github.com/arkfile/Arkfile/models"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 )

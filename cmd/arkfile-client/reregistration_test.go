@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/84adam/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/crypto"
 )
 
 // buildVerifierResponse encrypts a filename sample under the Account Key derived

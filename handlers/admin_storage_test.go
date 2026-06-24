@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/84adam/Arkfile/auth"
-	"github.com/84adam/Arkfile/storage"
+	"github.com/arkfile/Arkfile/auth"
+	"github.com/arkfile/Arkfile/storage"
 )
 
 // TestAdminStorageStatus_SingleProvider tests the storage status endpoint with a single provider.

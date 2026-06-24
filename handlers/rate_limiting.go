@@ -9,8 +9,8 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/84adam/Arkfile/database"
-	"github.com/84adam/Arkfile/logging"
+	"github.com/arkfile/Arkfile/database"
+	"github.com/arkfile/Arkfile/logging"
 )
 
 const (

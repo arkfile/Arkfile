@@ -21,11 +21,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/84adam/Arkfile/auth"
-	"github.com/84adam/Arkfile/cli/mfa"
-	"github.com/84adam/Arkfile/config"
-	"github.com/84adam/Arkfile/crypto"
-	"github.com/84adam/Arkfile/utils"
+	"github.com/arkfile/Arkfile/auth"
+	"github.com/arkfile/Arkfile/cli/mfa"
+	"github.com/arkfile/Arkfile/config"
+	"github.com/arkfile/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/utils"
 	"golang.org/x/term"
 )
 

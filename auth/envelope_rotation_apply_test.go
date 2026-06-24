@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/84adam/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/crypto"
 	_ "github.com/mattn/go-sqlite3"
 )
 

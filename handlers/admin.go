@@ -11,13 +11,13 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/84adam/Arkfile/auth"
-	"github.com/84adam/Arkfile/config"
-	"github.com/84adam/Arkfile/database"
-	"github.com/84adam/Arkfile/logging"
-	"github.com/84adam/Arkfile/models"
-	"github.com/84adam/Arkfile/monitoring"
-	"github.com/84adam/Arkfile/storage"
+	"github.com/arkfile/Arkfile/auth"
+	"github.com/arkfile/Arkfile/config"
+	"github.com/arkfile/Arkfile/database"
+	"github.com/arkfile/Arkfile/logging"
+	"github.com/arkfile/Arkfile/models"
+	"github.com/arkfile/Arkfile/monitoring"
+	"github.com/arkfile/Arkfile/storage"
 )
 
 // AdminCleanupRequest represents the request payload for test user cleanup

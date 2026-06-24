@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/84adam/Arkfile/config"
+	"github.com/arkfile/Arkfile/config"
 )
 
 // NewProvider returns the configured payment provider implementation.

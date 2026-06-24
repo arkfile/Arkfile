@@ -3,7 +3,7 @@ package billing
 import (
 	"testing"
 
-	"github.com/84adam/Arkfile/models"
+	"github.com/arkfile/Arkfile/models"
 )
 
 func createPaymentInvoicesTable(t *testing.T, db interface{ Exec(string, ...interface{}) (interface{}, error) }) {

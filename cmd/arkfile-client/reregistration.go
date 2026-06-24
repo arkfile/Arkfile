@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 
-	"github.com/84adam/Arkfile/auth"
-	"github.com/84adam/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/auth"
+	"github.com/arkfile/Arkfile/crypto"
 )
 
 // reregistrationRequiredCode is the stable error code the server returns (with

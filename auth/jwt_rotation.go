@@ -6,7 +6,7 @@ import (
 	"io"
 	"strconv"
 
-	"github.com/84adam/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/crypto"
 )
 
 // JWTRotationResult reports the active versions after a rotation.
