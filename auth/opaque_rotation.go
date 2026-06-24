@@ -97,11 +97,11 @@ func ReplaceOpaqueServerKeys() (OpaqueKeyReplaceResult, error) {
 		return result, fmt.Errorf("failed to generate new opaque oprf seed: %w", err)
 	}
 
-	if err := km.StoreKey(OpaqueServerPrivateKeyID, OpaqueKeyType, newPriv); err != nil {
-		return result, fmt.Errorf("failed to store new opaque server private key: %w", err)
-	}
-	if err := km.StoreKey(OpaqueOPRFSeedKeyID, OpaqueKeyType, newSeed); err != nil {
-		return result, fmt.Errorf("failed to store new opaque oprf seed: %w", err)
+	if err := km.StoreKeysAtomic(OpaqueKeyType,
+		crypto.SystemKeyMaterial{KeyID: OpaqueServerPrivateKeyID, RawKey: newPriv},
+		crypto.SystemKeyMaterial{KeyID: OpaqueOPRFSeedKeyID, RawKey: newSeed},
+	); err != nil {
+		return result, fmt.Errorf("failed to store new OPAQUE server keys: %w", err)
 	}
 
 	storedPriv, err := km.GetKey(OpaqueServerPrivateKeyID, OpaqueKeyType)
@@ -124,7 +124,22 @@ func ReplaceOpaqueServerKeys() (OpaqueKeyReplaceResult, error) {
 	}
 
 	if err := ReloadOpaqueServerKeys(); err != nil {
-		return result, fmt.Errorf("keys replaced in database but in-memory reload failed: %w", err)
+		if restoreErr := km.StoreKeysAtomic(OpaqueKeyType,
+			crypto.SystemKeyMaterial{KeyID: OpaqueServerPrivateKeyID, RawKey: oldPriv},
+			crypto.SystemKeyMaterial{KeyID: OpaqueOPRFSeedKeyID, RawKey: oldSeed},
+		); restoreErr != nil {
+			return result, fmt.Errorf(
+				"keys replaced in database but in-memory reload failed (%v); CRITICAL: failed to restore previous keys: %v",
+				err, restoreErr,
+			)
+		}
+		if reloadOldErr := ReloadOpaqueServerKeys(); reloadOldErr != nil {
+			return result, fmt.Errorf(
+				"keys replaced in database but in-memory reload failed (%v); previous keys restored in database but reload still failed: %v — restart required",
+				err, reloadOldErr,
+			)
+		}
+		return result, fmt.Errorf("in-memory reload failed after storing new keys; previous keys restored: %w", err)
 	}
 
 	result.PrivateKeyFingerprint = opaqueKeyFingerprint(storedPriv)

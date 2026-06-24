@@ -250,6 +250,46 @@ func (km *KeyManager) GetOrGenerateKey(keyID string, keyType string, keySize int
 	return rawKey, nil
 }
 
+// SystemKeyMaterial is one raw key row to store via StoreKeysAtomic.
+type SystemKeyMaterial struct {
+	KeyID  string
+	RawKey []byte
+}
+
+// StoreKeysAtomic encrypts and stores multiple keys in a single transaction.
+// Either every row is written or none are, so paired keys (e.g. OPAQUE private
+// key + OPRF seed) cannot end up half-updated.
+func (km *KeyManager) StoreKeysAtomic(keyType string, keys ...SystemKeyMaterial) error {
+	if len(keys) == 0 {
+		return fmt.Errorf("StoreKeysAtomic: no keys provided")
+	}
+
+	tx, err := km.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	for _, key := range keys {
+		encryptedData, nonce, err := km.EncryptSystemKey(key.RawKey, keyType)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(
+			"REPLACE INTO system_keys (key_id, key_type, encrypted_data, nonce) VALUES (?, ?, ?, ?)",
+			key.KeyID, keyType, hex.EncodeToString(encryptedData), hex.EncodeToString(nonce),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to store system key %s: %w", key.KeyID, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit system key transaction: %w", err)
+	}
+	return nil
+}
+
 // StoreKey encrypts and stores a key in the database.
 // It overwrites any existing key with the same ID.
 func (km *KeyManager) StoreKey(keyID string, keyType string, rawKey []byte) error {

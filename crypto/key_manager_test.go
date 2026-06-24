@@ -97,3 +97,48 @@ func TestListKeyIDs(t *testing.T) {
 		t.Fatalf("expected no matches, got %v", none)
 	}
 }
+
+func TestStoreKeysAtomic_WritesBothRows(t *testing.T) {
+	km := ensureKeyManager(t)
+
+	priv := make([]byte, 32)
+	seed := make([]byte, 32)
+	for i := range priv {
+		priv[i] = byte(i + 1)
+		seed[i] = byte(i + 2)
+	}
+
+	if err := km.StoreKeysAtomic("opaque",
+		SystemKeyMaterial{KeyID: "storeatomic_priv", RawKey: priv},
+		SystemKeyMaterial{KeyID: "storeatomic_seed", RawKey: seed},
+	); err != nil {
+		t.Fatalf("StoreKeysAtomic: %v", err)
+	}
+	defer func() {
+		_ = km.DeleteKey("storeatomic_priv")
+		_ = km.DeleteKey("storeatomic_seed")
+	}()
+
+	gotPriv, err := km.GetKey("storeatomic_priv", "opaque")
+	if err != nil {
+		t.Fatalf("GetKey priv: %v", err)
+	}
+	if string(gotPriv) != string(priv) {
+		t.Fatalf("priv mismatch")
+	}
+
+	gotSeed, err := km.GetKey("storeatomic_seed", "opaque")
+	if err != nil {
+		t.Fatalf("GetKey seed: %v", err)
+	}
+	if string(gotSeed) != string(seed) {
+		t.Fatalf("seed mismatch")
+	}
+}
+
+func TestStoreKeysAtomic_RejectsEmpty(t *testing.T) {
+	km := ensureKeyManager(t)
+	if err := km.StoreKeysAtomic("opaque"); err == nil {
+		t.Fatal("expected error for empty key list")
+	}
+}

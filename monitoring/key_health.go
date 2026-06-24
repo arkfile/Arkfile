@@ -99,7 +99,7 @@ func (khm *KeyHealthMonitor) PerformHealthCheck() {
 		{
 			Name: "OPAQUE Server Keys",
 			Type: "opaque_server",
-			Path: "/opt/arkfile/etc/keys/opaque/server.key",
+			Path: auth.OpaqueServerPrivateKeyID, // both keys live in system_keys
 		},
 		{
 			Name: "JWT Signing Key (temp tier, aud=arkfile-mfa)",
@@ -167,48 +167,59 @@ func (khm *KeyHealthMonitor) checkComponent(component *KeyComponent) {
 	khm.logStatusChange(component)
 }
 
-// checkOpaqueServerKeys checks OPAQUE server key health
+// checkOpaqueServerKeys checks OPAQUE server key health. OPAQUE material lives in
+// system_keys (encrypted under ARKFILE_MASTER_KEY), not on disk under etc/keys/opaque/.
 func (khm *KeyHealthMonitor) checkOpaqueServerKeys(component *KeyComponent) {
-	// Check if OPAQUE server keys exist and are accessible
-	if !khm.fileExists(component.Path) {
-		component.Status = HealthStatusCritical
-		component.AlertLevel = "CRITICAL"
-		component.ErrorMessage = "OPAQUE server key file not found"
-		component.Details["issue"] = "missing_file"
-		return
-	}
+	const opaqueKeySize = 32 // matches auth/opaque.go opaqueServerPrivateKeySize and opaqueOPRFSeedSize
 
-	// Check file permissions
-	if !khm.checkFilePermissions(component.Path, 0600) {
-		component.Status = HealthStatusWarning
-		component.AlertLevel = "WARNING"
-		component.ErrorMessage = "OPAQUE server key has incorrect permissions"
-		component.Details["issue"] = "incorrect_permissions"
-		return
-	}
-
-	// Check file age and size
-	fileInfo, err := os.Stat(component.Path)
+	km, err := crypto.GetKeyManager()
 	if err != nil {
 		component.Status = HealthStatusCritical
 		component.AlertLevel = "CRITICAL"
-		component.ErrorMessage = fmt.Sprintf("Cannot access OPAQUE server key: %v", err)
-		component.Details["issue"] = "access_error"
+		component.ErrorMessage = fmt.Sprintf("KeyManager unavailable: %v", err)
+		component.Details["issue"] = "keymanager_unavailable"
 		return
 	}
 
-	component.Details["file_size"] = fileInfo.Size()
-	component.Details["file_age_days"] = int(time.Since(fileInfo.ModTime()).Hours() / 24)
-
-	// Check if key needs rotation (older than 30 days)
-	if time.Since(fileInfo.ModTime()) > khm.config.KeyRotationOverdue {
-		component.Status = HealthStatusWarning
-		component.AlertLevel = "WARNING"
-		component.ErrorMessage = "OPAQUE server key is overdue for rotation"
-		component.Details["issue"] = "rotation_overdue"
+	priv, err := km.GetKey(auth.OpaqueServerPrivateKeyID, auth.OpaqueKeyType)
+	if err != nil {
+		component.Status = HealthStatusCritical
+		component.AlertLevel = "CRITICAL"
+		component.ErrorMessage = fmt.Sprintf("OPAQUE server private key not present or undecryptable: %v", err)
+		component.Details["issue"] = "missing_or_undecryptable"
+		component.Details["key_id"] = auth.OpaqueServerPrivateKeyID
+		return
+	}
+	if len(priv) != opaqueKeySize {
+		component.Status = HealthStatusCritical
+		component.AlertLevel = "CRITICAL"
+		component.ErrorMessage = fmt.Sprintf("OPAQUE server private key has wrong length: %d", len(priv))
+		component.Details["issue"] = "wrong_key_length"
+		component.Details["key_id"] = auth.OpaqueServerPrivateKeyID
 		return
 	}
 
+	seed, err := km.GetKey(auth.OpaqueOPRFSeedKeyID, auth.OpaqueKeyType)
+	if err != nil {
+		component.Status = HealthStatusCritical
+		component.AlertLevel = "CRITICAL"
+		component.ErrorMessage = fmt.Sprintf("OPAQUE OPRF seed not present or undecryptable: %v", err)
+		component.Details["issue"] = "missing_or_undecryptable"
+		component.Details["key_id"] = auth.OpaqueOPRFSeedKeyID
+		return
+	}
+	if len(seed) != opaqueKeySize {
+		component.Status = HealthStatusCritical
+		component.AlertLevel = "CRITICAL"
+		component.ErrorMessage = fmt.Sprintf("OPAQUE OPRF seed has wrong length: %d", len(seed))
+		component.Details["issue"] = "wrong_key_length"
+		component.Details["key_id"] = auth.OpaqueOPRFSeedKeyID
+		return
+	}
+
+	component.Details["private_key_id"] = auth.OpaqueServerPrivateKeyID
+	component.Details["oprf_seed_key_id"] = auth.OpaqueOPRFSeedKeyID
+	component.Details["key_bytes"] = opaqueKeySize
 	component.Status = HealthStatusHealthy
 	component.AlertLevel = "INFO"
 }
