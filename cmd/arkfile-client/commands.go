@@ -1655,6 +1655,128 @@ func handleShareRevoke(client *HTTPClient, config *ClientConfig, args []string) 
 	return nil
 }
 
+// shareTicketHolder obtains and caches a short-lived share download ticket,
+// refreshing it on demand. It mirrors the browser ShareTicketHolder so both
+// clients use the same credential flow against /api/public/shares/:id/ticket.
+type shareTicketHolder struct {
+	client        *HTTPClient
+	shareID       string
+	downloadToken string // base64 static token from the envelope (proof of decryption)
+	ticket        string
+	expiresAt     time.Time
+}
+
+func newShareTicketHolder(client *HTTPClient, shareID, downloadTokenB64 string) *shareTicketHolder {
+	return &shareTicketHolder{client: client, shareID: shareID, downloadToken: downloadTokenB64}
+}
+
+// get returns a valid ticket, fetching or refreshing as needed.
+func (h *shareTicketHolder) get() (string, error) {
+	if h.ticket != "" && time.Now().Before(h.expiresAt) {
+		return h.ticket, nil
+	}
+	return h.refresh()
+}
+
+// refresh forces a fresh ticket from the server.
+func (h *shareTicketHolder) refresh() (string, error) {
+	body, err := json.Marshal(map[string]string{"download_token": h.downloadToken})
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal ticket request: %w", err)
+	}
+	ticketURL := h.client.baseURL + "/api/public/shares/" + h.shareID + "/ticket"
+	req, err := http.NewRequest("POST", ticketURL, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("failed to create ticket request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := h.client.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to request share ticket: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("ticket issuance failed (HTTP %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var parsed struct {
+		Ticket    string `json:"ticket"`
+		ExpiresIn int    `json:"expires_in"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return "", fmt.Errorf("failed to decode ticket response: %w", err)
+	}
+	if parsed.Ticket == "" {
+		return "", fmt.Errorf("ticket response missing ticket field")
+	}
+	h.ticket = parsed.Ticket
+	// Refresh a bit before the server-stated expiry to avoid races.
+	lead := 30 * time.Second
+	if d := time.Duration(parsed.ExpiresIn) * time.Second; d > lead {
+		h.expiresAt = time.Now().Add(d - lead)
+	} else {
+		h.expiresAt = time.Now().Add(5 * time.Second)
+	}
+	return h.ticket, nil
+}
+
+// setShareAuthHeader sets X-Share-Ticket on the request using the holder,
+// refreshing the ticket if needed. Falls back to the static X-Download-Token
+// only if ticket issuance fails (best-effort compatibility).
+func setShareAuthHeader(req *http.Request, h *shareTicketHolder) error {
+	ticket, err := h.get()
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Share-Ticket", ticket)
+	return nil
+}
+
+// fetchShareChunkWithTicketRefresh downloads one encrypted share chunk, sending
+// the short-lived X-Share-Ticket. On a 403 (ticket expired mid-download) it
+// forces a ticket refresh and retries the chunk once.
+func fetchShareChunkWithTicketRefresh(client *HTTPClient, h *shareTicketHolder, shareID string, chunkIndex, chunkCount int64) ([]byte, error) {
+	chunkURL := fmt.Sprintf("%s/api/public/shares/%s/chunks/%d", client.baseURL, shareID, chunkIndex)
+
+	doFetch := func() (*http.Response, error) {
+		req, err := http.NewRequest("GET", chunkURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create chunk request: %w", err)
+		}
+		if err := setShareAuthHeader(req, h); err != nil {
+			return nil, fmt.Errorf("failed to obtain share ticket: %w", err)
+		}
+		return client.client.Do(req)
+	}
+
+	resp, err := doFetch()
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode == http.StatusForbidden {
+		resp.Body.Close()
+		if _, refreshErr := h.refresh(); refreshErr != nil {
+			return nil, fmt.Errorf("chunk %d returned 403 and ticket refresh failed: %w", chunkIndex, refreshErr)
+		}
+		resp, err = doFetch()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("server returned HTTP %d for chunk %d/%d", resp.StatusCode, chunkIndex+1, chunkCount)
+	}
+	encChunk, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("failed to read chunk %d: %w", chunkIndex, readErr)
+	}
+	return encChunk, nil
+}
+
 func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string) error {
 	fs := flag.NewFlagSet("share download", flag.ExitOnError)
 	shareID := fs.String("share-id", "", "Share ID to download")
@@ -1753,12 +1875,22 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 	}
 	downloadTokenB64 := encodeBase64(downloadToken)
 
+	// Exchange the static download token (proof of envelope decryption) for a
+	// short-lived, entity-bound download ticket. The ticket is presented as
+	// X-Share-Ticket on chunk fetches and refreshed on 403, replacing the
+	// never-rotated static token as the per-chunk credential. Mirrors the
+	// browser share-access flow.
+	ticketHolder := newShareTicketHolder(client, *shareID, downloadTokenB64)
+
 	// Step 5: Get chunk metadata
 	// GET /api/public/shares/:id/metadata -> {file_id, size_bytes, chunk_count, chunk_size_bytes}
 	chunkMetaURL := client.baseURL + "/api/public/shares/" + *shareID + "/metadata"
 	chunkMetaReq, err := http.NewRequest("GET", chunkMetaURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create chunk metadata request: %w", err)
+	}
+	if err := setShareAuthHeader(chunkMetaReq, ticketHolder); err != nil {
+		return fmt.Errorf("failed to obtain share ticket: %w", err)
 	}
 
 	chunkMetaResp, err := client.client.Do(chunkMetaReq)
@@ -1815,37 +1947,14 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 	}
 
 	// Step 7: Stream download + decrypt each chunk
-	// GET /api/public/shares/:id/chunks/:chunkIndex with X-Download-Token header
+	// GET /api/public/shares/:id/chunks/:chunkIndex with X-Share-Ticket header.
+	// On a 403 (ticket expired mid-download), refresh the ticket once and retry.
 	downloadFailed := false
 	for i := int64(0); i < chunkCount; i++ {
-		chunkURL := fmt.Sprintf("%s/api/public/shares/%s/chunks/%d", client.baseURL, *shareID, i)
-		chunkReq, err := http.NewRequest("GET", chunkURL, nil)
-		if err != nil {
-			outFile.Close()
-			os.Remove(*outputPath)
-			return fmt.Errorf("failed to create chunk request: %w", err)
-		}
-		// Download token authenticates the chunk download (no user auth required)
-		chunkReq.Header.Set("X-Download-Token", downloadTokenB64)
-
-		chunkResp, err := client.client.Do(chunkReq)
-		if err != nil {
+		encChunk, chunkErr := fetchShareChunkWithTicketRefresh(client, ticketHolder, *shareID, i, chunkCount)
+		if chunkErr != nil {
 			downloadFailed = true
-			break
-		}
-
-		if chunkResp.StatusCode != http.StatusOK {
-			chunkResp.Body.Close()
-			downloadFailed = true
-			err = fmt.Errorf("server returned HTTP %d for chunk %d", chunkResp.StatusCode, i)
-			break
-		}
-
-		encChunk, readErr := io.ReadAll(chunkResp.Body)
-		chunkResp.Body.Close()
-		if readErr != nil {
-			downloadFailed = true
-			err = fmt.Errorf("failed to read chunk %d: %w", i, readErr)
+			err = chunkErr
 			break
 		}
 

@@ -110,8 +110,13 @@ export interface DownloadProgressCallback {
 export interface StreamingDownloadOptions {
   /** Authorization token for authenticated downloads */
   authToken?: string;
-  /** Download token for share downloads */
+  /** Download token for share downloads (static, from envelope). Used as the
+   *  fallback credential and as proof to obtain a short-lived ticket. */
   downloadToken?: string;
+  /** Optional holder for a short-lived share download ticket. When set, the
+   *  manager sends X-Share-Ticket (preferred over X-Download-Token) and calls
+   *  refresh() on 403 to re-issue transparently. */
+  shareTicket?: { get: () => Promise<string>; refresh: () => Promise<string> };
   /** Account key for metadata decryption (owner downloads only) */
   accountKey?: Uint8Array;
   /** Retry configuration */
@@ -426,23 +431,13 @@ export class StreamingDownloadManager {
     this.startTime = Date.now();
     this.bytesDownloaded = 0;
 
-    const headers: Record<string, string> = {};
-    if (this.options.downloadToken) headers['X-Download-Token'] = this.options.downloadToken;
-
     const totalChunks = metadata.chunk_count;
 
     for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
       if (this.options.abortController?.signal.aborted) throw new Error('Download cancelled');
 
       const tFetch = Date.now();
-      const encryptedChunk = await downloadChunkWithRetry(
-        `${this.baseUrl}/api/public/shares/${shareId}/chunks/${chunkIndex}`,
-        headers,
-        this.options.retryConfig,
-        (attempt, error, delay) => {
-          console.log(`${LOG_PREFIX_SHARE} Chunk ${chunkIndex} retry ${attempt} after ${delay}ms: ${error.message}`);
-        },
-      );
+      const encryptedChunk = await this.fetchShareChunkWithTicketRefresh(shareId, chunkIndex, totalChunks);
       const fetchMs = Date.now() - tFetch;
 
       const aad = buildChunkAAD(
@@ -605,13 +600,69 @@ export class StreamingDownloadManager {
   /** Fetch download metadata for a shared file */
   private async fetchShareMetadata(shareId: string): Promise<ChunkedDownloadMetadata> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (this.options.downloadToken) headers['X-Download-Token'] = this.options.downloadToken;
+    await this.applyShareAuthHeader(headers);
     const response = await fetch(`${this.baseUrl}/api/public/shares/${shareId}/metadata`, { method: 'GET', headers });
-    if (!response.ok) {
-      console.error(`${LOG_PREFIX_SHARE} Metadata fetch failed: HTTP ${response.status} ${response.statusText}`);
-      throw new Error(`Failed to fetch share metadata: ${response.status} ${response.statusText}`);
+    if (response.ok) return response.json();
+
+    // On 403, the ticket may have expired mid-session; refresh once and retry.
+    if (response.status === 403 && this.options.shareTicket) {
+      await this.options.shareTicket.refresh();
+      const retryHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+      await this.applyShareAuthHeader(retryHeaders);
+      const retry = await fetch(`${this.baseUrl}/api/public/shares/${shareId}/metadata`, { method: 'GET', headers: retryHeaders });
+      if (retry.ok) return retry.json();
+      console.error(`${LOG_PREFIX_SHARE} Metadata fetch failed after ticket refresh: HTTP ${retry.status} ${retry.statusText}`);
+      throw new Error(`Failed to fetch share metadata: ${retry.status} ${retry.statusText}`);
     }
-    return response.json();
+    console.error(`${LOG_PREFIX_SHARE} Metadata fetch failed: HTTP ${response.status} ${response.statusText}`);
+    throw new Error(`Failed to fetch share metadata: ${response.status} ${response.statusText}`);
+  }
+
+  /**
+   * Build share auth headers, preferring a short-lived X-Share-Ticket when a
+   * ticket holder is configured and falling back to the static X-Download-Token.
+   */
+  private async applyShareAuthHeader(headers: Record<string, string>): Promise<void> {
+    if (this.options.shareTicket) {
+      try {
+        headers['X-Share-Ticket'] = await this.options.shareTicket.get();
+        return;
+      } catch (err) {
+        console.warn(`${LOG_PREFIX_SHARE} Ticket provider failed, falling back to static token:`, err);
+      }
+    }
+    if (this.options.downloadToken) headers['X-Download-Token'] = this.options.downloadToken;
+  }
+
+  /**
+   * Fetch a single encrypted share chunk, transparently refreshing the
+   * short-lived download ticket if the server returns 403 mid-download. The
+   * retry helper does not retry 403 by design (it is not a transient error in
+   * general), so we intercept it here specifically for ticket expiry.
+   */
+  private async fetchShareChunkWithTicketRefresh(
+    shareId: string,
+    chunkIndex: number,
+    totalChunks: number,
+  ): Promise<Uint8Array> {
+    const url = `${this.baseUrl}/api/public/shares/${shareId}/chunks/${chunkIndex}`;
+    const doFetch = async (): Promise<Response> => {
+      const headers: Record<string, string> = {};
+      await this.applyShareAuthHeader(headers);
+      return fetch(url, { headers });
+    };
+
+    let response = await doFetch();
+    if (response.status === 403 && this.options.shareTicket) {
+      console.log(`${LOG_PREFIX_SHARE} Chunk ${chunkIndex} got 403; refreshing share ticket and retrying once.`);
+      await this.options.shareTicket.refresh();
+      response = await doFetch();
+    }
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} ${response.statusText} fetching chunk ${chunkIndex + 1}/${totalChunks}`);
+    }
+    const arrayBuffer = await response.arrayBuffer();
+    return new Uint8Array(arrayBuffer);
   }
 
   private calculateTotalEncryptedSize(metadata: ChunkedDownloadMetadata): number {
@@ -682,6 +733,23 @@ export async function downloadSharedFileChunked(
   options: Partial<StreamingDownloadOptions> = {},
 ): Promise<StreamingDownloadResult> {
   const manager = new StreamingDownloadManager('', { downloadToken, ...options });
+  return manager.downloadSharedFile(shareId, fek, shareMetadata);
+}
+
+/**
+ * Convenience function to download a shared file using a short-lived download
+ * ticket instead of (or in addition to) the static download token. The holder
+ * is responsible for issuing and refreshing the ticket; the manager sends
+ * X-Share-Ticket per chunk and refreshes on 403.
+ */
+export async function downloadSharedFileWithTicket(
+  shareId: string,
+  fek: Uint8Array,
+  shareTicket: { get: () => Promise<string>; refresh: () => Promise<string> },
+  shareMetadata?: { filename?: string | undefined; sha256?: string | undefined },
+  options: Partial<StreamingDownloadOptions> = {},
+): Promise<StreamingDownloadResult> {
+  const manager = new StreamingDownloadManager('', { shareTicket, ...options });
   return manager.downloadSharedFile(shareId, fek, shareMetadata);
 }
 

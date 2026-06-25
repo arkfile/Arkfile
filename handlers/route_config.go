@@ -177,6 +177,7 @@ func RegisterRoutes() {
 	// we protect it with the exact same middleware group.
 	Echo.GET("/shared/:id", ShareEnumerationMiddleware(ShareRateLimitMiddleware(TimingProtectionMiddleware(GetSharedFile))))
 	publicShareGroup.GET("/:id/envelope", GetShareEnvelope)             // Get share envelope for client-side decryption
+	publicShareGroup.POST("/:id/ticket", IssueShareDownloadTicket)      // Exchange static download token for short-lived ticket
 	publicShareGroup.GET("/:id/metadata", GetShareDownloadMetadata)     // Get metadata for shared file download
 	publicShareGroup.GET("/:id/chunks/:chunkIndex", DownloadShareChunk) // Download chunk of shared file
 

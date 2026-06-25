@@ -22,11 +22,12 @@ import { shareCrypto } from './share-crypto';
 import { showError, showWarning } from '../ui/messages';
 import { isSwAvailable } from '../files/sw-streaming-download';
 import {
-  downloadSharedFileChunked,
+  downloadSharedFileWithTicket,
   triggerBrowserDownloadFromUrl,
   StreamingDownloadResult,
 } from '../files/streaming-download';
 import { addPasswordToggle } from '../utils/password-toggle';
+import { ShareTicketHolder } from './share-ticket';
 
 interface ShareEnvelope {
   share_id: string;
@@ -40,7 +41,8 @@ export class ShareAccessUI {
   private containerId: string;
   private shareId: string;
   private envelope: ShareEnvelope | null = null;
-  private downloadToken: string | null = null; // Store Download Token after decryption
+  private downloadToken: string | null = null; // Static token from envelope (proof of decryption)
+  private ticketHolder: ShareTicketHolder | null = null;
 
   constructor(containerId: string, shareId: string) {
     this.containerId = containerId;
@@ -164,8 +166,10 @@ export class ShareAccessUI {
         this.envelope.salt
       );
 
-      // Store the Download Token for later use
+      // Store the Download Token for later use (proof of decryption for the
+      // ticket issuance endpoint) and create the short-lived ticket holder.
       this.downloadToken = decryptedEnvelope.downloadToken;
+      this.ticketHolder = new ShareTicketHolder(this.shareId, this.downloadToken);
 
       // 3. Get filename from the decrypted ShareEnvelope metadata
       // Share recipients cannot decrypt server-side encrypted_filename because
@@ -269,17 +273,23 @@ export class ShareAccessUI {
     }
 
     try {
-      // Validate we have the Download Token
+      // Validate we have the Download Token (proof of decryption used to
+      // obtain a short-lived download ticket) and the ticket holder.
       if (!this.downloadToken) {
         throw new Error('Download token not available');
       }
+      if (!this.ticketHolder) {
+        this.ticketHolder = new ShareTicketHolder(this.shareId, this.downloadToken);
+      }
 
       // The streaming-download manager picks the SW path when available and
-      // falls back to incremental Blob construction otherwise.
-      const result: StreamingDownloadResult = await downloadSharedFileChunked(
+      // falls back to incremental Blob construction otherwise. It sends the
+      // short-lived X-Share-Ticket per chunk (refreshing on 403) instead of the
+      // never-rotated static token, mirroring the arkfile-client CLI flow.
+      const result: StreamingDownloadResult = await downloadSharedFileWithTicket(
         this.shareId,
         fek,
-        this.downloadToken,
+        this.ticketHolder,
         { filename, sha256 },
         {
           showProgressUI: true,

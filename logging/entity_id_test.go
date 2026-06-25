@@ -111,9 +111,9 @@ func TestEntityIDGeneration(t *testing.T) {
 				t.Errorf("Entity ID should be consistent for same IP: %s != %s", entityID, entityID2)
 			}
 
-			// Verify entity ID length (should be 16 characters for hex)
-			if len(entityID) != 16 {
-				t.Errorf("Entity ID should be 16 characters long, got %d", len(entityID))
+			// Verify entity ID length (full-width HMAC-SHA256 = 64 hex characters)
+			if len(entityID) != 64 {
+				t.Errorf("Entity ID should be 64 characters long, got %d", len(entityID))
 			}
 		})
 	}
@@ -247,8 +247,8 @@ func TestEntityIDServiceInitialization(t *testing.T) {
 		t.Errorf("Service should generate non-empty entity ID")
 	}
 
-	if len(entityID) != 16 {
-		t.Errorf("Entity ID should be 16 characters long, got %d", len(entityID))
+	if len(entityID) != 64 {
+		t.Errorf("Entity ID should be 64 characters long, got %d", len(entityID))
 	}
 }
 
@@ -280,19 +280,21 @@ func TestEntityIDCorrelationResistance(t *testing.T) {
 }
 
 func TestEntityIDValidation(t *testing.T) {
-	// Test the ValidateEntityID function
+	// Test the ValidateEntityID function. Entity IDs are full-width
+	// HMAC-SHA256 digests: 32 bytes = 64 hex characters.
 	validIDs := []string{
-		"1234567890abcdef",
-		"0000000000000000",
-		"ffffffffffffffff",
+		"1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+		"0000000000000000000000000000000000000000000000000000000000000000",
+		"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
 	}
 
 	invalidIDs := []string{
 		"",
 		"123",
-		"1234567890abcdefg", // too long
-		"1234567890abcdeg",  // invalid hex character
-		"12345678-90abcdef", // contains dash
+		"1234567890abcdef",                                                    // old 16-char width, now invalid
+		"1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdefg",  // 64 chars but invalid hex
+		"1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdeg",   // invalid hex char
+		"12345678-90abcdef1234567890abcdef1234567890abcdef1234567890abcdef",  // contains dash
 	}
 
 	for _, id := range validIDs {
@@ -413,8 +415,8 @@ func TestCompositeEntityID_AuthenticatedUsesUsername(t *testing.T) {
 		t.Errorf("Same username should produce consistent entity ID: %s != %s", entityID1, entityID2)
 	}
 
-	if len(entityID1) != 16 {
-		t.Errorf("Entity ID should be 16 characters, got %d", len(entityID1))
+	if len(entityID1) != 64 {
+		t.Errorf("Entity ID should be 64 characters, got %d", len(entityID1))
 	}
 }
 
@@ -456,38 +458,64 @@ func TestCompositeEntityID_DifferentUsernamesDifferentIDs(t *testing.T) {
 func TestCompositeEntityID_NATDisambiguation(t *testing.T) {
 	service := createTestService(t)
 
-	// Same IP, different User-Agents (simulating users behind NAT)
+	// Same IP, same browser family but different platform/OS/CPU/build. Under
+	// coarse bucketing these MUST collapse to one entity ID: the bucket
+	// intentionally drops platform, OS version, CPU architecture and exact
+	// build numbers so that a raw User-Agent is not a per-user pseudonym.
 	sharedIP := net.ParseIP("203.0.113.50")
 
-	input1 := EntityIDInput{
+	firefoxWindows := EntityIDInput{
+		IP:             sharedIP,
+		UserAgent:      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:115.0) Gecko/20100101 Firefox/115.0",
+		AcceptLanguage: "en-US,en;q=0.9",
+	}
+	firefoxLinux := EntityIDInput{
+		IP:             sharedIP,
+		UserAgent:      "Mozilla/5.0 (X11; Linux x86_64; rv:115.0) Gecko/20100101 Firefox/115.0",
+		AcceptLanguage: "en-US,en;q=0.9",
+	}
+	torBrowser := EntityIDInput{
+		IP:             sharedIP,
+		UserAgent:      "Mozilla/5.0 (Windows NT 10.0; rv:115.0) Gecko/20100101 Firefox/115.0 TorBrowser/115.0",
+		AcceptLanguage: "en-US,en;q=0.9",
+	}
+
+	idFW := service.GetCompositeEntityID(firefoxWindows)
+	idFL := service.GetCompositeEntityID(firefoxLinux)
+	idTor := service.GetCompositeEntityID(torBrowser)
+
+	if idFW != idFL {
+		t.Errorf("Same browser family, different platform should collapse to same entity ID: %s != %s", idFW, idFL)
+	}
+	if idFW != idTor {
+		t.Errorf("Tor Browser should collapse into the Firefox bucket: %s != %s", idFW, idTor)
+	}
+
+	// A genuinely different browser family on the same IP + language MUST still
+	// produce a different entity ID, preserving NAT disambiguation at the
+	// browser-family level.
+	chrome := EntityIDInput{
 		IP:             sharedIP,
 		UserAgent:      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0",
 		AcceptLanguage: "en-US,en;q=0.9",
 	}
-	input2 := EntityIDInput{
+	safari := EntityIDInput{
 		IP:             sharedIP,
 		UserAgent:      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/604.1",
 		AcceptLanguage: "en-US,en;q=0.9",
 	}
-	input3 := EntityIDInput{
-		IP:             sharedIP,
-		UserAgent:      "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0",
-		AcceptLanguage: "de-DE,de;q=0.9,en;q=0.8",
-	}
 
-	entityID1 := service.GetCompositeEntityID(input1)
-	entityID2 := service.GetCompositeEntityID(input2)
-	entityID3 := service.GetCompositeEntityID(input3)
+	idChrome := service.GetCompositeEntityID(chrome)
+	idSafari := service.GetCompositeEntityID(safari)
 
-	// All three should be different despite same IP
-	if entityID1 == entityID2 {
-		t.Errorf("Same IP + different UA should produce different entity IDs: %s == %s", entityID1, entityID2)
+	if idChrome == idFW {
+		t.Errorf("Chrome vs Firefox on same IP should produce different entity IDs: %s == %s", idChrome, idFW)
 	}
-	if entityID1 == entityID3 {
-		t.Errorf("Same IP + different UA should produce different entity IDs: %s == %s", entityID1, entityID3)
+	if idSafari == idFW {
+		t.Errorf("Safari vs Firefox on same IP should produce different entity IDs: %s == %s", idSafari, idFW)
 	}
-	if entityID2 == entityID3 {
-		t.Errorf("Same IP + different UA should produce different entity IDs: %s == %s", entityID2, entityID3)
+	if idChrome == idSafari {
+		t.Errorf("Chrome vs Safari on same IP should produce different entity IDs: %s == %s", idChrome, idSafari)
 	}
 }
 
@@ -548,14 +576,114 @@ func TestCompositeEntityID_AcceptLanguageAffectsID(t *testing.T) {
 	ip := net.ParseIP("192.168.1.100")
 	ua := "Mozilla/5.0 Chrome/120.0"
 
-	input1 := EntityIDInput{IP: ip, UserAgent: ua, AcceptLanguage: "en-US"}
-	input2 := EntityIDInput{IP: ip, UserAgent: ua, AcceptLanguage: "fr-FR"}
+	// Different primary language -> different entity ID (bucket-level signal).
+	input1 := EntityIDInput{IP: ip, UserAgent: ua, AcceptLanguage: "en-US,en;q=0.9"}
+	input2 := EntityIDInput{IP: ip, UserAgent: ua, AcceptLanguage: "fr-FR,fr;q=0.8"}
 
 	entityID1 := service.GetCompositeEntityID(input1)
 	entityID2 := service.GetCompositeEntityID(input2)
 
 	if entityID1 == entityID2 {
-		t.Errorf("Different Accept-Language should produce different entity IDs: %s == %s", entityID1, entityID2)
+		t.Errorf("Different primary language should produce different entity IDs: %s == %s", entityID1, entityID2)
+	}
+
+	// Same primary language, differing only in q-values / secondary locales ->
+	// same entity ID. The full locale list and q-values are a fingerprint
+	// vector and are intentionally dropped by the bucket function.
+	input3 := EntityIDInput{IP: ip, UserAgent: ua, AcceptLanguage: "en-US,en;q=0.9,de;q=0.7"}
+	input4 := EntityIDInput{IP: ip, UserAgent: ua, AcceptLanguage: "en-GB,en;q=0.8"}
+
+	entityID3 := service.GetCompositeEntityID(input3)
+	entityID4 := service.GetCompositeEntityID(input4)
+
+	if entityID1 != entityID3 {
+		t.Errorf("q-value/secondary-locale differences should not change entity ID: %s != %s", entityID1, entityID3)
+	}
+	if entityID1 != entityID4 {
+		t.Errorf("region subtag (en-US vs en-GB) should not change entity ID: %s != %s", entityID1, entityID4)
+	}
+}
+
+// TestUserAgentBucket covers the coarse browser-family bucketing used to keep
+// raw User-Agent strings out of the persisted entity-ID pseudonym.
+func TestUserAgentBucket(t *testing.T) {
+	cases := []struct {
+		name string
+		ua   string
+		want string
+	}{
+		{"empty", "", "unknown"},
+		{"firefox_windows", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:115.0) Gecko/20100101 Firefox/115.0", "firefox"},
+		{"firefox_linux", "Mozilla/5.0 (X11; Linux x86_64; rv:115.0) Gecko/20100101 Firefox/115.0", "firefox"},
+		{"tor_browser", "Mozilla/5.0 (Windows NT 10.0; rv:115.0) Gecko/20100101 Firefox/115.0 TorBrowser/115.0", "firefox"},
+		{"chrome_windows", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0", "chrome"},
+		{"chromium", "Mozilla/5.0 (X11; Linux x86_64) Chromium/120.0", "chrome"},
+		{"edge", "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 Edg/120.0", "chrome"},
+		{"opera", "Mozilla/5.0 (Windows NT 10.0) Opera/115.0", "chrome"},
+		{"safari", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/604.1", "safari"},
+		{"curl_unknown", "curl/8.0", "other"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := userAgentBucket(tc.ua); got != tc.want {
+				t.Errorf("userAgentBucket(%q) = %q; want %q", tc.ua, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAcceptLanguageBucket covers primary-language extraction and defensive
+// handling of malformed headers.
+func TestAcceptLanguageBucket(t *testing.T) {
+	cases := []struct {
+		name   string
+		header string
+		want   string
+	}{
+		{"empty", "", "unknown"},
+		{"single", "en", "en"},
+		{"with_region", "en-US", "en"},
+		{"with_qvalues", "en-US,en;q=0.9,de;q=0.7", "en"},
+		{"french", "fr-FR,fr;q=0.8", "fr"},
+		{"whitespace", "  de-DE  ", "de"},
+		{"malformed_long", "abcdefghij-DE", "unknown"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := acceptLanguageBucket(tc.header); got != tc.want {
+				t.Errorf("acceptLanguageBucket(%q) = %q; want %q", tc.header, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestEntityIDNoBirthdayCollisions asserts that full-width HMAC-SHA256 entity
+// IDs do not collide across a large daily population. This is the concrete
+// collision-resistance guarantee that motivated dropping the previous 16-char
+// (64-bit) truncation, where birthday collisions across a day window were
+// realistic enough to let unrelated visitors share a rate-limit bucket.
+func TestEntityIDNoBirthdayCollisions(t *testing.T) {
+	service := createTestService(t)
+
+	const n = 1_000_000
+	seen := make(map[string]struct{}, n)
+
+	for i := 0; i < n; i++ {
+		// Vary the IP across the 10.0.0.0/8 space; same UA + language bucket
+		// so the only varying input is the IP, exercising the HMAC spread.
+		ip := net.IPv4(10, byte(i>>16), byte(i>>8), byte(i))
+		id := service.GetCompositeEntityID(EntityIDInput{
+			IP:             ip,
+			UserAgent:      "Mozilla/5.0 Firefox/115.0",
+			AcceptLanguage: "en-US,en;q=0.9",
+		})
+		if _, dup := seen[id]; dup {
+			t.Fatalf("birthday collision at i=%d: entity ID %s already seen", i, id)
+		}
+		seen[id] = struct{}{}
+		if len(id) != 64 {
+			t.Fatalf("entity ID length = %d, want 64 (full-width)", len(id))
+		}
 	}
 }
 

@@ -21,7 +21,7 @@ import (
 // Entity IDs are computed from composite inputs to distinguish different
 // clients behind shared IP addresses (NAT, VPN, corporate networks):
 //   - Authenticated requests use the username as input
-//   - Unauthenticated requests use IP + User-Agent + Accept-Language
+//   - Unauthenticated requests use IP + coarse User-Agent/Accept-Language buckets
 type EntityIDService struct {
 	masterSecret   []byte
 	keyCache       map[string][]byte // Cache for derived daily keys
@@ -71,11 +71,28 @@ func NewEntityIDService(config EntityIDConfig) (*EntityIDService, error) {
 // composite inputs. This is the primary method for entity ID generation.
 //
 // For authenticated requests (Username is set): HMAC(daily_key, "user:" + username)
-// For anonymous requests: HMAC(daily_key, "anon:" + IP + "|" + UserAgent + "|" + AcceptLanguage)
+// For anonymous requests: HMAC(daily_key, "anon:" + IP + "|" + uaBucket + "|" + langBucket)
 //
 // The "user:"/"anon:" prefix prevents collisions between the two input domains.
-// Using User-Agent and Accept-Language for anonymous requests distinguishes
-// different browsers behind the same NAT/VPN without invasive fingerprinting.
+//
+// The HMAC output is returned at full width (32 bytes / 64 hex characters).
+// The previous 16-character (64-bit) truncation created a non-trivial birthday
+// collision risk across a day window: two unrelated anonymous visitors sharing
+// an entity ID also share a rate-limit bucket and an enumeration counter, which
+// lets an attacker burn a neighbor's budget or hide inside a noisy shared
+// bucket. Full width drops that collision probability to effectively zero for
+// any realistic daily population at negligible storage cost (the field is TEXT).
+//
+// Browser fingerprint signals (User-Agent, Accept-Language) are reduced to
+// coarse, low-entropy buckets before entering the HMAC. The intent of the
+// composite input is NAT disambiguation, not fingerprint harvesting: a raw
+// User-Agent carries platform, OS version, CPU architecture and exact build
+// numbers, and a raw Accept-Language list with q-values is similarly
+// near-unique, so including them verbatim would bake a strong day-stable
+// tracker into the persisted pseudonym. Coarse bucketing preserves enough
+// signal to distinguish a few co-located browsers behind one NAT while keeping
+// each recipient inside a large anonymity set (e.g. all Tor Browser / Firefox
+// users on the same IP collapse to one bucket).
 func (e *EntityIDService) GetCompositeEntityID(input EntityIDInput) string {
 	timeWindow := e.GetCurrentTimeWindow()
 	dailyKey := e.getDailyKey(timeWindow)
@@ -87,19 +104,78 @@ func (e *EntityIDService) GetCompositeEntityID(input EntityIDInput) string {
 		mac.Write([]byte("user:"))
 		mac.Write([]byte(input.Username))
 	} else if input.IP != nil {
-		// Anonymous: combine IP with browser signals for NAT disambiguation
+		// Anonymous: combine IP with coarse browser buckets for NAT disambiguation
 		mac.Write([]byte("anon:"))
 		mac.Write([]byte(input.IP.String()))
 		mac.Write([]byte("|"))
-		mac.Write([]byte(input.UserAgent))
+		mac.Write([]byte(userAgentBucket(input.UserAgent)))
 		mac.Write([]byte("|"))
-		mac.Write([]byte(input.AcceptLanguage))
+		mac.Write([]byte(acceptLanguageBucket(input.AcceptLanguage)))
 	} else {
 		return "unknown"
 	}
 
-	entityID := hex.EncodeToString(mac.Sum(nil))
-	return entityID[:16]
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// userAgentBucket reduces a raw User-Agent string to a coarse browser-family
+// bucket, dropping platform, OS version, CPU architecture and exact build
+// numbers. This preserves minimal NAT-disambiguation signal (one bucket per
+// major browser family) while keeping each recipient inside a large anonymity
+// set. Tor Browser is detected explicitly and bucketed alongside Firefox so
+// its distinct UA does not become a per-user pseudonym.
+func userAgentBucket(ua string) string {
+	if ua == "" {
+		return "unknown"
+	}
+	lower := strings.ToLower(ua)
+	switch {
+	case strings.Contains(lower, "tor browser") || strings.Contains(lower, "torbrowser"):
+		return "firefox" // Tor Browser intentionally collapses into the Firefox set
+	case strings.Contains(lower, "firefox"):
+		return "firefox"
+	case strings.Contains(lower, "edg/"):
+		return "chrome"
+	case strings.Contains(lower, "opera") || strings.Contains(lower, "opr/"):
+		return "chrome"
+	case strings.Contains(lower, "chrome") || strings.Contains(lower, "crios") || strings.Contains(lower, "chromium"):
+		return "chrome"
+	case strings.Contains(lower, "safari") || strings.Contains(lower, "webkit"):
+		return "safari"
+	default:
+		return "other"
+	}
+}
+
+// acceptLanguageBucket reduces a raw Accept-Language header to its primary
+// language tag only (e.g. "en-US,en;q=0.9,de;q=0.7" -> "en"), dropping the
+// full locale list and q-values which are themselves a fingerprint vector.
+// If the header is empty or unparseable, returns "unknown" so the input is
+// still deterministic.
+func acceptLanguageBucket(header string) string {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return "unknown"
+	}
+	// Take the first comma-separated entry, then the subtag before any '-'.
+	first := header
+	if idx := strings.Index(first, ","); idx >= 0 {
+		first = first[:idx]
+	}
+	first = strings.TrimSpace(first)
+	if first == "" {
+		return "unknown"
+	}
+	if idx := strings.Index(first, "-"); idx > 0 {
+		first = first[:idx]
+	}
+	first = strings.ToLower(strings.TrimSpace(first))
+	if first == "" || len(first) > 8 {
+		// Defensive: malformed or absurdly long tag -> unknown rather than
+		// letting a crafted header become a unique bucket.
+		return "unknown"
+	}
+	return first
 }
 
 // GetEntityID returns a privacy-preserving entity identifier for the given IP address.
@@ -220,9 +296,13 @@ func (e *EntityIDService) cleanupRoutine(interval time.Duration) {
 	}
 }
 
-// ValidateEntityID checks if an entity ID has the expected format
+// ValidateEntityID checks if an entity ID has the expected format.
+//
+// Entity IDs are full-width HMAC-SHA256 digests: 32 bytes encoded as 64 hex
+// characters. The previous 16-character (64-bit) truncation is no longer used;
+// see GetCompositeEntityID for the collision-resistance rationale.
 func ValidateEntityID(entityID string) bool {
-	if len(entityID) != 16 {
+	if len(entityID) != 64 {
 		return false
 	}
 
@@ -256,7 +336,8 @@ func GetEntityIDForIP(ip net.IP) string {
 }
 
 // GetCompositeEntityIDForRequest generates an entity ID from an HTTP request,
-// using IP + User-Agent + Accept-Language for anonymous disambiguation.
+// using IP plus coarse User-Agent and Accept-Language buckets for anonymous
+// disambiguation. See GetCompositeEntityID for the bucketing rationale.
 func GetCompositeEntityIDForRequest(ip net.IP, r *http.Request) string {
 	if DefaultEntityIDService == nil {
 		return "uninitialized"

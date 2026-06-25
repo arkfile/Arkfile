@@ -1899,6 +1899,29 @@ run_shares() {
     # After 4 unique 404s, subsequent requests should be delayed (HTTP 429).
     scenario "Share enumeration rate limiting"
 
+    # Timing-protection regression: a 404 on the public share envelope endpoint
+    # MUST be padded to the 1-second minimum so a fast 404 does not leak share-ID
+    # existence at line rate. Use a fresh fake ID (not one of the FAKE_IDS below)
+    # so the enumeration counter does not taint this measurement. Anonymous curl,
+    # no login cycle.
+    scenario "Share envelope timing protection floor"
+    local timing_id
+    timing_id="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=' | head -c 43)"
+    local timing_start timing_end timing_elapsed
+    timing_start=$(date +%s%N)
+    local timing_code
+    timing_code=$(curl -sk -o /dev/null -w '%{http_code}' \
+        "${SERVER_URL}/api/public/shares/${timing_id}/envelope" 2>/dev/null)
+    timing_end=$(date +%s%N)
+    timing_elapsed_ms=$(( (timing_end - timing_start) / 1000000 ))
+    if [ "$timing_code" = "404" ] && [ "$timing_elapsed_ms" -ge 1000 ]; then
+        record_test "Share envelope 404 padded to >=1s (elapsed ${timing_elapsed_ms}ms)" "PASS"
+        info "Envelope 404 padded: ${timing_elapsed_ms}ms (HTTP $timing_code)"
+    else
+        record_test "Share envelope 404 padded to >=1s (elapsed ${timing_elapsed_ms}ms, code $timing_code)" "FAIL"
+        warning "Expected padded 404 >=1000ms, got ${timing_elapsed_ms}ms (HTTP $timing_code)"
+    fi
+
     # Generate 4 unique fake 43-char base64url share IDs (matching expected format)
     local FAKE_IDS=()
     for i in 1 2 3 4; do
@@ -1979,6 +2002,62 @@ run_shares() {
     else
         warning "Share B ID not available, skipping invalid download token test"
         record_test "Invalid download token rate limiting" "SKIP"
+    fi
+
+    scenario "Share download ticket endpoint validation"
+    # The ticket issuance endpoint (/api/public/shares/:id/ticket) replaces the
+    # never-rotated static download token as the per-chunk credential. These
+    # anonymous curl checks (no login) confirm the endpoint exists, requires a
+    # download_token, and rejects a garbage token with 403 rather than leaking
+    # existence via 404/500. Uses SHARE_A_ID (still active + unlimited here).
+    if [ -n "$SHARE_A_ID" ]; then
+        local ticket_ep="${SERVER_URL}/api/public/shares/${SHARE_A_ID}/ticket"
+
+        # Empty token -> 400 Bad Request.
+        local empty_code
+        empty_code=$(curl -sk -o /dev/null -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            -d '{"download_token":""}' "$ticket_ep" 2>/dev/null)
+        if [ "$empty_code" = "400" ]; then
+            record_test "Ticket endpoint rejects empty token (HTTP 400)" "PASS"
+            info "Ticket endpoint empty-token -> 400 (expected)"
+        else
+            record_test "Ticket endpoint rejects empty token (HTTP $empty_code)" "FAIL"
+            warning "Expected 400 for empty token, got $empty_code"
+        fi
+
+        # Garbage token -> 403 Forbidden (NOT 404/500, which would leak state).
+        local bad_code
+        bad_code=$(curl -sk -o /dev/null -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            -d '{"download_token":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}' \
+            "$ticket_ep" 2>/dev/null)
+        if [ "$bad_code" = "403" ]; then
+            record_test "Ticket endpoint rejects bad token (HTTP 403)" "PASS"
+            info "Ticket endpoint garbage-token -> 403 (expected, no state leak)"
+        else
+            record_test "Ticket endpoint rejects bad token (HTTP $bad_code)" "FAIL"
+            warning "Expected 403 for bad token, got $bad_code"
+        fi
+
+        # Non-existent share ID -> 404 NotFound (and must NOT be a 500).
+        local fake_id
+        fake_id="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=' | head -c 43)"
+        local nf_code
+        nf_code=$(curl -sk -o /dev/null -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            -d '{"download_token":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}' \
+            "${SERVER_URL}/api/public/shares/${fake_id}/ticket" 2>/dev/null)
+        if [ "$nf_code" = "404" ]; then
+            record_test "Ticket endpoint unknown share -> 404" "PASS"
+            info "Ticket endpoint unknown share -> 404 (expected)"
+        else
+            record_test "Ticket endpoint unknown share -> HTTP $nf_code" "FAIL"
+            warning "Expected 404 for unknown share, got $nf_code"
+        fi
+    else
+        warning "Share A ID not available, skipping ticket endpoint validation"
+        record_test "Share download ticket endpoint validation" "SKIP"
     fi
     scenario "Re-authenticate to revoke share"
     user_login_with_totp "Re-authentication for revoke"

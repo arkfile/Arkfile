@@ -303,6 +303,210 @@ func GetShareEnvelope(c echo.Context) error {
 	})
 }
 
+// IssueShareDownloadTicket exchanges the static download token (recovered from
+// the decrypted share envelope) for a short-lived, entity-bound download
+// ticket. Recipients call this after successfully decrypting the envelope, then
+// present the returned ticket as X-Share-Ticket on chunk fetches. This replaces
+// the never-rotated static download token as the per-chunk credential: a ticket
+// captured from a compromised channel expires within minutes and is bound to
+// the recipient's entity ID, so it cannot be reused by a different party and
+// does not outlive the share.
+//
+// The static token's hash is still verified here as proof that the caller
+// actually decrypted the envelope (i.e. knew the share password). The share's
+// expiry, revocation, and max-accesses state are enforced exactly as in the
+// chunk path; issuance does not consume a max-accesses slot (that happens
+// atomically on chunk 0 in DownloadShareChunk).
+//
+// POST /api/public/shares/:id/ticket  { "download_token": "<base64>" }
+func IssueShareDownloadTicket(c echo.Context) error {
+	shareID := c.Param("id")
+	if shareID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Share ID is required")
+	}
+
+	entityID := logging.GetOrCreateEntityID(c)
+
+	// Basic rate limiting (same per-share-ID limiter as the envelope path).
+	allowed, delay, rateLimitErr := checkRateLimit(shareID, entityID)
+	if rateLimitErr != nil {
+		logging.ErrorLogger.Printf("Rate limit check failed: %v", rateLimitErr)
+	} else if !allowed {
+		c.Response().Header().Set("Retry-After", fmt.Sprintf("%d", int(delay.Seconds())))
+		return echo.NewHTTPError(http.StatusTooManyRequests, "Too many requests")
+	}
+
+	var request struct {
+		DownloadToken string `json:"download_token"`
+	}
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body: "+err.Error())
+	}
+	if request.DownloadToken == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Download token is required")
+	}
+
+	// Load share state and enforce expiry / revocation / exhaustion.
+	var downloadTokenHash string
+	var expiresAt *time.Time
+	var revokedAt *time.Time
+	var revokedReason sql.NullString
+	var accessCount float64
+	var maxAccesses sql.NullFloat64
+
+	err := database.DB.QueryRow(`
+		SELECT download_token_hash, expires_at, revoked_at, revoked_reason,
+		       access_count, max_accesses
+		FROM file_share_keys
+		WHERE share_id = ?
+	`, shareID).Scan(
+		&downloadTokenHash,
+		&expiresAt,
+		&revokedAt,
+		&revokedReason,
+		&accessCount,
+		&maxAccesses,
+	)
+
+	if err == sql.ErrNoRows {
+		prefix := shareID[:min(8, len(shareID))]
+		logging.LogSecurityEventWithEntityID(
+			logging.EventShareNotFound,
+			entityID,
+			map[string]interface{}{
+				"endpoint":        "issue_share_download_ticket",
+				"share_id_prefix": prefix,
+			},
+		)
+		NotifyShareNotFound(entityID, shareID)
+		return echo.NewHTTPError(http.StatusNotFound, "Share not found")
+	} else if err != nil {
+		logging.ErrorLogger.Printf("Database error accessing share %s: %v", shareID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
+	}
+
+	if expiresAt != nil && time.Now().After(*expiresAt) {
+		return echo.NewHTTPError(http.StatusForbidden, "Share link has expired")
+	}
+	if revokedAt != nil {
+		reason := "Share has been revoked"
+		if revokedReason.Valid && (revokedReason.String == "time" || revokedReason.String == "exhausted") {
+			reason += ": " + revokedReason.String
+		}
+		return echo.NewHTTPError(http.StatusForbidden, reason)
+	}
+	if maxAccesses.Valid && int64(accessCount) >= int64(maxAccesses.Float64) {
+		return echo.NewHTTPError(http.StatusForbidden, "Download limit reached")
+	}
+
+	// Verify the static download token (proof of envelope decryption).
+	computedHash, err := hashDownloadToken(request.DownloadToken)
+	if err != nil {
+		logging.WarningLogger.Printf("Invalid download token format at ticket issuance: share_id=%s, error=%v", shareID[:8], err)
+		return echo.NewHTTPError(http.StatusForbidden, "Invalid download token")
+	}
+	if !constantTimeCompare(computedHash, downloadTokenHash) {
+		logging.WarningLogger.Printf("Invalid download token at ticket issuance: share_id=%s, entity_id=%s", shareID[:8], entityID)
+		logging.LogSecurityEventWithEntityID(
+			logging.EventInvalidDownloadToken,
+			entityID,
+			map[string]interface{}{
+				"endpoint":        "issue_share_download_ticket",
+				"share_id_prefix": shareID[:min(8, len(shareID))],
+			},
+		)
+		if recordErr := recordFailedAttempt(shareID, entityID); recordErr != nil {
+			logging.ErrorLogger.Printf("Failed to record invalid token attempt: %v", recordErr)
+		}
+		return echo.NewHTTPError(http.StatusForbidden, "Invalid download token")
+	}
+
+	// Issue the ticket bound to this recipient's entity ID.
+	ticketKey, err := arkcrypto.GetShareTicketKey()
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to obtain share ticket key: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to issue ticket")
+	}
+
+	ticket, err := arkcrypto.IssueShareTicket(ticketKey, shareID, entityID, time.Now())
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to issue share ticket: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to issue ticket")
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"share_id":   shareID,
+		"ticket":     ticket,
+		"expires_in": int(arkcrypto.ShareTicketTTL.Seconds()),
+	})
+}
+
+// validateShareDownloadCredential verifies the per-chunk download credential
+// presented by the caller. It prefers the short-lived X-Share-Ticket (bound to
+// the requesting entity ID) and falls back to the static X-Download-Token for
+// compatibility during the client transition. A failed check records a rate
+// limit attempt and returns an echo HTTP error.
+func validateShareDownloadCredential(c echo.Context, shareID, storedTokenHash string, chunkIndex int) error {
+	entityID := logging.GetOrCreateEntityID(c)
+
+	if ticket := c.Request().Header.Get("X-Share-Ticket"); ticket != "" {
+		ticketKey, err := arkcrypto.GetShareTicketKey()
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to obtain share ticket key: %v", err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to validate ticket")
+		}
+		if _, err := arkcrypto.VerifyShareTicket(ticketKey, ticket, shareID, entityID, time.Now()); err != nil {
+			logging.WarningLogger.Printf("Invalid share ticket: share_id=%s, entity_id=%s, error=%v", shareID[:8], entityID, err)
+			logging.LogSecurityEventWithEntityID(
+				logging.EventInvalidDownloadToken,
+				entityID,
+				map[string]interface{}{
+					"endpoint":        "download_share_chunk",
+					"share_id_prefix": shareID[:min(8, len(shareID))],
+					"chunk_index":     chunkIndex,
+					"credential":      "ticket",
+				},
+			)
+			if recordErr := recordFailedAttempt(shareID, entityID); recordErr != nil {
+				logging.ErrorLogger.Printf("Failed to record invalid ticket attempt: %v", recordErr)
+			}
+			return echo.NewHTTPError(http.StatusForbidden, "Invalid download ticket")
+		}
+		return nil
+	}
+
+	// Fallback: static download token (proof-of-decryption bearer).
+	downloadToken := c.Request().Header.Get("X-Download-Token")
+	if downloadToken == "" {
+		logging.WarningLogger.Printf("Chunk download attempt without credential: share_id=%s", shareID[:8])
+		return echo.NewHTTPError(http.StatusForbidden, "Download credential required")
+	}
+
+	computedHash, err := hashDownloadToken(downloadToken)
+	if err != nil {
+		logging.WarningLogger.Printf("Invalid download token format: share_id=%s, error=%v", shareID[:8], err)
+		return echo.NewHTTPError(http.StatusForbidden, "Invalid download token")
+	}
+	if !constantTimeCompare(computedHash, storedTokenHash) {
+		logging.WarningLogger.Printf("Invalid download token: share_id=%s, entity_id=%s", shareID[:8], entityID)
+		logging.LogSecurityEventWithEntityID(
+			logging.EventInvalidDownloadToken,
+			entityID,
+			map[string]interface{}{
+				"endpoint":        "download_share_chunk",
+				"share_id_prefix": shareID[:min(8, len(shareID))],
+				"chunk_index":     chunkIndex,
+				"credential":      "token",
+			},
+		)
+		if recordErr := recordFailedAttempt(shareID, entityID); recordErr != nil {
+			logging.ErrorLogger.Printf("Failed to record invalid token attempt: %v", recordErr)
+		}
+		return echo.NewHTTPError(http.StatusForbidden, "Invalid download token")
+	}
+	return nil
+}
+
 // RevokeShare revokes a share
 func RevokeShare(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
@@ -712,12 +916,9 @@ func DownloadShareChunk(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid chunk index")
 	}
 
-	// Get Download Token from header
-	downloadToken := c.Request().Header.Get("X-Download-Token")
-	if downloadToken == "" {
-		logging.WarningLogger.Printf("Chunk download attempt without token: share_id=%s", shareID[:8])
-		return echo.NewHTTPError(http.StatusForbidden, "Download token required")
-	}
+	// The per-chunk download credential (X-Share-Ticket preferred, X-Download-Token
+	// fallback) is validated below via validateShareDownloadCredential after the
+	// share state is loaded.
 
 	// Validate share exists and isn't expired/revoked
 	var share struct {
@@ -773,30 +974,11 @@ func DownloadShareChunk(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Share link has expired")
 	}
 
-	// Validate Download Token using constant-time comparison
-	computedHash, err := hashDownloadToken(downloadToken)
-	if err != nil {
-		logging.WarningLogger.Printf("Invalid download token format: share_id=%s, error=%v", shareID[:8], err)
-		return echo.NewHTTPError(http.StatusForbidden, "Invalid download token")
-	}
-
-	if !constantTimeCompare(computedHash, share.DownloadTokenHash) {
-		entityID := logging.GetOrCreateEntityID(c)
-		logging.WarningLogger.Printf("Invalid download token: share_id=%s, entity_id=%s", shareID[:8], entityID)
-		logging.LogSecurityEventWithEntityID(
-			logging.EventInvalidDownloadToken,
-			entityID,
-			map[string]interface{}{
-				"endpoint":        "download_share_chunk",
-				"share_id_prefix": shareID[:min(8, len(shareID))],
-				"chunk_index":     chunkIndex,
-			},
-		)
-		// Record failed attempt for per-share-ID progressive rate limiting
-		if recordErr := recordFailedAttempt(shareID, entityID); recordErr != nil {
-			logging.ErrorLogger.Printf("Failed to record invalid token attempt: %v", recordErr)
-		}
-		return echo.NewHTTPError(http.StatusForbidden, "Invalid download token")
+	// Validate the per-chunk download credential: short-lived entity-bound
+	// X-Share-Ticket preferred, static X-Download-Token fallback. A failed
+	// check records a per-share-ID rate-limit attempt and 403s.
+	if err := validateShareDownloadCredential(c, shareID, share.DownloadTokenHash, chunkIndex); err != nil {
+		return err
 	}
 
 	// Check if max accesses limit has been reached (only block NEW downloads on chunk 0)

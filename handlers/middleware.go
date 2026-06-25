@@ -611,25 +611,25 @@ func TimingProtectionMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
-// requiresTimingProtection checks if an endpoint requires timing protection
+// requiresTimingProtection checks if an endpoint requires timing protection.
+//
+// These are the anonymous (no-auth) share-access paths where a fast response
+// would leak whether a share ID exists, enabling share-URL enumeration at line
+// rate. The protected prefixes MUST stay in sync with the public share route
+// group registered in route_config.go (publicShareGroup at /api/public/shares
+// and the /shared/:id page route). The previous prefix list checked /api/share/
+// which never matched the real /api/public/shares/... routes, silently dropping
+// timing protection on the envelope/metadata/chunk endpoints.
 func requiresTimingProtection(path string) bool {
-	protectedEndpoints := []string{
-		"/api/share/", // Share envelope access (no auth required, client-side decryption)
-		"/shared/",    // Share page access
+	protectedPrefixes := []string{
+		"/api/public/shares/", // Public share envelope/metadata/chunk endpoints (no auth)
+		"/shared/",             // Share access page (no auth)
 	}
 
-	for _, endpoint := range protectedEndpoints {
-		if len(path) >= len(endpoint) && path[:len(endpoint)] == endpoint {
+	for _, prefix := range protectedPrefixes {
+		if strings.HasPrefix(path, prefix) {
 			return true
 		}
-	}
-
-	// Also check for exact matches and patterns that should be protected
-	if path == "/api/share" ||
-		path == "/shared" ||
-		(len(path) > len("/api/share/") && path[:len("/api/share/")] == "/api/share/") ||
-		(len(path) > len("/shared/") && path[:len("/shared/")] == "/shared/") {
-		return true
 	}
 
 	return false

@@ -24,6 +24,17 @@ const (
 	// EntityIDKeyType is the system_keys key_type (wrapping derivation context)
 	// for the EntityID master.
 	EntityIDKeyType = "entity_id"
+
+	// ShareTicketMasterKeyID is the system_keys key_id holding the HMAC key
+	// used to issue and verify short-lived share download tickets. A ticket
+	// binds a recipient's entity ID to a share ID for a bounded TTL, replacing
+	// the previous never-rotated static download token as the per-chunk
+	// credential. Rotation regenerates this value, which simply invalidates
+	// outstanding tickets (recipients re-issue on next envelope decrypt).
+	ShareTicketMasterKeyID = "share_ticket_master_key"
+	// ShareTicketKeyType is the system_keys key_type (wrapping derivation
+	// context) for the share ticket master.
+	ShareTicketKeyType = "share_ticket"
 )
 
 // EnvelopeRotationStats reports the outcome of a system_keys re-wrap.
@@ -73,11 +84,11 @@ func ReencryptAllSystemKeys(db *sql.DB, oldMaster, newMaster []byte) (EnvelopeRo
 		}
 
 		var plaintext []byte
-		if keyID == EntityIDMasterKeyID {
+		if keyID == EntityIDMasterKeyID || keyID == ShareTicketMasterKeyID {
 			plaintext = make([]byte, 32)
 			if _, err := io.ReadFull(rand.Reader, plaintext); err != nil {
 				rows.Close()
-				return stats, fmt.Errorf("failed to generate new EntityID master: %w", err)
+				return stats, fmt.Errorf("failed to generate new system key %s: %w", keyID, err)
 			}
 			regenerated = true
 		} else {

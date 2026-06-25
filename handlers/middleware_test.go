@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/labstack/echo/v4"
 )
@@ -410,5 +411,81 @@ func TestCSRFMiddleware_ValidTokens_Passes(t *testing.T) {
 	}
 	if !called {
 		t.Error("next handler was not called")
+	}
+}
+
+// TestRequiresTimingProtection_PublicShareRoutes is a regression guard against
+// the route-namespace drift where timing protection matched /api/share/ but the
+// real anonymous share endpoints live under /api/public/shares/. Every path the
+// publicShareGroup and the /shared/:id page route serve MUST be covered, or a
+// fast 404/200 leaks share-ID existence at line rate.
+func TestRequiresTimingProtection_PublicShareRoutes(t *testing.T) {
+	protected := []string{
+		"/api/public/shares/abc123",
+		"/api/public/shares/abc123/envelope",
+		"/api/public/shares/abc123/metadata",
+		"/api/public/shares/abc123/chunks/0",
+		"/api/public/shares/abc123/chunks/42",
+		"/shared/abc123",
+	}
+	for _, p := range protected {
+		if !requiresTimingProtection(p) {
+			t.Errorf("requiresTimingProtection(%q) = false; want true (public share route must be padded)", p)
+		}
+	}
+}
+
+// TestRequiresTimingProtection_NonShareRoutesNotPadded confirms the floor does
+// not silently widen to authenticated or unrelated paths, which would add
+// avoidable latency to non-anonymous endpoints.
+func TestRequiresTimingProtection_NonShareRoutesNotPadded(t *testing.T) {
+	unprotected := []string{
+		"/api/share", // legacy prefix root, not a registered route
+		"/api/shares",
+		"/api/files/abc/envelope",
+		"/api/uploads/abc/chunks/0",
+		"/api/auth/login",
+		"/",
+		"/api/admin/users",
+	}
+	for _, p := range unprotected {
+		if requiresTimingProtection(p) {
+			t.Errorf("requiresTimingProtection(%q) = true; want false (non-public-share route should not be padded)", p)
+		}
+	}
+}
+
+// TestTimingProtectionMiddleware_AppliesMinimumFloor verifies the middleware
+// pads a sub-floor response up to the 1-second minimum on a protected path, and
+// does not pad an unprotected path.
+func TestTimingProtectionMiddleware_AppliesMinimumFloor(t *testing.T) {
+	e := echo.New()
+
+	// Protected path: handler returns instantly; middleware must pad to >= 1s.
+	req := httptest.NewRequest(http.MethodGet, "/api/public/shares/abc/envelope", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	fastHandler := func(c echo.Context) error { return c.String(http.StatusOK, "ok") }
+	start := time.Now()
+	if err := TimingProtectionMiddleware(fastHandler)(c); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	elapsed := time.Since(start)
+	if elapsed < time.Second-50*time.Millisecond {
+		t.Errorf("protected path not padded: elapsed=%v, want >= ~1s", elapsed)
+	}
+
+	// Unprotected path: handler returns instantly; no padding expected.
+	req2 := httptest.NewRequest(http.MethodGet, "/api/files/abc/envelope", nil)
+	rec2 := httptest.NewRecorder()
+	c2 := e.NewContext(req2, rec2)
+	start2 := time.Now()
+	if err := TimingProtectionMiddleware(fastHandler)(c2); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	elapsed2 := time.Since(start2)
+	if elapsed2 >= time.Second {
+		t.Errorf("unprotected path was padded: elapsed=%v, want < 1s", elapsed2)
 	}
 }
