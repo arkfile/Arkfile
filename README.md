@@ -63,7 +63,7 @@ The script will:
 
 ## Need More Details?
 
-* **User FAQ** - see `docs/user-faw.md`
+* **User FAQ** - see `docs/user-faq.md`
 * **Deployment & Ops Guide** – see `docs/setup.md`  
 * **API Reference** – see `docs/api.md`  
 * **Security Architecture** – see `docs/security.md`
