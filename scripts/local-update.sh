@@ -21,23 +21,17 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 ARKFILE_DIR="/opt/arkfile"
-USER="arkfile"
-GROUP="arkfile"
+ARKFILE_USER="arkfile"
+ARKFILE_GROUP="arkfile"
 SECRETS_ENV="$ARKFILE_DIR/etc/secrets.env"
 TLS_PORT="8443"
 
 FORCE_REBUILD_ALL=false
 
-print_status() {
-    local status="$1"
-    local message="$2"
-    case "$status" in
-        "INFO")    echo -e "  ${BLUE}INFO:${NC} ${message}" ;;
-        "SUCCESS") echo -e "  ${GREEN}SUCCESS:${NC} ${message}" ;;
-        "WARNING") echo -e "  ${YELLOW}WARNING:${NC} ${message}" ;;
-        "ERROR")   echo -e "  ${RED}ERROR:${NC} ${message}" ;;
-    esac
-}
+# Shared helpers (print_status, run_as_user, stop_service_*, verify_ownership,
+# validate_username, validate_storage_backend, read_secrets_env_value).
+# Color vars above and SECRETS_ENV must be set before this is sourced.
+source "$SCRIPT_DIR/setup/deploy-common.sh"
 
 show_help() {
     cat << EOF2
@@ -60,34 +54,6 @@ Requirements:
   - /opt/arkfile/etc/secrets.env must exist
   - The repo must be checked out at the current working directory
 EOF2
-}
-
-run_as_user() {
-    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
-        sudo -u "$SUDO_USER" -H "$@"
-    else
-        "$@"
-    fi
-}
-
-stop_service_gracefully() {
-    local service_name="$1"
-    if systemctl is-active --quiet "$service_name" 2>/dev/null; then
-        print_status "INFO" "Stopping $service_name..."
-        systemctl stop "$service_name" || {
-            print_status "WARNING" "Graceful stop failed for $service_name, trying kill..."
-            systemctl kill "$service_name" 2>/dev/null || true
-            sleep 2
-        }
-        print_status "SUCCESS" "$service_name stopped"
-    else
-        print_status "INFO" "$service_name is not running"
-    fi
-}
-
-read_secrets_env_value() {
-    local key="$1"
-    grep "^${key}=" "$SECRETS_ENV" 2>/dev/null | head -1 | cut -d'=' -f2-
 }
 
 while [[ $# -gt 0 ]]; do
@@ -132,6 +98,17 @@ fi
 TLS_PORT_VALUE=$(read_secrets_env_value "TLS_PORT")
 if [ -n "$TLS_PORT_VALUE" ]; then
     TLS_PORT="$TLS_PORT_VALUE"
+fi
+
+# ARKFILE_DOMAIN binds the OPAQUE server identity (idS); it is REQUIRED.
+# Update scripts assume a complete secrets.env and hard-fail if it is missing
+# rather than silently backfilling (which could change idS out from under
+# existing user records).
+ARKFILE_DOMAIN_VALUE=$(read_secrets_env_value "ARKFILE_DOMAIN")
+if [ -z "$ARKFILE_DOMAIN_VALUE" ]; then
+    print_status "ERROR" "ARKFILE_DOMAIN is not set in $SECRETS_ENV"
+    print_status "ERROR" "It is required (OPAQUE server identity). Add 'ARKFILE_DOMAIN=localhost' (or your chosen idS) and retry."
+    exit 1
 fi
 
 # Detect storage backends from existing secrets.env
@@ -286,32 +263,90 @@ sleep 2
 echo
 echo -e "${CYAN}Step 3: Deploy binaries and static assets${NC}"
 
+# Backup current binaries and database before overwriting (keep max 3 backups)
+if [ -x "$ARKFILE_DIR/bin/arkfile" ]; then
+    BACKUP_DIR="$ARKFILE_DIR/backups/bin-$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$BACKUP_DIR"
+    cp "$ARKFILE_DIR/bin/arkfile" "$ARKFILE_DIR/bin/arkfile-client" "$ARKFILE_DIR/bin/arkfile-admin" "$BACKUP_DIR/" 2>/dev/null || true
+
+    # Back up rqlite physical database safely by stopping the service briefly
+    if systemctl is-active --quiet rqlite 2>/dev/null; then
+        print_status "INFO" "Backing up rqlite physical database..."
+        systemctl stop rqlite || { print_status "WARNING" "Failed to stop rqlite for backup; continuing anyway"; }
+        if [ -d "$ARKFILE_DIR/var/lib/rqlite" ]; then
+            cp -r "$ARKFILE_DIR/var/lib/rqlite" "$BACKUP_DIR/"
+        fi
+        systemctl start rqlite || { print_status "ERROR" "Failed to restart rqlite after backup"; exit 1; }
+        print_status "SUCCESS" "rqlite physical database backed up"
+    fi
+
+    chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/backups"
+    print_status "SUCCESS" "Current version backed up to $BACKUP_DIR"
+
+    # Setup automatic rollback trap on failure
+    rollback_on_failure() {
+        local exit_code=$?
+        if [ $exit_code -ne 0 ]; then
+            print_status "ERROR" "Update failed with exit code $exit_code! Triggering automatic rollback to previous version..."
+            systemctl stop arkfile 2>/dev/null || true
+            if [ -d "$BACKUP_DIR" ]; then
+                cp "$BACKUP_DIR"/arkfile* "$ARKFILE_DIR/bin/" 2>/dev/null || true
+                chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/bin"
+                # Restore database files if backed up
+                if [ -d "$BACKUP_DIR/rqlite" ]; then
+                    systemctl stop rqlite 2>/dev/null || true
+                    rm -rf "$ARKFILE_DIR/var/lib/rqlite" 2>/dev/null || true
+                    cp -r "$BACKUP_DIR/rqlite" "$ARKFILE_DIR/var/lib/rqlite"
+                    chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/var/lib/rqlite"
+                    systemctl start rqlite 2>/dev/null || true
+                fi
+            fi
+            systemctl start arkfile 2>/dev/null || true
+            print_status "SUCCESS" "Rollback complete"
+            exit "$exit_code"
+        fi
+    }
+    trap 'rollback_on_failure' EXIT
+
+    # Prune old backups, keep only the 3 most recent
+    BACKUP_COUNT=$(ls -1d "$ARKFILE_DIR/backups/bin-"* 2>/dev/null | wc -l)
+    if [ "$BACKUP_COUNT" -gt 3 ]; then
+        ls -1d "$ARKFILE_DIR/backups/bin-"* 2>/dev/null | head -n -3 | xargs rm -rf
+        print_status "INFO" "Pruned old backups (kept 3 most recent)"
+    fi
+fi
+
 print_status "INFO" "Deploying Go binaries..."
-install -m 755 -o "$USER" -g "$GROUP" "$BUILD_BIN/arkfile"        "$ARKFILE_DIR/bin/arkfile"
-install -m 755 -o "$USER" -g "$GROUP" "$BUILD_BIN/arkfile-client" "$ARKFILE_DIR/bin/arkfile-client"
-install -m 755 -o "$USER" -g "$GROUP" "$BUILD_BIN/arkfile-admin"  "$ARKFILE_DIR/bin/arkfile-admin"
+install -m 755 -o "$ARKFILE_USER" -g "$ARKFILE_GROUP" "$BUILD_BIN/arkfile"        "$ARKFILE_DIR/bin/arkfile"
+install -m 755 -o "$ARKFILE_USER" -g "$ARKFILE_GROUP" "$BUILD_BIN/arkfile-client" "$ARKFILE_DIR/bin/arkfile-client"
+install -m 755 -o "$ARKFILE_USER" -g "$ARKFILE_GROUP" "$BUILD_BIN/arkfile-admin"  "$ARKFILE_DIR/bin/arkfile-admin"
 print_status "SUCCESS" "Binaries deployed"
 
-print_status "INFO" "Deploying static assets..."
+print_status "INFO" "Deploying static assets (with directory cleanup for stale assets)..."
+# Clear out stale JS dist directory to prevent reachability of obsolete assets (e.g. bundle mapping)
+rm -rf "$ARKFILE_DIR/client/static/js/dist" 2>/dev/null || true
 cp -r "$BUILD_CLIENT/static/." "$ARKFILE_DIR/client/static/"
-chown -R "$USER:$GROUP" "$ARKFILE_DIR/client"
+chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/client"
 print_status "SUCCESS" "Static assets deployed"
 
-print_status "INFO" "Deploying updated systemd service files..."
+print_status "INFO" "Deploying updated systemd service files (fail closed on copy failure)..."
+# Caddy is not used by local deployments (self-signed TLS served by Arkfile directly),
+# so caddy.service is intentionally not copied here.
 if [ -d "$BUILD_ROOT/systemd" ]; then
-    cp "$BUILD_ROOT/systemd/arkfile.service"   /etc/systemd/system/ 2>/dev/null || true
-    cp "$BUILD_ROOT/systemd/rqlite.service"    /etc/systemd/system/ 2>/dev/null || true
-    cp "$BUILD_ROOT/systemd/seaweedfs.service" /etc/systemd/system/ 2>/dev/null || true
+    cp "$BUILD_ROOT/systemd/arkfile.service"   /etc/systemd/system/
+    cp "$BUILD_ROOT/systemd/rqlite.service"    /etc/systemd/system/
+    cp "$BUILD_ROOT/systemd/seaweedfs.service" /etc/systemd/system/
     systemctl daemon-reload
     print_status "SUCCESS" "Systemd services updated"
 else
-    print_status "WARNING" "No systemd directory in build, skipping service file update"
+    print_status "ERROR" "No systemd directory in build, systemd service file update failed"
+    exit 1
 fi
 
 print_status "INFO" "Deploying updated database schema..."
 if [ -d "$BUILD_ROOT/database" ]; then
     cp -r "$BUILD_ROOT/database/." "$ARKFILE_DIR/database/"
-    chown -R "$USER:$GROUP" "$ARKFILE_DIR/database"
+    chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/database"
 fi
 
 echo

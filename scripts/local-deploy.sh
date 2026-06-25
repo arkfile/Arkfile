@@ -106,39 +106,7 @@ if [ -z "$ADMIN_USERNAME" ]; then
     exit 1
 fi
 
-# Username validation (mirrors Go validator in utils/username_validator.go)
-validate_username() {
-    local username="$1"
-    local len=${#username}
-
-    if [ "$len" -lt 10 ]; then
-        echo "ERROR: Username must be at least 10 characters (got $len)"
-        return 1
-    fi
-    if [ "$len" -gt 50 ]; then
-        echo "ERROR: Username must be at most 50 characters (got $len)"
-        return 1
-    fi
-    if ! echo "$username" | grep -qE '^[a-z0-9_.,-]{10,50}$'; then
-        echo "ERROR: Username can only contain lowercase letters, numbers, underscores, hyphens, periods, and commas"
-        return 1
-    fi
-    # Cannot start or end with special characters
-    if echo "$username" | grep -qE '^[-_.,]'; then
-        echo "ERROR: Username cannot start with a special character"
-        return 1
-    fi
-    if echo "$username" | grep -qE '[-_.,]$'; then
-        echo "ERROR: Username cannot end with a special character"
-        return 1
-    fi
-    # No consecutive special characters
-    if echo "$username" | grep -qE '\.\.|--|__|,,'; then
-        echo "ERROR: Username cannot contain consecutive special characters"
-        return 1
-    fi
-    return 0
-}
+# Username validation is provided by deploy-common.sh (validate_username).
 
 if ! validate_username "$ADMIN_USERNAME"; then
     echo ""
@@ -161,50 +129,18 @@ NC='\033[0m'
 
 # Configuration
 ARKFILE_DIR="/opt/arkfile"
-USER="arkfile"
-GROUP="arkfile"
+ARKFILE_USER="arkfile"
+ARKFILE_GROUP="arkfile"
 
 # Preserve original user context for Go operations
 ORIGINAL_USER="${SUDO_USER:-$USER}"
 ORIGINAL_UID="${SUDO_UID:-$(id -u)}"
 ORIGINAL_GID="${SUDO_GID:-$(id -g)}"
 
-# Helper: print status messages
-print_status() {
-    local status=$1
-    local message=$2
-    case $status in
-        "INFO")    echo -e "  ${BLUE}INFO:${NC} ${message}" ;;
-        "SUCCESS") echo -e "  ${GREEN}SUCCESS:${NC} ${message}" ;;
-        "WARNING") echo -e "  ${YELLOW}WARNING:${NC} ${message}" ;;
-        "ERROR")   echo -e "  ${RED}ERROR:${NC} ${message}" ;;
-    esac
-}
-
-# Helper: verify no root-owned files in a directory
-verify_ownership() {
-    local check_dir="$1"
-    print_status "INFO" "Verifying directory ownership for $check_dir..."
-    local root_owned=$(find "$check_dir" -user root 2>/dev/null | grep -v "^$" || true)
-    if [ -n "$root_owned" ]; then
-        print_status "ERROR" "Found root-owned files/directories:"
-        echo "$root_owned" | while read -r file; do
-            echo "  - $file"
-        done
-        return 1
-    fi
-    print_status "SUCCESS" "All files in $check_dir owned by arkfile user"
-    return 0
-}
-
-# Helper: run commands as original user (not root)
-run_as_user() {
-    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
-        sudo -u "$SUDO_USER" -H "$@"
-    else
-        "$@"
-    fi
-}
+# Shared helpers (print_status, run_as_user, stop_service_*, verify_ownership,
+# validate_username, validate_storage_backend, read_secrets_env_value).
+# Color vars above and ARKFILE_DIR must be set before this is sourced.
+source "$SCRIPT_DIR/setup/deploy-common.sh"
 
 # Helper: fix Go file ownership (verbose wrapper)
 fix_go_ownership() {
@@ -215,22 +151,6 @@ fix_go_ownership() {
         [ -f ".vendor_cache" ] && chown "$SUDO_USER:$SUDO_USER" .vendor_cache 2>/dev/null || true
         [ -d "$BUILD_ROOT" ] && chown -R "$SUDO_USER:$SUDO_USER" "$BUILD_ROOT/" 2>/dev/null || true
         print_status "SUCCESS" "Go file ownership restored"
-    fi
-}
-
-# Helper: safely stop a service if running
-stop_service_if_running() {
-    local service_name="$1"
-    if systemctl is-active --quiet "$service_name" 2>/dev/null; then
-        print_status "INFO" "Stopping $service_name..."
-        systemctl stop "$service_name" || {
-            print_status "WARNING" "Failed to stop $service_name gracefully, trying force stop..."
-            systemctl kill "$service_name" 2>/dev/null || true
-            sleep 2
-        }
-        print_status "SUCCESS" "$service_name stopped"
-    else
-        print_status "INFO" "$service_name not running"
     fi
 }
 
@@ -272,17 +192,7 @@ detect_lan_ip() {
     echo "$lan_ip"
 }
 
-# Storage backend validation
-validate_storage_backend() {
-    case "$1" in
-        local-seaweedfs|wasabi|backblaze|vultr|hetzner|cloudflare-r2|aws-s3|generic-s3)
-            return 0
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-}
+# Storage backend validation is provided by deploy-common.sh (validate_storage_backend).
 
 # Prompt helpers for interactive credential collection
 prompt_nonempty() {
@@ -689,7 +599,7 @@ chmod 700 "$ARKFILE_DIR/etc/keys"
 
 # Create and permission log directory
 mkdir -p "$ARKFILE_DIR/var/log"
-chown "$USER:$GROUP" "$ARKFILE_DIR/var/log"
+chown "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/var/log"
 chmod 775 "$ARKFILE_DIR/var/log"
 
 print_status "SUCCESS" "Ownership and permissions set"
@@ -769,7 +679,7 @@ EOF
   ]
 }
 EOF
-        chown "$USER:$GROUP" "$ARKFILE_DIR/etc/seaweedfs-s3.json"
+        chown "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/etc/seaweedfs-s3.json"
         chmod 640 "$ARKFILE_DIR/etc/seaweedfs-s3.json"
         print_status "SUCCESS" "SeaweedFS S3 auth configuration created"
         ;;
@@ -864,7 +774,7 @@ DEBUG_MODE=false
 LOG_LEVEL=info
 EOF
 
-chown "$USER:$GROUP" "$ARKFILE_DIR/etc/secrets.env"
+chown "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/etc/secrets.env"
 chmod 640 "$ARKFILE_DIR/etc/secrets.env"
 print_status "SUCCESS" "secrets.env created"
 
@@ -879,7 +789,7 @@ cat > "$ARKFILE_DIR/etc/rqlite-auth.json" << EOF
 ]
 EOF
 
-chown "$USER:$GROUP" "$ARKFILE_DIR/etc/rqlite-auth.json"
+chown "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/etc/rqlite-auth.json"
 chmod 640 "$ARKFILE_DIR/etc/rqlite-auth.json"
 print_status "SUCCESS" "rqlite auth file created"
 
@@ -1144,30 +1054,27 @@ echo "  Arkfile:   ${arkfile_status}"
 echo ""
 echo -e "${YELLOW}NEXT: Bootstrap your admin account${NC}"
 echo ""
-echo "  1. Read the bootstrap token (the file is mode 0400 owned by arkfile):"
-echo "     sudo cat /opt/arkfile/etc/keys/bootstrap-token.bin"
-echo ""
-echo "  2. Bootstrap the admin account (from this machine):"
-echo "     /opt/arkfile/bin/arkfile-admin \\"
+echo "  1. Bootstrap the admin account (using --token-stdin to prevent argv credential exposure):"
+echo "     sudo cat /opt/arkfile/etc/keys/bootstrap-token.bin | /opt/arkfile/bin/arkfile-admin \\"
 echo "       --server-url https://localhost:${TLS_PORT} --tls-insecure \\"
-echo "       bootstrap --token \$(sudo cat /opt/arkfile/etc/keys/bootstrap-token.bin) --username ${ADMIN_USERNAME}"
+echo "       bootstrap --token-stdin --username ${ADMIN_USERNAME}"
 echo ""
-echo "  3. Setup MFA for the admin account (TOTP or security key):"
+echo "  2. Setup MFA for the admin account (TOTP or security key):"
 echo "     /opt/arkfile/bin/arkfile-admin \\"
 echo "       --server-url https://localhost:${TLS_PORT} --tls-insecure \\"
 echo "       setup-mfa"
 echo ""
-echo "  4. Verify admin login:"
+echo "  3. Verify admin login:"
 echo "     /opt/arkfile/bin/arkfile-admin \\"
 echo "       --server-url https://localhost:${TLS_PORT} --tls-insecure \\"
 echo "       login --username ${ADMIN_USERNAME}"
 echo ""
-echo "  5. After successful admin login, disable force bootstrap:"
+echo "  4. After successful admin login, disable force bootstrap:"
 echo "     - Edit /opt/arkfile/etc/secrets.env"
 echo "     - Set ARKFILE_FORCE_ADMIN_BOOTSTRAP=false"
 echo "     - Restart: sudo systemctl restart arkfile"
 echo ""
-echo "  6. Access the web interface:"
+echo "  5. Access the web interface:"
 echo "     https://localhost:${TLS_PORT}"
 echo "     https://${LAN_IP}:${TLS_PORT} (from other devices on your network)"
 echo "     (Accept the self-signed certificate warning)"

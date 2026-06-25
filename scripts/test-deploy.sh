@@ -22,8 +22,8 @@ NC='\033[0m'
 
 # Configuration defaults
 ARKFILE_DIR="/opt/arkfile"
-USER="arkfile"
-GROUP="arkfile"
+ARKFILE_USER="arkfile"
+ARKFILE_GROUP="arkfile"
 
 DOMAIN=""
 DESEC_TOKEN=""
@@ -55,17 +55,10 @@ ORIGINAL_USER="${SUDO_USER:-$USER}"
 ORIGINAL_UID="${SUDO_UID:-$(id -u)}"
 ORIGINAL_GID="${SUDO_GID:-$(id -g)}"
 
-print_status() {
-    local status="$1"
-    local message="$2"
-
-    case "$status" in
-        "INFO") echo -e "  ${BLUE}INFO:${NC} ${message}" ;;
-        "SUCCESS") echo -e "  ${GREEN}SUCCESS:${NC} ${message}" ;;
-        "WARNING") echo -e "  ${YELLOW}WARNING:${NC} ${message}" ;;
-        "ERROR") echo -e "  ${RED}ERROR:${NC} ${message}" ;;
-    esac
-}
+# Shared helpers (print_status, run_as_user, stop_service_*, verify_ownership,
+# validate_username, validate_storage_backend, read_secrets_env_value).
+# Color vars above and ARKFILE_DIR must be set before this is sourced.
+source "$SCRIPT_DIR/setup/deploy-common.sh"
 
 show_help() {
     cat << EOF2
@@ -88,54 +81,6 @@ Optional:
   --external-firewall-confirmed Confirm that an external firewall is configured (suppresses halt if local firewalls are absent)
   -h, --help                    Show this help message
 EOF2
-}
-
-run_as_user() {
-    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
-        sudo -u "$SUDO_USER" -H "$@"
-    else
-        "$@"
-    fi
-}
-
-stop_service_if_running() {
-    local service_name="$1"
-    if systemctl is-active --quiet "$service_name" 2>/dev/null; then
-        print_status "INFO" "Stopping $service_name..."
-        systemctl stop "$service_name" || {
-            print_status "WARNING" "Failed to stop $service_name gracefully, trying force stop..."
-            systemctl kill "$service_name" 2>/dev/null || true
-            sleep 2
-        }
-        print_status "SUCCESS" "$service_name stopped"
-    else
-        print_status "INFO" "$service_name not running"
-    fi
-}
-
-verify_ownership() {
-    local check_dir="$1"
-    print_status "INFO" "Verifying directory ownership for $check_dir..."
-    local root_owned=$(find "$check_dir" -user root 2>/dev/null | grep -v "^$" || true)
-    if [ -n "$root_owned" ]; then
-        print_status "ERROR" "Found root-owned files/directories:"
-        echo "$root_owned" | while read -r file; do
-            echo "  - $file"
-        done
-        return 1
-    fi
-    print_status "SUCCESS" "All files in $check_dir owned by arkfile user"
-    return 0
-}
-
-detect_os_family() {
-    if [ -f /etc/debian_version ]; then
-        echo "debian"
-    elif [ -f /etc/redhat-release ]; then
-        echo "rhel"
-    else
-        echo "unknown"
-    fi
 }
 
 detect_public_ip() {
@@ -235,9 +180,9 @@ build_application() {
 
     rm -f client/static/js/.buildcache
     rm -rf client/static/js/dist/*
-# Also remove the streaming-download SW build artifact (top-level), so it
-# is regenerated fresh from src/sw-download.ts on every run.
-rm -f client/static/js/sw-download.js client/static/js/sw-download.js.map
+    # Also remove the streaming-download SW build artifact (top-level), so it
+    # is regenerated fresh from src/sw-download.ts on every run.
+    rm -f client/static/js/sw-download.js client/static/js/sw-download.js.map
 
     if [ -d "$BUILD_ROOT" ]; then
         if [ "$SKIP_C_LIBS" = "true" ]; then
@@ -252,7 +197,7 @@ rm -f client/static/js/sw-download.js client/static/js/sw-download.js.map
     export SKIP_C_LIBS="$SKIP_C_LIBS"
 
     fix_go_ownership
-    if ! run_as_user ./scripts/setup/build.sh --build-only; then
+    if ! run_as_user ./scripts/setup/build.sh --build-only --production; then
         print_status "ERROR" "Build failed"
         exit 1
     fi
@@ -349,7 +294,7 @@ EOF2
   ]
 }
 EOF2
-            chown "$USER:$GROUP" "$ARKFILE_DIR/etc/seaweedfs-s3.json"
+            chown "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/etc/seaweedfs-s3.json"
             chmod 640 "$ARKFILE_DIR/etc/seaweedfs-s3.json"
             ;;
         wasabi|vultr|hetzner|aws-s3)
@@ -439,9 +384,12 @@ REQUIRE_APPROVAL=true
 ENABLE_REGISTRATION=true
 DEBUG_MODE=false
 LOG_LEVEL=info
+
+# Caddy / Let's Encrypt
+CADDY_EMAIL=${ACME_EMAIL}
 EOF2
 
-    chown "$USER:$GROUP" "$ARKFILE_DIR/etc/secrets.env"
+    chown "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/etc/secrets.env"
     chmod 640 "$ARKFILE_DIR/etc/secrets.env"
 
     cat > "$ARKFILE_DIR/etc/rqlite-auth.json" <<EOF2
@@ -453,7 +401,7 @@ EOF2
   }
 ]
 EOF2
-    chown "$USER:$GROUP" "$ARKFILE_DIR/etc/rqlite-auth.json"
+    chown "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/etc/rqlite-auth.json"
     chmod 640 "$ARKFILE_DIR/etc/rqlite-auth.json"
 
     print_status "SUCCESS" "Configuration files written"
@@ -467,7 +415,7 @@ generate_crypto_material() {
     ./scripts/setup/03-setup-master-key.sh
     print_status "INFO" "Generating internal TLS certificates..."
     ./scripts/setup/04-setup-tls-certs.sh
-    chown -R "$USER:$GROUP" "$ARKFILE_DIR"
+    chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR"
     chmod 700 "$ARKFILE_DIR/etc/keys"
     [ -d "$ARKFILE_DIR/etc/keys/tls" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls"
     verify_ownership "$ARKFILE_DIR"
@@ -814,48 +762,6 @@ prompt_storage_backend_config() {
     esac
 }
 
-validate_username() {
-    local username="$1"
-    local len=${#username}
-
-    if [ "$len" -lt 10 ]; then
-        echo "ERROR: Username must be at least 10 characters (got $len)"
-        return 1
-    fi
-    if [ "$len" -gt 50 ]; then
-        echo "ERROR: Username must be at most 50 characters (got $len)"
-        return 1
-    fi
-    if ! echo "$username" | grep -qE '^[a-z0-9_.,-]{10,50}$'; then
-        echo "ERROR: Username can only contain lowercase letters, numbers, underscores, hyphens, periods, and commas"
-        return 1
-    fi
-    if echo "$username" | grep -qE '^[-_.,]'; then
-        echo "ERROR: Username cannot start with a special character"
-        return 1
-    fi
-    if echo "$username" | grep -qE '[-_.,]$'; then
-        echo "ERROR: Username cannot end with a special character"
-        return 1
-    fi
-    if echo "$username" | grep -qE '\.\.|--|__|,,'; then
-        echo "ERROR: Username cannot contain consecutive special characters"
-        return 1
-    fi
-    return 0
-}
-
-validate_storage_backend() {
-    case "$1" in
-        local-seaweedfs|wasabi|backblaze|vultr|hetzner|cloudflare-r2|aws-s3|generic-s3)
-            return 0
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-}
-
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --domain)
@@ -1121,7 +1027,7 @@ echo -e "${CYAN}Step 4: Deploy build artifacts and set ownership${NC}"
 echo "================================================="
 deploy_build_artifacts
 
-chown -R "$USER:$GROUP" "$ARKFILE_DIR"
+chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR"
 chmod 700 "$ARKFILE_DIR/etc/keys"
 [ -d "$ARKFILE_DIR/etc/keys/opaque" ] && chmod 700 "$ARKFILE_DIR/etc/keys/opaque"
 [ -d "$ARKFILE_DIR/etc/keys/tls" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls"
@@ -1133,7 +1039,7 @@ chmod 700 "$ARKFILE_DIR/etc/keys"
 [ -d "$ARKFILE_DIR/etc/keys/totp" ] && chmod 700 "$ARKFILE_DIR/etc/keys/totp"
 
 mkdir -p "$ARKFILE_DIR/var/log"
-chown "$USER:$GROUP" "$ARKFILE_DIR/var/log"
+chown "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/var/log"
 chmod 775 "$ARKFILE_DIR/var/log"
 print_status "SUCCESS" "Ownership and permissions set"
 
@@ -1213,7 +1119,7 @@ fi
 
 # Record deployed version
 echo "$VERSION" > "$ARKFILE_DIR/etc/deployed-version"
-chown "$USER:$GROUP" "$ARKFILE_DIR/etc/deployed-version"
+chown "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/etc/deployed-version"
 chmod 644 "$ARKFILE_DIR/etc/deployed-version"
 print_status "SUCCESS" "Deployed version: $VERSION"
 
@@ -1230,17 +1136,17 @@ echo "     sudo cat /opt/arkfile/etc/keys/bootstrap-token.bin | /opt/arkfile/bin
        --server-url https://localhost:8443 --tls-insecure \\
        bootstrap --token-stdin --username ${ADMIN_USERNAME}"
 echo
-echo "  3. Setup MFA (TOTP or security key; VPS default is TOTP):"
+echo "  2. Setup MFA (TOTP or security key; VPS default is TOTP):"
 echo "     /opt/arkfile/bin/arkfile-admin \\
        --server-url https://localhost:8443 --tls-insecure \\
        setup-mfa"
 echo
-echo "  4. Verify admin login:"
+echo "  3. Verify admin login:"
 echo "     /opt/arkfile/bin/arkfile-admin \\"
 echo "       --server-url https://localhost:8443 --tls-insecure \\"
 echo "       login --username ${ADMIN_USERNAME}"
 echo
-echo "  5. After successful admin login, disable force bootstrap:"
+echo "  4. After successful admin login, disable force bootstrap:"
 echo "     - Edit /opt/arkfile/etc/secrets.env"
 echo "     - Set ARKFILE_FORCE_ADMIN_BOOTSTRAP=false"
 echo "     - Restart: sudo systemctl restart arkfile"

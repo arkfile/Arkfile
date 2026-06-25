@@ -27,16 +27,10 @@ SECRETS_ENV="$ARKFILE_DIR/etc/secrets.env"
 
 FORCE_REBUILD_ALL=false
 
-print_status() {
-    local status="$1"
-    local message="$2"
-    case "$status" in
-        "INFO")    echo -e "  ${BLUE}INFO:${NC} ${message}" ;;
-        "SUCCESS") echo -e "  ${GREEN}SUCCESS:${NC} ${message}" ;;
-        "WARNING") echo -e "  ${YELLOW}WARNING:${NC} ${message}" ;;
-        "ERROR")   echo -e "  ${RED}ERROR:${NC} ${message}" ;;
-    esac
-}
+# Shared helpers (print_status, run_as_user, stop_service_*, verify_ownership,
+# validate_username, validate_storage_backend, read_secrets_env_value).
+# Color vars above and SECRETS_ENV must be set before this is sourced.
+source "$SCRIPT_DIR/setup/deploy-common.sh"
 
 show_help() {
     cat << EOF2
@@ -59,34 +53,6 @@ Requirements:
   - /opt/arkfile/etc/secrets.env must exist and contain BASE_URL=https://<domain>
   - The repo must be checked out on the VPS at the current working directory
 EOF2
-}
-
-run_as_user() {
-    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
-        sudo -u "$SUDO_USER" -H "$@"
-    else
-        "$@"
-    fi
-}
-
-stop_service_gracefully() {
-    local service_name="$1"
-    if systemctl is-active --quiet "$service_name" 2>/dev/null; then
-        print_status "INFO" "Stopping $service_name..."
-        systemctl stop "$service_name" || {
-            print_status "WARNING" "Graceful stop failed for $service_name, trying kill..."
-            systemctl kill "$service_name" 2>/dev/null || true
-            sleep 2
-        }
-        print_status "SUCCESS" "$service_name stopped"
-    else
-        print_status "INFO" "$service_name is not running"
-    fi
-}
-
-read_secrets_env_value() {
-    local key="$1"
-    grep "^${key}=" "$SECRETS_ENV" 2>/dev/null | head -1 | cut -d'=' -f2-
 }
 
 while [[ $# -gt 0 ]]; do

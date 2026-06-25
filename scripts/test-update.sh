@@ -21,22 +21,16 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 ARKFILE_DIR="/opt/arkfile"
-USER="arkfile"
-GROUP="arkfile"
+ARKFILE_USER="arkfile"
+ARKFILE_GROUP="arkfile"
 SECRETS_ENV="$ARKFILE_DIR/etc/secrets.env"
 
 FORCE_REBUILD_ALL=false
 
-print_status() {
-    local status="$1"
-    local message="$2"
-    case "$status" in
-        "INFO")    echo -e "  ${BLUE}INFO:${NC} ${message}" ;;
-        "SUCCESS") echo -e "  ${GREEN}SUCCESS:${NC} ${message}" ;;
-        "WARNING") echo -e "  ${YELLOW}WARNING:${NC} ${message}" ;;
-        "ERROR")   echo -e "  ${RED}ERROR:${NC} ${message}" ;;
-    esac
-}
+# Shared helpers (print_status, run_as_user, stop_service_*, verify_ownership,
+# validate_username, validate_storage_backend, read_secrets_env_value).
+# Color vars above and SECRETS_ENV must be set before this is sourced.
+source "$SCRIPT_DIR/setup/deploy-common.sh"
 
 show_help() {
     cat << EOF2
@@ -59,34 +53,6 @@ Requirements:
   - /opt/arkfile/etc/secrets.env must exist and contain BASE_URL=https://<domain>
   - The repo must be checked out on the VPS at the current working directory
 EOF2
-}
-
-run_as_user() {
-    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
-        sudo -u "$SUDO_USER" -H "$@"
-    else
-        "$@"
-    fi
-}
-
-stop_service_gracefully() {
-    local service_name="$1"
-    if systemctl is-active --quiet "$service_name" 2>/dev/null; then
-        print_status "INFO" "Stopping $service_name..."
-        systemctl stop "$service_name" || {
-            print_status "WARNING" "Graceful stop failed for $service_name, trying kill..."
-            systemctl kill "$service_name" 2>/dev/null || true
-            sleep 2
-        }
-        print_status "SUCCESS" "$service_name stopped"
-    else
-        print_status "INFO" "$service_name is not running"
-    fi
-}
-
-read_secrets_env_value() {
-    local key="$1"
-    grep "^${key}=" "$SECRETS_ENV" 2>/dev/null | head -1 | cut -d'=' -f2-
 }
 
 while [[ $# -gt 0 ]]; do
@@ -282,7 +248,7 @@ export VERSION="update-$(date +%Y%m%d-%H%M%S)"
 export SKIP_C_LIBS="$SKIP_C_LIBS"
 
 fix_go_ownership
-if ! run_as_user ./scripts/setup/build.sh --build-only; then
+if ! run_as_user ./scripts/setup/build.sh --build-only --production; then
     print_status "ERROR" "Build failed"
     exit 1
 fi
@@ -326,7 +292,7 @@ if [ -x "$ARKFILE_DIR/bin/arkfile" ]; then
         print_status "SUCCESS" "rqlite physical database backed up"
     fi
 
-    chown -R "$USER:$GROUP" "$ARKFILE_DIR/backups"
+    chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/backups"
     print_status "SUCCESS" "Current version backed up to $BACKUP_DIR"
 
     # Setup automatic rollback trap on failure
@@ -337,13 +303,13 @@ if [ -x "$ARKFILE_DIR/bin/arkfile" ]; then
             systemctl stop caddy arkfile 2>/dev/null || true
             if [ -d "$BACKUP_DIR" ]; then
                 cp "$BACKUP_DIR"/arkfile* "$ARKFILE_DIR/bin/" 2>/dev/null || true
-                chown -R "$USER:$GROUP" "$ARKFILE_DIR/bin"
+                chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/bin"
                 # Restore database files if backed up
                 if [ -d "$BACKUP_DIR/rqlite" ]; then
                     systemctl stop rqlite 2>/dev/null || true
                     rm -rf "$ARKFILE_DIR/var/lib/rqlite" 2>/dev/null || true
                     cp -r "$BACKUP_DIR/rqlite" "$ARKFILE_DIR/var/lib/rqlite"
-                    chown -R "$USER:$GROUP" "$ARKFILE_DIR/var/lib/rqlite"
+                    chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/var/lib/rqlite"
                     systemctl start rqlite 2>/dev/null || true
                 fi
             fi
@@ -363,9 +329,9 @@ if [ -x "$ARKFILE_DIR/bin/arkfile" ]; then
 fi
 
 print_status "INFO" "Deploying Go binaries..."
-install -m 755 -o "$USER" -g "$GROUP" "$BUILD_BIN/arkfile"        "$ARKFILE_DIR/bin/arkfile"
-install -m 755 -o "$USER" -g "$GROUP" "$BUILD_BIN/arkfile-client" "$ARKFILE_DIR/bin/arkfile-client"
-install -m 755 -o "$USER" -g "$GROUP" "$BUILD_BIN/arkfile-admin"  "$ARKFILE_DIR/bin/arkfile-admin"
+install -m 755 -o "$ARKFILE_USER" -g "$ARKFILE_GROUP" "$BUILD_BIN/arkfile"        "$ARKFILE_DIR/bin/arkfile"
+install -m 755 -o "$ARKFILE_USER" -g "$ARKFILE_GROUP" "$BUILD_BIN/arkfile-client" "$ARKFILE_DIR/bin/arkfile-client"
+install -m 755 -o "$ARKFILE_USER" -g "$ARKFILE_GROUP" "$BUILD_BIN/arkfile-admin"  "$ARKFILE_DIR/bin/arkfile-admin"
 print_status "SUCCESS" "Binaries deployed"
 
 print_status "INFO" "Deploying static assets (with directory cleanup for stale assets)..."
@@ -374,7 +340,7 @@ rm -rf "$ARKFILE_DIR/client/static/js/dist" 2>/dev/null || true
 # Sync client/static tree (HTML, CSS, JS, WASM, errors)
 # Using cp -r to preserve structure; chown after to ensure correct ownership
 cp -r "$BUILD_CLIENT/static/." "$ARKFILE_DIR/client/static/"
-chown -R "$USER:$GROUP" "$ARKFILE_DIR/client"
+chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/client"
 print_status "SUCCESS" "Static assets deployed"
 
 print_status "INFO" "Deploying updated systemd service files (fail closed on copy failure)..."
@@ -393,11 +359,15 @@ fi
 print_status "INFO" "Deploying updated database schema..."
 if [ -d "$BUILD_ROOT/database" ]; then
     cp -r "$BUILD_ROOT/database/." "$ARKFILE_DIR/database/"
-    chown -R "$USER:$GROUP" "$ARKFILE_DIR/database"
+    chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/database"
 fi
 
 print_status "INFO" "Regenerating Caddyfile from Caddyfile.test template..."
-DESEC_TOKEN_VALUE=$(read_secrets_env_value "DESEC_TOKEN" 2>/dev/null || true)
+# Read DESEC_TOKEN from caddy-env (where test-deploy.sh stores it), not secrets.env
+DESEC_TOKEN_VALUE=""
+if [ -f /var/lib/caddy/caddy-env ]; then
+    DESEC_TOKEN_VALUE=$(grep "^DESEC_TOKEN=" /var/lib/caddy/caddy-env 2>/dev/null | head -1 | cut -d'=' -f2- || true)
+fi
 ACME_EMAIL_VALUE=$(read_secrets_env_value "CADDY_EMAIL" 2>/dev/null || true)
 
 repo_root="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -515,7 +485,7 @@ echo "    storage:   ${STORAGE_DISPLAY}"
 
 # Record deployed version
 echo "$VERSION" > "$ARKFILE_DIR/etc/deployed-version"
-chown "$USER:$GROUP" "$ARKFILE_DIR/etc/deployed-version"
+chown "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/etc/deployed-version"
 chmod 644 "$ARKFILE_DIR/etc/deployed-version"
 print_status "SUCCESS" "Deployed version: $VERSION"
 
