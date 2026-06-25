@@ -1829,6 +1829,77 @@ run_shares() {
     # Verify SHA256
     assert_sha256_matches "$dl_a_file" "$UPLOADED_FILE_SHA256" "Share A SHA256 integrity"
     rm -f "$dl_a_file"
+
+    scenario "Share download ticket endpoint validation"
+    # The ticket issuance endpoint (/api/public/shares/:id/ticket) replaces the
+    # never-rotated static download token as the per-chunk credential. These
+    # anonymous curl checks (no login) confirm the endpoint exists, requires a
+    # download_token, and rejects a garbage token with 403 rather than leaking
+    # state via 404/500.
+    #
+    # ORDERING NOTE: this scenario MUST run before the "Share enumeration rate
+    # limiting" and "Invalid download token rate limiting" sub-tests below.
+    # ShareEnumerationMiddleware (the FIRST middleware on the public-share group)
+    # keys on the loopback test entity and blocks the entire /api/public/shares/*
+    # namespace once ~4 unique 404s accumulate in a 10-minute window. Running
+    # these probes after the enumeration/abuse flood would receive 429 from the
+    # guard instead of the real 400/403/404 from the handler, masking the
+    # behavior under test. Here the entity is clean (only successful downloads
+    # so far), so the handler responses are genuine. We also keep to a single
+    # unknown-share probe so we add only one unique 404 to the entity's counter
+    # before the enumeration flood begins.
+    if [ -n "$SHARE_A_ID" ]; then
+        local ticket_ep="${SERVER_URL}/api/public/shares/${SHARE_A_ID}/ticket"
+
+        # Empty token -> 400 Bad Request.
+        local empty_code
+        empty_code=$(curl -sk -o /dev/null -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            -d '{"download_token":""}' "$ticket_ep" 2>/dev/null)
+        if [ "$empty_code" = "400" ]; then
+            record_test "Ticket endpoint rejects empty token (HTTP 400)" "PASS"
+            info "Ticket endpoint empty-token -> 400 (expected)"
+        else
+            record_test "Ticket endpoint rejects empty token (HTTP $empty_code)" "FAIL"
+            warning "Expected 400 for empty token, got $empty_code"
+        fi
+
+        # Garbage token -> 403 Forbidden (NOT 404/500, which would leak state).
+        # A bad token does NOT record a share-enumeration 404 hit, so this probe
+        # does not advance the enumeration counter.
+        local bad_code
+        bad_code=$(curl -sk -o /dev/null -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            -d '{"download_token":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}' \
+            "$ticket_ep" 2>/dev/null)
+        if [ "$bad_code" = "403" ]; then
+            record_test "Ticket endpoint rejects bad token (HTTP 403)" "PASS"
+            info "Ticket endpoint garbage-token -> 403 (expected, no state leak)"
+        else
+            record_test "Ticket endpoint rejects bad token (HTTP $bad_code)" "FAIL"
+            warning "Expected 403 for bad token, got $bad_code"
+        fi
+
+        # Non-existent share ID -> 404 NotFound (and must NOT be a 500). This is
+        # the single unique 404 this scenario contributes to the entity counter.
+        local fake_id
+        fake_id="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=' | head -c 43)"
+        local nf_code
+        nf_code=$(curl -sk -o /dev/null -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            -d '{"download_token":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}' \
+            "${SERVER_URL}/api/public/shares/${fake_id}/ticket" 2>/dev/null)
+        if [ "$nf_code" = "404" ]; then
+            record_test "Ticket endpoint unknown share -> 404" "PASS"
+            info "Ticket endpoint unknown share -> 404 (expected)"
+        else
+            record_test "Ticket endpoint unknown share -> HTTP $nf_code" "FAIL"
+            warning "Expected 404 for unknown share, got $nf_code"
+        fi
+    else
+        warning "Share A ID not available, skipping ticket endpoint validation"
+        record_test "Share download ticket endpoint validation" "SKIP"
+    fi
     scenario "Visitor downloads custom-password share"
 
     sleep 2 # Rate limit buffer
@@ -1894,16 +1965,22 @@ run_shares() {
 
     share_download_with_password "$DUMMY_SHARE_PASSWORD" "$NONEXISTENT_SHARE_ID" "$TEST_DATA_DIR/nonexistent.bin" "Non-existent share rejection" "true"
     assert_output_file_absent_or_empty "$TEST_DATA_DIR/nonexistent.bin" "Non-existent share file hygiene"
-    # Hit 4 unique fake share IDs via curl to trigger the 5-second delay threshold.
-    # The enumeration guard tracks unique 404s per entity in a 10-minute window.
-    # After 4 unique 404s, subsequent requests should be delayed (HTTP 429).
+    # Hit unique fake share IDs via curl to trigger the enumeration threshold.
+    # The enumeration guard tracks unique 404s per entity in a 10-minute window
+    # and blocks (429) after ~4 unique 404s. Earlier sub-tests (Non-existent
+    # share download, ticket endpoint unknown-share probe, and the timing-floor
+    # probe below) may already have added a few unique 404s to the entity's
+    # counter, so we do NOT assume a pristine counter. Instead we probe fresh
+    # unique IDs until the guard returns 429 (or we hit a safety cap), which
+    # proves the enumeration guard is active regardless of starting state.
     scenario "Share enumeration rate limiting"
 
     # Timing-protection regression: a 404 on the public share envelope endpoint
     # MUST be padded to the 1-second minimum so a fast 404 does not leak share-ID
-    # existence at line rate. Use a fresh fake ID (not one of the FAKE_IDS below)
-    # so the enumeration counter does not taint this measurement. Anonymous curl,
-    # no login cycle.
+    # existence at line rate. Use a fresh fake ID so this measurement is not
+    # served from cache. Anonymous curl, no login cycle. (This probe also adds
+    # one unique 404 to the entity's enumeration counter, which the loop below
+    # tolerates.)
     scenario "Share envelope timing protection floor"
     local timing_id
     timing_id="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=' | head -c 43)"
@@ -1922,47 +1999,38 @@ run_shares() {
         warning "Expected padded 404 >=1000ms, got ${timing_elapsed_ms}ms (HTTP $timing_code)"
     fi
 
-    # Generate 4 unique fake 43-char base64url share IDs (matching expected format)
-    local FAKE_IDS=()
-    for i in 1 2 3 4; do
-        FAKE_IDS+=("$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=' | head -c 43)")
-    done
-
-    # Hit the first 3 (should return 404 quickly, no penalty)
-    for i in 0 1 2; do
-        local enum_code
+    # Probe fresh unique share IDs until the enumeration guard blocks (429) or
+    # we exceed a safety cap. The guard blocks after ~4 unique 404s in a
+    # 10-minute window; with a handful of prior 404s already counted, this
+    # typically triggers within the first few probes.
+    local enum_blocked=0
+    local enum_probes=0
+    local enum_max_probes=12
+    while [ "$enum_probes" -lt "$enum_max_probes" ]; do
+        enum_probes=$((enum_probes + 1))
+        local enum_id enum_code
+        enum_id="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=' | head -c 43)"
         enum_code=$(curl -sk -o /dev/null -w '%{http_code}' \
-            "${SERVER_URL}/api/public/shares/${FAKE_IDS[$i]}/envelope" 2>/dev/null)
-        if [ "$enum_code" = "404" ]; then
-            info "Enumeration probe $((i+1))/4: 404 (expected)"
+            "${SERVER_URL}/api/public/shares/${enum_id}/envelope" 2>/dev/null)
+        if [ "$enum_code" = "429" ]; then
+            enum_blocked=1
+            info "Enumeration guard returned 429 on probe ${enum_probes} (unique-404 threshold reached)"
+            break
+        elif [ "$enum_code" = "404" ]; then
+            info "Enumeration probe ${enum_probes}: 404 (counting toward threshold)"
         else
-            warning "Enumeration probe $((i+1))/4: unexpected HTTP $enum_code"
+            warning "Enumeration probe ${enum_probes}: unexpected HTTP $enum_code"
         fi
     done
 
-    # Hit the 4th unique fake ID (this crosses the threshold and sets penalty,
-    # but the 4th request itself still gets 404 -- the block applies to the NEXT request)
-    local enum_code_4
-    enum_code_4=$(curl -sk -o /dev/null -w '%{http_code}' \
-        "${SERVER_URL}/api/public/shares/${FAKE_IDS[3]}/envelope" 2>/dev/null)
-    if [ "$enum_code_4" = "404" ]; then
-        info "Enumeration probe 4/4: 404 (threshold crossed, penalty now active)"
-        record_test "Share enumeration threshold (4 unique 404s recorded)" "PASS"
-    else
-        warning "Enumeration probe 4/4: unexpected HTTP $enum_code_4"
-        record_test "Share enumeration threshold (4 unique 404s recorded)" "PASS"
-    fi
-
-    # 5th probe: NOW the enumeration guard should block with 429
-    local enum_code_5
-    enum_code_5=$(curl -sk -o /dev/null -w '%{http_code}' \
-        "${SERVER_URL}/api/public/shares/${FAKE_IDS[0]}/envelope" 2>/dev/null)
-    if [ "$enum_code_5" = "429" ]; then
+    if [ "$enum_blocked" = "1" ]; then
+        record_test "Share enumeration threshold (429 after unique 404s)" "PASS"
         record_test "Share enumeration rate limiting (HTTP 429 after threshold)" "PASS"
-        info "Enumeration guard returned 429 on 5th probe after 4 unique 404s"
+        info "Enumeration guard returned 429 after ${enum_probes} unique-404 probes"
     else
+        record_test "Share enumeration threshold (429 after unique 404s)" "FAIL"
         record_test "Share enumeration rate limiting (HTTP 429 after threshold)" "FAIL"
-        error "Expected 429 on 5th probe after enumeration penalty, got HTTP $enum_code_5"
+        error "Enumeration guard did not return 429 after ${enum_max_probes} unique-404 probes"
     fi
     # Use a valid share ID (Share B) with a deliberately bad download token.
     # The per-share-ID rate limiter should record failures and eventually return 429.
@@ -2002,62 +2070,6 @@ run_shares() {
     else
         warning "Share B ID not available, skipping invalid download token test"
         record_test "Invalid download token rate limiting" "SKIP"
-    fi
-
-    scenario "Share download ticket endpoint validation"
-    # The ticket issuance endpoint (/api/public/shares/:id/ticket) replaces the
-    # never-rotated static download token as the per-chunk credential. These
-    # anonymous curl checks (no login) confirm the endpoint exists, requires a
-    # download_token, and rejects a garbage token with 403 rather than leaking
-    # existence via 404/500. Uses SHARE_A_ID (still active + unlimited here).
-    if [ -n "$SHARE_A_ID" ]; then
-        local ticket_ep="${SERVER_URL}/api/public/shares/${SHARE_A_ID}/ticket"
-
-        # Empty token -> 400 Bad Request.
-        local empty_code
-        empty_code=$(curl -sk -o /dev/null -w '%{http_code}' \
-            -X POST -H 'Content-Type: application/json' \
-            -d '{"download_token":""}' "$ticket_ep" 2>/dev/null)
-        if [ "$empty_code" = "400" ]; then
-            record_test "Ticket endpoint rejects empty token (HTTP 400)" "PASS"
-            info "Ticket endpoint empty-token -> 400 (expected)"
-        else
-            record_test "Ticket endpoint rejects empty token (HTTP $empty_code)" "FAIL"
-            warning "Expected 400 for empty token, got $empty_code"
-        fi
-
-        # Garbage token -> 403 Forbidden (NOT 404/500, which would leak state).
-        local bad_code
-        bad_code=$(curl -sk -o /dev/null -w '%{http_code}' \
-            -X POST -H 'Content-Type: application/json' \
-            -d '{"download_token":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}' \
-            "$ticket_ep" 2>/dev/null)
-        if [ "$bad_code" = "403" ]; then
-            record_test "Ticket endpoint rejects bad token (HTTP 403)" "PASS"
-            info "Ticket endpoint garbage-token -> 403 (expected, no state leak)"
-        else
-            record_test "Ticket endpoint rejects bad token (HTTP $bad_code)" "FAIL"
-            warning "Expected 403 for bad token, got $bad_code"
-        fi
-
-        # Non-existent share ID -> 404 NotFound (and must NOT be a 500).
-        local fake_id
-        fake_id="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=' | head -c 43)"
-        local nf_code
-        nf_code=$(curl -sk -o /dev/null -w '%{http_code}' \
-            -X POST -H 'Content-Type: application/json' \
-            -d '{"download_token":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}' \
-            "${SERVER_URL}/api/public/shares/${fake_id}/ticket" 2>/dev/null)
-        if [ "$nf_code" = "404" ]; then
-            record_test "Ticket endpoint unknown share -> 404" "PASS"
-            info "Ticket endpoint unknown share -> 404 (expected)"
-        else
-            record_test "Ticket endpoint unknown share -> HTTP $nf_code" "FAIL"
-            warning "Expected 404 for unknown share, got $nf_code"
-        fi
-    else
-        warning "Share A ID not available, skipping ticket endpoint validation"
-        record_test "Share download ticket endpoint validation" "SKIP"
     fi
     scenario "Re-authenticate to revoke share"
     user_login_with_totp "Re-authentication for revoke"
@@ -2521,12 +2533,22 @@ run_security_rate_limits() {
     group "Security rate limits"
 
     local FLOOD_UA="arkfile-flood-test-scanner"
+    # Isolate this test's entity ID from other curl probes. The entity ID is
+    # HMAC(key, "anon:" + IP + "|" + uaBucket + "|" + langBucket). On loopback
+    # the IP is fixed, and the custom UA above collapses into the "other" UA
+    # bucket (shared with curl's own UA), so the only remaining axis we control
+    # is the Accept-Language bucket. A distinct primary language ("xx") yields a
+    # distinct langBucket, giving this test a fresh flood-guard counter that
+    # other UA-less curl probes in the suite do not pollute. See
+    # logging/entity_id.go acceptLanguageBucket.
+    local FLOOD_LANG="xx"
     scenario "Unauthenticated probes under threshold"
     local all_under_threshold=true
     for i in $(seq 1 9); do
         local probe_code
         probe_code=$(curl -sk -o /dev/null -w '%{http_code}' \
             -H "User-Agent: $FLOOD_UA" \
+            -H "Accept-Language: $FLOOD_LANG" \
             "${SERVER_URL}/wp-scan-${i}.php" 2>/dev/null)
         if [ "$probe_code" = "429" ]; then
             all_under_threshold=false
@@ -2542,6 +2564,7 @@ run_security_rate_limits() {
     local probe_10_code
     probe_10_code=$(curl -sk -o /dev/null -w '%{http_code}' \
         -H "User-Agent: $FLOOD_UA" \
+        -H "Accept-Language: $FLOOD_LANG" \
         "${SERVER_URL}/wp-scan-10.php" 2>/dev/null)
     info "Probe 10: HTTP $probe_10_code"
     # The 10th request itself may or may not get 429 (depends on whether the middleware
@@ -2550,6 +2573,7 @@ run_security_rate_limits() {
     local probe_11_code probe_11_headers
     probe_11_headers=$(curl -sk -D - -o /dev/null \
         -H "User-Agent: $FLOOD_UA" \
+        -H "Accept-Language: $FLOOD_LANG" \
         "${SERVER_URL}/wp-scan-11.php" 2>/dev/null)
     probe_11_code=$(echo "$probe_11_headers" | head -1 | awk '{print $2}')
 

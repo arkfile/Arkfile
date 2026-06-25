@@ -446,7 +446,7 @@ func IssueShareDownloadTicket(c echo.Context) error {
 // the requesting entity ID) and falls back to the static X-Download-Token for
 // compatibility during the client transition. A failed check records a rate
 // limit attempt and returns an echo HTTP error.
-func validateShareDownloadCredential(c echo.Context, shareID, storedTokenHash string, chunkIndex int) error {
+func validateShareDownloadCredential(c echo.Context, shareID, storedTokenHash string, chunkIndex int64) error {
 	entityID := logging.GetOrCreateEntityID(c)
 
 	if ticket := c.Request().Header.Get("X-Share-Ticket"); ticket != "" {
