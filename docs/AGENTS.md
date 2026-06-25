@@ -112,6 +112,24 @@ Do not name functions or variables or include in comments references to temporar
 
 Do not add unnecessary hard line breaks within paragraphs. Allow continuous lines of arbitrary length and allow IDEs and text editors to do the line-wrapping as desired by the end-user, reader or developer.
 
+## Representative Users and Threat Models
+
+When designing features, weigh these personas from low to high adversary pressure. Each assumes client-side crypto is intact and the user chooses strong passwords; none assume protection against a malicious operator serving tampered JavaScript or a user forced to disclose passwords.
+
+**Personal vault (low).** Wants encrypted off-device backup; threats are cloud breach and device loss; needs reliable streaming upload/download and `.arkbackup` export.
+
+**Professional archive (medium).** Needs encrypted metadata, MFA, revocable shares with expiry/download limits; threats include storage subpoena and curious admins.
+
+**Cross-border records (medium).** Minimize identity (username-only, optional email); may use Tor with TOTP; threats include device loss and jurisdiction mismatch; large files on constrained mobile RAM must work.
+
+**Insider preservation and disclosure (high).** Compartmentalization via custom file passwords; selective share without recipient accounts; threats include employer monitoring and coerced account access. Custom passwords limit blast radius.
+
+**Self-hosted operator (medium–high).** Open deploy, S3 backend choice, admin cannot decrypt; threats include misconfiguration and user demand for auditable E2EE.
+
+**Anonymous share recipient (medium–high).** Public share path with no auth; rate limiting via entity ID not raw IP logging; chunked decrypt on low-RAM devices; threats include link enumeration and wrong-channel password delivery.
+
+If a change helps one persona but harms streaming on a 3 GB RAM phone or weakens zero-knowledge guarantees, flag it before shipping.
+
 ## User FAQ (docs/user-faq.md)
 
 The file docs/user-faq.md is end-user documentation. It may be published on the website or referenced from the arkfile-client manual. When adding or editing entries, keep the entire file in Q&A form only. Each answer must be one or more plain paragraphs. Do not use bullet lists, numbered lists, bold, italics, code spans, code blocks, tables, links as the primary structure of an answer, or emojis inside answers. Section headings may introduce a question topic; the answer text beneath each question must still be prose paragraphs only. If implementation details belong in developer docs, put them in docs/security.md, docs/api.md, or a WIP planning doc instead.
