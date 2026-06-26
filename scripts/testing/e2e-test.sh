@@ -3145,26 +3145,36 @@ run_payments() {
     fi
 
     # --- Step 2: drive balance below the -$10 cap ----------------------
+    # Each tick-now --sweep bills only one simulated hour (~55-70k µ¢ at
+    # dev storage + 9999.99 price), so 40 sweeps cannot reach -$10.  Batch
+    # tick-only calls to fill the accumulator, then sweep once per round.
     safe_exec _cap_sp_out _cap_sp_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
         billing set-price 9999.99 || true
 
-    local cap_max_sweeps=40
-    local cap_sweep_count=0
+    local cap_drain_round=0
+    local cap_max_drain_rounds=5
+    local cap_ticks_per_round=150
     local cap_balance
     safe_exec credits_after_out credits_after_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
         billing show --user "$TEST_USERNAME" --json
     cap_balance=$(echo "$credits_after_out" | \
         jq -r '.balance_usd_microcents // 0' 2>/dev/null || echo "0")
-    while [ "$cap_sweep_count" -lt "$cap_max_sweeps" ]; do
+    while [ "$cap_drain_round" -lt "$cap_max_drain_rounds" ]; do
         if [ -n "$cap_balance" ] && [ "$cap_balance" -le "-$cap_microcents" ] 2>/dev/null; then
             break
         fi
+        local cap_tick_i
+        for cap_tick_i in $(seq 1 "$cap_ticks_per_round"); do
+            safe_exec tick_out tick_code \
+                $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+                billing tick-now --json || true
+        done
         safe_exec tick_out tick_code \
             $ADMIN --server-url "$SERVER_URL" --tls-insecure \
             billing tick-now --sweep --json || true
-        cap_sweep_count=$((cap_sweep_count + 1))
+        cap_drain_round=$((cap_drain_round + 1))
         safe_exec credits_after_out credits_after_code \
             $ADMIN --server-url "$SERVER_URL" --tls-insecure \
             billing show --user "$TEST_USERNAME" --json
@@ -3174,10 +3184,10 @@ run_payments() {
     info "Balance after cap drain: $cap_balance microcents (target <= -$cap_microcents)"
 
     if [ -n "$cap_balance" ] && [ "$cap_balance" -le "-$cap_microcents" ] 2>/dev/null; then
-        record_test "Balance driven to/below negative cap (-$10)" "PASS"
+        record_test "Balance driven to/below negative cap (-\$10)" "PASS"
     else
-        error "Balance did not reach negative cap after $cap_max_sweeps sweeps: $cap_balance"
-        record_test "Balance driven to/below negative cap (-$10)" "FAIL"
+        error "Balance did not reach negative cap after $cap_drain_round drain round(s): $cap_balance"
+        record_test "Balance driven to/below negative cap (-\$10)" "FAIL"
     fi
 
     # --- Step 2b: upload now blocked at/under the cap ------------------
