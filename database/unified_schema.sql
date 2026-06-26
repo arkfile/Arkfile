@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS users (
     username_folded TEXT UNIQUE NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     total_storage_bytes BIGINT NOT NULL DEFAULT 0,
-    storage_limit_bytes BIGINT NOT NULL DEFAULT 1181116006,
+    storage_limit_bytes BIGINT NOT NULL DEFAULT 1073741824,
     is_approved BOOLEAN NOT NULL DEFAULT false,
     approved_by TEXT,
     approved_at TIMESTAMP,
@@ -306,6 +306,22 @@ CREATE TABLE IF NOT EXISTS share_access_attempts (
     UNIQUE(share_id, entity_id)
 );
 
+-- Registration throttle: counts successful account creations per entityID over
+-- a rolling 24h window. entity_id is the privacy-preserving composite identifier
+-- (IP + coarse User-Agent/Accept-Language buckets, HMAC'd) from logging.GetOrCreateEntityID;
+-- the raw IP is never stored. username is kept only for audit correlation since
+-- usernames already live in the users table. Rows are pruned after 48h.
+CREATE TABLE IF NOT EXISTS registration_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_id TEXT NOT NULL,
+    username TEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_registration_attempts_entity_created
+    ON registration_attempts(entity_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_registration_attempts_cleanup
+    ON registration_attempts(created_at);
+
 -- =====================================================
 -- PHASE 9: OPERATIONAL MONITORING
 -- =====================================================
@@ -419,6 +435,19 @@ CREATE TABLE IF NOT EXISTS storage_usage_accumulator (
 -- Single-row key/value store for billing settings (currently just the customer price knob).
 -- Seeded at first startup from ARKFILE_CUSTOMER_PRICE_USD_PER_TB_PER_MONTH; updates persist here.
 CREATE TABLE IF NOT EXISTS billing_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_by TEXT
+);
+
+-- Generic key/value store for instance-wide runtime settings that admins can
+-- modulate without a restart. Currently keys:
+--   require_approval : "true"/"false" -- auto-approval policy for new
+--                      registrations (seeded from REQUIRE_APPROVAL at startup,
+--                      updated via `arkfile-admin set-approval-policy`).
+-- Mirrors the billing_settings shape.
+CREATE TABLE IF NOT EXISTS system_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,

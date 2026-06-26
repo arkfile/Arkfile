@@ -186,8 +186,9 @@ func BootstrapRegisterFinalize(c echo.Context) error {
 		return JSONError(c, http.StatusUnauthorized, "Bootstrap token already consumed")
 	}
 
-	// Create user
-	user, err := models.CreateUser(tx, request.Username)
+	// Create user. Bootstrap accounts are always admins and always approved;
+	// autoApprove=true is redundant for admins but makes intent explicit.
+	user, err := models.CreateUser(tx, request.Username, true)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create user %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "User creation failed")

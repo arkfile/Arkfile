@@ -131,13 +131,17 @@ func CreateUploadSession(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Account pending approval. File uploads are restricted until your account is approved by an administrator. You can still access other features of your account.")
 	}
 
-	// Soft-block uploads on negative credit balance if payments integration is enabled
+	// Soft-block uploads once a pay-as-you-go balance reaches the configured
+	// negative-balance cap. Only applies when billing is enabled; login and
+	// downloads remain available so users can retrieve their data and settle up.
 	cfg, err := config.LoadConfig()
-	if err == nil && cfg.Payments.Enabled {
-		credits, err := models.GetUserCredits(database.DB, username)
-		if err == nil && credits != nil && credits.BalanceUSDMicrocents < 0 {
+	if err == nil && cfg.Billing.Enabled {
+		credits, creditsErr := models.GetUserCredits(database.DB, username)
+		if creditsErr != nil {
+			logging.ErrorLogger.Printf("Upload balance check failed for %s: %v", username, creditsErr)
+		} else if credits != nil && credits.BalanceUSDMicrocents <= -cfg.Billing.PaygNegativeBalanceLimitMicrocents() {
 			return JSONErrorCode(c, http.StatusPaymentRequired, "payment_required",
-				"Your credit balance is negative. Please top up your balance to upload new files.")
+				"Your credit balance has reached the negative balance limit. Please top up to upload new files.")
 		}
 	}
 

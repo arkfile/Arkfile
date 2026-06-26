@@ -33,7 +33,13 @@ type User struct {
 }
 
 const (
-	DefaultStorageLimit int64 = 1181116006 // 1.1GB in bytes
+	DefaultStorageLimit int64 = 1073741824 // 1 GiB in bytes (2^30)
+
+	// systemApprover is the recorded approved_by sentinel for accounts that
+	// the system auto-approves at registration time (REQUIRE_APPROVAL=false).
+	// Admin accounts created via the bootstrap path keep approved_by NULL to
+	// preserve their distinct self-approval provenance.
+	systemApprover = "system"
 )
 
 // validateUsername wrapper function for utils.ValidateUsername
@@ -61,20 +67,44 @@ func isAdminUsername(username string) bool {
 	return false
 }
 
-// CreateUser creates a new user in the database for OPAQUE authentication
-func CreateUser(dbtx DBTX, username string) (*User, error) {
+// CreateUser creates a new user in the database for OPAQUE authentication.
+// When autoApprove is true (the instance default when REQUIRE_APPROVAL=false),
+// the account is created already approved with approved_by set to the
+// "system" sentinel so the audit trail distinguishes system auto-approval
+// from explicit admin approval. Admin usernames are always approved regardless
+// of autoApprove; their approved_by is left NULL to preserve the existing
+// bootstrap self-approval provenance.
+func CreateUser(dbtx DBTX, username string, autoApprove bool) (*User, error) {
 	// Validate username
 	if err := validateUsername(username); err != nil {
 		return nil, fmt.Errorf("invalid username: %w", err)
 	}
 
 	isAdmin := isAdminUsername(username)
+	approved := isAdmin || autoApprove
 	folded := utils.FoldUsername(username)
+
+	// Only system-auto-approved non-admin accounts carry the "system" sentinel
+	// and a timestamp. Admin approvals leave approved_by/approved_at NULL.
+	var (
+		approvedByVal  interface{}
+		approvedAtVal  interface{}
+		approvedByStr  = sql.NullString{}
+		approvedAtTime = sql.NullTime{}
+	)
+	if approved && !isAdmin {
+		now := time.Now()
+		approvedByVal = systemApprover
+		approvedAtVal = now
+		approvedByStr = sql.NullString{String: systemApprover, Valid: true}
+		approvedAtTime = sql.NullTime{Time: now, Valid: true}
+	}
+
 	result, err := dbtx.Exec(
 		`INSERT INTO users (
-			username, username_folded, storage_limit_bytes, is_admin, is_approved
-		) VALUES (?, ?, ?, ?, ?)`,
-		username, folded, DefaultStorageLimit, isAdmin, isAdmin, // Auto-approve admin usernames
+			username, username_folded, storage_limit_bytes, is_admin, is_approved, approved_by, approved_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		username, folded, DefaultStorageLimit, isAdmin, approved, approvedByVal, approvedAtVal,
 	)
 	if err != nil {
 		return nil, err
@@ -90,8 +120,10 @@ func CreateUser(dbtx DBTX, username string) (*User, error) {
 		Username:          username,
 		StorageLimitBytes: DefaultStorageLimit,
 		CreatedAt:         time.Now(),
-		IsApproved:        isAdmin,
+		IsApproved:        approved,
 		IsAdmin:           isAdmin,
+		ApprovedBy:        approvedByStr,
+		ApprovedAt:        approvedAtTime,
 	}, nil
 }
 

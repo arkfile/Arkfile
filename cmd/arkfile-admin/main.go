@@ -44,6 +44,8 @@ NETWORK COMMANDS (Admin API - localhost only):
     list-users        List all users
     approve-user      Approve user account
     unapprove-user    Revoke approval and force-logout a user (terminates all active sessions)
+    set-approval-policy   Set instance-wide auto-approval policy (live, no restart)
+    get-approval-policy   Show the current auto-approval policy and its source
     user-status       Get status of a specific user
     user-contact-info View a user's contact information
     set-storage       Set user storage limit
@@ -89,6 +91,9 @@ BILLING COMMANDS (storage credits / usage metering):
 SYSTEM COMMANDS:
     system-status     System status overview
     health-check      System health check
+    set-approval-policy   Set instance-wide auto-approval policy (live, no restart)
+    get-approval-policy   Show the current auto-approval policy and its source
+    reset-registration-throttle  Clear registration_attempts (dev/test only)
     verify-storage    Verify S3 storage connectivity (upload/download/delete round-trip)
     rotate-user-secret-master  User-secret master rotation (prepare|apply)
     rotate-envelope-master     Envelope master key rotation (prepare|apply)
@@ -459,6 +464,21 @@ func main() {
 
 	case "version":
 		printVersion()
+	case "set-approval-policy":
+		if err := handleSetApprovalPolicyCommand(client, config, args); err != nil {
+			logError("Set approval policy failed: %v", err)
+			os.Exit(1)
+		}
+	case "get-approval-policy":
+		if err := handleGetApprovalPolicyCommand(client, config, args); err != nil {
+			logError("Get approval policy failed: %v", err)
+			os.Exit(1)
+		}
+	case "reset-registration-throttle":
+		if err := handleResetRegistrationThrottleCommand(client, config, args); err != nil {
+			logError("Reset registration throttle failed: %v", err)
+			os.Exit(1)
+		}
 	case "rotate-user-secret-master":
 		if err := handleRotateUserSecretMasterCommand(client, config, args); err != nil {
 			logError("User-secret rotation failed: %v", err)

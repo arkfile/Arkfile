@@ -124,7 +124,7 @@ func getUserTotalStorageBytes(db *sql.DB, username string) int64 {
 }
 
 // freeBaselineBytes returns the per-instance ARKFILE_FREE_STORAGE_BYTES.
-// Defaults to 1181116006 (1.1 GiB) to match models.DefaultStorageLimit.
+// Defaults to 1073741824 (1 GiB) to match models.DefaultStorageLimit.
 //
 // This wrapper exists so Section D can swap in a typed config-driven version
 // without revisiting handler call sites.
@@ -191,7 +191,7 @@ var (
 
 // defaultFreeBaselineBytes mirrors models.DefaultStorageLimit so the seam
 // resolves to a sensible value before main.go wires BillingConfig.
-const defaultFreeBaselineBytes int64 = 1181116006
+const defaultFreeBaselineBytes int64 = 1073741824
 
 // SetBillingProjectionSeams wires the projection helpers to the live billing
 // package. Called once from main.go during startup.

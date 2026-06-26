@@ -43,7 +43,7 @@ func setupPaymentsSQLiteDB(t *testing.T) *sql.DB {
 			username_folded TEXT UNIQUE NOT NULL,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			total_storage_bytes BIGINT NOT NULL DEFAULT 0,
-			storage_limit_bytes BIGINT NOT NULL DEFAULT 1181116006,
+			storage_limit_bytes BIGINT NOT NULL DEFAULT 1073741824,
 			is_approved BOOLEAN NOT NULL DEFAULT 1,
 			approved_by TEXT,
 			approved_at TIMESTAMP,
@@ -122,6 +122,11 @@ func withPaymentsTestEnv(t *testing.T, btcpayURL string, paymentsEnabled bool) (
 	if paymentsEnabled {
 		t.Setenv("ARKFILE_PAYMENTS_ENABLED", "true")
 	}
+	// The upload soft-block now gates on Billing.Enabled with a configurable
+	// PAYG negative-balance cap. Enable billing for the payments/billing test
+	// suite so the gate is exercised; the cap defaults to $10.00.
+	t.Setenv("ARKFILE_BILLING_ENABLED", "true")
+	t.Setenv("ARKFILE_PAYG_NEGATIVE_BALANCE_LIMIT_USD", "10.00")
 	t.Setenv("ARKFILE_BTCPAY_SERVER_URL", btcpayURL)
 	t.Setenv("ARKFILE_BTCPAY_STORE_ID", paymentsStoreID)
 	t.Setenv("ARKFILE_BTCPAY_API_KEY", "test_api_key")

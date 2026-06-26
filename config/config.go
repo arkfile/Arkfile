@@ -148,6 +148,23 @@ type BillingConfig struct {
 	// IncludeAdmins controls whether admin accounts are billed. Default false
 	// keeps operator self-usage out of beta usage data.
 	IncludeAdmins bool `json:"include_admins"`
+
+	// PaygNegativeBalanceLimitUSD is the dollars-and-cents pay-as-you-go
+	// negative-balance cap (default "10.00"). Once a user's balance reaches
+	// this far below zero, uploads are blocked; login and downloads remain
+	// available so users can retrieve their data and settle up. Only enforced
+	// when Enabled is true.
+	PaygNegativeBalanceLimitUSD string `json:"payg_negative_balance_limit_usd"`
+
+	// paygNegativeBalanceLimitMicrocents is the parsed value of
+	// PaygNegativeBalanceLimitUSD in microcents, populated by LoadConfig.
+	paygNegativeBalanceLimitMicrocents int64
+}
+
+// PaygNegativeBalanceLimitMicrocents returns the configured pay-as-you-go
+// negative-balance cap in microcents. Returns 0 (block at zero) if unset.
+func (b BillingConfig) PaygNegativeBalanceLimitMicrocents() int64 {
+	return b.paygNegativeBalanceLimitMicrocents
 }
 
 // PaymentsConfig is the BTCPay Server / Stripe extension payments configuration.
@@ -304,12 +321,13 @@ func loadDefaultConfig(cfg *Config) error {
 
 	// Billing defaults (storage credits / usage metering).
 	cfg.Billing.Enabled = false
-	cfg.Billing.FreeBaselineBytes = 1181116006 // 1.1 GiB, matches models.DefaultStorageLimit
+	cfg.Billing.FreeBaselineBytes = 1073741824 // 1 GiB, matches models.DefaultStorageLimit
 	cfg.Billing.CustomerPriceUSDPerTBPerMonth = "10.00"
 	cfg.Billing.GiftedCreditsUSD = "0.00" // no auto-gift; admins gift manually if desired
 	cfg.Billing.TickInterval = time.Hour
 	cfg.Billing.SweepAtUTC = "00:15"
 	cfg.Billing.IncludeAdmins = false
+	cfg.Billing.PaygNegativeBalanceLimitUSD = "10.00"
 
 	// Payments defaults (BTCPay Server integration)
 	cfg.Payments.Enabled = false
@@ -467,6 +485,9 @@ func loadEnvConfig(cfg *Config) error {
 			cfg.Billing.IncludeAdmins = parsed
 		}
 	}
+	if v := os.Getenv("ARKFILE_PAYG_NEGATIVE_BALANCE_LIMIT_USD"); v != "" {
+		cfg.Billing.PaygNegativeBalanceLimitUSD = v
+	}
 
 	// Payments (BTCPay Server integration) envs
 	if v := os.Getenv("ARKFILE_PAYMENTS_ENABLED"); v != "" {
@@ -493,6 +514,12 @@ func loadEnvConfig(cfg *Config) error {
 		cfg.Payments.MaxTopUpUSD = v
 	}
 
+	// Parse the PAYG negative-balance cap into microcents for the upload gate.
+	// Invalid values fall through to 0 here; validateConfig reports the error.
+	if microcents, err := parseUSDToMicrocents(cfg.Billing.PaygNegativeBalanceLimitUSD); err == nil {
+		cfg.Billing.paygNegativeBalanceLimitMicrocents = microcents
+	}
+
 	return nil
 }
 
@@ -512,6 +539,14 @@ func loadJSONConfig(cfg *Config, path string) error {
 }
 
 func validateConfig(cfg *Config) error {
+	// Validate the PAYG negative-balance cap regardless of whether billing is
+	// enabled; the default ("10.00") must always parse cleanly.
+	if cfg.Billing.PaygNegativeBalanceLimitUSD != "" {
+		if _, err := parseUSDToMicrocents(cfg.Billing.PaygNegativeBalanceLimitUSD); err != nil {
+			return fmt.Errorf("ARKFILE_PAYG_NEGATIVE_BALANCE_LIMIT_USD: %w", err)
+		}
+	}
+
 	// Validate storage configuration based on provider
 	switch cfg.Storage.Provider {
 	case "generic-s3":
@@ -579,6 +614,32 @@ func validatePaymentsConfig(cfg *Config) error {
 		return fmt.Errorf("ARKFILE_MIN_TOP_UP_USD must be less than ARKFILE_MAX_TOP_UP_USD")
 	}
 	return nil
+}
+
+// parseUSDToMicrocents parses a non-negative dollars-and-cents string (e.g.
+// "10.00", "$10", "0.50") into microcents (1 USD = 1_000_000 microcents).
+// Used for the PAYG negative-balance cap, which may be 0 (block at zero).
+func parseUSDToMicrocents(value string) (int64, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, fmt.Errorf("must be a non-negative USD amount")
+	}
+	negative := false
+	if strings.HasPrefix(value, "-") {
+		negative = true
+		value = strings.TrimPrefix(value, "-")
+	}
+	if strings.HasPrefix(value, "+") {
+		value = strings.TrimPrefix(value, "+")
+	}
+	if strings.HasPrefix(value, "$") {
+		value = strings.TrimPrefix(value, "$")
+	}
+	f, err := strconv.ParseFloat(value, 64)
+	if err != nil || negative || f < 0 {
+		return 0, fmt.Errorf("must be a non-negative USD amount")
+	}
+	return int64(f*1e6 + 0.5), nil
 }
 
 func parsePositiveTopUpUSD(value, name string) (int64, error) {
@@ -698,4 +759,46 @@ func GetConfig() *Config {
 func ResetConfigForTest() {
 	configOnce = sync.Once{}
 	config = nil
+	requireApprovalMu.Lock()
+	requireApproval = false
+	requireApprovalInitialized = false
+	requireApprovalMu.Unlock()
+}
+
+// require_approval live, admin-controllable policy state.
+//
+// The env-loaded Deployment.RequireApproval is the seed/default. At startup
+// main.go loads the persisted value from the system_settings table (if present)
+// and calls SetRequireApproval; the admin set-approval-policy endpoint updates
+// that table and calls SetRequireApproval to flip the policy without a restart.
+// RequireApproval falls back to the env default until the first SetRequireApproval.
+var (
+	requireApprovalMu          sync.RWMutex
+	requireApproval            bool
+	requireApprovalInitialized bool
+)
+
+// SetRequireApproval sets the live auto-approval policy. require_approval=true
+// means new registrations require explicit admin approval; false means they are
+// auto-approved at registration time with approved_by="system".
+func SetRequireApproval(enabled bool) {
+	requireApprovalMu.Lock()
+	requireApproval = enabled
+	requireApprovalInitialized = true
+	requireApprovalMu.Unlock()
+}
+
+// RequireApproval returns the live auto-approval policy. Before the first
+// SetRequireApproval call it falls back to the env-loaded
+// Deployment.RequireApproval so the registration path is correct even if the
+// system_settings load has not yet run.
+func RequireApproval() bool {
+	requireApprovalMu.RLock()
+	if requireApprovalInitialized {
+		v := requireApproval
+		requireApprovalMu.RUnlock()
+		return v
+	}
+	requireApprovalMu.RUnlock()
+	return GetConfig().Deployment.RequireApproval
 }

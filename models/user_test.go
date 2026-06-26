@@ -100,18 +100,20 @@ func TestCreateUser(t *testing.T) {
 	testCases := []struct {
 		name           string
 		username       string
+		autoApprove    bool
 		expectAdmin    bool
 		expectApproved bool
 		expectError    bool
 	}{
-		{"Regular User", "test.user.regular", false, false, false},
-		{"Admin User", "admin.superuser", true, true, false},
+		{"Regular User, manual approval", "test.user.regular", false, false, false, false},
+		{"Regular User, auto approve", "test.user.autoapproved", true, false, true, false},
+		{"Admin User", "admin.superuser", false, true, true, false},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Execute CreateUser
-			user, err := CreateUser(db, tc.username)
+			user, err := CreateUser(db, tc.username, tc.autoApprove)
 
 			assert.NoError(t, err, "Did not expect an error for "+tc.name)
 			require.NotNil(t, user, "User object should not be nil for "+tc.name)
@@ -121,21 +123,25 @@ func TestCreateUser(t *testing.T) {
 			assert.Equal(t, DefaultStorageLimit, user.StorageLimitBytes, "Storage limit should be default")
 			assert.Equal(t, tc.expectAdmin, user.IsAdmin, "Admin status mismatch")
 			assert.Equal(t, tc.expectApproved, user.IsApproved, "Approved status mismatch")
-			assert.NotZero(t, user.ID, "User ID should be populated") // Check if ID is generated
+			assert.NotZero(t, user.ID, "User ID should be populated")
 
-			// Note: With OPAQUE authentication, password hash is no longer stored in the users table
-			// This test section is removed as it's no longer applicable
+			// Auto-approved non-admin accounts carry the "system" sentinel.
+			if tc.autoApprove && !tc.expectAdmin {
+				assert.True(t, user.ApprovedBy.Valid, "ApprovedBy should be set for auto-approved user")
+				assert.Equal(t, systemApprover, user.ApprovedBy.String, "ApprovedBy should be the system sentinel")
+				assert.True(t, user.ApprovedAt.Valid, "ApprovedAt should be set for auto-approved user")
+			}
 		})
 	}
 
 	// Test Duplicate Username specifically
 	t.Run("Duplicate Username", func(t *testing.T) {
 		// First creation should succeed
-		_, err := CreateUser(db, "duplicate.user.test")
+		_, err := CreateUser(db, "duplicate.user.test", false)
 		require.NoError(t, err)
 
 		// Second creation with the same username should fail
-		_, err = CreateUser(db, "duplicate.user.test")
+		_, err = CreateUser(db, "duplicate.user.test", false)
 		assert.Error(t, err, "Expected an error for duplicate username")
 		if err != nil {
 			assert.Contains(t, err.Error(), "UNIQUE constraint failed", "Error should be about uniqueness")
@@ -149,7 +155,7 @@ func TestGetUserByUsername(t *testing.T) {
 
 	// Create a test user first
 	username := "findme.user.test"
-	createdUser, err := CreateUser(db, username)
+	createdUser, err := CreateUser(db, username, false)
 	require.NoError(t, err)
 	require.NotNil(t, createdUser)
 
@@ -217,7 +223,7 @@ func TestApproveUser(t *testing.T) {
 	defer os.Setenv("ADMIN_USERNAMES", originalAdmins)
 
 	// Create a user to approve
-	userToApprove, err := CreateUser(db, "pending.user.test")
+	userToApprove, err := CreateUser(db, "pending.user.test", false)
 	require.NoError(t, err)
 	require.False(t, userToApprove.IsApproved, "User should initially be unapproved")
 
@@ -270,7 +276,7 @@ func TestUpdateStorageUsage(t *testing.T) {
 	defer db.Close()
 
 	// Create user with initial storage
-	user, err := CreateUser(db, "storageuser")
+	user, err := CreateUser(db, "storageuser", false)
 	require.NoError(t, err)
 	initialStorage := int64(1024 * 1024) // 1MB initial
 	_, err = db.Exec("UPDATE users SET total_storage_bytes = ? WHERE id = ?", initialStorage, user.ID)
@@ -320,17 +326,17 @@ func TestGetPendingUsers(t *testing.T) {
 	defer os.Setenv("ADMIN_USERNAMES", originalAdmins)
 
 	// Create users: 2 pending, 1 approved, 1 admin (auto-approved)
-	_, err := CreateUser(db, "pending1.user.test")
+	_, err := CreateUser(db, "pending1.user.test", false)
 	require.NoError(t, err)
-	_, err = CreateUser(db, "pending2.user.test")
+	_, err = CreateUser(db, "pending2.user.test", false)
 	require.NoError(t, err)
-	approvedUser, err := CreateUser(db, "approved.user.test")
+	approvedUser, err := CreateUser(db, "approved.user.test", false)
 	require.NoError(t, err)
 	// Manually approve this one
 	_, err = db.Exec("UPDATE users SET is_approved = TRUE WHERE username = ?", approvedUser.Username)
 	require.NoError(t, err)
 	// Admin username should be auto-approved
-	_, err = CreateUser(db, "adminuser.test")
+	_, err = CreateUser(db, "adminuser.test", false)
 	require.NoError(t, err)
 
 	// Execute GetPendingUsers

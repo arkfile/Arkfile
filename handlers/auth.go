@@ -12,6 +12,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/arkfile/Arkfile/auth"
+	"github.com/arkfile/Arkfile/config"
 	"github.com/arkfile/Arkfile/database"
 	"github.com/arkfile/Arkfile/logging"
 	"github.com/arkfile/Arkfile/models"
@@ -357,6 +358,17 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 		return JSONError(c, http.StatusInternalServerError, "Failed to store user record")
 	}
 
+	// Per-entityID positive throttle on successful registrations. Counts only
+	// completed account creations over a rolling 24h window; denied attempts
+	// do not consume a slot. See handlers/registration_throttle.go.
+	throttleAllowed, throttleErr := enforceRegistrationThrottle(c)
+	if throttleErr != nil {
+		return JSONError(c, http.StatusServiceUnavailable, "Registration throttle unavailable")
+	}
+	if !throttleAllowed {
+		return nil // 429 already written
+	}
+
 	// Start transaction for atomic user + OPAQUE record creation
 	tx, err := database.DB.Begin()
 	if err != nil {
@@ -365,8 +377,11 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 	}
 	defer tx.Rollback()
 
-	// Create user record
-	_, err = models.CreateUser(tx, request.Username)
+	// Create user record. The auto-approval policy is read live so an admin
+	// can flip it at runtime via `arkfile-admin set-approval-policy` without a
+	// restart. require_approval=false => auto-approved with approved_by="system";
+	// true => created pending explicit admin approval.
+	_, err = models.CreateUser(tx, request.Username, !config.RequireApproval())
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create user %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "User creation failed")
@@ -388,6 +403,10 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 		logging.ErrorLogger.Printf("Failed to commit transaction for %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "User creation failed")
 	}
+
+	// Account the completed registration against the per-entityID throttle.
+	// Best-effort: the account already exists; a logging failure must not undo it.
+	recordSuccessfulRegistration(c, request.Username)
 
 	// Clean up session after successful registration
 	if err := auth.DeleteAuthSession(database.DB, request.SessionID); err != nil {

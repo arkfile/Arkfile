@@ -3060,6 +3060,118 @@ run_billing() {
         record_test "list-overdrawn includes test user after negative balance" "FAIL"
     fi
 
+    # ------------------------------------------------------------------ #
+    # ------------------------------------------------------------------ #
+    scenario "PAYG negative-balance upload cap"
+
+    # The drain above left the balance slightly negative (just under $0)
+    # and the price still at 9999.99.  We exercise the -$10 negative
+    # balance upload cap in three steps:
+    #   1. small negative (within the -$10 cap) -> upload NOT blocked
+    #   2. drive balance <= -$10                 -> upload blocked (402)
+    #   3. while <= -$10, login + download still succeed
+    local cap_microcents=10000000   # $10.00 in microcents
+    local cap_test_file="$TEST_DATA_DIR/payg_cap_probe.bin"
+    head -c 2048 /dev/urandom > "$cap_test_file" 2>/dev/null || \
+        printf 'x%.0s' $(seq 1 2048) > "$cap_test_file"
+
+    # Fresh session so the upload probe is not defeated by an expired token.
+    user_login_with_totp "Re-login before PAYG cap probe"
+
+    # --- Step 1: small negative balance does NOT block uploads ---------
+    local cap_small_out cap_small_code
+    safe_exec cap_small_out cap_small_code \
+        $CLIENT \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        upload \
+        --file "$cap_test_file" \
+        --password-type account || true
+
+    if echo "$cap_small_out" | grep -qi "payment_required" \
+        || echo "$cap_small_out" | grep -qi "HTTP 402"; then
+        error "Upload blocked at small negative balance (within cap):"
+        echo "$cap_small_out"
+        record_test "Small negative balance does not block upload" "FAIL"
+    else
+        record_test "Small negative balance does not block upload" "PASS"
+    fi
+
+    # --- Step 2: drive balance below the -$10 cap ----------------------
+    # Price is still 9999.99 from the drain above; sweep until the
+    # balance is at or below -cap_microcents (-$10.00).
+    local cap_max_sweeps=40
+    local cap_sweep_count=0
+    local cap_balance="$current_balance"
+    while [ "$cap_sweep_count" -lt "$cap_max_sweeps" ]; do
+        if [ -n "$cap_balance" ] && [ "$cap_balance" -le "-$cap_microcents" ] 2>/dev/null; then
+            break
+        fi
+        safe_exec tick_out tick_code \
+            $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+            billing tick-now --sweep --json || true
+        cap_sweep_count=$((cap_sweep_count + 1))
+        safe_exec credits_after_out credits_after_code \
+            $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+            billing show --user "$TEST_USERNAME" --json
+        cap_balance=$(echo "$credits_after_out" | \
+            jq -r '.balance_usd_microcents // 0' 2>/dev/null || echo "0")
+    done
+    info "Balance after cap drain: $cap_balance microcents (target <= -$cap_microcents)"
+
+    if [ -n "$cap_balance" ] && [ "$cap_balance" -le "-$cap_microcents" ] 2>/dev/null; then
+        record_test "Balance driven to/below negative cap (-$10)" "PASS"
+    else
+        error "Balance did not reach negative cap after $cap_max_sweeps sweeps: $cap_balance"
+        record_test "Balance driven to/below negative cap (-$10)" "FAIL"
+    fi
+
+    # --- Step 2b: upload now blocked at/under the cap ------------------
+    # Fresh random content so client-side dedup cannot short-circuit and
+    # skip the CreateUploadSession call that enforces the cap.
+    head -c 2048 /dev/urandom > "$cap_test_file" 2>/dev/null || \
+        printf 'y%.0s' $(seq 1 2048) > "$cap_test_file"
+    local cap_block_out cap_block_code
+    safe_exec cap_block_out cap_block_code \
+        $CLIENT \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        upload \
+        --file "$cap_test_file" \
+        --password-type account || true
+
+    if echo "$cap_block_out" | grep -qi "payment_required" \
+        && echo "$cap_block_out" | grep -qi "HTTP 402"; then
+        record_test "Upload blocked at negative cap (402 payment_required)" "PASS"
+        info "Blocked upload output:"
+        echo "$cap_block_out"
+    else
+        error "Upload was NOT blocked at negative cap (expected 402 payment_required):"
+        echo "$cap_block_out"
+        record_test "Upload blocked at negative cap (402 payment_required)" "FAIL"
+    fi
+
+    # --- Step 3: download still works while at the cap -----------------
+    local cap_dl_file="$TEST_DATA_DIR/payg_cap_download.bin"
+    local cap_dl_out cap_dl_code
+    safe_exec cap_dl_out cap_dl_code \
+        $CLIENT \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        download \
+        --file-id "$UPLOADED_FILE_ID" \
+        --output "$cap_dl_file"
+
+    if [ $cap_dl_code -eq 0 ]; then
+        record_test "Download still works while at negative cap" "PASS"
+    else
+        error "Download failed while at negative cap:"
+        echo "$cap_dl_out"
+        record_test "Download still works while at negative cap" "FAIL"
+    fi
+
+    rm -f "$cap_test_file" "$cap_dl_file"
+
     # Restore price to documented default after the drain test.
     safe_exec _restore_sp_out _restore_sp_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
@@ -3257,6 +3369,116 @@ run_payments() {
     stop_mock_btcpay_server "$mock_pid"
 
     info "Payments complete"
+}
+
+run_registration_throttle() {
+    group "Registration throttle"
+
+    # Isolated, deterministic test of the positive registration throttle:
+    # 7 successful registrations per entityID are free; the 8th is rejected
+    # with HTTP 429 + Retry-After.  All registrations in the e2e run originate
+    # from the same host, so they share one entityID.
+    #
+    # We reset registration_attempts before (known state) and after (so the
+    # test host is not left in a multi-hour cooldown that would block manual
+    # testing).  The reset endpoint is dev/test-only.
+
+    scenario "Reset registration throttle (pre-test)"
+    local reset_out reset_code
+    safe_exec reset_out reset_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        reset-registration-throttle --json || true
+    if [ $reset_code -eq 0 ]; then
+        record_test "reset-registration-throttle (pre)" "PASS"
+    else
+        error "reset-registration-throttle (pre) failed (is ADMIN_DEV_TEST_API_ENABLED=true on the server?):"
+        echo "$reset_out"
+        record_test "reset-registration-throttle (pre)" "FAIL"
+    fi
+
+    scenario "Register 7 users (free allowance)"
+    local throttle_prefix="e2e-throttle-$$"
+    local i out code ok_count=0
+    for i in $(seq 1 7); do
+        safe_exec out code \
+            bash -c "printf '%s\n%s\n' '$TEST_PASSWORD' '$TEST_PASSWORD' | $CLIENT \
+                --server-url '$SERVER_URL' \
+                --tls-insecure \
+                register \
+                --username '${throttle_prefix}-${i}'" || true
+        if [ $code -eq 0 ] && echo "$out" | grep -q "Registration successful"; then
+            ok_count=$((ok_count + 1))
+        else
+            error "Registration #$i unexpectedly failed:"
+            echo "$out"
+        fi
+    done
+
+    if [ "$ok_count" -eq 7 ]; then
+        record_test "7 free registrations succeed" "PASS"
+    else
+        error "Only $ok_count/7 free registrations succeeded"
+        record_test "7 free registrations succeed" "FAIL"
+    fi
+
+    scenario "8th registration is throttled (429 + Retry-After)"
+    local eighth_out eighth_code
+    safe_exec eighth_out eighth_code \
+        bash -c "printf '%s\n%s\n' '$TEST_PASSWORD' '$TEST_PASSWORD' | $CLIENT \
+            --server-url '$SERVER_URL' \
+            --tls-insecure \
+            register \
+            --username '${throttle_prefix}-8'" || true
+
+    if [ $eighth_code -ne 0 ] \
+        && echo "$eighth_out" | grep -qi "HTTP 429" \
+        && echo "$eighth_out" | grep -qi "rate_limited"; then
+        record_test "8th registration blocked with 429 + Retry-After" "PASS"
+        info "Throttled response:"
+        echo "$eighth_out"
+    else
+        error "8th registration was not throttled as expected:"
+        echo "$eighth_out"
+        record_test "8th registration blocked with 429 + Retry-After" "FAIL"
+    fi
+
+    scenario "Reset registration throttle (cleanup)"
+    safe_exec reset_out reset_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        reset-registration-throttle --json || true
+    if [ $reset_code -eq 0 ]; then
+        record_test "reset-registration-throttle (cleanup)" "PASS"
+    else
+        error "reset-registration-throttle (cleanup) failed:"
+        echo "$reset_out"
+        record_test "reset-registration-throttle (cleanup)" "FAIL"
+    fi
+
+    success "Registration throttle complete"
+}
+
+run_enable_auto_approval() {
+    group "Enable auto-approval (post-test setup)"
+
+    # Pure setup step for subsequent MANUAL testing in the dev-reset
+    # environment: flip the live approval policy so newly-registered users
+    # are auto-approved.  This is NOT an assertion about the e2e run; failure
+    # is recorded for visibility but does not fail the suite.
+    scenario "Set approval policy: require-approval=false (auto-approve on)"
+    local flip_out flip_code
+    safe_exec flip_out flip_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        set-approval-policy --require-approval false || true
+    if [ $flip_code -eq 0 ]; then
+        record_test "set-approval-policy --require-approval false" "PASS"
+        info "$flip_out"
+    else
+        error "set-approval-policy --require-approval false failed:"
+        echo "$flip_out"
+        record_test "set-approval-policy --require-approval false" "FAIL"
+    fi
+
+    success "Auto-approval enabled for manual testing"
 }
 
 run_teardown() {
@@ -3463,6 +3685,8 @@ main() {
         run_storage_replication
         run_billing
         run_payments
+        run_registration_throttle
+        run_enable_auto_approval
         run_teardown
     )
 

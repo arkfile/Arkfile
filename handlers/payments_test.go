@@ -345,9 +345,11 @@ func TestCreateUploadSession_SoftBlockNegativeBalance(t *testing.T) {
 	db, cleanup := withPaymentsTestEnv(t, mock.URL, true)
 	defer cleanup()
 
+	// Balance of -$11.00 is beyond the $10.00 PAYG negative-balance cap, so
+	// uploads must be soft-blocked (login/downloads remain available).
 	if _, err := db.Exec(
 		`INSERT INTO user_credits (username, balance_usd_microcents) VALUES (?, ?)`,
-		paymentsTestUser, -1000,
+		paymentsTestUser, -11_000_000,
 	); err != nil {
 		t.Fatalf("seed credits: %v", err)
 	}
@@ -366,4 +368,33 @@ func TestCreateUploadSession_SoftBlockNegativeBalance(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	assert.False(t, resp.Success)
 	assert.Equal(t, "payment_required", resp.Error)
+}
+
+// TestCreateUploadSession_AllowsWithinNegativeCap verifies that a small
+// negative balance within the $10.00 PAYG cap does NOT trigger the upload
+// soft-block. The handler may still error later (the test schema omits the
+// upload_sessions table); the assertion is only that the payment_required gate
+// did not fire.
+func TestCreateUploadSession_AllowsWithinNegativeCap(t *testing.T) {
+	mock := startMockBTCPayServer(t, nil)
+	defer mock.Close()
+	db, cleanup := withPaymentsTestEnv(t, mock.URL, true)
+	defer cleanup()
+
+	// -$0.001 is negative but well within the $10.00 cap.
+	if _, err := db.Exec(
+		`INSERT INTO user_credits (username, balance_usd_microcents) VALUES (?, ?)`,
+		paymentsTestUser, -1000,
+	); err != nil {
+		t.Fatalf("seed credits: %v", err)
+	}
+
+	payload := buildValidInitPayload(validTestFileID)
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	c, rec := newPaymentsEchoContext(t, http.MethodPost, "/api/uploads/init", bytes.NewReader(body), paymentsTestUser)
+
+	_ = CreateUploadSession(c)
+	assert.NotEqual(t, http.StatusPaymentRequired, rec.Code, "small negative balance must not trigger the upload soft-block")
 }

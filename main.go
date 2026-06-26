@@ -240,6 +240,15 @@ func main() {
 	defer cancelBilling()
 	startBillingScheduler(billingCtx, cfg)
 
+	// Load the persisted auto-approval policy from system_settings (seeding it
+	// from REQUIRE_APPROVAL on first startup) and apply it to the live config
+	// state so an admin's last `set-approval-policy` value survives restarts.
+	if err := loadRequireApprovalSetting(cfg); err != nil {
+		log.Printf("Warning: Failed to load require_approval setting: %v", err)
+		log.Printf("Falling back to REQUIRE_APPROVAL=%t", cfg.Deployment.RequireApproval)
+		config.SetRequireApproval(cfg.Deployment.RequireApproval)
+	}
+
 	// Create Echo instance
 	e := echo.New()
 
@@ -361,6 +370,48 @@ func main() {
 // cleanly without touching the meter (handy for dev-reset.sh which avoids
 // time-dependent test flakiness by disabling billing by default).
 //
+// loadRequireApprovalSetting loads the persisted auto-approval policy from
+// system_settings and applies it to the live config state. On first startup
+// (no row yet) it seeds the row from the env-loaded REQUIRE_APPROVAL default
+// so the admin set-approval-policy endpoint has a value to update.
+func loadRequireApprovalSetting(cfg *config.Config) error {
+	var valueStr string
+	err := database.DB.QueryRow(
+		`SELECT value FROM system_settings WHERE key = ?`,
+		"require_approval",
+	).Scan(&valueStr)
+	if err == sql.ErrNoRows {
+		seed := "false"
+		if cfg.Deployment.RequireApproval {
+			seed = "true"
+		}
+		if _, err := database.DB.Exec(
+			`INSERT INTO system_settings (key, value, updated_by, updated_at)
+			 VALUES (?, ?, 'system', CURRENT_TIMESTAMP)`,
+			"require_approval", seed,
+		); err != nil {
+			return fmt.Errorf("failed to seed require_approval: %w", err)
+		}
+		config.SetRequireApproval(cfg.Deployment.RequireApproval)
+		log.Printf("Seeded require_approval=%t (from REQUIRE_APPROVAL env)", cfg.Deployment.RequireApproval)
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to read require_approval: %w", err)
+	}
+
+	switch strings.ToLower(strings.TrimSpace(valueStr)) {
+	case "true", "1":
+		config.SetRequireApproval(true)
+	case "false", "0":
+		config.SetRequireApproval(false)
+	default:
+		return fmt.Errorf("invalid stored require_approval value %q", valueStr)
+	}
+	log.Printf("Loaded require_approval=%s from system_settings", valueStr)
+	return nil
+}
+
 // Wires the handler-side projection seam (handlers.SetBillingProjectionSeams)
 // so /api/credits and admin endpoints can render rate-aware fields. The seam
 // is wired even when billing is disabled, so the response shape stays stable

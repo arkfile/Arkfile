@@ -269,6 +269,8 @@ func RegisterRoutes() {
 	// System monitoring - admin endpoints
 	adminGroup.GET("/system/status", AdminSystemStatus)
 	adminGroup.GET("/system/health", AdminSystemHealth)
+	adminGroup.GET("/system/approval-policy", AdminGetApprovalPolicy)
+	adminGroup.POST("/system/approval-policy", AdminSetApprovalPolicy)
 	adminGroup.POST("/system/prepare-user-secret-master-rotation", AdminPrepareUserSecretMasterRotation)
 	adminGroup.POST("/system/prepare-envelope-master-rotation", AdminPrepareEnvelopeMasterRotation)
 	adminGroup.POST("/system/rotate-jwt-keys", AdminRotateJWTKeys)
@@ -327,6 +329,12 @@ func RegisterRoutes() {
 		// route in production-flavored deployments. Used by the e2e billing
 		// test in scripts/testing/e2e-test.sh.
 		devTestAdminGroup.POST("/billing/tick-now", AdminBillingTickNow)
+
+		// Registration throttle reset: clears the registration_attempts table
+		// so the e2e throttle-interaction test can run from a known state and
+		// so it does not leave the test host's entityID in a multi-hour
+		// cooldown that would block manual testing afterward. Dev/test only.
+		devTestAdminGroup.POST("/registration-throttle/reset", AdminResetRegistrationThrottle)
 	}
 }
 
