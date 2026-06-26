@@ -3060,118 +3060,6 @@ run_billing() {
         record_test "list-overdrawn includes test user after negative balance" "FAIL"
     fi
 
-    # ------------------------------------------------------------------ #
-    # ------------------------------------------------------------------ #
-    scenario "PAYG negative-balance upload cap"
-
-    # The drain above left the balance slightly negative (just under $0)
-    # and the price still at 9999.99.  We exercise the -$10 negative
-    # balance upload cap in three steps:
-    #   1. small negative (within the -$10 cap) -> upload NOT blocked
-    #   2. drive balance <= -$10                 -> upload blocked (402)
-    #   3. while <= -$10, login + download still succeed
-    local cap_microcents=10000000   # $10.00 in microcents
-    local cap_test_file="$TEST_DATA_DIR/payg_cap_probe.bin"
-    head -c 2048 /dev/urandom > "$cap_test_file" 2>/dev/null || \
-        printf 'x%.0s' $(seq 1 2048) > "$cap_test_file"
-
-    # Fresh session so the upload probe is not defeated by an expired token.
-    user_login_with_totp "Re-login before PAYG cap probe"
-
-    # --- Step 1: small negative balance does NOT block uploads ---------
-    local cap_small_out cap_small_code
-    safe_exec cap_small_out cap_small_code \
-        $CLIENT \
-        --server-url "$SERVER_URL" \
-        --tls-insecure \
-        upload \
-        --file "$cap_test_file" \
-        --password-type account || true
-
-    if echo "$cap_small_out" | grep -qi "payment_required" \
-        || echo "$cap_small_out" | grep -qi "HTTP 402"; then
-        error "Upload blocked at small negative balance (within cap):"
-        echo "$cap_small_out"
-        record_test "Small negative balance does not block upload" "FAIL"
-    else
-        record_test "Small negative balance does not block upload" "PASS"
-    fi
-
-    # --- Step 2: drive balance below the -$10 cap ----------------------
-    # Price is still 9999.99 from the drain above; sweep until the
-    # balance is at or below -cap_microcents (-$10.00).
-    local cap_max_sweeps=40
-    local cap_sweep_count=0
-    local cap_balance="$current_balance"
-    while [ "$cap_sweep_count" -lt "$cap_max_sweeps" ]; do
-        if [ -n "$cap_balance" ] && [ "$cap_balance" -le "-$cap_microcents" ] 2>/dev/null; then
-            break
-        fi
-        safe_exec tick_out tick_code \
-            $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-            billing tick-now --sweep --json || true
-        cap_sweep_count=$((cap_sweep_count + 1))
-        safe_exec credits_after_out credits_after_code \
-            $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-            billing show --user "$TEST_USERNAME" --json
-        cap_balance=$(echo "$credits_after_out" | \
-            jq -r '.balance_usd_microcents // 0' 2>/dev/null || echo "0")
-    done
-    info "Balance after cap drain: $cap_balance microcents (target <= -$cap_microcents)"
-
-    if [ -n "$cap_balance" ] && [ "$cap_balance" -le "-$cap_microcents" ] 2>/dev/null; then
-        record_test "Balance driven to/below negative cap (-$10)" "PASS"
-    else
-        error "Balance did not reach negative cap after $cap_max_sweeps sweeps: $cap_balance"
-        record_test "Balance driven to/below negative cap (-$10)" "FAIL"
-    fi
-
-    # --- Step 2b: upload now blocked at/under the cap ------------------
-    # Fresh random content so client-side dedup cannot short-circuit and
-    # skip the CreateUploadSession call that enforces the cap.
-    head -c 2048 /dev/urandom > "$cap_test_file" 2>/dev/null || \
-        printf 'y%.0s' $(seq 1 2048) > "$cap_test_file"
-    local cap_block_out cap_block_code
-    safe_exec cap_block_out cap_block_code \
-        $CLIENT \
-        --server-url "$SERVER_URL" \
-        --tls-insecure \
-        upload \
-        --file "$cap_test_file" \
-        --password-type account || true
-
-    if echo "$cap_block_out" | grep -qi "payment_required" \
-        && echo "$cap_block_out" | grep -qi "HTTP 402"; then
-        record_test "Upload blocked at negative cap (402 payment_required)" "PASS"
-        info "Blocked upload output:"
-        echo "$cap_block_out"
-    else
-        error "Upload was NOT blocked at negative cap (expected 402 payment_required):"
-        echo "$cap_block_out"
-        record_test "Upload blocked at negative cap (402 payment_required)" "FAIL"
-    fi
-
-    # --- Step 3: download still works while at the cap -----------------
-    local cap_dl_file="$TEST_DATA_DIR/payg_cap_download.bin"
-    local cap_dl_out cap_dl_code
-    safe_exec cap_dl_out cap_dl_code \
-        $CLIENT \
-        --server-url "$SERVER_URL" \
-        --tls-insecure \
-        download \
-        --file-id "$UPLOADED_FILE_ID" \
-        --output "$cap_dl_file"
-
-    if [ $cap_dl_code -eq 0 ]; then
-        record_test "Download still works while at negative cap" "PASS"
-    else
-        error "Download failed while at negative cap:"
-        echo "$cap_dl_out"
-        record_test "Download still works while at negative cap" "FAIL"
-    fi
-
-    rm -f "$cap_test_file" "$cap_dl_file"
-
     # Restore price to documented default after the drain test.
     safe_exec _restore_sp_out _restore_sp_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
@@ -3223,6 +3111,122 @@ run_payments() {
         # Log in as the regular test user to ensure a fresh session and token
         user_login_with_totp "User login for payments test"
     fi
+
+    # ------------------------------------------------------------------ #
+    # ------------------------------------------------------------------ #
+    scenario "PAYG negative-balance upload cap"
+
+    # Billing (admin-only) leaves the test user slightly negative.  User CLI
+    # steps run here — after post-admin-reset MFA re-enrollment — so upload
+    # and download probes have a valid session.  Invoice top-up below restores
+    # balance afterward.
+    local cap_microcents=10000000   # $10.00 in microcents
+    local cap_test_file="$TEST_DATA_DIR/payg_cap_probe.bin"
+    head -c 2048 /dev/urandom > "$cap_test_file" 2>/dev/null || \
+        printf 'x%.0s' $(seq 1 2048) > "$cap_test_file"
+
+    # --- Step 1: small negative balance does NOT block uploads ---------
+    local cap_small_out cap_small_code
+    safe_exec cap_small_out cap_small_code \
+        $CLIENT \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        upload \
+        --file "$cap_test_file" \
+        --password-type account || true
+
+    if echo "$cap_small_out" | grep -qi "payment_required" \
+        || echo "$cap_small_out" | grep -qi "HTTP 402"; then
+        error "Upload blocked at small negative balance (within cap):"
+        echo "$cap_small_out"
+        record_test "Small negative balance does not block upload" "FAIL"
+    else
+        record_test "Small negative balance does not block upload" "PASS"
+    fi
+
+    # --- Step 2: drive balance below the -$10 cap ----------------------
+    safe_exec _cap_sp_out _cap_sp_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing set-price 9999.99 || true
+
+    local cap_max_sweeps=40
+    local cap_sweep_count=0
+    local cap_balance
+    safe_exec credits_after_out credits_after_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing show --user "$TEST_USERNAME" --json
+    cap_balance=$(echo "$credits_after_out" | \
+        jq -r '.balance_usd_microcents // 0' 2>/dev/null || echo "0")
+    while [ "$cap_sweep_count" -lt "$cap_max_sweeps" ]; do
+        if [ -n "$cap_balance" ] && [ "$cap_balance" -le "-$cap_microcents" ] 2>/dev/null; then
+            break
+        fi
+        safe_exec tick_out tick_code \
+            $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+            billing tick-now --sweep --json || true
+        cap_sweep_count=$((cap_sweep_count + 1))
+        safe_exec credits_after_out credits_after_code \
+            $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+            billing show --user "$TEST_USERNAME" --json
+        cap_balance=$(echo "$credits_after_out" | \
+            jq -r '.balance_usd_microcents // 0' 2>/dev/null || echo "0")
+    done
+    info "Balance after cap drain: $cap_balance microcents (target <= -$cap_microcents)"
+
+    if [ -n "$cap_balance" ] && [ "$cap_balance" -le "-$cap_microcents" ] 2>/dev/null; then
+        record_test "Balance driven to/below negative cap (-$10)" "PASS"
+    else
+        error "Balance did not reach negative cap after $cap_max_sweeps sweeps: $cap_balance"
+        record_test "Balance driven to/below negative cap (-$10)" "FAIL"
+    fi
+
+    # --- Step 2b: upload now blocked at/under the cap ------------------
+    head -c 2048 /dev/urandom > "$cap_test_file" 2>/dev/null || \
+        printf 'y%.0s' $(seq 1 2048) > "$cap_test_file"
+    local cap_block_out cap_block_code
+    safe_exec cap_block_out cap_block_code \
+        $CLIENT \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        upload \
+        --file "$cap_test_file" \
+        --password-type account || true
+
+    if echo "$cap_block_out" | grep -qi "payment_required" \
+        && echo "$cap_block_out" | grep -qi "HTTP 402"; then
+        record_test "Upload blocked at negative cap (402 payment_required)" "PASS"
+        info "Blocked upload output:"
+        echo "$cap_block_out"
+    else
+        error "Upload was NOT blocked at negative cap (expected 402 payment_required):"
+        echo "$cap_block_out"
+        record_test "Upload blocked at negative cap (402 payment_required)" "FAIL"
+    fi
+
+    # --- Step 3: download still works while at the cap -----------------
+    local cap_dl_file="$TEST_DATA_DIR/payg_cap_download.bin"
+    local cap_dl_out cap_dl_code
+    safe_exec cap_dl_out cap_dl_code \
+        $CLIENT \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        download \
+        --file-id "$UPLOADED_FILE_ID" \
+        --output "$cap_dl_file"
+
+    if [ $cap_dl_code -eq 0 ]; then
+        record_test "Download still works while at negative cap" "PASS"
+    else
+        error "Download failed while at negative cap:"
+        echo "$cap_dl_out"
+        record_test "Download still works while at negative cap" "FAIL"
+    fi
+
+    rm -f "$cap_test_file" "$cap_dl_file"
+
+    safe_exec _cap_restore_sp_out _cap_restore_sp_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing set-price 10.00 || true
 
     # Extract the token directly from the user's active session file
     local user_token
