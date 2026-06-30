@@ -1,6 +1,6 @@
 # Subscription Plans and Entitlement Bridge Billing
 
-Arkfile is a privacy-first file vault: usernames are pseudonymous, file data is client-side encrypted, and the server should learn as little as possible about who pays how. Subscription tiers add a fourth commercial layer on top of the existing storage cap, PAYG microcent meter, and BTCPay one-off top-ups already shipped for mid-2026 (1 GiB default marketed as "1.0 GB Free", auto-approval with admin override, registration throttling, PAYG negative-balance upload cap at −$10, and the billing/payments stack in `docs/wip/storage-credits-v2.md` and `docs/wip/payments.md`). Recurring card billing cannot be delegated to the BTCPay Stripe Payments plugin — that plugin adds fiat as a one-off payment method on BTCPay invoices, not pull-based monthly subscriptions. The chosen architecture keeps Arkfile free of payment-processor SDKs and native processor identifiers. Instead, a separate **Entitlement Bridge** service (planned at `billing.arkfile.net`) owns Stripe and any future processors (Adyen, Mollie, Worldpay, Square, etc.), converts processor lifecycle events into a single canonical entitlement protocol, and notifies Arkfile through one signed webhook. Arkfile stores only opaque `checkout_id` and `entitlement_ref` values plus local plan and status rows; usernames never leave the vault host in payment metadata. Operators define a plan catalog (name, display price, storage limit). Subscribed users get a raised effective storage cap and paused PAYG metering. Everyone else stays on the free baseline, hourly meter, and optional BTCPay top-ups. Private instances disable billing, PAYG, subscriptions, and payments independently.
+Arkfile is a privacy-first file vault: usernames are pseudonymous, file data is client-side encrypted, and the server should learn as little as possible about who pays how. Subscription tiers add a fourth commercial layer on top of the existing storage cap, PAYG microcent meter, and BTCPay one-off top-ups already shipped for mid-2026 (1 GiB default marketed as "1.0 GB Free", auto-approval with admin override, registration throttling, PAYG negative-balance upload cap at -$10, and the billing/payments stack in `docs/wip/storage-credits-v2.md` and `docs/wip/payments.md`). Recurring card billing cannot be delegated to the BTCPay Stripe Payments plugin — that plugin adds fiat as a one-off payment method on BTCPay invoices, not pull-based monthly subscriptions. The chosen architecture keeps Arkfile free of payment-processor SDKs and native processor identifiers. Instead, a separate **Entitlement Bridge** service (planned at `billing.arkfile.net`) owns Stripe and any future processors (Adyen, Mollie, Worldpay, Square, etc.), converts processor lifecycle events into a single canonical entitlement protocol, and notifies Arkfile through one signed webhook. Arkfile stores only opaque `checkout_id` and `entitlement_ref` values plus local plan and status rows; usernames never leave the vault host in payment metadata. Operators define a plan catalog (name, display price, storage limit). Subscribed users get a raised effective storage cap and paused PAYG metering. Everyone else stays on the free baseline, hourly meter, and optional BTCPay top-ups. Private or self-hosted instances may choose to disable billing, PAYG, subscriptions, and payments independently, if they so desire.
 
 ## Relationship to existing billing and payments
 
@@ -15,14 +15,16 @@ Three commercial layers already exist in the codebase. Subscriptions add a fourt
 
 Paying does **not** automatically raise storage unless the payment activates a **subscription plan** (or an admin runs `subscriptions assign`). Hard storage cap and credit balance remain separate gates. Upload soft-block at negative PAYG balance applies only when PAYG metering is active for that user.
 
+NOTE: During implementation, we should keep in mind we must maintain the ability of a user and the admin to agree to manually set a higher storage cap for a user who is willing and able to make one-time payments for the service and plans to keep a ~positive balance. E.g. user uses up the free 1 GB, contacts admin via contact info, requests storage cap increase to 10 GB, admin approves and directs user to make a PAYG payment, user balance stays positive for some time as they continue to add files; PAYG approach may continue like this indefinitely; users may always request a higher storage cap out of bounds (or separate from subscription plan system) as desired
+
 ## Three-host architecture
 
 Commercial traffic splits across three hosts with narrow, explicit responsibilities. Arkfile never loads processor checkout scripts and never holds processor API keys for subscriptions.
 
 ```
 ┌─────────────────────────┐         ┌────────────────────────────┐         ┌──────────────┐
-│  app.arkfile.net        │         │  billing.arkfile.net       │         │  Processors  │
-│  (Arkfile)              │  HMAC   │  (Entitlement Bridge)      │  API    │  Stripe, …   │
+│  arkfile.net            │         │  billing.arkfile.net       │         │  Processors  │
+│  (Arkfile app)          │  HMAC   │  (Entitlement Bridge)      │  API    │  Stripe, …   │
 │                         │◄───────►│                            │◄───────►│              │
 │  username, files,       │         │  checkout_id join key      │         │              │
 │  checkout_id,           │         │  entitlement_ref           │         │              │
@@ -73,6 +75,7 @@ User selects a plan from the operator-defined catalog. While entitlement status 
 - **Effective storage cap** is the higher of admin baseline and plan limit (see Storage limit source of truth). `users.storage_limit_bytes` is not mutated.
 - **PAYG metering is off** — flat monthly fee covers storage up to the plan limit; no new `usage` rows while subscribed.
 - User is **not** subject to the PAYG negative-balance upload cap.
+- **BTCPay top-ups are not allowed** while subscribed (server, web UI, and `arkfile-client`).
 
 When entitlement **ends** (cancel, expiry, failed payment after grace):
 
@@ -80,13 +83,70 @@ When entitlement **ends** (cancel, expiry, failed payment after grace):
 
 ### Operator pricing intent (marketing, not code)
 
-Hosted offerings may tier from roughly **250 GB at the low end** to **20 TB at the high end**, with lower tiers priced at a higher effective $/TB and higher tiers approaching infrastructure cost assumptions (~$15/TiB/month for dual-backend replication). Competitor research (Proton, MEGA, SpiderOak) informs positioning only; the codebase stores operator-editable plan rows, not margin tables. Differentiators to emphasize in copy (not in schema): dual object-storage backends, export/portability, open source.
+Hosted offerings may tier from roughly **250 GB at the low end** to **20 TB at the high end**, with lower tiers priced at a higher effective $/TB and higher tiers approaching or even falling below infrastructure cost assumptions (~$15/TiB/month for dual-backend replication). Competitor research (Proton, MEGA, SpiderOak) informs positioning only; the codebase stores operator-editable plan rows, not margin tables. Differentiators to emphasize in copy (not in schema): dual object-storage backends, export/portability, fully open source backend and frontend.
 
 ### v1 billing-mode decision (locked)
 
 **v1:** subscription = **flat fee + storage limit + meter paused**. No per-plan microcent rates, no subscriber overage metering, no proration, no annual intervals, no crypto recurring subscriptions, no automated purge on `past_due`.
 
 **Deferred:** plan-specific PAYG rate overrides, proration, annual billing, BTCPay-native subscriptions as an alternative backend, automated storage purge on `past_due` (policy-only, like `docs/wip/payments.md`).
+
+## How account billing works (operator guide)
+
+This section is for billing staff, accounting, and sysadmins who need to understand behavior without reading application code. The tables below assume instance flags are on: billing, PAYG, subscriptions, and BTCPay top-ups.
+
+Every account is in exactly one **account mode** at a time. Mode controls whether usage is metered by the hour, whether the user pays through a prepaid **balance**, or whether they are on a fixed **subscription plan**.
+
+### Two payment channels (do not mix them on the ledger)
+
+**Prepaid PAYG balance** lives in Arkfile (`user_credits`). Users add funds via BTCPay top-ups. Hourly usage accumulates and is deducted once per day (daily settlement). Subscription fees never post to this balance in v1.
+
+**Subscription plan fees** are billed by the Entitlement Bridge and card processor (`billing.arkfile.net`). Plan payments do not increase or decrease the PAYG balance. Receipt history for subscriptions is on the processor or bridge side, not in `credit_transactions`.
+
+### Account modes
+
+| Account mode | Typical user | Storage paid via | Hourly usage charges | BTCPay top-up |
+|---|---|---|---|---|
+| **Free** | Within 1.0 GB Free tier | Included | No (usage at or below free baseline is not metered) | Allowed (optional; builds balance for later PAYG use) |
+| **Pay-as-you-go (PAYG)** | Above free tier, no active plan | Prepaid balance | **Yes** (hourly meter, daily settlement) | **Allowed** |
+| **Subscribed** | Active or trial plan | Flat monthly plan fee (bridge) | **No** (usage meter paused) | **Not allowed** |
+
+While **Subscribed**, any existing PAYG balance remains on the account but is **frozen**: no new usage charges are applied and no new top-ups are accepted until the subscription ends.
+
+### Worked example
+
+Alice registers and receives 1.0 GB Free. She uploads 30 GB and tops up $20 via BTCPay. She is in **PAYG** mode: the hourly meter runs and daily settlement draws from her balance. She subscribes to a 500 GB monthly plan. The system runs a **final usage settlement** for any pending charges, then **pauses the meter**. Her $20 balance stays on file but is not spent while subscribed; **top-ups are blocked**. She manages renewal and payment method on the billing subdomain. When the plan expires or she cancels, she returns to **PAYG** (or **Free** if back within 1 GB): the meter resumes, top-ups work again, and her $20 balance is available for usage charges as before.
+
+### Admin PAYG without subscription (unchanged)
+
+Operators may still grant a higher **baseline storage cap** via `arkfile-admin set-storage` and direct a user to maintain a positive PAYG balance without any subscription plan. That path stays independent of the subscription catalog (see NOTE under Relationship to existing billing and payments).
+
+## PAYG and metering gating matrix
+
+When a user starts or stops a subscription plan, the behaviors in this table turn on or off together. Implementation uses one billing resolver; operators and support staff can use this table to answer “why is this user being charged?” or “why was top-up rejected?”
+
+**Instance prerequisites:** `ARKFILE_BILLING_ENABLED` and `ARKFILE_BILLING_PAYG_ENABLED` must both be true for any PAYG metering or PAYG upload cap to apply. Per-user subscription state then further gates each row.
+
+| Mechanism | Free (within free tier) | PAYG | Subscribed (active / trial) | Subscribed (past due, in grace) | After subscription ends |
+|---|---|---|---|---|---|
+| Hourly usage meter | Off (nothing to bill at/below baseline) | **On** | **Off** | **Off** | **On** if still above baseline |
+| Daily settlement (balance debit) | Off | **On** | **Off** | **Off** | **On** |
+| PAYG balance decreases from usage | No | Yes | **No** | **No** | Yes |
+| BTCPay top-up | Allowed | Allowed | **Blocked** | **Blocked** | Allowed |
+| Upload blocked at −$10 PAYG cap | No (not in PAYG debt mode) | Yes, if balance that low | **No** (cap not applied) | **No** | Yes, if PAYG and balance that low |
+| Upload blocked for storage cap | Yes | Yes | Yes (effective plan cap) | Yes (subscription past-due rules after grace) | Yes (baseline cap) |
+
+**When user subscribes:** Run **`FinalizePaygBeforeSubscribe(username)`** once — final hourly charge if needed, then settle any pending accumulator into the balance. Then turn the meter off.
+
+**When user unsubscribes or plan expires:** Meter and daily settlement resume on the next scheduler cycle. Balance is unchanged.
+
+**Daily settlement rule:** `SweepAllUsers` (and any per-user settle helper) must **skip users where `ShouldMeter(username)` is false**. A subscribed user must never receive a usage debit from settlement. If a subscribed user still has pending accumulator rows, treat as incomplete transition — repair via admin tools, not silent billing.
+
+## Client parity (web app and arkfile-client)
+
+Per `docs/AGENTS.md`, billing and subscriptions are an **important domain**: the browser billing panel and **`arkfile-client` must offer the same user-facing capabilities** and the same server-enforced rules (including top-up rejection while subscribed). Hosted checkout and portal flows open in the system browser from CLI; iframe embedding is web-only. Naming and behavior should mirror each other (e.g. web “Top Up Balance” ↔ `arkfile-client billing top-up`).
+
+Implement web and CLI billing/subscription flows in the **same build phase**, not web-first with CLI deferred.
 
 ## Storage limit source of truth
 
@@ -111,7 +171,7 @@ All upload gates call `EffectiveStorageLimit(username)`. `CheckStorageAvailable`
 
 1. Every user has a **baseline storage cap** (default 1.0 GB Free). Change it with `arkfile-admin set-storage`.
 2. If they have an **active paid plan**, their cap is the **higher of** baseline and plan size — visible in `arkfile-admin subscriptions show --user`.
-3. **PAYG metering** runs only when they are not on an active plan; topping up balance (BTCPay) is separate from plan storage.
+3. **PAYG metering** runs only when they are not on an active plan. **Top-ups (BTCPay) are only for PAYG/Free** — not while subscribed.
 
 **Example CLI output shape for `subscriptions show --user`:**
 
@@ -121,8 +181,8 @@ User: alice
   Entitlement:                  active (ent_a8f3… via bridge)
   Plan:                         500 GB ($9/mo) until 2026-07-26
   Effective upload cap:         500 GB
-  Billing mode:                 subscribed (PAYG meter paused)
-  PAYG balance:                 $3.42 (unchanged)
+  Account mode:                 Subscribed (usage meter paused; top-ups disabled)
+  PAYG balance:                 $3.42 (unchanged; frozen while subscribed)
   Last checkout:                subchk_91c2… (completed)
 ```
 
@@ -136,8 +196,9 @@ Gates are evaluated in this order. Document and implement consistently.
 4. **PAYG meter** — skip `TickUser` when user has active or trialing subscription and instance subscriptions enabled.
 5. **Free baseline in projection** — for subscribed users, treat effective free baseline as plan storage limit so `billable_bytes = 0` in UI while under cap.
 6. **PAYG upload cap (402)** — apply only when `ShouldApplyPaygUploadCap` is true (PAYG active, not subscribed).
+7. **Top-ups** — reject `POST /api/billing/invoice` when subscription status is `active` or `trialing` (see Backend: HTTP API).
 
-**Mid-period PAYG accumulator.** When a user subscribes while PAYG metering has unbilled microcents in `storage_usage_accumulator`, run a **final partial tick and sweep for that user** before pausing the meter. Fair to the operator; one-time transition cost for the user.
+**Mid-period PAYG accumulator.** Covered by **When user subscribes** in the PAYG and metering gating matrix: `FinalizePaygBeforeSubscribe` runs a final partial tick and settlement before `ShouldMeter` becomes false.
 
 ## Entitlement Bridge Protocol v1
 
@@ -178,7 +239,7 @@ Header: `Entitlement-Bridge-Signature: t=<unix>,v1=<hmac_sha256_hex>` over raw b
 
 | `event_type` | Arkfile action |
 |---|---|
-| `entitlement.activated` | Link `entitlement_ref` to checkout row; upsert `user_subscriptions` with status `active` or `trialing` |
+| `entitlement.activated` | Run `FinalizePaygBeforeSubscribe`; link `entitlement_ref`; upsert `user_subscriptions` with status `active` or `trialing` |
 | `entitlement.renewed` | Extend `current_period_end` (and `current_period_start` if provided) |
 | `entitlement.past_due` | Set status `past_due`; start grace timer for upload block |
 | `entitlement.canceled` | Set `cancel_at_period_end` or immediate cancel per payload |
@@ -233,7 +294,7 @@ Split commercial modes so private and gratis instances can disable layers indepe
 |---|---|
 | `ARKFILE_BILLING_ENABLED` | Master switch: scheduler runs; billing APIs respond; projection in `/api/credits` |
 | `ARKFILE_BILLING_PAYG_ENABLED` (new) | Hourly meter + daily sweep + PAYG negative upload cap |
-| `ARKFILE_SUBSCRIPTIONS_ENABLED` (new) | Plan catalog, checkout redirect, entitlement webhook, subscription UI |
+| `ARKFILE_SUBSCRIPTIONS_ENABLED` (new) | Plan catalog, checkout redirect, entitlement webhook, subscription UI **and arkfile-client subscription commands** |
 | `ARKFILE_PAYMENTS_ENABLED` | BTCPay one-off top-ups (existing) |
 
 Suggested defaults: **private / gratis** — all false. **Hosted PAYG-only** — billing + PAYG + payments on, subscriptions off. **Hosted with tiers** — all relevant flags on.
@@ -371,15 +432,20 @@ Central resolver functions (e.g. `billing/subscription.go` + `billing/effective.
 | `EffectiveBillingMode(username)` | `free`, `payg`, or `subscribed` |
 | `EffectiveStorageLimit(username)` | Bytes for hard cap |
 | `EffectiveFreeBaseline(username)` | Bytes for meter/projection |
-| `ShouldMeter(username)` | Whether `TickUser` applies |
+| `ShouldMeter(username)` | Whether hourly tick and daily settlement apply |
 | `ShouldApplyPaygUploadCap(username)` | Whether 402 gate applies |
+| `ShouldAllowTopUp(username)` | Whether `POST /api/billing/invoice` is permitted |
+| `FinalizePaygBeforeSubscribe(username)` | One-time tick + settle before meter off (subscribe / manual assign with meter pause) |
 
 Wire into:
 
-- `billing/meter.go` — `TickUser` / `TickAllActiveUsers`
-- `handlers/billing_projection.go` — add `subscription` block to `/api/credits`
+- `billing/meter.go` — `TickAllActiveUsers` skips users where `ShouldMeter` is false
+- `billing/sweep.go` — `SweepAllUsers` skips non-metered users; export or add **`SettleUserAccumulator(username)`** for subscribe transition
+- `handlers/payments.go` — reject invoice create when `ShouldAllowTopUp` is false
+- `handlers/billing_projection.go` — add `subscription` block and `account_mode` / `billing_mode` to `/api/credits`
 - `handlers/uploads.go` — storage cap and PAYG cap guards
 - `billing/scheduler.go` — optional entitlement reconcile tick (daily or piggyback on sweep)
+- Entitlement webhook handler — call `FinalizePaygBeforeSubscribe` on `entitlement.activated`
 
 Extend `buildBillingProjection` response:
 
@@ -397,9 +463,12 @@ Extend `buildBillingProjection` response:
     "current_period_end": "2026-07-26T00:00:00Z",
     "cancel_at_period_end": false
   },
-  "billing_mode": "subscribed"
+  "billing_mode": "subscribed",
+  "account_mode": "subscribed"
 }
 ```
+
+`account_mode` uses plain-language values `free`, `payg`, `subscribed` for clients. `billing_mode` may mirror the same for backward compatibility in APIs.
 
 When subscriptions disabled globally, omit or null the block (same pattern as `payments` in `/api/credits`). Do not expose raw `entitlement_ref` or `checkout_id` to the browser unless needed for return-URL polling; prefer status-only responses on public APIs.
 
@@ -413,6 +482,16 @@ When subscriptions disabled globally, omit or null the block (same pattern as `p
 | GET | `/api/subscriptions/me` | Current user subscription + effective limits |
 | POST | `/api/subscriptions/checkout` | Body: `{ "plan_id": "..." }` → bridge checkout URL |
 | POST | `/api/subscriptions/portal` | Bridge portal URL for manage/cancel |
+| POST | `/api/billing/invoice` | **Existing top-up path** — see Top-up rules below |
+
+### Top-up rules (locked)
+
+| Condition | Result |
+|---|---|
+| User subscription status `active` or `trialing` | **409 Conflict** — e.g. “Top-ups are not available while you have an active subscription. Manage your plan from billing or use `arkfile-client subscription portal`.” |
+| Otherwise, payments enabled, amount valid | Unchanged BTCPay invoice flow (`docs/wip/payments.md`) |
+
+Same rule in **`arkfile-client billing top-up`** (client-side pre-check from `/api/credits` plus server enforcement). Cross-link rejection behavior in `docs/wip/payments.md` when implemented.
 
 ### Admin (`/api/admin/...`, existing admin MFA stack)
 
@@ -445,14 +524,14 @@ Webhook delivery is the primary path; reconcile is part of normal operations, no
 | Scheduler reconcile | Daily: rows with `current_period_end` within window or past; call bridge GET |
 | Admin sync/reconcile | Manual repair after bridge or network outage |
 
-| Local status | Upload | Meter | Notes |
-|---|---|---|---|
-| `trialing`, `active` | Allowed to effective cap | Off | |
-| `past_due` | Block after grace | Off until expired | Login/download OK |
-| `canceled` (at period end) | Allowed until `current_period_end` | Off until end | |
-| `expired`, `canceled` (immediate) | Baseline cap only | On if PAYG enabled | |
+| Local status | Upload | Meter | Top-up | Notes |
+|---|---|---|---|---|
+| `trialing`, `active` | Allowed to effective cap | Off | **Blocked** | |
+| `past_due` | Block after grace | Off | **Blocked** | Login/download OK; not −$10 PAYG rule |
+| `canceled` (at period end) | Allowed until `current_period_end` | Off until end | **Blocked** until period ends | |
+| `expired`, `canceled` (immediate) | Baseline cap only | On if PAYG enabled | Allowed | |
 
-On subscribe transition to active: run partial PAYG sweep for that user, then pause meter.
+On `entitlement.activated`: `FinalizePaygBeforeSubscribe`, then meter off.
 
 ## arkfile-admin (planned)
 
@@ -470,20 +549,52 @@ New command group **`subscriptions`** (alongside `billing` and `payments`):
 
 Extend **`billing show --user`** and **`user-status`** to include subscription summary when enabled.
 
-No user-facing purchase flow in admin CLI — users subscribe via the web UI.
+No end-user subscription purchase in **`arkfile-admin`** — operators use assign/cancel; users subscribe via **web app or `arkfile-client`**.
 
 ## arkfile-client (planned)
 
-Minimal v1 surface:
+End-user billing and subscriptions must match the web billing panel (see **Client parity**). New command group **`billing`** and **`subscription`** under `cmd/arkfile-client/` (same API surface as `billing.ts`).
 
-- Optional **`subscription status`** — plan, renewal date, effective storage limit from `/api/subscriptions/me`.
-- No checkout in CLI unless power-user demand appears later.
+### `billing` (PAYG balance and top-ups)
 
-PAYG **`billing`** subcommands remain unchanged for operators.
+| Command | Purpose |
+|---|---|
+| `billing show [--json]` | Balance, usage projection, account mode, transaction summary from `GET /api/credits` |
+| `billing transactions [--json]` | Ledger rows (optional; may fold into `show`) |
+| `billing top-up --amount USD [--open-browser] [--wait]` | Create BTCPay invoice; print or open checkout URL; optional poll until paid |
+| `billing invoice status --id INV [--json]` | Poll local invoice status (parity with web return flow) |
+
+**Top-up while subscribed:** command exits with clear error if `account_mode` is `subscribed`; server returns 409 if invoked anyway.
+
+### `subscription` (plans and Entitlement Bridge checkout)
+
+| Command | Purpose |
+|---|---|
+| `subscription status [--json] [--watch]` | Plan, renewal, effective storage cap, account mode from `/api/subscriptions/me` + credits |
+| `subscription plans [--json]` | List public plans |
+| `subscription subscribe --plan PLAN_ID [--open-browser] [--wait]` | `POST /api/subscriptions/checkout`; open or print bridge URL; optional poll until active |
+| `subscription portal [--open-browser]` | `POST /api/subscriptions/portal`; open manage/cancel URL |
+
+Hosted checkout and portal always use the **system browser** (or printed URL); no Stripe/BTCPay embed in terminal. **`--wait`** mirrors web polling after external payment.
+
+### Parity checklist (web ↔ CLI)
+
+| Web billing panel | arkfile-client |
+|---|---|
+| Balance, usage, transactions | `billing show` |
+| Top Up Balance (PAYG only) | `billing top-up` |
+| Return from BTCPay tab | `billing top-up --wait` / `billing invoice status` |
+| Your plan / account mode | `subscription status` |
+| Plan cards | `subscription plans` |
+| Subscribe | `subscription subscribe` |
+| Manage plan | `subscription portal` |
+| PAYG hidden when subscribed | No top-up command / server 409; status shows Subscribed |
+
+Document new commands in `docs/scripts-guide.md` (user-facing `arkfile-client` section) when implemented.
 
 ## TypeScript frontend (planned)
 
-Extend `client/static/js/src/ui/billing.ts` and billing panel markup.
+Extend `client/static/js/src/ui/billing.ts` and billing panel markup. Must stay in parity with `arkfile-client` (see **Client parity**).
 
 ### When subscriptions disabled
 
@@ -495,7 +606,8 @@ No change beyond current balance, usage projection, transaction history, and top
 2. **Available plans** — cards from `GET /api/subscriptions/plans`.
 3. **Subscribe / Upgrade** — `POST /api/subscriptions/checkout` → **redirect** to bridge URL (no processor scripts in Arkfile).
 4. **Manage** — `POST /api/subscriptions/portal` → redirect to bridge portal.
-5. **PAYG section** — balance, usage, top-up only when `billing_mode === 'payg'`; collapsed when subscribed.
+5. **PAYG section** — balance, usage, top-up only when `account_mode` is `free` or `payg`; hidden when `subscribed`.
+6. **Top-up while subscribed** — button hidden; if API called, show server error message.
 
 Return URL: `resumePendingSubscriptionCheckout` for `/?subscription=return&checkout_id=...` — session refresh, poll `/api/subscriptions/me` until active, strip query string. Mirror `resumePendingBillingCheckout` in `billing.ts`.
 
@@ -509,22 +621,26 @@ Playwright: mock plans and checkout APIs; assert effective storage in billing pa
 |---|---|
 | User over plan limit at downgrade/cancel | Block new uploads; allow download/delete/export |
 | Admin `set-storage` while subscribed | Effective cap = max(new baseline, plan); no mutation on subscribe/cancel |
-| User with positive PAYG balance subscribes | Balance remains; partial sweep then meter paused |
-| User `past_due` | Upload block after grace; login + download allowed |
+| User with positive PAYG balance subscribes | Balance remains frozen; `FinalizePaygBeforeSubscribe`; meter paused; top-ups blocked |
+| User attempts top-up while subscribed | API **409**; web top-up hidden; `arkfile-client billing top-up` errors |
+| User subscribes with pending usage in accumulator | Final tick + settle once, then meter off |
+| User `past_due` | No PAYG metering; no top-ups; upload block after subscription grace (not −$10 rule) |
 | Registration throttle / auto-approval | Unchanged |
 | Soft-deleted user | RESTRICT FK; cancel entitlement before delete |
 | Bridge reachable but webhook missed | Reconcile/sync repairs local state |
-| Manual assign | Synthetic `entitlement_ref`; no bridge call |
+| Manual assign | Synthetic `entitlement_ref`; same meter/top-up rules as bridge activate |
 
 ## Testing (planned)
 
 ### Go unit tests
 
-- Billing resolver: mode, effective limits, meter skip, PAYG cap skip when subscribed
+- Billing resolver: mode, effective limits, `ShouldMeter`, `ShouldAllowTopUp`, PAYG cap skip when subscribed
+- `FinalizePaygBeforeSubscribe` and sweep skip for subscribed users
 - Entitlement webhook signature verification and idempotency
 - State transitions for each `event_type`
 - `past_due` upload gate after grace
-- Manual assign path
+- Top-up handler returns 409 when subscribed
+- Manual assign path (meter off, top-up blocked)
 
 ### Shell e2e
 
@@ -532,31 +648,33 @@ New **`run_subscriptions`** group in `scripts/testing/e2e-test.sh` (after `run_p
 
 - Mock Entitlement Bridge (`scripts/testing/entitlement-bridge-mock.go`, parallel to `btcpay-mock.go`)
 - Checkout → signed webhook `entitlement.activated` → assert effective limit → upload OK
-- `entitlement.expired` → revert to baseline cap
+- Subscribed user: `POST /api/billing/invoice` → **409**; accumulator unchanged after tick window
+- `entitlement.expired` → revert to baseline cap; top-up allowed again
 - Manual `subscriptions assign` without mock bridge
+- **`arkfile-client`:** `subscription status`, `subscription subscribe` (mock URL), `billing top-up` rejected when subscribed, `billing top-up` succeeds after expire
 
 ### Playwright
 
-Billing panel plans display; mocked checkout redirect; subscription return URL polling.
+Billing panel plans display; mocked checkout redirect; subscription return URL polling; top-up control absent when subscribed.
 
 ## Build phases (recommended order)
 
 1. **Schema + resolver + admin plan CRUD** — no bridge; dogfood with `subscriptions assign`.
-2. **Meter/storage integration** — wire `TickUser`, projection, upload gates; admin/CLI breakdown output.
-3. **Frontend plans display** — read-only or manual-assign messaging.
-4. **Entitlement webhook + checkout redirect** — mock bridge in e2e.
+2. **Meter/storage/top-up integration** — `ShouldMeter`, sweep skip, `ShouldAllowTopUp`, `FinalizePaygBeforeSubscribe`, projection, upload gates; admin breakdown output.
+3. **Web billing panel + arkfile-client billing/subscription commands** — same phase; parity checklist complete.
+4. **Entitlement webhook + checkout redirect** — mock bridge in e2e (web + CLI).
 5. **Entitlement Bridge VPS + Stripe adapter** — live `billing.arkfile.net` (separate repo/service).
-6. **E2e + Playwright + FAQ** — `docs/user-faq.md`, `.env.example`, deploy scripts.
+6. **E2e + Playwright + FAQ** — `docs/user-faq.md`, `.env.example`, deploy scripts, `docs/scripts-guide.md` client billing section.
 
 ## Documentation updates (when implemented)
 
 | File | Change |
 |---|---|
 | `docs/wip/entitlement-bridge.md` | Bridge service spec, deployment, processor adapters |
-| `docs/wip/payments.md` | Cross-link: top-ups = BTCPay PAYG; subscriptions = Entitlement Bridge |
-| `docs/user-faq.md` | Q&A prose: plans, cancel, what happens to files |
-| `docs/api.md` | New endpoints |
-| `docs/scripts-guide.md` | Admin CLI subscription commands |
+| `docs/wip/payments.md` | Cross-link: top-ups = BTCPay PAYG; top-up 409 when subscribed; subscriptions = Entitlement Bridge |
+| `docs/user-faq.md` | Q&A prose: plans, cancel, PAYG vs subscription, top-ups while subscribed |
+| `docs/api.md` | New endpoints; top-up 409 |
+| `docs/scripts-guide.md` | Admin CLI subscription commands; **arkfile-client billing/subscription** |
 | `.env.example` | Subscriptions + bridge vars (no processor keys) |
 | `scripts/dev-reset.sh`, deploy scripts | Sensible defaults per environment |
 
@@ -570,7 +688,6 @@ Billing panel plans display; mocked checkout redirect; subscription return URL p
 - Margin / breakeven tables in code or config
 - Crypto recurring subscriptions
 - Automated storage purge on `past_due`
-- Subscription purchase via `arkfile-client`
 - Web admin UI (admin remains CLI-only by design)
 - Mutating `users.storage_limit_bytes` on subscribe/cancel
 
@@ -590,3 +707,4 @@ Billing panel plans display; mocked checkout redirect; subscription return URL p
 - `client/static/js/src/ui/billing.ts` — billing panel UI
 - `payments/btcpay.go` — opaque metadata pattern for top-ups
 - `cmd/arkfile-admin/billing_commands.go`, `payments_commands.go` — CLI patterns to mirror
+- `cmd/arkfile-client/` — billing/subscription command parity (planned)

@@ -8,7 +8,7 @@ Three hosts cooperate with non-overlapping responsibilities. Confusing them lead
 
 | Host | Role | Subscription involvement |
 |---|---|---|
-| **app.arkfile.net** (Arkfile) | Vault, plan catalog, entitlement state, storage/meter gates | Creates `checkout_id`, stores `entitlement_ref`, receives entitlement webhooks |
+| **arkfile.net** (Arkfile app) | Vault, plan catalog, entitlement state, storage/meter gates | Creates `checkout_id`, stores `entitlement_ref`, receives entitlement webhooks |
 | **billing.arkfile.net** (this service) | Processor adapters, checkout/portal sessions, entitlement notifications | Full subscription payment lifecycle |
 | **pay.arkfile.net** (BTCPay) | Crypto/fiat one-off invoices for PAYG top-ups | None for subscriptions |
 
@@ -35,7 +35,7 @@ Public browsers reach `https://billing.example.com` on Caddy. Caddy reverse-prox
 ```
 Browser ──► Caddy ──► Bridge ──► Processor API (Stripe, …)
                          │
-                         ├──► Bridge DB (checkouts, entitlements, processor IDs)
+                         ├──► Managed Postgres (e.g. DigitalOcean or Vultr; checkouts, entitlements, processor IDs)
                          │
                          └──► HMAC POST ──► Arkfile /api/webhooks/entitlements
 
@@ -57,7 +57,7 @@ Arkfile signs a URL-safe token when the user calls `POST /api/subscriptions/chec
 {
   "checkout_id": "subchk_...",
   "plan_id": "plan_500gb",
-  "return_url": "https://app.example.com/?subscription=return",
+  "return_url": "https://example.com/?subscription=return",
   "exp": 1710000000
 }
 ```
@@ -82,7 +82,7 @@ Arkfile signs when the user calls `POST /api/subscriptions/portal`.
 ```json
 {
   "entitlement_ref": "ent_...",
-  "return_url": "https://app.example.com/",
+  "return_url": "https://example.com/",
   "exp": 1710000000
 }
 ```
@@ -174,7 +174,7 @@ Optional future: `POST /v1/entitlements/{entitlement_ref}/cancel` for operator-d
 
 ## Database schema (bridge)
 
-SQLite or PostgreSQL on the bridge host. Suggested tables:
+The bridge uses **PostgreSQL**. State is small (checkouts, entitlements, event idempotency) but webhook retries, concurrent checkout sessions, and reconcile jobs benefit from a server database and provider-managed backups. Provision a managed Postgres instance—for example, **DigitalOcean Managed Databases for PostgreSQL** or **Vultr Managed Databases**—in the same region as the bridge app VPS when possible so latency stays low and private/VPC networking can be enabled. The bridge connects via `BRIDGE_DATABASE_URL` (or discrete `BRIDGE_DB_*` variables) over TLS. Schema migrations run at bridge startup or via a dedicated migrate step. Suggested tables:
 
 ### `bridge_checkouts`
 
@@ -239,6 +239,26 @@ CREATE TABLE bridge_events (
 Optional raw audit of inbound processor payloads (redact PAN/card data at ingest if logged).
 
 No `username` column anywhere.
+
+## Managed PostgreSQL
+
+Production bridge deployments target a **hosted managed Postgres** service, not a self-run database on the app VPS. DigitalOcean and Vultr both offer managed PostgreSQL suitable for this workload; use whichever matches where the bridge app VPS already lives.
+
+**Colocation.** Create the managed database in the **same region** as the bridge app VPS (e.g. a DigitalOcean Droplet and DO managed Postgres both in `nyc3`, or Vultr compute and Vultr managed DB in the same location). Avoid cross-provider database links unless necessary—they add latency and often force traffic over the public internet.
+
+**Sizing (v1).** Single-node Postgres at the smallest tier (typically 1 GB RAM class) is enough for early production. Bridge write volume is low. Scale up only if webhook replay or reconcile volume grows.
+
+**Network hardening.**
+
+- Prefer **private/VPC connectivity** (DigitalOcean VPC, Vultr VPC) so Postgres is not open to the world.
+- If the managed product exposes a public host, restrict **trusted sources** to the bridge app VPS IP only.
+- Require **TLS** (`sslmode=require` or stricter). Install the provider CA bundle if required.
+
+**Credentials.** Dedicated database user (e.g. `bridge_app`) with least privilege on a `bridge` database only. Do not share Arkfile's database or BTCPay Postgres. Connection credentials live in bridge `.env` on the app VPS.
+
+**Backups.** Use the provider's automated daily backups and point-in-time recovery when offered. Bridge data is payment-adjacent (processor IDs, checkout correlation) but contains no vault file content; treat backups as sensitive.
+
+**Local dev / CI.** Ephemeral Postgres (e.g. Docker `postgres:18` in CI) is fine for tests. Production uses managed Postgres only—not SQLite.
 
 ## Processor adapter interface
 
@@ -328,7 +348,7 @@ Webhook delivery is primary; reconcile is normal operations.
 
 **Clock skew.** Reject start/portal tokens and HMAC requests outside ±300 seconds unless configured otherwise.
 
-**Startup.** Fail fast if webhook secrets, Arkfile callback URL, or default processor credentials missing.
+**Startup.** Fail fast if webhook secrets, Arkfile callback URL, default processor credentials, or database connectivity are missing or migrations are pending.
 
 ## Configuration
 
@@ -337,7 +357,7 @@ Environment variables for the bridge service (`.env` on bridge VPS):
 ```
 # Public URLs
 BRIDGE_PUBLIC_URL=https://billing.arkfile.net
-ARKFILE_WEBHOOK_URL=https://app.arkfile.net/api/webhooks/entitlements
+ARKFILE_WEBHOOK_URL=https://arkfile.net/api/webhooks/entitlements
 
 # Shared secrets (must match Arkfile)
 BRIDGE_ARKFILE_WEBHOOK_SECRET=
@@ -350,7 +370,16 @@ STRIPE_PUBLISHABLE_KEY=                 # optional if fully redirect-based
 
 # Server
 BRIDGE_LISTEN=127.0.0.1:8081
-BRIDGE_DB_PATH=/var/lib/bridge/bridge.db
+
+# Database (managed PostgreSQL — e.g. DigitalOcean or Vultr)
+BRIDGE_DATABASE_URL=postgres://bridge_app:PASSWORD@HOST:5432/bridge?sslmode=require
+# Or discrete vars:
+# BRIDGE_DB_HOST=
+# BRIDGE_DB_PORT=5432
+# BRIDGE_DB_NAME=bridge
+# BRIDGE_DB_USER=bridge_app
+# BRIDGE_DB_PASSWORD=
+# BRIDGE_DB_SSLMODE=require
 
 # Optional
 BRIDGE_DEFAULT_SUCCESS_URL=
@@ -365,11 +394,11 @@ ARKFILE_ENTITLEMENT_BRIDGE_URL=https://billing.arkfile.net
 ARKFILE_ENTITLEMENT_BRIDGE_WEBHOOK_SECRET=<same as BRIDGE_ARKFILE_WEBHOOK_SECRET>
 ```
 
-Plan SKU mapping lives in `config/plans.yaml` mounted into the bridge container or read at startup.
+Plan SKU mapping lives in `config/plans.yaml` mounted into the bridge container or read at startup. Startup must fail if the database is unreachable. `bridge health` should verify DB connectivity, not just HTTP liveness.
 
 ## Deployment
 
-Target: small VPS (1–2 vCPU, 1–2 GB RAM, 20 GB SSD) — no chain nodes, lighter than BTCPay. Alma Linux 9 or similar RHEL-family, rootless Podman, Caddy TLS, dedicated runtime user `bridge`.
+Target: small **app VPS** (1–2 vCPU, 1–2 GB RAM, 20–40 GB SSD) plus a **separate managed PostgreSQL** instance—for example on DigitalOcean or Vultr in the same region. No chain nodes; much lighter than BTCPay. Alma Linux 10 or Ubuntu LTS (latest), rootless Podman or a static binary, Caddy TLS on the app VPS, dedicated runtime user `bridge`. The app VPS may live on any provider; the managed database should be colocated in the same region or reachable over a private network when the provider supports it.
 
 **Phase 1 — Host bootstrap (operator root).**
 
@@ -381,9 +410,11 @@ sudo dnf -y install podman curl jq
 sudo loginctl enable-linger bridge
 ```
 
-**Phase 2 — Deploy artifact.** v1 may ship as a single Go binary in a minimal container image or directly under `bridge` user systemd unit. Bind `127.0.0.1:8081`. Mount `/var/lib/bridge` for SQLite and secrets.
+**Phase 2 — Managed Postgres.** In the provider console (DigitalOcean or Vultr): create a PostgreSQL 18+ managed instance in the same region as the bridge app VPS. Create database `bridge` and user `bridge_app`. Enable VPC/private networking if available; use the private connection host in `BRIDGE_DATABASE_URL`. Enable automated backups. Restrict inbound to the app VPS IP if the endpoint is public.
 
-**Phase 3 — Caddy site block.**
+**Phase 3 — Deploy artifact.** v1 may ship as a single Go binary in a minimal container image or directly under `bridge` user systemd unit. Bind `127.0.0.1:8081`. Mount `/var/lib/bridge` for secrets and config only—not database files. Run schema migrations before or during service start.
+
+**Phase 4 — Caddy site block.**
 
 ```
 billing.example.com {
@@ -391,9 +422,9 @@ billing.example.com {
 }
 ```
 
-**Phase 4 — Stripe dashboard.** Register webhook endpoint `https://billing.example.com/v1/webhooks/stripe` for required subscription events. Use live/test mode keys matching deployment.
+**Phase 5 — Stripe dashboard.** Register webhook endpoint `https://billing.example.com/v1/webhooks/stripe` for required subscription events. Use live/test mode keys matching deployment.
 
-**Phase 5 — Pair with Arkfile.** Set matching HMAC secrets on both hosts. Confirm Arkfile `ARKFILE_SUBSCRIPTIONS_ENABLED=true` only after end-to-end test on staging.
+**Phase 6 — Pair with Arkfile.** Set matching HMAC secrets on both hosts. Confirm Arkfile `ARKFILE_SUBSCRIPTIONS_ENABLED=true` only after end-to-end test on staging.
 
 DNS: `billing.arkfile.net` (production), optional `billing-test.arkfile.net` for staging bridge paired with `test.arkfile.net`.
 
@@ -416,16 +447,16 @@ Payment refunds and chargebacks: v1 manual via processor dashboard; optional fut
 
 **Unit tests.** Token verify/sign, HMAC callback formatting, Stripe webhook parsing, idempotency, plan SKU resolution.
 
-**Integration tests.** Stripe test mode checkout → webhook → mock Arkfile receiver captures entitlement POST.
+**Integration tests.** Stripe test mode checkout → webhook → mock Arkfile receiver captures entitlement POST. Use ephemeral Postgres in CI (not SQLite) so SQL matches production.
 
-**Cross-service e2e.** Arkfile `scripts/testing/e2e-test.sh` runs `entitlement-bridge-mock.go` (parallel to `btcpay-mock.go`) implementing `/v1/start`, `/v1/entitlements/{ref}`, and firing signed callbacks — no live Stripe required in CI.
+**Cross-service e2e.** Arkfile `scripts/testing/e2e-test.sh` runs `entitlement-bridge-mock.go` (parallel to `btcpay-mock.go`) implementing `/v1/start`, `/v1/entitlements/{ref}`, and firing signed callbacks — no live Stripe or managed DB required in CI.
 
 **Staging.** Real Stripe test mode + staging bridge VPS + `test.arkfile.net` before production keys.
 
 ## Build phases (bridge repo)
 
 1. **Protocol types + HMAC helpers** — shared test vectors with Arkfile mock.
-2. **SQLite schema + checkout/start route** — redirect to stub URL.
+2. **Postgres schema migrations + checkout/start route** — redirect to stub URL.
 3. **Stripe adapter + webhook handler** — test mode end-to-end.
 4. **Entitlement notifier + retry** — POST to Arkfile mock.
 5. **Portal route + GET entitlement sync.**
