@@ -3436,10 +3436,72 @@ stop_mock_entitlement_bridge() {
     fi
 }
 
+user_access_token() {
+    jq -r '.access_token // empty' "$HOME/.arkfile-session.json" 2>/dev/null
+}
+
+ensure_user_session() {
+    local tok http_code
+    tok=$(user_access_token)
+    if [ -z "$tok" ]; then
+        user_login_with_totp "User login (subscriptions session missing)"
+        return
+    fi
+    http_code=$(curl -sk -o /dev/null -w '%{http_code}' \
+        -H "Authorization: Bearer $tok" "$SERVER_URL/api/credits")
+    if [ "$http_code" = "401" ]; then
+        user_login_with_totp "User login (subscriptions session expired)"
+    fi
+}
+
+user_credits_json() {
+    curl -sk -H "Authorization: Bearer $(user_access_token)" "$SERVER_URL/api/credits"
+}
+
+entitlement_bridge_webhook_signature() {
+    local body="$1"
+    local ts secret sig
+    ts=$(date +%s)
+    secret="${ENTITLEMENT_BRIDGE_WEBHOOK_SECRET:-test_entitlement_bridge_secret}"
+    sig=$( { printf '%s.' "$ts"; printf '%s' "$body"; } \
+        | openssl dgst -sha256 -hmac "$secret" | awk '{print $NF}')
+    echo "t=${ts},v1=${sig}"
+}
+
+post_entitlement_webhook() {
+    local body="$1"
+    local sig
+    sig=$(entitlement_bridge_webhook_signature "$body")
+    curl -sk -X POST \
+        -H "Content-Type: application/json" \
+        -H "Entitlement-Bridge-Signature: $sig" \
+        -d "$body" \
+        "$SERVER_URL/api/webhooks/entitlements"
+}
+
+mock_bridge_activate() {
+    local checkout_id="$1"
+    local username="$2"
+    curl -s -X POST "http://127.0.0.1:8081/v1/mock/activate" \
+        -H "Content-Type: application/json" \
+        -d "{\"checkout_id\":\"$checkout_id\",\"username\":\"$username\"}"
+}
+
+mock_bridge_expire() {
+    local entitlement_ref="$1"
+    curl -s -X POST "http://127.0.0.1:8081/v1/mock/expire" \
+        -H "Content-Type: application/json" \
+        -d "{\"entitlement_ref\":\"$entitlement_ref\"}"
+}
+
 run_subscriptions() {
     group "Subscriptions"
 
-    local e2e_script_dir go_bin mock_pid
+    local e2e_script_dir go_bin mock_pid btcpay_mock_pid
+    local dev_plan_storage_bytes=268435456000
+    local user_token credits_json billing_mode effective_limit sub_source
+    local tx_count_before tx_count_after checkout_id checkout_out checkout_http
+    local invoice_http invoice_body topup_out topup_code bridge_ent_ref
 
     e2e_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     go_bin="go"
@@ -3456,6 +3518,7 @@ run_subscriptions() {
     export ARKFILE_BILLING_PAYG_ENABLED=true
     export ARKFILE_ENTITLEMENT_BRIDGE_URL="http://127.0.0.1:8081"
     export ARKFILE_ENTITLEMENT_BRIDGE_WEBHOOK_SECRET="test_entitlement_bridge_secret"
+    export ADMIN_DEV_TEST_API_ENABLED=true
 
     mock_pid=$(start_mock_entitlement_bridge "$e2e_script_dir" "$go_bin") || {
         record_test "Start mock Entitlement Bridge" "FAIL"
@@ -3485,16 +3548,118 @@ run_subscriptions() {
         record_test "Grant gift subscription" "FAIL"
     fi
 
-    scenario "Gift subscription blocks top-up"
-    user_login_with_totp "User login for subscription top-up block test"
-    local topup_out topup_code
+    # Reuse the user session left by run_payments when still valid.
+    ensure_user_session
+
+    scenario "Credits API subscribed after gift grant"
+    credits_json=$(user_credits_json)
+    billing_mode=$(echo "$credits_json" | jq -r '.billing_mode // empty' 2>/dev/null)
+    sub_source=$(echo "$credits_json" | jq -r '.subscription.source // empty' 2>/dev/null)
+    effective_limit=$(echo "$credits_json" | jq -r '.subscription.effective_storage_limit_bytes // 0' 2>/dev/null)
+    if [ "$billing_mode" = "subscribed" ] && [ "$sub_source" = "gift" ] \
+        && [ "$effective_limit" = "$dev_plan_storage_bytes" ]; then
+        record_test "Credits API subscribed after gift grant" "PASS"
+    else
+        error "Unexpected credits after gift grant: $credits_json"
+        record_test "Credits API subscribed after gift grant" "FAIL"
+    fi
+
+    scenario "Admin subscriptions show gift entitlement"
+    local admin_sub_out admin_sub_code
+    safe_exec admin_sub_out admin_sub_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        subscriptions show --user "$TEST_USERNAME" --json || true
+    if [ $admin_sub_code -eq 0 ] \
+        && echo "$admin_sub_out" | jq -e '.billing_mode == "subscribed" and .subscription.source == "gift"' >/dev/null 2>&1 \
+        && echo "$admin_sub_out" | jq -e ".effective_storage_limit_bytes == $dev_plan_storage_bytes" >/dev/null 2>&1; then
+        record_test "Admin subscriptions show gift entitlement" "PASS"
+    else
+        error "Admin subscriptions show unexpected: $admin_sub_out"
+        record_test "Admin subscriptions show gift entitlement" "FAIL"
+    fi
+
+    scenario "CLI billing show while subscribed"
+    local billing_show_out billing_show_code
+    safe_exec billing_show_out billing_show_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+        billing show || true
+    if [ $billing_show_code -eq 0 ] && echo "$billing_show_out" | grep -qi "subscribed"; then
+        record_test "CLI billing show while subscribed" "PASS"
+    else
+        record_test "CLI billing show while subscribed" "FAIL"
+    fi
+
+    scenario "CLI subscription status while subscribed"
+    local sub_status_out sub_status_code
+    safe_exec sub_status_out sub_status_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+        subscription status || true
+    if [ $sub_status_code -eq 0 ] \
+        && echo "$sub_status_out" | grep -qi "250 GB" \
+        && echo "$sub_status_out" | grep -qi "active"; then
+        record_test "CLI subscription status while subscribed" "PASS"
+    else
+        record_test "CLI subscription status while subscribed" "FAIL"
+    fi
+
+    scenario "CLI subscription plans while subscribed"
+    local sub_plans_out sub_plans_code
+    safe_exec sub_plans_out sub_plans_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+        subscription plans || true
+    if [ $sub_plans_code -eq 0 ] && echo "$sub_plans_out" | grep -q 'plan_dev_250gb'; then
+        record_test "CLI subscription plans while subscribed" "PASS"
+    else
+        record_test "CLI subscription plans while subscribed" "FAIL"
+    fi
+
+    scenario "Invoice API rejects top-up while gift subscribed"
+    user_token=$(user_access_token)
+    invoice_body=$(curl -sk -X POST \
+        -H "Authorization: Bearer $user_token" \
+        -H "Content-Type: application/json" \
+        -d '{"amount_usd":"1.00"}' \
+        "$SERVER_URL/api/billing/invoice")
+    invoice_http=$(curl -sk -o /dev/null -w '%{http_code}' -X POST \
+        -H "Authorization: Bearer $user_token" \
+        -H "Content-Type: application/json" \
+        -d '{"amount_usd":"1.00"}' \
+        "$SERVER_URL/api/billing/invoice")
+    if [ "$invoice_http" = "409" ] && echo "$invoice_body" | grep -qi "subscription"; then
+        record_test "Invoice API 409 while gift subscribed" "PASS"
+    else
+        error "Expected invoice 409 while gift subscribed (http=$invoice_http): $invoice_body"
+        record_test "Invoice API 409 while gift subscribed" "FAIL"
+    fi
+
+    scenario "CLI top-up rejected while gift subscribed"
     safe_exec topup_out topup_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure \
         billing top-up --amount 1.00 || true
     if [ $topup_code -ne 0 ] && echo "$topup_out" | grep -qi "subscription"; then
-        record_test "Top-up rejected while subscribed" "PASS"
+        record_test "Top-up rejected while gift subscribed" "PASS"
     else
-        record_test "Top-up rejected while subscribed" "FAIL"
+        record_test "Top-up rejected while gift subscribed" "FAIL"
+    fi
+
+    scenario "Billing tick does not add usage while gift subscribed"
+    local tx_before_out tx_before_code tick_sub_out tick_sub_code tx_after_out tx_after_code
+    safe_exec tx_before_out tx_before_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing show --user "$TEST_USERNAME" --json || true
+    tx_count_before=$(echo "$tx_before_out" | jq -r '.pagination.count // 0' 2>/dev/null)
+    safe_exec tick_sub_out tick_sub_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing tick-now --json || true
+    safe_exec tx_after_out tx_after_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing show --user "$TEST_USERNAME" --json || true
+    tx_count_after=$(echo "$tx_after_out" | jq -r '.pagination.count // 0' 2>/dev/null)
+    if [ $tick_sub_code -eq 0 ] && [ "$tx_count_before" = "$tx_count_after" ]; then
+        record_test "tick-now skips usage while gift subscribed" "PASS"
+    else
+        error "Usage tx count changed while subscribed: before=$tx_count_before after=$tx_count_after"
+        record_test "tick-now skips usage while gift subscribed" "FAIL"
     fi
 
     scenario "Cancel gift subscription"
@@ -3507,16 +3672,211 @@ run_subscriptions() {
         record_test "Cancel gift subscription" "FAIL"
     fi
 
-    scenario "arkfile-client subscription plans"
-    safe_exec sub_plans_out sub_plans_code \
-        $CLIENT --server-url "$SERVER_URL" --tls-insecure \
-        subscription plans || true
-    if [ $sub_plans_code -eq 0 ] && echo "$sub_plans_out" | grep -q 'plan_dev_250gb'; then
-        record_test "arkfile-client subscription plans" "PASS"
+    scenario "Credits API not subscribed after gift cancel"
+    credits_json=$(user_credits_json)
+    billing_mode=$(echo "$credits_json" | jq -r '.billing_mode // empty' 2>/dev/null)
+    if [ "$billing_mode" != "subscribed" ]; then
+        record_test "Credits API not subscribed after gift cancel" "PASS"
     else
-        record_test "arkfile-client subscription plans" "FAIL"
+        error "Still subscribed after gift cancel: $credits_json"
+        record_test "Credits API not subscribed after gift cancel" "FAIL"
     fi
 
+    scenario "Start mock BTCPay for post-cancel top-up checks"
+    btcpay_mock_pid=$(start_mock_btcpay_server "$e2e_script_dir" "$go_bin") || {
+        record_test "Start mock BTCPay for subscription top-up checks" "FAIL"
+        btcpay_mock_pid=""
+    }
+    if [ -n "$btcpay_mock_pid" ]; then
+        record_test "Start mock BTCPay for subscription top-up checks" "PASS"
+    fi
+
+    scenario "Invoice API allowed after gift cancel"
+    user_token=$(user_access_token)
+    invoice_http=$(curl -sk -o /dev/null -w '%{http_code}' -X POST \
+        -H "Authorization: Bearer $user_token" \
+        -H "Content-Type: application/json" \
+        -d '{"amount_usd":"1.00"}' \
+        "$SERVER_URL/api/billing/invoice")
+    if [ "$invoice_http" != "409" ]; then
+        record_test "Invoice API allowed after gift cancel" "PASS"
+    else
+        record_test "Invoice API allowed after gift cancel" "FAIL"
+    fi
+
+    scenario "CLI top-up allowed after gift cancel"
+    safe_exec topup_out topup_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+        billing top-up --amount 1.00 || true
+    if [ $topup_code -eq 0 ] || ! echo "$topup_out" | grep -qi "subscription"; then
+        record_test "CLI top-up allowed after gift cancel" "PASS"
+    else
+        error "Top-up still blocked by subscription after gift cancel: $topup_out"
+        record_test "CLI top-up allowed after gift cancel" "FAIL"
+    fi
+
+    scenario "Subscription checkout returns checkout id"
+    user_token=$(user_access_token)
+    checkout_out=$(curl -sk -X POST \
+        -H "Authorization: Bearer $user_token" \
+        -H "Content-Type: application/json" \
+        -d '{"plan_id":"plan_dev_250gb"}' \
+        "$SERVER_URL/api/subscriptions/checkout")
+    checkout_http=$(curl -sk -o /dev/null -w '%{http_code}' -X POST \
+        -H "Authorization: Bearer $user_token" \
+        -H "Content-Type: application/json" \
+        -d '{"plan_id":"plan_dev_250gb"}' \
+        "$SERVER_URL/api/subscriptions/checkout")
+    checkout_id=$(echo "$checkout_out" | jq -r '.data.checkout_id // empty' 2>/dev/null)
+    if [ "$checkout_http" = "200" ] && [ -n "$checkout_id" ]; then
+        record_test "Subscription checkout returns checkout id" "PASS"
+        info "Bridge checkout id: $checkout_id"
+    else
+        error "Checkout failed (http=$checkout_http): $checkout_out"
+        record_test "Subscription checkout returns checkout id" "FAIL"
+        checkout_id=""
+    fi
+
+    scenario "Bridge activate webhook subscribes user"
+    local activate_out activate_code
+    if [ -n "$checkout_id" ]; then
+        activate_out=$(mock_bridge_activate "$checkout_id" "$TEST_USERNAME")
+        bridge_ent_ref=$(echo "$activate_out" | jq -r '.entitlement_ref // empty' 2>/dev/null)
+        if [ -n "$bridge_ent_ref" ] && echo "$activate_out" | jq -e '.status == "delivered"' >/dev/null 2>&1; then
+            credits_json=$(user_credits_json)
+            billing_mode=$(echo "$credits_json" | jq -r '.billing_mode // empty' 2>/dev/null)
+            sub_source=$(echo "$credits_json" | jq -r '.subscription.source // empty' 2>/dev/null)
+            effective_limit=$(echo "$credits_json" | jq -r '.subscription.effective_storage_limit_bytes // 0' 2>/dev/null)
+            if [ "$billing_mode" = "subscribed" ] && [ "$sub_source" = "bridge" ] \
+                && [ "$effective_limit" = "$dev_plan_storage_bytes" ]; then
+                record_test "Bridge activate webhook subscribes user" "PASS"
+            else
+                error "Credits after bridge activate: $credits_json"
+                record_test "Bridge activate webhook subscribes user" "FAIL"
+            fi
+        else
+            error "Mock bridge activate failed: $activate_out"
+            record_test "Bridge activate webhook subscribes user" "FAIL"
+        fi
+    else
+        record_test "Bridge activate webhook subscribes user" "FAIL"
+    fi
+
+    scenario "CLI subscription status after bridge activate"
+    safe_exec sub_status_out sub_status_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+        subscription status || true
+    if [ $sub_status_code -eq 0 ] \
+        && echo "$sub_status_out" | grep -qi "250 GB" \
+        && echo "$sub_status_out" | grep -qi "active"; then
+        record_test "CLI subscription status after bridge activate" "PASS"
+    else
+        record_test "CLI subscription status after bridge activate" "FAIL"
+    fi
+
+    scenario "Grant gift rejected with bridge subscription"
+    safe_exec gift_dup_out gift_dup_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        subscriptions grant-gift-subscription --user "$TEST_USERNAME" --plan-id plan_dev_250gb --days 30 --note "e2e duplicate gift" || true
+    if [ $gift_dup_code -ne 0 ] && echo "$gift_dup_out" | grep -Eiq "active|subscription|already"; then
+        record_test "Grant gift rejected with bridge subscription" "PASS"
+    else
+        error "Expected grant gift rejection with bridge sub: $gift_dup_out"
+        record_test "Grant gift rejected with bridge subscription" "FAIL"
+    fi
+
+    scenario "Cancel gift rejected for bridge subscription"
+    safe_exec cancel_bridge_out cancel_bridge_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        subscriptions cancel-gift-subscription --user "$TEST_USERNAME" --immediate || true
+    if [ $cancel_bridge_code -ne 0 ] && echo "$cancel_bridge_out" | grep -Eiq "paid|portal|processor|bridge"; then
+        record_test "Cancel gift rejected for bridge subscription" "PASS"
+    else
+        error "Expected cancel-gift rejection for bridge sub: $cancel_bridge_out"
+        record_test "Cancel gift rejected for bridge subscription" "FAIL"
+    fi
+
+    scenario "Invoice API rejects top-up while bridge subscribed"
+    user_token=$(user_access_token)
+    invoice_http=$(curl -sk -o /dev/null -w '%{http_code}' -X POST \
+        -H "Authorization: Bearer $user_token" \
+        -H "Content-Type: application/json" \
+        -d '{"amount_usd":"1.00"}' \
+        "$SERVER_URL/api/billing/invoice")
+    if [ "$invoice_http" = "409" ]; then
+        record_test "Invoice API 409 while bridge subscribed" "PASS"
+    else
+        record_test "Invoice API 409 while bridge subscribed" "FAIL"
+    fi
+
+    scenario "CLI top-up rejected while bridge subscribed"
+    safe_exec topup_out topup_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+        billing top-up --amount 1.00 || true
+    if [ $topup_code -ne 0 ] && echo "$topup_out" | grep -qi "subscription"; then
+        record_test "Top-up rejected while bridge subscribed" "PASS"
+    else
+        record_test "Top-up rejected while bridge subscribed" "FAIL"
+    fi
+
+    scenario "Duplicate entitlement webhook is idempotent"
+    local ent_snap dup_wh1 dup_wh2 admin_sub_before admin_sub_after
+    if [ -n "$bridge_ent_ref" ]; then
+        ent_snap=$(curl -s "http://127.0.0.1:8081/v1/entitlements/$bridge_ent_ref" | jq -c . 2>/dev/null)
+        safe_exec admin_sub_before admin_sub_before_code \
+            $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+            subscriptions show --user "$TEST_USERNAME" --json || true
+        dup_wh1=$(post_entitlement_webhook "$ent_snap")
+        dup_wh2=$(post_entitlement_webhook "$ent_snap")
+        safe_exec admin_sub_after admin_sub_after_code \
+            $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+            subscriptions show --user "$TEST_USERNAME" --json || true
+        if [ -n "$ent_snap" ] \
+            && echo "$dup_wh1" | jq -e '.success == true' >/dev/null 2>&1 \
+            && echo "$dup_wh2" | jq -e '.success == true' >/dev/null 2>&1 \
+            && [ "$admin_sub_before" = "$admin_sub_after" ]; then
+            record_test "Duplicate entitlement webhook idempotent" "PASS"
+        else
+            error "Duplicate webhook unexpected: wh1=$dup_wh1 wh2=$dup_wh2"
+            record_test "Duplicate entitlement webhook idempotent" "FAIL"
+        fi
+    else
+        record_test "Duplicate entitlement webhook idempotent" "FAIL"
+    fi
+
+    scenario "Bridge expire webhook ends subscription"
+    local expire_out
+    if [ -n "$bridge_ent_ref" ]; then
+        expire_out=$(mock_bridge_expire "$bridge_ent_ref")
+        credits_json=$(user_credits_json)
+        billing_mode=$(echo "$credits_json" | jq -r '.billing_mode // empty' 2>/dev/null)
+        if echo "$expire_out" | jq -e '.status == "expired"' >/dev/null 2>&1 && [ "$billing_mode" != "subscribed" ]; then
+            record_test "Bridge expire webhook ends subscription" "PASS"
+        else
+            error "Expire failed or still subscribed: expire=$expire_out credits=$credits_json"
+            record_test "Bridge expire webhook ends subscription" "FAIL"
+        fi
+    else
+        record_test "Bridge expire webhook ends subscription" "FAIL"
+    fi
+
+    scenario "Invoice API allowed after bridge expire"
+    user_token=$(user_access_token)
+    invoice_http=$(curl -sk -o /dev/null -w '%{http_code}' -X POST \
+        -H "Authorization: Bearer $user_token" \
+        -H "Content-Type: application/json" \
+        -d '{"amount_usd":"1.00"}' \
+        "$SERVER_URL/api/billing/invoice")
+    if [ "$invoice_http" != "409" ]; then
+        record_test "Invoice API allowed after bridge expire" "PASS"
+    else
+        record_test "Invoice API allowed after bridge expire" "FAIL"
+    fi
+
+    if [ -n "$btcpay_mock_pid" ]; then
+        info "Stopping mock BTCPay server..."
+        stop_mock_btcpay_server "$btcpay_mock_pid"
+    fi
     stop_mock_entitlement_bridge "$mock_pid"
     info "Subscriptions complete"
 }
