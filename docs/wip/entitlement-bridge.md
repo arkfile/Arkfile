@@ -170,7 +170,7 @@ Stripe endpoint verifies `Stripe-Signature` header. Other adapters verify their 
 |---|---|---|
 | GET | `/v1/entitlements/{entitlement_ref}` | Reconcile snapshot |
 
-Optional future: `POST /v1/entitlements/{entitlement_ref}/cancel` for operator-driven cancel initiated from Arkfile admin (v2). v1 cancel flows through processor portal only.
+v1 paid subscription cancel flows through the **processor customer portal** (user via Arkfile `POST /api/subscriptions/portal`) or **operator action in the Stripe dashboard / bridge ops CLI**. Arkfile admin has **no** paid cancel command — only **`grant-gift-subscription`** and **`cancel-gift-subscription`** for `source=gift` rows on the vault host. Optional future: `POST /v1/entitlements/{entitlement_ref}/cancel` on the bridge for operator scripts (not wired to a misleading Arkfile “local cancel”).
 
 ## Database schema (bridge)
 
@@ -440,6 +440,8 @@ Minimal operator surface on the bridge host (CLI or `curl` scripts). No relation
 | `bridge replay-event <event_id>` | Re-POST undelivered callback to Arkfile |
 | `bridge reconcile` | Poll all active entitlements against processor |
 | `bridge list-undelivered` | Events where `arkfile_delivered=false` |
+
+**Cancel paid subscription (operator support).** Use the Stripe dashboard or processor tooling to cancel the subscription for the customer linked to `entitlement_ref`. Arkfile updates via entitlement webhook or operator runs `arkfile-admin subscriptions sync --user` on the vault host. Do not use Arkfile admin to “cancel” paid entitlements locally — gift comps use `cancel-gift-subscription` on Arkfile only.
 
 Payment refunds and chargebacks: v1 manual via processor dashboard; optional future `entitlement.expired` on chargeback webhook. Document policy in operator runbook; no automatic Arkfile file purge.
 
