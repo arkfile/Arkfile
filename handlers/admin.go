@@ -778,9 +778,9 @@ func ListUsers(c echo.Context) error {
 		}
 
 		// Convert boolean values from rqlite driver (may come as bool, int64, or string)
-		isApproved := toBool(isApprovedRaw)
-		isAdmin := toBool(isAdminRaw)
-		mfaEnabled := toBool(mfaEnabledRaw)
+		isApproved := models.ScanBool(isApprovedRaw)
+		isAdmin := models.ScanBool(isAdminRaw)
+		mfaEnabled := models.ScanBool(mfaEnabledRaw)
 
 		// Extract values with safe defaults for NULL columns
 		storageLimit := int64(0)
@@ -1153,26 +1153,6 @@ func toInt64(v interface{}) int64 {
 		return int64(val)
 	default:
 		return 0
-	}
-}
-
-// toBool converts an interface{} value to bool, handling the various types
-// that rqlite driver may return for BOOLEAN columns (bool, int64, float64, string).
-func toBool(v interface{}) bool {
-	if v == nil {
-		return false
-	}
-	switch val := v.(type) {
-	case bool:
-		return val
-	case int64:
-		return val != 0
-	case float64:
-		return val != 0
-	case string:
-		return val == "1" || val == "true" || val == "TRUE"
-	default:
-		return false
 	}
 }
 

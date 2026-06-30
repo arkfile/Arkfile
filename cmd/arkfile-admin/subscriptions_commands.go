@@ -1,11 +1,9 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"strconv"
-	"strings"
 )
 
 func handleSubscriptionsCommand(client *HTTPClient, config *AdminConfig, args []string) error {
@@ -261,23 +259,6 @@ func handleSubscriptionsReconcileCommand(client *HTTPClient, config *AdminConfig
 	}
 	fmt.Printf("Reconcile complete: %+v\n", resp.Data)
 	return nil
-}
-
-func safeBool(m map[string]interface{}, key string) bool {
-	v, ok := m[key]
-	if !ok {
-		return false
-	}
-	switch t := v.(type) {
-	case bool:
-		return t
-	case float64:
-		return t != 0
-	case string:
-		return t == "true" || t == "1"
-	default:
-		return false
-	}
 }
 
 func formatBytes(n int64) string {

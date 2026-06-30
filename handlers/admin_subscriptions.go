@@ -41,6 +41,7 @@ func AdminListSubscriptionPlansHandler(c echo.Context) error {
 	}
 	plans, err := models.ListAllSubscriptionPlans(database.DB)
 	if err != nil {
+		logging.Log(logging.ERROR, "admin list subscription plans: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list plans")
 	}
 	return c.JSON(http.StatusOK, map[string]interface{}{

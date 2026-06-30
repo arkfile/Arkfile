@@ -72,15 +72,9 @@ func ListPublicSubscriptionPlans(db *sql.DB) ([]SubscriptionPlan, error) {
 	var plans []SubscriptionPlan
 	for rows.Next() {
 		var p SubscriptionPlan
-		var active, public int
-		if err := rows.Scan(
-			&p.PlanID, &p.Name, &p.Description, &p.PriceUSDCents, &p.StorageLimitBytes,
-			&p.SortOrder, &active, &public, &p.CreatedAt, &p.UpdatedAt, &p.UpdatedBy,
-		); err != nil {
+		if err := scanSubscriptionPlan(rows, &p); err != nil {
 			return nil, err
 		}
-		p.IsActive = active != 0
-		p.IsPublic = public != 0
 		plans = append(plans, p)
 	}
 	return plans, rows.Err()
@@ -100,15 +94,9 @@ func ListAllSubscriptionPlans(db *sql.DB) ([]SubscriptionPlan, error) {
 	var plans []SubscriptionPlan
 	for rows.Next() {
 		var p SubscriptionPlan
-		var active, public int
-		if err := rows.Scan(
-			&p.PlanID, &p.Name, &p.Description, &p.PriceUSDCents, &p.StorageLimitBytes,
-			&p.SortOrder, &active, &public, &p.CreatedAt, &p.UpdatedAt, &p.UpdatedBy,
-		); err != nil {
+		if err := scanSubscriptionPlan(rows, &p); err != nil {
 			return nil, err
 		}
-		p.IsActive = active != 0
-		p.IsPublic = public != 0
 		plans = append(plans, p)
 	}
 	return plans, rows.Err()
@@ -116,20 +104,38 @@ func ListAllSubscriptionPlans(db *sql.DB) ([]SubscriptionPlan, error) {
 
 func GetSubscriptionPlan(db *sql.DB, planID string) (*SubscriptionPlan, error) {
 	var p SubscriptionPlan
-	var active, public int
-	err := db.QueryRow(`
+	row := db.QueryRow(`
 		SELECT plan_id, name, COALESCE(description,''), price_usd_cents, storage_limit_bytes,
 		       sort_order, is_active, is_public, created_at, updated_at, COALESCE(updated_by,'')
-		FROM subscription_plans WHERE plan_id = ?`, planID).Scan(
-		&p.PlanID, &p.Name, &p.Description, &p.PriceUSDCents, &p.StorageLimitBytes,
-		&p.SortOrder, &active, &public, &p.CreatedAt, &p.UpdatedAt, &p.UpdatedBy,
-	)
-	if err != nil {
+		FROM subscription_plans WHERE plan_id = ?`, planID)
+	if err := scanSubscriptionPlan(row, &p); err != nil {
 		return nil, err
 	}
-	p.IsActive = active != 0
-	p.IsPublic = public != 0
 	return &p, nil
+}
+
+type subscriptionPlanScanner interface {
+	Scan(dest ...interface{}) error
+}
+
+func scanSubscriptionPlan(scanner subscriptionPlanScanner, p *SubscriptionPlan) error {
+	var priceRaw, storageRaw, sortRaw interface{}
+	var isActiveRaw, isPublicRaw interface{}
+	var createdAtStr, updatedAtStr string
+	if err := scanner.Scan(
+		&p.PlanID, &p.Name, &p.Description, &priceRaw, &storageRaw,
+		&sortRaw, &isActiveRaw, &isPublicRaw, &createdAtStr, &updatedAtStr, &p.UpdatedBy,
+	); err != nil {
+		return err
+	}
+	p.PriceUSDCents = ScanInt(priceRaw)
+	p.StorageLimitBytes = ScanInt64(storageRaw)
+	p.SortOrder = ScanInt(sortRaw)
+	p.IsActive = ScanBool(isActiveRaw)
+	p.IsPublic = ScanBool(isPublicRaw)
+	p.CreatedAt = parseDBTimestamp(createdAtStr)
+	p.UpdatedAt = parseDBTimestamp(updatedAtStr)
+	return nil
 }
 
 func UpsertSubscriptionPlan(db *sql.DB, p *SubscriptionPlan) error {
@@ -188,16 +194,19 @@ func CreateSubscriptionCheckout(db *sql.DB, checkout *SubscriptionCheckout) erro
 
 func GetSubscriptionCheckout(db *sql.DB, checkoutID string) (*SubscriptionCheckout, error) {
 	var c SubscriptionCheckout
+	var createdAtStr, updatedAtStr string
 	err := db.QueryRow(`
 		SELECT checkout_id, username, plan_id, status,
 		       COALESCE(entitlement_ref,''), created_at, updated_at
 		FROM subscription_checkouts WHERE checkout_id = ?`, checkoutID).Scan(
 		&c.CheckoutID, &c.Username, &c.PlanID, &c.Status,
-		&c.EntitlementRef, &c.CreatedAt, &c.UpdatedAt,
+		&c.EntitlementRef, &createdAtStr, &updatedAtStr,
 	)
 	if err != nil {
 		return nil, err
 	}
+	c.CreatedAt = parseDBTimestamp(createdAtStr)
+	c.UpdatedAt = parseDBTimestamp(updatedAtStr)
 	return &c, nil
 }
 
@@ -236,21 +245,39 @@ func GetUserSubscriptionByEntitlementRef(db *sql.DB, entitlementRef string) (*Us
 	return scanUserSubscription(db.QueryRow(activeSubscriptionQuery()+` AND us.entitlement_ref = ?`, entitlementRef))
 }
 
+type userSubscriptionScanner interface {
+	Scan(dest ...interface{}) error
+}
+
 func scanUserSubscription(row *sql.Row) (*UserSubscription, error) {
+	return scanUserSubscriptionFields(row)
+}
+
+func scanUserSubscriptionFields(scanner userSubscriptionScanner) (*UserSubscription, error) {
 	var s UserSubscription
+	var idRaw interface{}
 	var cancelAtPeriodEnd interface{}
 	var canceledAt, pastDueSince sql.NullString
-	err := row.Scan(
-		&s.ID, &s.Username, &s.PlanID, &s.CheckoutID, &s.EntitlementRef,
-		&s.Status, &s.Source, &s.CurrentPeriodStart, &s.CurrentPeriodEnd,
+	var periodStartStr, periodEndStr, createdAtStr, updatedAtStr string
+	var planPriceRaw, planStorageRaw interface{}
+	err := scanner.Scan(
+		&idRaw, &s.Username, &s.PlanID, &s.CheckoutID, &s.EntitlementRef,
+		&s.Status, &s.Source, &periodStartStr, &periodEndStr,
 		&cancelAtPeriodEnd, &canceledAt, &pastDueSince,
-		&s.GiftNote, &s.CreatedAt, &s.UpdatedAt,
-		&s.PlanName, &s.PlanPriceUSDCents, &s.PlanStorageBytes,
+		&s.GiftNote, &createdAtStr, &updatedAtStr,
+		&s.PlanName, &planPriceRaw, &planStorageRaw,
 	)
 	if err != nil {
 		return nil, err
 	}
-	s.CancelAtPeriodEnd = scanBoolish(cancelAtPeriodEnd)
+	s.ID = ScanInt64(idRaw)
+	s.CurrentPeriodStart = parseDBTimestamp(periodStartStr)
+	s.CurrentPeriodEnd = parseDBTimestamp(periodEndStr)
+	s.CreatedAt = parseDBTimestamp(createdAtStr)
+	s.UpdatedAt = parseDBTimestamp(updatedAtStr)
+	s.PlanPriceUSDCents = ScanInt(planPriceRaw)
+	s.PlanStorageBytes = ScanInt64(planStorageRaw)
+	s.CancelAtPeriodEnd = ScanBool(cancelAtPeriodEnd)
 	if canceledAt.Valid && canceledAt.String != "" {
 		if t, err := parseFlexibleTime(canceledAt.String); err == nil {
 			s.CanceledAt = &t
@@ -272,21 +299,6 @@ func parseFlexibleTime(s string) (time.Time, error) {
 		return t.UTC(), nil
 	}
 	return time.Time{}, errors.New("unparseable time")
-}
-
-func scanBoolish(v interface{}) bool {
-	switch t := v.(type) {
-	case bool:
-		return t
-	case int64:
-		return t != 0
-	case int:
-		return t != 0
-	case float64:
-		return t != 0
-	default:
-		return false
-	}
 }
 
 func InsertUserSubscription(db *sql.DB, s *UserSubscription) error {
@@ -373,20 +385,11 @@ func ListBridgeSubscriptionsForReconcile(db *sql.DB, withinDays int) ([]UserSubs
 
 	var out []UserSubscription
 	for rows.Next() {
-		var s UserSubscription
-		var cancelAtPeriodEnd int
-		var canceledAt, pastDueSince sql.NullString
-		if err := rows.Scan(
-			&s.ID, &s.Username, &s.PlanID, &s.CheckoutID, &s.EntitlementRef,
-			&s.Status, &s.Source, &s.CurrentPeriodStart, &s.CurrentPeriodEnd,
-			&cancelAtPeriodEnd, &canceledAt, &pastDueSince,
-			&s.GiftNote, &s.CreatedAt, &s.UpdatedAt,
-			&s.PlanName, &s.PlanPriceUSDCents, &s.PlanStorageBytes,
-		); err != nil {
+		s, err := scanUserSubscriptionFields(rows)
+		if err != nil {
 			return nil, err
 		}
-		s.CancelAtPeriodEnd = cancelAtPeriodEnd != 0
-		out = append(out, s)
+		out = append(out, *s)
 	}
 	return out, rows.Err()
 }
@@ -410,20 +413,11 @@ func ListExpiredGiftSubscriptions(db *sql.DB) ([]UserSubscription, error) {
 
 	var out []UserSubscription
 	for rows.Next() {
-		var s UserSubscription
-		var cancelAtPeriodEnd int
-		var canceledAt, pastDueSince sql.NullString
-		if err := rows.Scan(
-			&s.ID, &s.Username, &s.PlanID, &s.CheckoutID, &s.EntitlementRef,
-			&s.Status, &s.Source, &s.CurrentPeriodStart, &s.CurrentPeriodEnd,
-			&cancelAtPeriodEnd, &canceledAt, &pastDueSince,
-			&s.GiftNote, &s.CreatedAt, &s.UpdatedAt,
-			&s.PlanName, &s.PlanPriceUSDCents, &s.PlanStorageBytes,
-		); err != nil {
+		s, err := scanUserSubscriptionFields(rows)
+		if err != nil {
 			return nil, err
 		}
-		s.CancelAtPeriodEnd = cancelAtPeriodEnd != 0
-		out = append(out, s)
+		out = append(out, *s)
 	}
 	return out, rows.Err()
 }

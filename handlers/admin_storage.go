@@ -120,7 +120,7 @@ func AdminStorageStatus(c echo.Context) error {
 			"region":           region,
 			"role":             role,
 			"env_var_prefix":   envVarPrefix,
-			"is_active":        toBool(isActiveRaw),
+			"is_active":        models.ScanBool(isActiveRaw),
 			"total_objects":    toInt64(totalObjectsRaw),
 			"total_size_bytes": toInt64(totalSizeBytesRaw),
 		}
