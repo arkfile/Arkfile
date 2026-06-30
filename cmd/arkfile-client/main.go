@@ -433,6 +433,7 @@ func (c *HTTPClient) makeRequest(method, endpoint string, payload interface{}, t
 	if err := json.Unmarshal(responseData, &apiResp); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
+	populateResponseData(responseData, &apiResp)
 
 	// Extract fields from Data map if present
 	if apiResp.Data != nil {
@@ -473,10 +474,40 @@ func (c *HTTPClient) makeRequest(method, endpoint string, payload interface{}, t
 	}
 
 	if resp.StatusCode >= 400 {
-		return &apiResp, fmt.Errorf("HTTP %d: %s", resp.StatusCode, apiResp.Error)
+		errMsg := apiResp.Error
+		if errMsg == "" {
+			errMsg = apiResp.Message
+		}
+		return &apiResp, fmt.Errorf("HTTP %d: %s", resp.StatusCode, errMsg)
 	}
 
 	return &apiResp, nil
+}
+
+// populateResponseData normalizes API payloads into Response.Data.
+// Wrapped responses use {"success":true,"data":{...}}; flat endpoints
+// (e.g. /api/credits) and mixed envelopes (e.g. {"success":true,"plans":[]})
+// expose their fields directly on Data.
+func populateResponseData(responseData []byte, apiResp *Response) {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(responseData, &raw); err != nil {
+		return
+	}
+	if data, ok := raw["data"].(map[string]interface{}); ok {
+		apiResp.Data = data
+		return
+	}
+	flat := make(map[string]interface{}, len(raw))
+	for k, v := range raw {
+		switch k {
+		case "success", "message", "error":
+			continue
+		}
+		flat[k] = v
+	}
+	if len(flat) > 0 {
+		apiResp.Data = flat
+	}
 }
 
 // fetchOpaqueServerID retrieves the OPAQUE server identity (idS) from the

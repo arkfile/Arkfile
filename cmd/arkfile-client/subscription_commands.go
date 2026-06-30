@@ -66,14 +66,14 @@ func handleSubscriptionStatusCommand(client *HTTPClient, config *ClientConfig, a
 		}
 		if *jsonOut {
 			out := map[string]interface{}{
-				"subscription": meResp.Data["data"],
-				"credits":        creditsResp.Data,
+				"subscription": meResp.Data,
+				"credits":      creditsResp.Data,
 			}
 			enc := json.NewEncoder(os.Stdout)
 			enc.SetIndent("", "  ")
 			return enc.Encode(out)
 		}
-		data, _ := meResp.Data["data"].(map[string]interface{})
+		data := meResp.Data
 		fmt.Printf("Billing mode: %s\n", stringField(data, "billing_mode"))
 		if sub, ok := data["subscription"].(map[string]interface{}); ok {
 			fmt.Printf("Plan: %s (%s) until %s\n",
@@ -92,7 +92,7 @@ func handleSubscriptionStatusCommand(client *HTTPClient, config *ClientConfig, a
 			return err
 		}
 		meResp, _ := client.makeRequestWithSession("GET", "/api/subscriptions/me", nil, session)
-		data, _ := meResp.Data["data"].(map[string]interface{})
+		data := meResp.Data
 		if sub, ok := data["subscription"].(map[string]interface{}); ok {
 			st := stringField(sub, "status")
 			if st == "active" || st == "trialing" {
@@ -155,8 +155,7 @@ func handleSubscriptionSubscribeCommand(client *HTTPClient, config *ClientConfig
 	if err != nil {
 		return err
 	}
-	inner, _ := resp.Data["data"].(map[string]interface{})
-	url := stringField(inner, "checkout_url")
+	url := stringField(resp.Data, "checkout_url")
 	fmt.Printf("Checkout URL: %s\n", url)
 	if *openBrowser && url != "" {
 		openBrowserURL(url)
@@ -181,8 +180,7 @@ func handleSubscriptionPortalCommand(client *HTTPClient, config *ClientConfig, a
 	if err != nil {
 		return err
 	}
-	inner, _ := resp.Data["data"].(map[string]interface{})
-	url := stringField(inner, "portal_url")
+	url := stringField(resp.Data, "portal_url")
 	fmt.Printf("Portal URL: %s\n", url)
 	if (*openBrowser || strings.TrimSpace(url) != "") && url != "" {
 		if *openBrowser {

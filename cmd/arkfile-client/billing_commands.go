@@ -103,9 +103,8 @@ func handleBillingTopUpCommand(client *HTTPClient, config *ClientConfig, args []
 	if err != nil {
 		return err
 	}
-	inner, _ := resp.Data["data"].(map[string]interface{})
-	checkoutURL := stringField(inner, "checkout_url")
-	invoiceID := stringField(inner, "invoice_id")
+	checkoutURL := stringField(resp.Data, "checkout_url")
+	invoiceID := stringField(resp.Data, "invoice_id")
 	fmt.Printf("Invoice: %s\n", invoiceID)
 	fmt.Printf("Checkout URL: %s\n", checkoutURL)
 	if *openBrowser && checkoutURL != "" {
@@ -118,8 +117,7 @@ func handleBillingTopUpCommand(client *HTTPClient, config *ClientConfig, args []
 			if err != nil {
 				continue
 			}
-			inv, _ := st.Data["data"].(map[string]interface{})
-			if stringField(inv, "status") == "paid" {
+			if stringField(st.Data, "status") == "paid" {
 				fmt.Println("Payment confirmed.")
 				return nil
 			}
@@ -152,7 +150,7 @@ func handleBillingInvoiceStatusCommand(client *HTTPClient, config *ClientConfig,
 		enc.SetIndent("", "  ")
 		return enc.Encode(resp.Data)
 	}
-	inv, _ := resp.Data["data"].(map[string]interface{})
+	inv := resp.Data
 	fmt.Printf("Status: %s\n", stringField(inv, "status"))
 	return nil
 }
