@@ -480,6 +480,79 @@ CREATE TABLE IF NOT EXISTS payment_invoices (
 );
 
 -- =====================================================
+-- PHASE 11b: SUBSCRIPTION PLANS AND ENTITLEMENTS
+-- =====================================================
+
+CREATE TABLE IF NOT EXISTS subscription_plans (
+    plan_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    price_usd_cents INTEGER NOT NULL,
+    storage_limit_bytes BIGINT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    is_active BOOLEAN NOT NULL DEFAULT 1,
+    is_public BOOLEAN NOT NULL DEFAULT 1,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_by TEXT
+);
+
+CREATE TABLE IF NOT EXISTS subscription_checkouts (
+    checkout_id TEXT PRIMARY KEY,
+    username TEXT NOT NULL,
+    plan_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending', 'completed', 'expired', 'canceled')),
+    entitlement_ref TEXT UNIQUE,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE RESTRICT,
+    FOREIGN KEY (plan_id) REFERENCES subscription_plans(plan_id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_subscription_checkouts_username
+    ON subscription_checkouts(username);
+CREATE INDEX IF NOT EXISTS idx_subscription_checkouts_entitlement_ref
+    ON subscription_checkouts(entitlement_ref);
+
+CREATE TABLE IF NOT EXISTS user_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL,
+    plan_id TEXT NOT NULL,
+    checkout_id TEXT NOT NULL,
+    entitlement_ref TEXT UNIQUE NOT NULL,
+    status TEXT NOT NULL CHECK (status IN (
+        'active', 'past_due', 'canceled', 'expired', 'trialing'
+    )),
+    source TEXT NOT NULL CHECK (source IN ('bridge', 'gift')),
+    current_period_start DATETIME NOT NULL,
+    current_period_end DATETIME NOT NULL,
+    cancel_at_period_end BOOLEAN NOT NULL DEFAULT 0,
+    canceled_at DATETIME,
+    past_due_since DATETIME,
+    gift_note TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE RESTRICT,
+    FOREIGN KEY (plan_id) REFERENCES subscription_plans(plan_id) ON DELETE RESTRICT,
+    FOREIGN KEY (checkout_id) REFERENCES subscription_checkouts(checkout_id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_user_subscriptions_username ON user_subscriptions(username);
+CREATE INDEX IF NOT EXISTS idx_user_subscriptions_status ON user_subscriptions(status);
+CREATE INDEX IF NOT EXISTS idx_user_subscriptions_entitlement_ref ON user_subscriptions(entitlement_ref);
+
+CREATE TABLE IF NOT EXISTS subscription_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT UNIQUE NOT NULL,
+    event_type TEXT NOT NULL,
+    entitlement_ref TEXT,
+    checkout_id TEXT,
+    username TEXT,
+    plan_id TEXT,
+    payload_hash TEXT NOT NULL,
+    processed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- =====================================================
 -- PHASE 12: USER CONTACT INFORMATION
 -- =====================================================
 

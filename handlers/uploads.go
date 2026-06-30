@@ -19,6 +19,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/arkfile/Arkfile/auth"
+	"github.com/arkfile/Arkfile/billing"
 	"github.com/arkfile/Arkfile/config"
 	"github.com/arkfile/Arkfile/crypto"
 	"github.com/arkfile/Arkfile/database"
@@ -135,7 +136,7 @@ func CreateUploadSession(c echo.Context) error {
 	// negative-balance cap. Only applies when billing is enabled; login and
 	// downloads remain available so users can retrieve their data and settle up.
 	cfg, err := config.LoadConfig()
-	if err == nil && cfg.Billing.Enabled {
+	if err == nil && cfg.Billing.Enabled && cfg.Billing.PaygEnabled && billing.ShouldApplyPaygUploadCap(database.DB, username) {
 		credits, creditsErr := models.GetUserCredits(database.DB, username)
 		if creditsErr != nil {
 			logging.ErrorLogger.Printf("Upload balance check failed for %s: %v", username, creditsErr)
@@ -145,7 +146,19 @@ func CreateUploadSession(c echo.Context) error {
 		}
 	}
 
-	if !user.CheckStorageAvailable(request.TotalSize) {
+	subBlocked, subErr := billing.SubscriptionUploadBlocked(database.DB, username)
+	if subErr != nil {
+		logging.ErrorLogger.Printf("Upload subscription check failed for %s: %v", username, subErr)
+	} else if subBlocked {
+		return JSONErrorCode(c, http.StatusPaymentRequired, "subscription_past_due",
+			"Your subscription payment is past due. Please update your payment method to upload new files.")
+	}
+
+	storageOK, storageErr := billing.CheckStorageAvailable(database.DB, username, request.TotalSize)
+	if storageErr != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check storage availability")
+	}
+	if !storageOK {
 		return echo.NewHTTPError(http.StatusForbidden, "Storage limit would be exceeded")
 	}
 

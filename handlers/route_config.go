@@ -213,8 +213,15 @@ func RegisterRoutes() {
 	mfaProtectedGroup.POST("/api/billing/invoice", CreateInvoiceHandler)
 	mfaProtectedGroup.GET("/api/billing/invoice/:invoice_id", GetInvoiceStatusHandler)
 
-	// Webhook endpoint (public, unauthenticated)
+	// Subscriptions (Entitlement Bridge consumer)
+	mfaProtectedGroup.GET("/api/subscriptions/plans", ListSubscriptionPlansHandler)
+	mfaProtectedGroup.GET("/api/subscriptions/me", GetMySubscriptionHandler)
+	mfaProtectedGroup.POST("/api/subscriptions/checkout", CreateSubscriptionCheckoutHandler)
+	mfaProtectedGroup.POST("/api/subscriptions/portal", CreateSubscriptionPortalHandler)
+
+	// Webhook endpoints (public, unauthenticated)
 	Echo.POST("/api/webhooks/btcpay", BTCPayWebhookHandler)
+	Echo.POST("/api/webhooks/entitlements", EntitlementWebhookHandler)
 
 	// Admin API endpoints - structured for future expansion.
 	// Stack: JWTMiddleware (validates aud=arkfile-api, rejects temp tokens at signature/audience)
@@ -311,6 +318,15 @@ func RegisterRoutes() {
 	adminGroup.GET("/payments/invoices", AdminListInvoicesHandler)
 	adminGroup.POST("/payments/invoice/:invoice_id/sync", AdminSyncInvoiceHandler)
 	adminGroup.POST("/payments/reconcile", AdminReconcilePaymentsHandler)
+
+	// Subscriptions - admin endpoints
+	adminGroup.GET("/subscriptions/plans", AdminListSubscriptionPlansHandler)
+	adminGroup.POST("/subscriptions/plans", AdminUpsertSubscriptionPlanHandler)
+	adminGroup.GET("/subscriptions/users/:username", AdminGetUserSubscriptionHandler)
+	adminGroup.POST("/subscriptions/users/:username/grant-gift-subscription", AdminGrantGiftSubscriptionHandler)
+	adminGroup.POST("/subscriptions/users/:username/cancel-gift-subscription", AdminCancelGiftSubscriptionHandler)
+	adminGroup.POST("/subscriptions/users/:username/sync", AdminSyncUserSubscriptionHandler)
+	adminGroup.POST("/subscriptions/reconcile", AdminReconcileSubscriptionsHandler)
 
 	// Development/Testing admin endpoints (gated by ADMIN_DEV_TEST_API_ENABLED)
 	// SECURITY: These endpoints are ONLY for development and testing

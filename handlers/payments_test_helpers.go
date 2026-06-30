@@ -25,6 +25,8 @@ const (
 	paymentsTestOtherUser = "pay-other-user"
 	paymentsWebhookSecret = "test_webhook_secret"
 	paymentsStoreID       = "test_store_id"
+	subscriptionsTestSecret = "test_entitlement_bridge_secret"
+	subscriptionsTestPlanID = "plan_dev_250gb"
 )
 
 func setupPaymentsSQLiteDB(t *testing.T) *sql.DB {
@@ -71,6 +73,43 @@ func setupPaymentsSQLiteDB(t *testing.T) *sql.DB {
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 		);
+		CREATE TABLE storage_usage_accumulator (
+			username TEXT PRIMARY KEY,
+			unbilled_microcents BIGINT NOT NULL DEFAULT 0,
+			last_tick_at DATETIME,
+			last_billed_at DATETIME,
+			FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+		);
+		CREATE TABLE billing_settings (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_by TEXT
+		);
+		CREATE TABLE upload_sessions (
+			id TEXT PRIMARY KEY,
+			file_id VARCHAR(36) NOT NULL UNIQUE,
+			encrypted_filename TEXT NOT NULL,
+			filename_nonce TEXT NOT NULL,
+			encrypted_sha256sum TEXT NOT NULL,
+			sha256sum_nonce TEXT NOT NULL,
+			owner_username TEXT NOT NULL,
+			total_size BIGINT NOT NULL,
+			chunk_size INTEGER NOT NULL,
+			total_chunks INTEGER NOT NULL,
+			password_hint TEXT,
+			password_type TEXT NOT NULL,
+			storage_upload_id TEXT,
+			storage_id VARCHAR(36),
+			padded_size BIGINT,
+			status TEXT NOT NULL DEFAULT 'in_progress',
+			encrypted_hash CHAR(64),
+			encrypted_fek TEXT NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			expires_at TIMESTAMP,
+			FOREIGN KEY (owner_username) REFERENCES users(username) ON DELETE CASCADE
+		);
 		CREATE TABLE payment_invoices (
 			invoice_id TEXT PRIMARY KEY,
 			username TEXT NOT NULL,
@@ -83,6 +122,56 @@ func setupPaymentsSQLiteDB(t *testing.T) *sql.DB {
 			FOREIGN KEY(username) REFERENCES users(username) ON DELETE RESTRICT,
 			CHECK(status IN ('pending', 'paid', 'expired', 'failed')),
 			CHECK(provider IN ('btcpay'))
+		);
+		CREATE TABLE subscription_plans (
+			plan_id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			description TEXT,
+			price_usd_cents INTEGER NOT NULL,
+			storage_limit_bytes BIGINT NOT NULL,
+			sort_order INTEGER NOT NULL DEFAULT 0,
+			is_active INTEGER NOT NULL DEFAULT 1,
+			is_public INTEGER NOT NULL DEFAULT 1,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_by TEXT
+		);
+		CREATE TABLE subscription_checkouts (
+			checkout_id TEXT PRIMARY KEY,
+			username TEXT NOT NULL,
+			plan_id TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			entitlement_ref TEXT UNIQUE,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE user_subscriptions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username TEXT NOT NULL,
+			plan_id TEXT NOT NULL,
+			checkout_id TEXT NOT NULL,
+			entitlement_ref TEXT UNIQUE NOT NULL,
+			status TEXT NOT NULL,
+			source TEXT NOT NULL,
+			current_period_start DATETIME NOT NULL,
+			current_period_end DATETIME NOT NULL,
+			cancel_at_period_end BOOLEAN NOT NULL DEFAULT 0,
+			canceled_at DATETIME,
+			past_due_since DATETIME,
+			gift_note TEXT,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE subscription_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			event_id TEXT UNIQUE NOT NULL,
+			event_type TEXT NOT NULL,
+			entitlement_ref TEXT,
+			checkout_id TEXT,
+			username TEXT,
+			plan_id TEXT,
+			payload_hash TEXT NOT NULL,
+			processed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);
 	`
 	if _, err := db.Exec(schema); err != nil {
@@ -147,6 +236,76 @@ func withPaymentsTestEnv(t *testing.T, btcpayURL string, paymentsEnabled bool) (
 		db.Close()
 	}
 	return db, cleanup
+}
+
+func withSubscriptionsTestEnv(t *testing.T, btcpayURL string) (*sql.DB, func()) {
+	t.Helper()
+	db, cleanup := withPaymentsTestEnv(t, btcpayURL, true)
+
+	t.Setenv("ARKFILE_SUBSCRIPTIONS_ENABLED", "true")
+	t.Setenv("ARKFILE_ENTITLEMENT_BRIDGE_URL", "http://127.0.0.1:8081")
+	t.Setenv("ARKFILE_ENTITLEMENT_BRIDGE_WEBHOOK_SECRET", subscriptionsTestSecret)
+	t.Setenv("ARKFILE_BILLING_PAYG_ENABLED", "true")
+	t.Setenv("ARKFILE_CUSTOMER_PRICE_USD_PER_TB_PER_MONTH", "10.00")
+	t.Setenv("JWT_SECRET", "test-jwt-secret")
+	t.Setenv("STORAGE_PROVIDER_1", "generic-s3")
+	t.Setenv("STORAGE_1_ENDPOINT", "http://localhost:9332")
+	t.Setenv("STORAGE_1_ACCESS_KEY", "test")
+	t.Setenv("STORAGE_1_SECRET_KEY", "test")
+	t.Setenv("STORAGE_1_BUCKET", "test-bucket")
+	config.ResetConfigForTest()
+	t.Setenv("ARKFILE_PAYMENTS_ENABLED", "true")
+	t.Setenv("ARKFILE_BILLING_ENABLED", "true")
+	t.Setenv("ARKFILE_PAYG_NEGATIVE_BALANCE_LIMIT_USD", "10.00")
+	t.Setenv("ARKFILE_BTCPAY_SERVER_URL", btcpayURL)
+	t.Setenv("ARKFILE_BTCPAY_STORE_ID", paymentsStoreID)
+	t.Setenv("ARKFILE_BTCPAY_API_KEY", "test_api_key")
+	t.Setenv("ARKFILE_BTCPAY_WEBHOOK_SECRET", paymentsWebhookSecret)
+	t.Setenv("ARKFILE_MIN_TOP_UP_USD", "0.50")
+	t.Setenv("ARKFILE_MAX_TOP_UP_USD", "1000.00")
+	t.Setenv("ARKFILE_SERVER_BASE_URL", "https://arkfile.test")
+	if _, err := config.LoadConfig(); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	planBytes := int64(250) << 30
+	if _, err := db.Exec(
+		`INSERT INTO subscription_plans (plan_id, name, price_usd_cents, storage_limit_bytes, is_active, is_public)
+		 VALUES (?, '250 GB Dev', 500, ?, 1, 1)`,
+		subscriptionsTestPlanID, planBytes,
+	); err != nil {
+		t.Fatalf("seed subscription plan: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO billing_settings (key, value) VALUES ('customer_price_usd_per_tb_per_month', '10.00')`); err != nil {
+		t.Fatalf("seed billing settings: %v", err)
+	}
+
+	origCleanup := cleanup
+	cleanup = func() {
+		origCleanup()
+	}
+	return db, cleanup
+}
+
+func seedHandlerGiftSubscription(t *testing.T, db *sql.DB, username string) {
+	t.Helper()
+	checkoutID := "subchk_gift_" + username
+	entRef := "ent_gift_" + username
+	if _, err := db.Exec(
+		`INSERT INTO subscription_checkouts (checkout_id, username, plan_id, status, entitlement_ref)
+		 VALUES (?, ?, ?, 'completed', ?)`,
+		checkoutID, username, subscriptionsTestPlanID, entRef,
+	); err != nil {
+		t.Fatalf("seed checkout: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO user_subscriptions
+		  (username, plan_id, checkout_id, entitlement_ref, status, source, current_period_start, current_period_end)
+		VALUES (?, ?, ?, ?, 'active', 'gift', datetime('now'), datetime('now', '+30 days'))`,
+		username, subscriptionsTestPlanID, checkoutID, entRef,
+	); err != nil {
+		t.Fatalf("seed subscription: %v", err)
+	}
 }
 
 func newPaymentsEchoContext(t *testing.T, method, path string, body io.Reader, username string) (echo.Context, *httptest.ResponseRecorder) {

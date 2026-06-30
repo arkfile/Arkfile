@@ -64,6 +64,9 @@ func SweepAllUsers(db *sql.DB, rate *Rate, now time.Time) (SweepSummary, error) 
 
 	summary := SweepSummary{}
 	for _, p := range queue {
+		if !ShouldMeter(db, p.username) {
+			continue
+		}
 		newBalance, settleErr := settleOneUser(db, rate, now, p.username, p.unbilledMicrocents, p.lastBilledAt)
 		if settleErr != nil {
 			logging.ErrorLogger.Printf("billing.SweepAllUsers: settle %s: %v", p.username, settleErr)

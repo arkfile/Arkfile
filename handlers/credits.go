@@ -39,6 +39,7 @@ func GetUserCredits(c echo.Context) error {
 	}
 
 	currentUsage, creditsRunway := buildBillingProjection(database.DB, username, summary.Balance.BalanceUSDMicrocents)
+	subscriptionBlock, billingMode := buildSubscriptionProjection(database.DB, username)
 
 	response := map[string]interface{}{
 		"username":               username,
@@ -52,6 +53,12 @@ func GetUserCredits(c echo.Context) error {
 			"offset": offset,
 			"count":  len(transactions),
 		},
+	}
+	if billingMode != "" {
+		response["billing_mode"] = billingMode
+	}
+	if subscriptionBlock != nil {
+		response["subscription"] = subscriptionBlock
 	}
 
 	cfg, err := config.LoadConfig()

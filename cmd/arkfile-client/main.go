@@ -57,6 +57,8 @@ COMMANDS:
     export            Export an encrypted file as a .arkbackup bundle
     decrypt-blob      Decrypt a .arkbackup bundle offline (no network required)
     contact-info      Manage your contact information (get, set, delete)
+    billing           PAYG balance, usage, and top-ups
+    subscription      Subscription plans and Entitlement Bridge checkout
     generate-test-file Generate a test file for upload testing
     logout            Logout and clear session
     agent             Manage the agent (start, stop, status)
@@ -310,6 +312,16 @@ func main() {
 	case "contact-info":
 		if err := handleContactInfoCommand(client, config, args); err != nil {
 			logError("Contact info failed: %v", err)
+			os.Exit(1)
+		}
+	case "billing":
+		if err := handleBillingCommand(client, config, args); err != nil {
+			logError("Billing command failed: %v", err)
+			os.Exit(1)
+		}
+	case "subscription":
+		if err := handleSubscriptionCommand(client, config, args); err != nil {
+			logError("Subscription command failed: %v", err)
 			os.Exit(1)
 		}
 	case "revoke-all":

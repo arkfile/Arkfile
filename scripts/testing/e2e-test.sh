@@ -3385,6 +3385,142 @@ run_payments() {
     info "Payments complete"
 }
 
+start_mock_entitlement_bridge() {
+    local e2e_script_dir="$1"
+    local go_bin="$2"
+    local mock_bin="$TEST_DATA_DIR/entitlement-bridge-mock"
+    local mock_log="$TEST_DATA_DIR/entitlement-bridge-mock.log"
+    local mock_src="$e2e_script_dir/entitlement-bridge-mock.go"
+    local mock_pid
+
+    : > "$mock_log"
+    export ENTITLEMENT_BRIDGE_WEBHOOK_SECRET="${ENTITLEMENT_BRIDGE_WEBHOOK_SECRET:-test_entitlement_bridge_secret}"
+    export ARKFILE_WEBHOOK_URL="${SERVER_URL}/api/webhooks/entitlements"
+
+    info "Building mock Entitlement Bridge..."
+    if ! "$go_bin" build -o "$mock_bin" "$mock_src" >>"$mock_log" 2>&1; then
+        error "Failed to build mock Entitlement Bridge"
+        cat "$mock_log"
+        return 1
+    fi
+
+    info "Starting mock Entitlement Bridge on :8081..."
+    "$mock_bin" >>"$mock_log" 2>&1 &
+    mock_pid=$!
+
+    local i
+    for i in $(seq 1 60); do
+        if curl -s --connect-timeout 1 http://127.0.0.1:8081/health >/dev/null 2>&1; then
+            info "Mock Entitlement Bridge is listening on :8081"
+            echo "$mock_pid"
+            return 0
+        fi
+        if ! kill -0 "$mock_pid" 2>/dev/null; then
+            error "Mock Entitlement Bridge exited early"
+            cat "$mock_log"
+            return 1
+        fi
+        sleep 1
+    done
+    error "Mock Entitlement Bridge did not become ready"
+    cat "$mock_log"
+    kill "$mock_pid" 2>/dev/null || true
+    return 1
+}
+
+stop_mock_entitlement_bridge() {
+    local mock_pid="$1"
+    if [ -n "$mock_pid" ] && kill -0 "$mock_pid" 2>/dev/null; then
+        kill "$mock_pid" 2>/dev/null || true
+        wait "$mock_pid" 2>/dev/null || true
+    fi
+}
+
+run_subscriptions() {
+    group "Subscriptions"
+
+    local e2e_script_dir go_bin mock_pid
+
+    e2e_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    go_bin="go"
+    if ! command -v go >/dev/null 2>&1; then
+        for path in "/usr/local/go/bin/go" "/usr/local/bin/go" "/usr/bin/go"; do
+            if [ -x "$path" ]; then
+                go_bin="$path"
+                break
+            fi
+        done
+    fi
+
+    export ARKFILE_SUBSCRIPTIONS_ENABLED=true
+    export ARKFILE_BILLING_PAYG_ENABLED=true
+    export ARKFILE_ENTITLEMENT_BRIDGE_URL="http://127.0.0.1:8081"
+    export ARKFILE_ENTITLEMENT_BRIDGE_WEBHOOK_SECRET="test_entitlement_bridge_secret"
+
+    mock_pid=$(start_mock_entitlement_bridge "$e2e_script_dir" "$go_bin") || {
+        record_test "Start mock Entitlement Bridge" "FAIL"
+        return 0
+    }
+    record_test "Start mock Entitlement Bridge" "PASS"
+
+    scenario "Dev subscription plan exists"
+    local plans_out plans_code
+    safe_exec plans_out plans_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        subscriptions list-plans --json || true
+    if [ $plans_code -eq 0 ] && echo "$plans_out" | grep -q 'plan_dev_250gb'; then
+        record_test "Dev plan plan_dev_250gb present" "PASS"
+    else
+        record_test "Dev plan plan_dev_250gb present" "FAIL"
+    fi
+
+    scenario "Grant gift subscription"
+    safe_exec gift_out gift_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        subscriptions grant-gift-subscription --user "$TEST_USERNAME" --plan-id plan_dev_250gb --days 30 --note "e2e gift" || true
+    if [ $gift_code -eq 0 ]; then
+        record_test "Grant gift subscription" "PASS"
+    else
+        error "Gift grant failed: $gift_out"
+        record_test "Grant gift subscription" "FAIL"
+    fi
+
+    scenario "Gift subscription blocks top-up"
+    user_login_with_totp "User login for subscription top-up block test"
+    local topup_out topup_code
+    safe_exec topup_out topup_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+        billing top-up --amount 1.00 || true
+    if [ $topup_code -ne 0 ] && echo "$topup_out" | grep -qi "subscription"; then
+        record_test "Top-up rejected while subscribed" "PASS"
+    else
+        record_test "Top-up rejected while subscribed" "FAIL"
+    fi
+
+    scenario "Cancel gift subscription"
+    safe_exec cancel_out cancel_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        subscriptions cancel-gift-subscription --user "$TEST_USERNAME" --immediate || true
+    if [ $cancel_code -eq 0 ]; then
+        record_test "Cancel gift subscription" "PASS"
+    else
+        record_test "Cancel gift subscription" "FAIL"
+    fi
+
+    scenario "arkfile-client subscription plans"
+    safe_exec sub_plans_out sub_plans_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+        subscription plans || true
+    if [ $sub_plans_code -eq 0 ] && echo "$sub_plans_out" | grep -q 'plan_dev_250gb'; then
+        record_test "arkfile-client subscription plans" "PASS"
+    else
+        record_test "arkfile-client subscription plans" "FAIL"
+    fi
+
+    stop_mock_entitlement_bridge "$mock_pid"
+    info "Subscriptions complete"
+}
+
 run_registration_throttle() {
     group "Registration throttle"
 
@@ -3699,6 +3835,7 @@ main() {
         run_storage_replication
         run_billing
         run_payments
+        run_subscriptions
         run_registration_throttle
         run_enable_auto_approval
         run_teardown

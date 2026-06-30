@@ -462,6 +462,12 @@ func main() {
 			os.Exit(1)
 		}
 
+	case "subscriptions":
+		if err := handleSubscriptionsCommand(client, config, args); err != nil {
+			logError("Subscriptions command failed: %v", err)
+			os.Exit(1)
+		}
+
 	case "version":
 		printVersion()
 	case "set-approval-policy":

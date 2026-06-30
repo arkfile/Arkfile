@@ -40,6 +40,11 @@ func CreateInvoiceHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Payments integration is disabled")
 	}
 
+	if !billing.ShouldAllowTopUp(database.DB, username) {
+		return echo.NewHTTPError(http.StatusConflict,
+			"Top-ups are not available while you have an active subscription. Manage your plan from billing or use `arkfile-client subscription portal`.")
+	}
+
 	var req CreateInvoiceRequest
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")

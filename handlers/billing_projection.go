@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/arkfile/Arkfile/billing"
+	"github.com/arkfile/Arkfile/config"
 	"github.com/arkfile/Arkfile/database"
 	"github.com/arkfile/Arkfile/models"
 )
@@ -24,7 +26,7 @@ import (
 // identical so frontend/tests do not branch on enabled/disabled.
 func buildBillingProjection(db *sql.DB, username string, balanceMicrocents int64) (map[string]interface{}, map[string]interface{}) {
 	totalStorageBytes := getUserTotalStorageBytes(db, username)
-	freeBaseline := freeBaselineBytes()
+	freeBaseline := billing.EffectiveFreeBaseline(db, username)
 
 	billable := totalStorageBytes - freeBaseline
 	if billable < 0 {
@@ -41,8 +43,11 @@ func buildBillingProjection(db *sql.DB, username string, balanceMicrocents int64
 		"rate_human":                       formatRateHuman(customerPrice),
 	}
 
+	effectiveLimit, _ := billing.EffectiveStorageLimit(db, username)
+	currentUsage["effective_storage_limit_bytes"] = effectiveLimit
+
 	// Cost projection (per-month, assuming 30 days = 720 hours).
-	if billable > 0 && rateAvailable {
+	if billable > 0 && rateAvailable && billing.ShouldMeter(db, username) {
 		hourlyMicrocents := (billable * rateMicrocentsPerGiBPerHour) >> 30
 		monthlyMicrocents := hourlyMicrocents * 720
 		currentUsage["current_cost_per_month_microcents"] = monthlyMicrocents
@@ -58,8 +63,41 @@ func buildBillingProjection(db *sql.DB, username string, balanceMicrocents int64
 	}
 
 	// Runway projection.
-	creditsRunway := buildCreditsRunway(balanceMicrocents, billable, rateMicrocentsPerGiBPerHour, rateAvailable)
+	creditsRunway := buildCreditsRunway(balanceMicrocents, billable, rateMicrocentsPerGiBPerHour, rateAvailable && billing.ShouldMeter(db, username))
 	return currentUsage, creditsRunway
+}
+
+func buildSubscriptionProjection(db *sql.DB, username string) (map[string]interface{}, string) {
+	cfg, err := config.LoadConfig()
+	if err != nil || !cfg.Subscriptions.Enabled {
+		return nil, ""
+	}
+
+	mode := string(billing.EffectiveBillingMode(db, username))
+	sub, _ := billing.GetActiveSubscription(db, username)
+	user, uerr := models.GetUserByUsername(db, username)
+	baseline := int64(models.DefaultStorageLimit)
+	if uerr == nil {
+		baseline = user.StorageLimitBytes
+	}
+
+	block := map[string]interface{}{
+		"enabled": true,
+	}
+	if sub != nil {
+		effectiveLimit, _ := billing.EffectiveStorageLimit(db, username)
+		block["status"] = sub.Status
+		block["plan_id"] = sub.PlanID
+		block["plan_name"] = sub.PlanName
+		block["price_usd"] = models.FormatPlanPriceUSD(sub.PlanPriceUSDCents)
+		block["baseline_storage_bytes"] = baseline
+		block["plan_storage_bytes"] = sub.PlanStorageBytes
+		block["effective_storage_limit_bytes"] = effectiveLimit
+		block["current_period_end"] = sub.CurrentPeriodEnd.UTC().Format(time.RFC3339)
+		block["cancel_at_period_end"] = sub.CancelAtPeriodEnd
+		block["source"] = sub.Source
+	}
+	return block, mode
 }
 
 // buildCreditsRunway computes how long the user's positive balance will last

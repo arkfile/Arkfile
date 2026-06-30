@@ -113,8 +113,9 @@ type Config struct {
 		BackupRetention   int      `json:"backup_retention_days"`
 	} `json:"deployment"`
 
-	Billing BillingConfig `json:"billing"`
-	Payments PaymentsConfig `json:"payments"`
+	Billing       BillingConfig       `json:"billing"`
+	Payments      PaymentsConfig      `json:"payments"`
+	Subscriptions SubscriptionsConfig `json:"subscriptions"`
 }
 
 // BillingConfig is the storage credits / usage metering configuration.
@@ -156,6 +157,10 @@ type BillingConfig struct {
 	// when Enabled is true.
 	PaygNegativeBalanceLimitUSD string `json:"payg_negative_balance_limit_usd"`
 
+	// PaygEnabled gates hourly metering, daily settlement, and the negative-
+	// balance upload cap. Requires Enabled=true for any PAYG behavior.
+	PaygEnabled bool `json:"payg_enabled"`
+
 	// paygNegativeBalanceLimitMicrocents is the parsed value of
 	// PaygNegativeBalanceLimitUSD in microcents, populated by LoadConfig.
 	paygNegativeBalanceLimitMicrocents int64
@@ -165,6 +170,18 @@ type BillingConfig struct {
 // negative-balance cap in microcents. Returns 0 (block at zero) if unset.
 func (b BillingConfig) PaygNegativeBalanceLimitMicrocents() int64 {
 	return b.paygNegativeBalanceLimitMicrocents
+}
+
+// SubscriptionsConfig is the Entitlement Bridge consumer configuration.
+type SubscriptionsConfig struct {
+	Enabled              bool   `json:"enabled"`
+	BridgeURL            string `json:"bridge_url"`
+	WebhookSecret        string `json:"webhook_secret"`
+	ReturnURL            string `json:"return_url"`
+	GiftDefaultDays      int    `json:"gift_default_days"`
+	GiftMaxDays          int    `json:"gift_max_days"`
+	PastDueGraceDays     int    `json:"past_due_grace_days"`
+	SeedDevPlan          bool   `json:"seed_dev_plan"`
 }
 
 // PaymentsConfig is the BTCPay Server / Stripe extension payments configuration.
@@ -328,6 +345,14 @@ func loadDefaultConfig(cfg *Config) error {
 	cfg.Billing.SweepAtUTC = "00:15"
 	cfg.Billing.IncludeAdmins = false
 	cfg.Billing.PaygNegativeBalanceLimitUSD = "10.00"
+	cfg.Billing.PaygEnabled = false
+
+	// Subscriptions defaults (Entitlement Bridge consumer)
+	cfg.Subscriptions.Enabled = false
+	cfg.Subscriptions.GiftDefaultDays = 30
+	cfg.Subscriptions.GiftMaxDays = 90
+	cfg.Subscriptions.PastDueGraceDays = 7
+	cfg.Subscriptions.SeedDevPlan = false
 
 	// Payments defaults (BTCPay Server integration)
 	cfg.Payments.Enabled = false
@@ -488,6 +513,51 @@ func loadEnvConfig(cfg *Config) error {
 	if v := os.Getenv("ARKFILE_PAYG_NEGATIVE_BALANCE_LIMIT_USD"); v != "" {
 		cfg.Billing.PaygNegativeBalanceLimitUSD = v
 	}
+	if v := os.Getenv("ARKFILE_BILLING_PAYG_ENABLED"); v != "" {
+		if parsed, err := strconv.ParseBool(v); err == nil {
+			cfg.Billing.PaygEnabled = parsed
+		}
+	} else if cfg.Billing.Enabled {
+		// Backward compatibility: existing billing-enabled deployments keep PAYG on
+		// until ARKFILE_BILLING_PAYG_ENABLED is explicitly set to false.
+		cfg.Billing.PaygEnabled = true
+	}
+
+	// Subscriptions envs
+	if v := os.Getenv("ARKFILE_SUBSCRIPTIONS_ENABLED"); v != "" {
+		if parsed, err := strconv.ParseBool(v); err == nil {
+			cfg.Subscriptions.Enabled = parsed
+		}
+	}
+	if v := os.Getenv("ARKFILE_ENTITLEMENT_BRIDGE_URL"); v != "" {
+		cfg.Subscriptions.BridgeURL = strings.TrimRight(strings.TrimSpace(v), "/")
+	}
+	if v := os.Getenv("ARKFILE_ENTITLEMENT_BRIDGE_WEBHOOK_SECRET"); v != "" {
+		cfg.Subscriptions.WebhookSecret = v
+	}
+	if v := os.Getenv("ARKFILE_SUBSCRIPTION_RETURN_URL"); v != "" {
+		cfg.Subscriptions.ReturnURL = v
+	}
+	if v := os.Getenv("ARKFILE_GIFT_SUBSCRIPTION_DEFAULT_DAYS"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			cfg.Subscriptions.GiftDefaultDays = parsed
+		}
+	}
+	if v := os.Getenv("ARKFILE_GIFT_SUBSCRIPTION_MAX_DAYS"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			cfg.Subscriptions.GiftMaxDays = parsed
+		}
+	}
+	if v := os.Getenv("ARKFILE_SUBSCRIPTION_PAST_DUE_GRACE_DAYS"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed >= 0 {
+			cfg.Subscriptions.PastDueGraceDays = parsed
+		}
+	}
+	if v := os.Getenv("ARKFILE_SUBSCRIPTION_SEED_DEV_PLAN"); v != "" {
+		if parsed, err := strconv.ParseBool(v); err == nil {
+			cfg.Subscriptions.SeedDevPlan = parsed
+		}
+	}
 
 	// Payments (BTCPay Server integration) envs
 	if v := os.Getenv("ARKFILE_PAYMENTS_ENABLED"); v != "" {
@@ -581,7 +651,32 @@ func validateConfig(cfg *Config) error {
 	if err := validatePaymentsConfig(cfg); err != nil {
 		return err
 	}
+	if err := validateSubscriptionsConfig(cfg); err != nil {
+		return err
+	}
 
+	return nil
+}
+
+func validateSubscriptionsConfig(cfg *Config) error {
+	if !cfg.Subscriptions.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(cfg.Subscriptions.BridgeURL) == "" {
+		return fmt.Errorf("ARKFILE_ENTITLEMENT_BRIDGE_URL is required when ARKFILE_SUBSCRIPTIONS_ENABLED=true")
+	}
+	if strings.TrimSpace(cfg.Subscriptions.WebhookSecret) == "" {
+		return fmt.Errorf("ARKFILE_ENTITLEMENT_BRIDGE_WEBHOOK_SECRET is required when ARKFILE_SUBSCRIPTIONS_ENABLED=true")
+	}
+	if cfg.Subscriptions.GiftDefaultDays < 1 {
+		return fmt.Errorf("ARKFILE_GIFT_SUBSCRIPTION_DEFAULT_DAYS must be at least 1")
+	}
+	if cfg.Subscriptions.GiftMaxDays < cfg.Subscriptions.GiftDefaultDays {
+		return fmt.Errorf("ARKFILE_GIFT_SUBSCRIPTION_MAX_DAYS must be >= ARKFILE_GIFT_SUBSCRIPTION_DEFAULT_DAYS")
+	}
+	if cfg.Subscriptions.PastDueGraceDays < 0 {
+		return fmt.Errorf("ARKFILE_SUBSCRIPTION_PAST_DUE_GRACE_DAYS must be non-negative")
+	}
 	return nil
 }
 

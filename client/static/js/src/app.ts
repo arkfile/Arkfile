@@ -106,6 +106,8 @@ class ArkFileApp {
             startAutoRefresh();
             await this.loadUserFiles();
             await resumePendingBillingCheckout();
+            const { resumePendingSubscriptionCheckout } = await import('./ui/billing');
+            await resumePendingSubscriptionCheckout();
           } else {
             await refreshToken();
             if (await validateToken()) {
@@ -114,6 +116,8 @@ class ArkFileApp {
               startAutoRefresh();
               await this.loadUserFiles();
               await resumePendingBillingCheckout();
+              const { resumePendingSubscriptionCheckout } = await import('./ui/billing');
+              await resumePendingSubscriptionCheckout();
             }
           }
         } else if (captureBillingCheckoutParams()) {
@@ -124,6 +128,8 @@ class ArkFileApp {
             startAutoRefresh();
             await this.loadUserFiles();
             await resumePendingBillingCheckout();
+            const { resumePendingSubscriptionCheckout } = await import('./ui/billing');
+            await resumePendingSubscriptionCheckout();
           }
         }
       } else {
@@ -629,6 +635,8 @@ class ArkFileApp {
             await this.loadUserFiles();
             const { resumePendingBillingCheckout } = await import('./ui/billing');
             await resumePendingBillingCheckout();
+            const { resumePendingSubscriptionCheckout } = await import('./ui/billing');
+            await resumePendingSubscriptionCheckout();
           }
         } else {
           const refreshed = await refreshToken();
@@ -644,6 +652,8 @@ class ArkFileApp {
               await this.loadUserFiles();
               const { resumePendingBillingCheckout } = await import('./ui/billing');
               await resumePendingBillingCheckout();
+              const { resumePendingSubscriptionCheckout } = await import('./ui/billing');
+              await resumePendingSubscriptionCheckout();
             }
           } else {
             console.warn('Stored token is invalid, clearing and showing auth');

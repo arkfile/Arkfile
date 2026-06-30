@@ -208,6 +208,7 @@ func main() {
 	// Handles databases created before the column was added to the CREATE TABLE definition.
 	// Silently ignored if the column already exists (fresh installs).
 	runSchemaMigrations()
+	seedSubscriptionsIfConfigured(cfg)
 
 	// Register storage providers in the database and backfill location records
 	registerAndBackfillStorageProviders()
@@ -595,6 +596,19 @@ func migrateCreditTransactionsPaymentType() {
 		return
 	}
 	log.Printf("Migration: %s applied successfully", desc)
+}
+
+func seedSubscriptionsIfConfigured(cfg *config.Config) {
+	if cfg == nil || !cfg.Subscriptions.Enabled {
+		return
+	}
+	if cfg.Subscriptions.SeedDevPlan || cfg.Deployment.Environment == "development" || os.Getenv("DEBUG_MODE") == "true" {
+		if err := models.SeedDevSubscriptionPlan(database.DB); err != nil {
+			log.Printf("Warning: failed to seed dev subscription plan: %v", err)
+		} else {
+			log.Printf("Seeded dev subscription plan %s", models.DevSubscriptionPlanID)
+		}
+	}
 }
 
 type configuredStorageProvider struct {
