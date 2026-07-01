@@ -356,9 +356,9 @@ No Stripe, Adyen, Mollie, or Worldpay keys on the Arkfile host.
 
 Bridge holds processor credentials, plan SKU mapping, bridge database, and adapter code. Deployment follows the same isolation principles as `docs/wip/alma-pay-server.md` (dedicated unprivileged runtime user, Caddy TLS, rootless Podman). Full bridge service specification: `docs/wip/entitlement-bridge.md`. This document defines the Arkfile-side consumer contract only.
 
-## Database schema (planned)
+## Database schema (implemented)
 
-Add to `database/unified_schema.sql` with migration helpers in `main.go` for existing databases.
+Shipped in `database/unified_schema.sql` with migration helpers in `main.go`. Dev/e2e instances seed `plan_dev_250gb` (250 GiB, $5/mo display) when `ARKFILE_SUBSCRIPTION_SEED_DEV_PLAN=true` or in development mode (`scripts/dev-reset.sh`).
 
 ### `subscription_plans`
 
@@ -466,9 +466,9 @@ CREATE TABLE IF NOT EXISTS subscription_events (
 
 Subscription charges stay **out of** `user_credits` / `credit_transactions` for v1. PAYG balance remains the microcent wallet for non-subscribers. Payment history lives in bridge/processor dashboards plus `subscription_events`. Optional later: `transaction_type = subscription` for billing panel visibility.
 
-## Backend: billing resolver
+## Backend: billing resolver (implemented)
 
-Central resolver functions (e.g. `billing/subscription.go` + `billing/effective.go`):
+Central resolver in `billing/effective.go` and `billing/subscription.go`:
 
 | Function | Returns |
 |---|---|
@@ -514,7 +514,7 @@ Extend `buildBillingProjection` response:
 
 When subscriptions disabled globally, omit or null the block (same pattern as `payments` in `/api/credits`). Do not expose raw `entitlement_ref` or `checkout_id` to the browser unless needed for return-URL polling; prefer status-only responses on public APIs.
 
-## Backend: HTTP API (planned)
+## Backend: HTTP API (implemented)
 
 ### Public / user (authenticated unless noted)
 
@@ -576,9 +576,9 @@ Webhook delivery is the primary path; reconcile is part of normal operations, no
 
 On `entitlement.activated`: `FinalizePaygBeforeSubscribe`, then meter off.
 
-## arkfile-admin (planned)
+## arkfile-admin (implemented)
 
-New command group **`subscriptions`** (alongside `billing` and `payments`):
+Command group **`subscriptions`** in `cmd/arkfile-admin/subscriptions_commands.go` (alongside `billing` and `payments`):
 
 | Command | Purpose |
 |---|---|
@@ -594,9 +594,9 @@ Extend **`billing show --user`** and **`user-status`** to include subscription s
 
 No end-user subscription purchase in **`arkfile-admin`**. Operators grant **gifts** via CLI; users subscribe via **web app or `arkfile-client`**. Paid cancel is **portal or processor/bridge dashboard**, not Arkfile admin.
 
-## arkfile-client (planned)
+## arkfile-client (implemented)
 
-End-user billing and subscriptions must match the web billing panel (see **Client parity**). New command group **`billing`** and **`subscription`** under `cmd/arkfile-client/` (same API surface as `billing.ts`).
+End-user billing and subscriptions match the web billing panel (see **Client parity**). Command groups **`billing`** and **`subscription`** in `cmd/arkfile-client/` (same API surface as `billing.ts`). Response parsing normalizes flat `/api/credits` JSON and wrapped `{ success, data }` envelopes; HTTP errors surface Echo `message` text.
 
 ### `billing` (PAYG balance and top-ups)
 
@@ -633,11 +633,11 @@ Hosted checkout and portal always use the **system browser** (or printed URL); n
 | Manage plan | `subscription portal` |
 | PAYG hidden when subscribed | No top-up command / server 409; `billing_mode` is `subscribed` |
 
-Document new commands in `docs/scripts-guide.md` (user-facing `arkfile-client` section) when implemented.
+Document new commands in `docs/scripts-guide.md` (user-facing `arkfile-client` section) — **CLI shipped; scripts-guide update still TODO.**
 
-## TypeScript frontend (planned)
+## TypeScript frontend (implemented on Arkfile host)
 
-Extend `client/static/js/src/ui/billing.ts` and billing panel markup. Must stay in parity with `arkfile-client` (see **Client parity**).
+Extend `client/static/js/src/ui/billing.ts` and billing panel markup. Must stay in parity with `arkfile-client` (see **Client parity**). Plans list, subscribe redirect, portal redirect, `billing_mode` display, top-up hidden when subscribed, and `resumePendingSubscriptionCheckout` for return URLs are implemented.
 
 ### When subscriptions disabled
 
@@ -676,56 +676,70 @@ Playwright: mock plans and checkout APIs; assert effective storage in billing pa
 | Gift expiry | Scheduler or daily reconcile sets `expired` at `current_period_end`; meter resumes |
 | `cancel-gift-subscription` on paid sub | **409** with message to use portal or Stripe/bridge |
 
-## Testing (planned)
+Playwright: billing top-up modal is covered in `e2e-playwright.ts`; dedicated subscription plan cards and return-URL polling tests remain TODO.
 
-### Go unit tests
+## Testing
 
-- Billing resolver: mode, effective limits, `ShouldMeter`, `ShouldAllowTopUp`, PAYG cap skip when subscribed
-- `FinalizePaygBeforeSubscribe` and sweep skip for subscribed users
-- Entitlement webhook signature verification and idempotency
-- State transitions for each `event_type`
-- `past_due` upload gate after grace
-- Top-up handler returns 409 when subscribed
-- Gift grant path (default 30 days, max 90, meter off, top-up blocked)
-- `cancel-gift-subscription` rejects `source=bridge`
-- `grant-gift-subscription` rejects active bridge entitlement
+### Go unit and integration tests (done)
 
-### Shell e2e
+Implemented and passing in CI/dev:
 
-New **`run_subscriptions`** group in `scripts/testing/e2e-test.sh` (after `run_payments`):
+- `billing/effective_test.go`, `billing/effective_extended_test.go` — mode, limits, `ShouldMeter`, `ShouldAllowTopUp`, PAYG cap skip when subscribed
+- `billing/subscription_test.go`, `billing/subscription_testdb_test.go` — `FinalizePaygBeforeSubscribe`, entitlement callback state transitions (`activated`, `renewed`, `past_due`, `expired`, `plan_changed`), gift grant/cancel rules
+- `billing/meter_subscription_test.go`, `billing/sweep_subscription_test.go` — meter and sweep skip for subscribed users
+- `entitlements/hmac_test.go` — webhook signature verification and replay window
+- `handlers/subscriptions_test.go`, `handlers/billing_projection_test.go` — user/admin HTTP handlers, `/api/credits` projection, top-up 409, `past_due` upload gate after grace
+- `handlers/payments_test.go` — top-up 409 when subscribed (with subscription test helpers)
+- `config/config_test.go` — subscription env validation
+- `models/scan_test.go`, `models/subscription_plan_scan_test.go` — rqlite-safe boolean and BIGINT scan helpers for plan reads
 
-- Mock Entitlement Bridge (`scripts/testing/entitlement-bridge-mock.go`, parallel to `btcpay-mock.go`)
-- Checkout → signed webhook `entitlement.activated` → assert effective limit → upload OK
-- Subscribed user: `POST /api/billing/invoice` → **409**; accumulator unchanged after tick window
-- `entitlement.expired` → revert to baseline cap; top-up allowed again
-- `grant-gift-subscription` without mock bridge (default 30-day period)
-- `cancel-gift-subscription` ends gift; paid sub cancel only via mock portal/webhook path
-- **`arkfile-client`:** `subscription status`, `subscription subscribe` (mock URL), `billing top-up` rejected when subscribed, `billing top-up` succeeds after expire
+### Shell e2e (done)
 
-### Playwright
+**`run_subscriptions`** group in `scripts/testing/e2e-test.sh` (after `run_payments`), using `scripts/testing/entitlement-bridge-mock.go` on `:8081`. Verified as part of the full suite (**212 tests**, June 2026 dev-reset run):
 
-Billing panel plans display; mocked checkout redirect; subscription return URL polling; top-up control absent when subscribed.
+- Mock Entitlement Bridge start
+- Dev plan `plan_dev_250gb` present (admin list-plans; exercises rqlite plan reads)
+- Gift grant, credits projection (`billing_mode: subscribed`, 250 GiB effective cap), admin `subscriptions show`
+- CLI: `billing show`, `subscription status`, `subscription plans` while subscribed
+- Invoice API **409** and `arkfile-client billing top-up` rejected while gift subscribed
+- `billing tick-now` does not add usage transactions while gift subscribed
+- Gift cancel; credits not subscribed; BTCPay mock restarted for post-cancel top-up checks
+- Invoice allowed and CLI top-up passes subscription gate after gift cancel
+- Bridge checkout → mock `/v1/mock/activate` webhook → subscribed (`source: bridge`)
+- Grant gift **409** and cancel-gift **409** while bridge subscription active
+- Invoice/CLI top-up blocked while bridge subscribed
+- Duplicate entitlement webhook idempotent (replay snapshot from mock `GET /v1/entitlements/{ref}`)
+- Mock `/v1/mock/expire` → not subscribed; invoice allowed again
+
+Session reuse: `run_subscriptions` reuses the test-user session from `run_payments` when still valid (`ensure_user_session`), avoiding extra TOTP login cycles.
+
+Foundation prerequisites remain e2e-verified in earlier groups: billing meter/sweep, PAYG negative cap, BTCPay top-ups, payments webhook idempotency.
+
+### Playwright (partial)
+
+- Done: billing top-up modal and BTCPay iframe (`e2e-playwright.ts`)
+- TODO: subscription plan cards, mocked checkout redirect, return-URL polling, top-up hidden when subscribed
 
 ## Build phases (recommended order)
 
-1. **Schema + resolver + admin plan CRUD** — no bridge; dogfood with `grant-gift-subscription`.
-2. **Meter/storage/top-up integration** — `ShouldMeter`, sweep skip, `ShouldAllowTopUp`, `FinalizePaygBeforeSubscribe`, projection, upload gates; admin breakdown output.
-3. **Web billing panel + arkfile-client billing/subscription commands** — same phase; parity checklist complete.
-4. **Entitlement webhook + checkout redirect** — mock bridge in e2e (web + CLI).
-5. **Entitlement Bridge VPS + Stripe adapter** — live `billing.arkfile.net` (separate repo/service).
-6. **E2e + Playwright + FAQ** — `docs/user-faq.md`, `.env.example`, deploy scripts, `docs/scripts-guide.md` client billing section.
+1. **Schema + resolver + admin plan CRUD** — **Done.** Unified schema, `billing/effective.go`, admin plan CRUD and gift commands, dev seed plan.
+2. **Meter/storage/top-up integration** — **Done.** `ShouldMeter`, sweep skip, `ShouldAllowTopUp`, `FinalizePaygBeforeSubscribe`, upload gates, `/api/credits` projection; scheduler gift expiry and bridge reconcile hooks in `billing/scheduler.go`.
+3. **Web billing panel + arkfile-client billing/subscription commands** — **Done.** `billing.ts` subscription UI; `cmd/arkfile-client/billing_commands.go` and `subscription_commands.go`.
+4. **Entitlement webhook + checkout redirect on Arkfile** — **Done on vault host.** User/admin APIs, `POST /api/webhooks/entitlements`, mock bridge + full `run_subscriptions` e2e.
+5. **Entitlement Bridge VPS + Stripe adapter** — **Not started.** Production `billing.arkfile.net` service (separate repo/deployment per `docs/wip/entitlement-bridge.md`).
+6. **Playwright subscription coverage + user/docs polish** — **Partial.** Playwright top-up exists; subscription-specific browser tests, `docs/user-faq.md`, `docs/api.md`, and `docs/scripts-guide.md` client billing section remain open.
 
 ## Documentation updates (when implemented)
 
-| File | Change |
-|---|---|
-| `docs/wip/entitlement-bridge.md` | Bridge service spec, deployment, processor adapters |
-| `docs/wip/payments.md` | Cross-link: top-ups = BTCPay PAYG; top-up 409 when subscribed; subscriptions = Entitlement Bridge |
-| `docs/user-faq.md` | Q&A prose: plans, cancel (portal for paid; gifts are operator-only), PAYG vs subscription, top-ups while subscribed |
-| `docs/api.md` | New endpoints; top-up 409 |
-| `docs/scripts-guide.md` | Admin CLI subscription commands; **arkfile-client billing/subscription** |
-| `.env.example` | Subscriptions + bridge vars (no processor keys) |
-| `scripts/dev-reset.sh`, deploy scripts | Sensible defaults per environment |
+| File | Change | Status |
+|---|---|---|
+| `docs/wip/entitlement-bridge.md` | Bridge service spec, deployment, processor adapters | Spec exists; production deploy not done |
+| `docs/wip/payments.md` | Cross-link: top-ups = BTCPay PAYG; top-up 409 when subscribed; subscriptions = Entitlement Bridge | TODO |
+| `docs/user-faq.md` | Q&A prose: plans, cancel (portal for paid; gifts are operator-only), PAYG vs subscription, top-ups while subscribed | TODO |
+| `docs/api.md` | New endpoints; top-up 409 | TODO |
+| `docs/scripts-guide.md` | Admin CLI subscription commands; **arkfile-client billing/subscription** | TODO |
+| `.env.example` | Subscriptions + bridge vars (no processor keys) | Vars present (commented); review for prod defaults |
+| `scripts/dev-reset.sh`, deploy scripts | Sensible defaults per environment | **Done** for dev-reset (subscriptions on, seed plan, bridge URL/secret for mock) |
 
 ## Explicitly out of scope for v1
 
@@ -743,7 +757,15 @@ Billing panel plans display; mocked checkout redirect; subscription return URL p
 
 ## Status
 
-**NOT STARTED.** Foundation prerequisites (1 GiB default, auto-approval, registration throttle, PAYG −$10 cap, billing meter, BTCPay top-ups, billing panel, `arkfile-admin billing` / `payments`) are implemented and e2e-verified as of June 2026. This document is the implementation plan for the subscription and Entitlement Bridge layer.
+**Arkfile subscription layer: implemented and e2e-verified (June 2026).** The vault host ships the full v1 consumer contract: schema, billing resolver, meter/top-up/upload integration, user and admin HTTP APIs, Entitlement Bridge webhook handler, `arkfile-admin subscriptions` commands, `arkfile-client billing` / `subscription` commands, billing panel subscription UI, dev mock bridge (`scripts/testing/entitlement-bridge-mock.go`), and **`run_subscriptions`** in `scripts/testing/e2e-test.sh` (26 subscription tests; **212/212** total e2e pass after dev-reset). Go unit tests cover resolver, entitlement callbacks, gift rules, top-up 409, webhook HMAC, and rqlite-safe plan scanning (`models.ScanBool` / `ScanInt64`).
+
+**Still open for production:**
+
+- **Entitlement Bridge production service** at `billing.arkfile.net` (Stripe adapter, bridge DB, processor SKU mapping) — see `docs/wip/entitlement-bridge.md`; Arkfile is ready to consume it via existing URL, webhook secret, checkout redirect, and portal tokens.
+- **Playwright** subscription-specific UI tests (plan cards, return URL, top-up hidden when subscribed).
+- **User and operator docs:** `docs/user-faq.md`, `docs/api.md`, `docs/scripts-guide.md`, cross-links in `docs/wip/payments.md`.
+
+**Foundation prerequisites** (1 GiB default marketed as 1.0 GB Free, auto-approval, registration throttle, PAYG −$10 cap, billing meter, BTCPay top-ups, billing panel PAYG, `arkfile-admin billing` / `payments`) were already implemented and remain e2e-verified in groups before `run_subscriptions`.
 
 ## References
 
@@ -757,4 +779,4 @@ Billing panel plans display; mocked checkout redirect; subscription return URL p
 - `client/static/js/src/ui/billing.ts` — billing panel UI
 - `payments/btcpay.go` — opaque metadata pattern for top-ups
 - `cmd/arkfile-admin/billing_commands.go`, `payments_commands.go` — CLI patterns to mirror
-- `cmd/arkfile-client/` — billing/subscription command parity (planned)
+- `cmd/arkfile-client/billing_commands.go`, `subscription_commands.go` — billing/subscription CLI
