@@ -520,10 +520,13 @@ CREATE TABLE IF NOT EXISTS user_subscriptions (
     plan_id TEXT NOT NULL,
     checkout_id TEXT NOT NULL,
     subscription_ref TEXT UNIQUE NOT NULL,
+    is_current BOOLEAN NOT NULL DEFAULT 1,
     status TEXT NOT NULL CHECK (status IN (
         'active', 'past_due', 'canceled', 'expired', 'trialing'
     )),
     source TEXT NOT NULL CHECK (source IN ('bridge', 'gift')),
+    state_version BIGINT NOT NULL DEFAULT 0,
+    last_event_at DATETIME,
     current_period_start DATETIME NOT NULL,
     current_period_end DATETIME NOT NULL,
     cancel_at_period_end BOOLEAN NOT NULL DEFAULT 0,
@@ -539,6 +542,8 @@ CREATE TABLE IF NOT EXISTS user_subscriptions (
 CREATE INDEX IF NOT EXISTS idx_user_subscriptions_username ON user_subscriptions(username);
 CREATE INDEX IF NOT EXISTS idx_user_subscriptions_status ON user_subscriptions(status);
 CREATE INDEX IF NOT EXISTS idx_user_subscriptions_subscription_ref ON user_subscriptions(subscription_ref);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_subscriptions_one_current
+    ON user_subscriptions(username) WHERE is_current = 1;
 
 CREATE TABLE IF NOT EXISTS subscription_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -548,6 +553,11 @@ CREATE TABLE IF NOT EXISTS subscription_events (
     checkout_id TEXT,
     username TEXT,
     plan_id TEXT,
+    state_version BIGINT NOT NULL DEFAULT 0,
+    occurred_at DATETIME,
+    disposition TEXT NOT NULL DEFAULT 'applied'
+        CHECK(disposition IN ('applied', 'duplicate', 'ignored_stale')),
+    admin_username TEXT,
     payload_hash TEXT NOT NULL,
     processed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

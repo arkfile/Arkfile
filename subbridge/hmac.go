@@ -10,9 +10,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/crypto/hkdf"
 )
 
 const (
@@ -21,7 +24,49 @@ const (
 	SignatureHeaderName = "Subscription-Bridge-Signature"
 	ProtocolName        = "subscription-bridge"
 	ProtocolVersion     = 1
+	maxResponseBody     = 1 << 20
 )
+
+var bridgeHTTPClient = &http.Client{
+	Timeout: 15 * time.Second,
+	CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
+type DerivedKeys struct {
+	Token     string
+	Callback  string
+	Reconcile string
+}
+
+// DeriveKeys expands one deployment pairing root into purpose-specific keys.
+func DeriveKeys(pairingRoot string) (DerivedKeys, error) {
+	if len(pairingRoot) < 32 {
+		return DerivedKeys{}, errors.New("subscription bridge pairing root must contain at least 32 characters")
+	}
+	derive := func(info string) (string, error) {
+		reader := hkdf.New(sha256.New, []byte(pairingRoot), []byte("subscription-bridge/v1"), []byte(info))
+		key := make([]byte, 32)
+		if _, err := io.ReadFull(reader, key); err != nil {
+			return "", err
+		}
+		return string(key), nil
+	}
+	token, err := derive("consumer-to-bridge/token")
+	if err != nil {
+		return DerivedKeys{}, err
+	}
+	callback, err := derive("bridge-to-consumer/callback")
+	if err != nil {
+		return DerivedKeys{}, err
+	}
+	reconcile, err := derive("consumer-to-bridge/reconcile")
+	if err != nil {
+		return DerivedKeys{}, err
+	}
+	return DerivedKeys{Token: token, Callback: callback, Reconcile: reconcile}, nil
+}
 
 type StartTokenPayload struct {
 	CheckoutID string `json:"checkout_id"`
@@ -44,6 +89,7 @@ type CallbackPayload struct {
 	CheckoutID         string `json:"checkout_id"`
 	SubscriptionRef    string `json:"subscription_ref"`
 	PlanID             string `json:"plan_id"`
+	StateVersion       int64  `json:"state_version"`
 	Status             string `json:"status"`
 	CurrentPeriodStart string `json:"current_period_start"`
 	CurrentPeriodEnd   string `json:"current_period_end"`
@@ -64,6 +110,9 @@ func SignToken(secret string, payload interface{}) (string, error) {
 }
 
 func VerifyToken(secret, token string, dest interface{}) error {
+	if len(token) == 0 || len(token) > 8192 {
+		return errors.New("invalid token length")
+	}
 	parts := strings.Split(token, ".")
 	if len(parts) != 2 {
 		return errors.New("invalid token format")
@@ -139,9 +188,15 @@ func parseSignatureHeader(header string) (ts, sig string, err error) {
 	for _, part := range strings.Split(header, ",") {
 		part = strings.TrimSpace(part)
 		if strings.HasPrefix(part, "t=") {
+			if ts != "" {
+				return "", "", errors.New("duplicate signature timestamp")
+			}
 			ts = strings.TrimPrefix(part, "t=")
 		}
 		if strings.HasPrefix(part, "v1=") {
+			if sig != "" {
+				return "", "", errors.New("duplicate signature value")
+			}
 			sig = strings.TrimPrefix(part, "v1=")
 		}
 	}
@@ -186,14 +241,24 @@ func VerifyBridgeGET(secret, method, path, authHeader string) error {
 }
 
 func parseBridgeHMACHeader(header string) (ts, sig string, err error) {
-	header = strings.TrimPrefix(strings.TrimSpace(header), "Subscription-Bridge-HMAC")
+	header = strings.TrimSpace(header)
+	if !strings.HasPrefix(header, "Subscription-Bridge-HMAC ") {
+		return "", "", errors.New("invalid bridge auth scheme")
+	}
+	header = strings.TrimPrefix(header, "Subscription-Bridge-HMAC")
 	header = strings.TrimSpace(header)
 	for _, part := range strings.Split(header, ",") {
 		part = strings.TrimSpace(part)
 		if strings.HasPrefix(part, "t=") {
+			if ts != "" {
+				return "", "", errors.New("duplicate auth timestamp")
+			}
 			ts = strings.TrimPrefix(part, "t=")
 		}
 		if strings.HasPrefix(part, "v1=") {
+			if sig != "" {
+				return "", "", errors.New("duplicate auth signature")
+			}
 			sig = strings.TrimPrefix(part, "v1=")
 		}
 	}
@@ -204,31 +269,39 @@ func parseBridgeHMACHeader(header string) (ts, sig string, err error) {
 }
 
 func FetchSubscriptionSnapshot(bridgeURL, secret, subscriptionRef string) (*CallbackPayload, error) {
-	path := "/v1/subscriptions/" + subscriptionRef
+	path := "/v1/subscriptions/" + url.PathEscape(subscriptionRef)
 	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(bridgeURL, "/")+path, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", SignBridgeGET(secret, "GET", path))
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := bridgeHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(body) > maxResponseBody {
+		return nil, errors.New("bridge response exceeds size limit")
 	}
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, fmt.Errorf("subscription not found")
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("bridge returned %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("bridge returned HTTP %d", resp.StatusCode)
 	}
 	var snap CallbackPayload
-	if err := json.Unmarshal(body, &snap); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&snap); err != nil {
 		return nil, err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, errors.New("bridge returned trailing JSON")
 	}
 	return &snap, nil
 }

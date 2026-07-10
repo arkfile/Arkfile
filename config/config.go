@@ -174,14 +174,15 @@ func (b BillingConfig) PaygNegativeBalanceLimitMicrocents() int64 {
 
 // SubscriptionsConfig is the Subscription Bridge consumer configuration.
 type SubscriptionsConfig struct {
-	Enabled              bool   `json:"enabled"`
-	BridgeURL            string `json:"bridge_url"`
-	WebhookSecret        string `json:"webhook_secret"`
-	ReturnURL            string `json:"return_url"`
-	GiftDefaultDays      int    `json:"gift_default_days"`
-	GiftMaxDays          int    `json:"gift_max_days"`
-	PastDueGraceDays     int    `json:"past_due_grace_days"`
-	SeedDevPlan          bool   `json:"seed_dev_plan"`
+	Enabled           bool   `json:"enabled"`
+	BridgeEnabled     bool   `json:"bridge_enabled"`
+	BridgeURL         string `json:"bridge_url"`
+	BridgePairingRoot string `json:"-"`
+	ReturnURL         string `json:"return_url"`
+	GiftDefaultDays   int    `json:"gift_default_days"`
+	GiftMaxDays       int    `json:"gift_max_days"`
+	PastDueGraceDays  int    `json:"past_due_grace_days"`
+	SeedDevPlan       bool   `json:"seed_dev_plan"`
 }
 
 // PaymentsConfig is the BTCPay Server / Stripe extension payments configuration.
@@ -529,11 +530,16 @@ func loadEnvConfig(cfg *Config) error {
 			cfg.Subscriptions.Enabled = parsed
 		}
 	}
+	if v := os.Getenv("ARKFILE_SUBSCRIPTION_BRIDGE_ENABLED"); v != "" {
+		if parsed, err := strconv.ParseBool(v); err == nil {
+			cfg.Subscriptions.BridgeEnabled = parsed
+		}
+	}
 	if v := os.Getenv("ARKFILE_SUBSCRIPTION_BRIDGE_URL"); v != "" {
 		cfg.Subscriptions.BridgeURL = strings.TrimRight(strings.TrimSpace(v), "/")
 	}
-	if v := os.Getenv("ARKFILE_SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET"); v != "" {
-		cfg.Subscriptions.WebhookSecret = v
+	if v := os.Getenv("ARKFILE_SUBSCRIPTION_BRIDGE_PAIRING_ROOT"); v != "" {
+		cfg.Subscriptions.BridgePairingRoot = v
 	}
 	if v := os.Getenv("ARKFILE_SUBSCRIPTION_RETURN_URL"); v != "" {
 		cfg.Subscriptions.ReturnURL = v
@@ -660,13 +666,10 @@ func validateConfig(cfg *Config) error {
 
 func validateSubscriptionsConfig(cfg *Config) error {
 	if !cfg.Subscriptions.Enabled {
+		if cfg.Subscriptions.BridgeEnabled {
+			return fmt.Errorf("ARKFILE_SUBSCRIPTION_BRIDGE_ENABLED requires ARKFILE_SUBSCRIPTIONS_ENABLED=true")
+		}
 		return nil
-	}
-	if strings.TrimSpace(cfg.Subscriptions.BridgeURL) == "" {
-		return fmt.Errorf("ARKFILE_SUBSCRIPTION_BRIDGE_URL is required when ARKFILE_SUBSCRIPTIONS_ENABLED=true")
-	}
-	if strings.TrimSpace(cfg.Subscriptions.WebhookSecret) == "" {
-		return fmt.Errorf("ARKFILE_SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET is required when ARKFILE_SUBSCRIPTIONS_ENABLED=true")
 	}
 	if cfg.Subscriptions.GiftDefaultDays < 1 {
 		return fmt.Errorf("ARKFILE_GIFT_SUBSCRIPTION_DEFAULT_DAYS must be at least 1")
@@ -676,6 +679,22 @@ func validateSubscriptionsConfig(cfg *Config) error {
 	}
 	if cfg.Subscriptions.PastDueGraceDays < 0 {
 		return fmt.Errorf("ARKFILE_SUBSCRIPTION_PAST_DUE_GRACE_DAYS must be non-negative")
+	}
+	if !cfg.Subscriptions.BridgeEnabled {
+		return nil
+	}
+	if strings.TrimSpace(cfg.Subscriptions.BridgeURL) == "" {
+		return fmt.Errorf("ARKFILE_SUBSCRIPTION_BRIDGE_URL is required when ARKFILE_SUBSCRIPTION_BRIDGE_ENABLED=true")
+	}
+	bridgeURL, err := url.Parse(cfg.Subscriptions.BridgeURL)
+	if err != nil || bridgeURL.Host == "" || (bridgeURL.Scheme != "https" && bridgeURL.Scheme != "http") {
+		return fmt.Errorf("ARKFILE_SUBSCRIPTION_BRIDGE_URL must be an absolute HTTP(S) URL")
+	}
+	if bridgeURL.Scheme != "https" && bridgeURL.Hostname() != "127.0.0.1" && bridgeURL.Hostname() != "localhost" && bridgeURL.Hostname() != "::1" {
+		return fmt.Errorf("ARKFILE_SUBSCRIPTION_BRIDGE_URL must use HTTPS except on loopback")
+	}
+	if len(cfg.Subscriptions.BridgePairingRoot) < 32 {
+		return fmt.Errorf("ARKFILE_SUBSCRIPTION_BRIDGE_PAIRING_ROOT must contain at least 32 characters")
 	}
 	return nil
 }

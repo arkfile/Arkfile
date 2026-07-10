@@ -3394,7 +3394,7 @@ start_mock_subscription_bridge() {
     local mock_pid
 
     : > "$mock_log"
-    export SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET="${SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET:-test_subscription_bridge_secret}"
+    export SUBSCRIPTION_BRIDGE_PAIRING_ROOT="${SUBSCRIPTION_BRIDGE_PAIRING_ROOT:-test_subscription_bridge_pairing_root}"
     export ARKFILE_WEBHOOK_URL="${SERVER_URL}/api/webhooks/subscription-bridge"
 
     info "Building mock Subscription Bridge..."
@@ -3458,27 +3458,6 @@ user_credits_json() {
     curl -sk -H "Authorization: Bearer $(user_access_token)" "$SERVER_URL/api/credits"
 }
 
-subscription_bridge_webhook_signature() {
-    local body="$1"
-    local ts secret sig
-    ts=$(date +%s)
-    secret="${SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET:-test_subscription_bridge_secret}"
-    sig=$( { printf '%s.' "$ts"; printf '%s' "$body"; } \
-        | openssl dgst -sha256 -hmac "$secret" | awk '{print $NF}')
-    echo "t=${ts},v1=${sig}"
-}
-
-post_subscription_bridge_webhook() {
-    local body="$1"
-    local sig
-    sig=$(subscription_bridge_webhook_signature "$body")
-    curl -sk -X POST \
-        -H "Content-Type: application/json" \
-        -H "Subscription-Bridge-Signature: $sig" \
-        -d "$body" \
-        "$SERVER_URL/api/webhooks/subscription-bridge"
-}
-
 mock_bridge_activate() {
     local checkout_id="$1"
     local username="$2"
@@ -3490,6 +3469,13 @@ mock_bridge_activate() {
 mock_bridge_expire() {
     local subscription_ref="$1"
     curl -s -X POST "http://127.0.0.1:8081/v1/mock/expire" \
+        -H "Content-Type: application/json" \
+        -d "{\"subscription_ref\":\"$subscription_ref\"}"
+}
+
+mock_bridge_replay() {
+    local subscription_ref="$1"
+    curl -s -X POST "http://127.0.0.1:8081/v1/mock/replay" \
         -H "Content-Type: application/json" \
         -d "{\"subscription_ref\":\"$subscription_ref\"}"
 }
@@ -3515,9 +3501,10 @@ run_subscriptions() {
     fi
 
     export ARKFILE_SUBSCRIPTIONS_ENABLED=true
+    export ARKFILE_SUBSCRIPTION_BRIDGE_ENABLED=true
     export ARKFILE_BILLING_PAYG_ENABLED=true
     export ARKFILE_SUBSCRIPTION_BRIDGE_URL="http://127.0.0.1:8081"
-    export ARKFILE_SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET="test_subscription_bridge_secret"
+    export ARKFILE_SUBSCRIPTION_BRIDGE_PAIRING_ROOT="test_subscription_bridge_pairing_root"
     export ADMIN_DEV_TEST_API_ENABLED=true
 
     mock_pid=$(start_mock_subscription_bridge "$e2e_script_dir" "$go_bin") || {
@@ -3820,19 +3807,17 @@ run_subscriptions() {
     fi
 
     scenario "Duplicate subscription bridge webhook is idempotent"
-    local sub_snap dup_wh1 dup_wh2 admin_sub_before admin_sub_after
+    local dup_wh1 dup_wh2 admin_sub_before admin_sub_after
     if [ -n "$bridge_sub_ref" ]; then
-        sub_snap=$(curl -s "http://127.0.0.1:8081/v1/subscriptions/$bridge_sub_ref" | jq -c . 2>/dev/null)
         safe_exec admin_sub_before admin_sub_before_code \
             $ADMIN --server-url "$SERVER_URL" --tls-insecure \
             subscriptions show --user "$TEST_USERNAME" --json || true
-        dup_wh1=$(post_subscription_bridge_webhook "$sub_snap")
-        dup_wh2=$(post_subscription_bridge_webhook "$sub_snap")
+        dup_wh1=$(mock_bridge_replay "$bridge_sub_ref")
+        dup_wh2=$(mock_bridge_replay "$bridge_sub_ref")
         safe_exec admin_sub_after admin_sub_after_code \
             $ADMIN --server-url "$SERVER_URL" --tls-insecure \
             subscriptions show --user "$TEST_USERNAME" --json || true
-        if [ -n "$sub_snap" ] \
-            && echo "$dup_wh1" | jq -e '.success == true' >/dev/null 2>&1 \
+        if echo "$dup_wh1" | jq -e '.success == true' >/dev/null 2>&1 \
             && echo "$dup_wh2" | jq -e '.success == true' >/dev/null 2>&1 \
             && [ "$admin_sub_before" = "$admin_sub_after" ]; then
             record_test "Duplicate subscription bridge webhook idempotent" "PASS"

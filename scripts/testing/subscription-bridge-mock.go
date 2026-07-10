@@ -4,35 +4,36 @@ package main
 
 import (
 	"bytes"
-	"crypto/hmac"
-	"crypto/sha256"
 	"crypto/tls"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/arkfile/Arkfile/subbridge"
 	"github.com/google/uuid"
 )
 
 var (
-	webhookSecret string
+	bridgeKeys    subbridge.DerivedKeys
 	subscriptions sync.Map // subscription_ref -> snapshot
 	checkouts     sync.Map // checkout_id -> plan_id
 )
 
 func main() {
-	webhookSecret = os.Getenv("SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET")
-	if webhookSecret == "" {
-		webhookSecret = "test_subscription_bridge_secret"
+	pairingRoot := os.Getenv("SUBSCRIPTION_BRIDGE_PAIRING_ROOT")
+	if pairingRoot == "" {
+		pairingRoot = "test_subscription_bridge_pairing_root"
+	}
+	var err error
+	bridgeKeys, err = subbridge.DeriveKeys(pairingRoot)
+	if err != nil {
+		log.Fatal(err)
 	}
 	consumerURL := os.Getenv("CONSUMER_WEBHOOK_URL")
 	if consumerURL == "" {
@@ -90,8 +91,19 @@ func main() {
 			http.Error(w, "missing subscription_ref", http.StatusBadRequest)
 			return
 		}
+		if err := subbridge.VerifyBridgeGET(bridgeKeys.Reconcile, r.Method, r.URL.Path, r.Header.Get("Authorization")); err != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		if v, ok := subscriptions.Load(ref); ok {
-			writeJSON(w, v)
+			stored, _ := v.(map[string]interface{})
+			snapshot := make(map[string]interface{}, len(stored))
+			for key, value := range stored {
+				snapshot[key] = value
+			}
+			delete(snapshot, "event_id")
+			delete(snapshot, "event_type")
+			writeJSON(w, snapshot)
 			return
 		}
 		http.Error(w, "not found", http.StatusNotFound)
@@ -125,8 +137,9 @@ func main() {
 			"event_id":             "evt_" + strings.ReplaceAll(uuid.New().String(), "-", ""),
 			"event_type":           "subscription.activated",
 			"checkout_id":          req.CheckoutID,
-			"subscription_ref":       subRef,
+			"subscription_ref":     subRef,
 			"plan_id":              planStr,
+			"state_version":        1,
 			"status":               "active",
 			"current_period_start": now.Format(time.RFC3339),
 			"current_period_end":   end.Format(time.RFC3339),
@@ -155,16 +168,56 @@ func main() {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		snap, _ := v.(map[string]interface{})
+		stored, _ := v.(map[string]interface{})
+		snap := make(map[string]interface{}, len(stored))
+		for key, value := range stored {
+			snap[key] = value
+		}
 		snap["event_id"] = "evt_" + strings.ReplaceAll(uuid.New().String(), "-", "")
 		snap["event_type"] = "subscription.expired"
 		snap["status"] = "expired"
+		snap["state_version"] = 2
+		snap["occurred_at"] = time.Now().UTC().Format(time.RFC3339)
 		subscriptions.Store(req.SubscriptionRef, snap)
 		if err := postSubscriptionBridgeWebhook(consumerURL, snap); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
 		writeJSON(w, map[string]string{"status": "expired"})
+	})
+
+	// Test helper: replay the last stored callback for idempotency checks.
+	http.HandleFunc("/v1/mock/replay", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			SubscriptionRef string `json:"subscription_ref"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		v, ok := subscriptions.Load(req.SubscriptionRef)
+		if !ok {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		stored, _ := v.(map[string]interface{})
+		callback := make(map[string]interface{}, len(stored))
+		for key, value := range stored {
+			callback[key] = value
+		}
+		if err := postSubscriptionBridgeWebhook(consumerURL, callback); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		writeJSON(w, map[string]interface{}{
+			"success":          true,
+			"subscription_ref": req.SubscriptionRef,
+			"status":           "delivered",
+		})
 	})
 
 	log.Println("Starting mock Subscription Bridge on :8081...")
@@ -174,32 +227,11 @@ func main() {
 }
 
 func verifyToken(token string) (map[string]interface{}, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 2 {
-		return nil, fmt.Errorf("invalid token")
-	}
-	body, err := decodeBase64URL(parts[0])
-	if err != nil {
-		return nil, err
-	}
-	sig, err := hex.DecodeString(parts[1])
-	if err != nil {
-		return nil, err
-	}
-	mac := hmac.New(sha256.New, []byte(webhookSecret))
-	mac.Write(body)
-	if !hmac.Equal(sig, mac.Sum(nil)) {
-		return nil, fmt.Errorf("bad signature")
-	}
 	var payload map[string]interface{}
-	if err := json.Unmarshal(body, &payload); err != nil {
+	if err := subbridge.VerifyToken(bridgeKeys.Token, token, &payload); err != nil {
 		return nil, err
 	}
 	return payload, nil
-}
-
-func decodeBase64URL(s string) ([]byte, error) {
-	return base64.RawURLEncoding.DecodeString(s)
 }
 
 func postSubscriptionBridgeWebhook(url string, payload map[string]interface{}) error {
@@ -207,11 +239,7 @@ func postSubscriptionBridgeWebhook(url string, payload map[string]interface{}) e
 	if err != nil {
 		return err
 	}
-	ts := strconv.FormatInt(time.Now().UTC().Unix(), 10)
-	mac := hmac.New(sha256.New, []byte(webhookSecret))
-	mac.Write([]byte(ts + "."))
-	mac.Write(body)
-	sig := "t=" + ts + ",v1=" + hex.EncodeToString(mac.Sum(nil))
+	sig := subbridge.SignWebhook(bridgeKeys.Callback, body)
 
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {

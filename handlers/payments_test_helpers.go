@@ -15,17 +15,17 @@ import (
 	"github.com/arkfile/Arkfile/database"
 	"github.com/arkfile/Arkfile/logging"
 	"github.com/arkfile/Arkfile/models"
-	"github.com/labstack/echo/v4"
 	jwt "github.com/golang-jwt/jwt/v5"
+	"github.com/labstack/echo/v4"
 	_ "github.com/mattn/go-sqlite3"
 )
 
 const (
-	paymentsTestUser      = "pay-test-user"
-	paymentsTestOtherUser = "pay-other-user"
-	paymentsWebhookSecret = "test_webhook_secret"
-	paymentsStoreID       = "test_store_id"
-	subscriptionsTestSecret = "test_subscription_bridge_secret"
+	paymentsTestUser        = "pay-test-user"
+	paymentsTestOtherUser   = "pay-other-user"
+	paymentsWebhookSecret   = "test_webhook_secret"
+	paymentsStoreID         = "test_store_id"
+	subscriptionsTestSecret = "test_subscription_bridge_pairing_root"
 	subscriptionsTestPlanID = "plan_dev_250gb"
 )
 
@@ -151,8 +151,11 @@ func setupPaymentsSQLiteDB(t *testing.T) *sql.DB {
 			plan_id TEXT NOT NULL,
 			checkout_id TEXT NOT NULL,
 			subscription_ref TEXT UNIQUE NOT NULL,
+			is_current BOOLEAN NOT NULL DEFAULT 1,
 			status TEXT NOT NULL,
 			source TEXT NOT NULL,
+			state_version BIGINT NOT NULL DEFAULT 0,
+			last_event_at DATETIME,
 			current_period_start DATETIME NOT NULL,
 			current_period_end DATETIME NOT NULL,
 			cancel_at_period_end BOOLEAN NOT NULL DEFAULT 0,
@@ -170,9 +173,15 @@ func setupPaymentsSQLiteDB(t *testing.T) *sql.DB {
 			checkout_id TEXT,
 			username TEXT,
 			plan_id TEXT,
+			state_version BIGINT NOT NULL DEFAULT 0,
+			occurred_at DATETIME,
+			disposition TEXT NOT NULL DEFAULT 'applied',
+			admin_username TEXT,
 			payload_hash TEXT NOT NULL,
 			processed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);
+		CREATE UNIQUE INDEX idx_user_subscriptions_one_current
+			ON user_subscriptions(username) WHERE is_current = 1;
 	`
 	if _, err := db.Exec(schema); err != nil {
 		t.Fatalf("create schema: %v", err)
@@ -243,8 +252,9 @@ func withSubscriptionsTestEnv(t *testing.T, btcpayURL string) (*sql.DB, func()) 
 	db, cleanup := withPaymentsTestEnv(t, btcpayURL, true)
 
 	t.Setenv("ARKFILE_SUBSCRIPTIONS_ENABLED", "true")
+	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_ENABLED", "true")
 	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_URL", "http://127.0.0.1:8081")
-	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET", subscriptionsTestSecret)
+	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_PAIRING_ROOT", subscriptionsTestSecret)
 	t.Setenv("ARKFILE_BILLING_PAYG_ENABLED", "true")
 	t.Setenv("ARKFILE_CUSTOMER_PRICE_USD_PER_TB_PER_MONTH", "10.00")
 	t.Setenv("JWT_SECRET", "test-jwt-secret")

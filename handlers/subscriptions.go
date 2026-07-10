@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -51,7 +52,6 @@ func GetMySubscriptionHandler(c echo.Context) error {
 	if err != nil || !cfg.Subscriptions.Enabled {
 		return subscriptionsDisabledError()
 	}
-
 	sub, err := billing.GetActiveSubscription(database.DB, username)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to load subscription")
@@ -91,6 +91,9 @@ func CreateSubscriptionCheckoutHandler(c echo.Context) error {
 	cfg, err := config.LoadConfig()
 	if err != nil || !cfg.Subscriptions.Enabled {
 		return subscriptionsDisabledError()
+	}
+	if !cfg.Subscriptions.BridgeEnabled {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "Paid subscriptions are disabled on this instance")
 	}
 
 	active, err := billing.GetActiveSubscription(database.DB, username)
@@ -148,6 +151,9 @@ func CreateSubscriptionPortalHandler(c echo.Context) error {
 	if err != nil || !cfg.Subscriptions.Enabled {
 		return subscriptionsDisabledError()
 	}
+	if !cfg.Subscriptions.BridgeEnabled {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "Paid subscriptions are disabled on this instance")
+	}
 
 	sub, err := billing.GetActiveSubscription(database.DB, username)
 	if err != nil || sub == nil || sub.Source != "bridge" {
@@ -176,22 +182,35 @@ func SubscriptionBridgeWebhookHandler(c echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal configuration error")
 	}
-	if !cfg.Subscriptions.Enabled {
-		return echo.NewHTTPError(http.StatusForbidden, "Subscriptions are disabled")
+	if !cfg.Subscriptions.Enabled || !cfg.Subscriptions.BridgeEnabled {
+		return echo.NewHTTPError(http.StatusNotFound, "Not found")
 	}
 
-	body, err := io.ReadAll(c.Request().Body)
+	const maxCallbackBody = 64 << 10
+	body, err := io.ReadAll(io.LimitReader(c.Request().Body, maxCallbackBody+1))
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Failed to read body")
 	}
+	if len(body) > maxCallbackBody {
+		return echo.NewHTTPError(http.StatusRequestEntityTooLarge, "Request body too large")
+	}
+	keys, err := subbridge.DeriveKeys(cfg.Subscriptions.BridgePairingRoot)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Internal configuration error")
+	}
 	sig := c.Request().Header.Get(subbridge.SignatureHeaderName)
-	if err := subbridge.VerifyWebhookSignature(cfg.Subscriptions.WebhookSecret, body, sig); err != nil {
+	if err := subbridge.VerifyWebhookSignature(keys.Callback, body, sig); err != nil {
 		logging.ErrorLogger.Printf("Subscription bridge webhook signature failed: %v", err)
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid signature")
 	}
 
 	var payload subbridge.CallbackPayload
-	if err := json.Unmarshal(body, &payload); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid JSON")
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid JSON")
 	}
 

@@ -163,17 +163,13 @@ func getUserTotalStorageBytes(db *sql.DB, username string) int64 {
 
 // freeBaselineBytes returns the per-instance ARKFILE_FREE_STORAGE_BYTES.
 // Defaults to 1073741824 (1 GiB) to match models.DefaultStorageLimit.
-//
-// This wrapper exists so Section D can swap in a typed config-driven version
-// without revisiting handler call sites.
+// The indirection keeps configuration wiring outside the handler package.
 func freeBaselineBytes() int64 {
 	return billingFreeBaselineBytes()
 }
 
-// resolveBillingRate is the seam between the handlers and the billing
-// package. Section D replaces this with a real call to billing.ResolveRate.
-// Until then the seam returns zeros (rateAvailable=false), which is exercised
-// by the projection-builder paths above.
+// resolveBillingRate is the configured seam between handlers and the billing
+// package.
 func resolveBillingRate(db *sql.DB) (rateMicrocentsPerGiBPerHour int64, customerPriceUSDPerTBPerMonth string, rateAvailable bool) {
 	return billingResolveRate(db)
 }
@@ -187,8 +183,7 @@ func formatRateHuman(price string) string {
 	return fmt.Sprintf("$%s/TiB/month", price)
 }
 
-// Default seams. Section D overrides these via the Set* functions below,
-// which main.go calls during startup.
+// Default seams are replaced through the Set* functions during startup.
 
 var (
 	// billingFreeBaselineBytes returns the configured free baseline bytes.

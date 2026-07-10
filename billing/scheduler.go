@@ -259,6 +259,9 @@ func runSubscriptionMaintenance(db *sql.DB) {
 	} else if n > 0 {
 		logging.InfoLogger.Printf("billing.Scheduler: expired %d gift subscription(s)", n)
 	}
+	if !cfg.Subscriptions.BridgeEnabled {
+		return
+	}
 	if n, err := ReconcileBridgeSubscriptions(db, 7); err != nil {
 		logging.ErrorLogger.Printf("billing.Scheduler: bridge reconcile failed: %v", err)
 	} else if n > 0 {

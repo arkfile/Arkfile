@@ -97,7 +97,9 @@ func TestSubscriptionUploadBlockedIntegration(t *testing.T) {
 	if err := ProcessSubscriptionBridgeCallback(db, testSubscriptionBridgePayload("subscription.activated", newEventID(), checkoutID, entRef, "active")); err != nil {
 		t.Fatal(err)
 	}
-	if err := ProcessSubscriptionBridgeCallback(db, testSubscriptionBridgePayload("subscription.past_due", newEventID(), checkoutID, entRef, "past_due")); err != nil {
+	pastDue := testSubscriptionBridgePayload("subscription.past_due", newEventID(), checkoutID, entRef, "past_due")
+	pastDue.StateVersion = 2
+	if err := ProcessSubscriptionBridgeCallback(db, pastDue); err != nil {
 		t.Fatal(err)
 	}
 

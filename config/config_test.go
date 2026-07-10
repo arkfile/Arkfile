@@ -494,19 +494,19 @@ func TestValidateProductionConfig_RequiresDomain(t *testing.T) {
 
 func TestPaymentsConfigFromEnv(t *testing.T) {
 	baseEnv := map[string]string{
-		"JWT_SECRET":           "test-jwt-secret",
-		"STORAGE_PROVIDER_1":   "generic-s3",
-		"STORAGE_1_ENDPOINT":   "http://localhost:9332",
-		"STORAGE_1_ACCESS_KEY": "test",
-		"STORAGE_1_SECRET_KEY": "test",
-		"STORAGE_1_BUCKET":     "test-bucket",
-		"ARKFILE_PAYMENTS_ENABLED":       "true",
-		"ARKFILE_BTCPAY_SERVER_URL":      "https://btcpay.example.com",
-		"ARKFILE_BTCPAY_STORE_ID":        "store-abc",
-		"ARKFILE_BTCPAY_API_KEY":         "key-xyz",
-		"ARKFILE_BTCPAY_WEBHOOK_SECRET":  "whsec-test",
-		"ARKFILE_MIN_TOP_UP_USD":         "1.25",
-		"ARKFILE_MAX_TOP_UP_USD":         "500.00",
+		"JWT_SECRET":                    "test-jwt-secret",
+		"STORAGE_PROVIDER_1":            "generic-s3",
+		"STORAGE_1_ENDPOINT":            "http://localhost:9332",
+		"STORAGE_1_ACCESS_KEY":          "test",
+		"STORAGE_1_SECRET_KEY":          "test",
+		"STORAGE_1_BUCKET":              "test-bucket",
+		"ARKFILE_PAYMENTS_ENABLED":      "true",
+		"ARKFILE_BTCPAY_SERVER_URL":     "https://btcpay.example.com",
+		"ARKFILE_BTCPAY_STORE_ID":       "store-abc",
+		"ARKFILE_BTCPAY_API_KEY":        "key-xyz",
+		"ARKFILE_BTCPAY_WEBHOOK_SECRET": "whsec-test",
+		"ARKFILE_MIN_TOP_UP_USD":        "1.25",
+		"ARKFILE_MAX_TOP_UP_USD":        "500.00",
 	}
 	originalEnv := map[string]string{}
 	for key := range baseEnv {
@@ -541,12 +541,12 @@ func TestPaymentsConfigFromEnv(t *testing.T) {
 
 func TestPaymentsConfigValidationRequiresCredentials(t *testing.T) {
 	baseEnv := map[string]string{
-		"JWT_SECRET":           "test-jwt-secret",
-		"STORAGE_PROVIDER_1":   "generic-s3",
-		"STORAGE_1_ENDPOINT":   "http://localhost:9332",
-		"STORAGE_1_ACCESS_KEY": "test",
-		"STORAGE_1_SECRET_KEY": "test",
-		"STORAGE_1_BUCKET":     "test-bucket",
+		"JWT_SECRET":               "test-jwt-secret",
+		"STORAGE_PROVIDER_1":       "generic-s3",
+		"STORAGE_1_ENDPOINT":       "http://localhost:9332",
+		"STORAGE_1_ACCESS_KEY":     "test",
+		"STORAGE_1_SECRET_KEY":     "test",
+		"STORAGE_1_BUCKET":         "test-bucket",
 		"ARKFILE_PAYMENTS_ENABLED": "true",
 	}
 	originalEnv := map[string]string{}
@@ -617,13 +617,14 @@ func TestPaymentsConfigValidationRejectsInvalidTopUpRange(t *testing.T) {
 
 func TestSubscriptionsConfigValidationRequiresBridgeWhenEnabled(t *testing.T) {
 	baseEnv := map[string]string{
-		"JWT_SECRET":                    "test-jwt-secret",
-		"STORAGE_PROVIDER_1":            "generic-s3",
-		"STORAGE_1_ENDPOINT":            "http://localhost:9332",
-		"STORAGE_1_ACCESS_KEY":          "test",
-		"STORAGE_1_SECRET_KEY":          "test",
-		"STORAGE_1_BUCKET":              "test-bucket",
-		"ARKFILE_SUBSCRIPTIONS_ENABLED": "true",
+		"JWT_SECRET":                          "test-jwt-secret",
+		"STORAGE_PROVIDER_1":                  "generic-s3",
+		"STORAGE_1_ENDPOINT":                  "http://localhost:9332",
+		"STORAGE_1_ACCESS_KEY":                "test",
+		"STORAGE_1_SECRET_KEY":                "test",
+		"STORAGE_1_BUCKET":                    "test-bucket",
+		"ARKFILE_SUBSCRIPTIONS_ENABLED":       "true",
+		"ARKFILE_SUBSCRIPTION_BRIDGE_ENABLED": "true",
 	}
 	originalEnv := map[string]string{}
 	for key := range baseEnv {
@@ -650,16 +651,17 @@ func TestSubscriptionsConfigValidationRequiresBridgeWhenEnabled(t *testing.T) {
 	assert.Contains(t, err.Error(), "ARKFILE_SUBSCRIPTION_BRIDGE_URL")
 }
 
-func TestSubscriptionsConfigValidationRequiresWebhookSecret(t *testing.T) {
+func TestSubscriptionsConfigValidationRequiresPairingRoot(t *testing.T) {
 	baseEnv := map[string]string{
-		"JWT_SECRET":                      "test-jwt-secret",
-		"STORAGE_PROVIDER_1":              "generic-s3",
-		"STORAGE_1_ENDPOINT":              "http://localhost:9332",
-		"STORAGE_1_ACCESS_KEY":            "test",
-		"STORAGE_1_SECRET_KEY":            "test",
-		"STORAGE_1_BUCKET":                "test-bucket",
-		"ARKFILE_SUBSCRIPTIONS_ENABLED":   "true",
-		"ARKFILE_SUBSCRIPTION_BRIDGE_URL":  "http://127.0.0.1:8081",
+		"JWT_SECRET":                          "test-jwt-secret",
+		"STORAGE_PROVIDER_1":                  "generic-s3",
+		"STORAGE_1_ENDPOINT":                  "http://localhost:9332",
+		"STORAGE_1_ACCESS_KEY":                "test",
+		"STORAGE_1_SECRET_KEY":                "test",
+		"STORAGE_1_BUCKET":                    "test-bucket",
+		"ARKFILE_SUBSCRIPTIONS_ENABLED":       "true",
+		"ARKFILE_SUBSCRIPTION_BRIDGE_ENABLED": "true",
+		"ARKFILE_SUBSCRIPTION_BRIDGE_URL":     "http://127.0.0.1:8081",
 	}
 	originalEnv := map[string]string{}
 	for key := range baseEnv {
@@ -683,5 +685,25 @@ func TestSubscriptionsConfigValidationRequiresWebhookSecret(t *testing.T) {
 
 	_, err := LoadConfig()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ARKFILE_SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET")
+	assert.Contains(t, err.Error(), "ARKFILE_SUBSCRIPTION_BRIDGE_PAIRING_ROOT")
+}
+
+func TestSubscriptionsConfigAllowsGiftOnlyMode(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-jwt-secret")
+	t.Setenv("STORAGE_PROVIDER_1", "generic-s3")
+	t.Setenv("STORAGE_1_ENDPOINT", "http://localhost:9332")
+	t.Setenv("STORAGE_1_ACCESS_KEY", "test")
+	t.Setenv("STORAGE_1_SECRET_KEY", "test")
+	t.Setenv("STORAGE_1_BUCKET", "test-bucket")
+	t.Setenv("ARKFILE_SUBSCRIPTIONS_ENABLED", "true")
+	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_ENABLED", "false")
+	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_URL", "")
+	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_PAIRING_ROOT", "")
+	ResetConfigForTest()
+	defer ResetConfigForTest()
+
+	cfg, err := LoadConfig()
+	assert.NoError(t, err)
+	assert.True(t, cfg.Subscriptions.Enabled)
+	assert.False(t, cfg.Subscriptions.BridgeEnabled)
 }

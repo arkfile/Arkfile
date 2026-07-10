@@ -43,7 +43,7 @@ Internet --HTTPS/443--> Caddy --HTTP/8080--> Arkfile --TCP/4001--> rqlite
 
 **Why not `FROM scratch`?** Arkfile requires CGO (`CGO_ENABLED=1`) because the OPAQUE authentication protocol is implemented via C FFI bindings to libopaque (which depends on libsodium). A `CGO_ENABLED=0` build would fail to compile. We use Alpine with static linking to keep the image minimal.
 
-```dockerfile
+```containerfile
 # === STAGE 1: C Library Builder ===
 # Build libsodium, liboprf, and libopaque as static libraries
 FROM alpine:latest AS clibs
@@ -131,7 +131,7 @@ ENTRYPOINT ["/usr/local/bin/arkfile"]
 
 rqlite is pure Go -- `CGO_ENABLED=0` works perfectly. This is a true minimal scratch build.
 
-```dockerfile
+```containerfile
 # === STAGE 1: Builder ===
 FROM golang:1.26-alpine AS builder
 RUN apk add --no-cache git
@@ -167,11 +167,11 @@ CMD ["-http-addr", "0.0.0.0:4001", "-raft-addr", "0.0.0.0:4002", "/data"]
 
 We use the official Alpine-based Caddy image. It provides useful debugging tools if network issues arise, and the attack surface is still very small (Alpine, not Debian/Ubuntu).
 
-No custom Dockerfile needed -- configured via `Caddyfile` bind mount.
+No custom Containerfile needed -- configured via `Caddyfile` bind mount.
 
 ### D. SeaweedFS (Local S3 Storage) -- Official Image
 
-SeaweedFS provides official Docker Hub images at `chrislusf/seaweedfs`. The `4.18` tag (~95MB) includes the `weed` binary with master, volume, filer, and S3 gateway in a single image. No custom Dockerfile needed.
+SeaweedFS provides official OCI images at `chrislusf/seaweedfs`. The `4.18` tag (~95MB) includes the `weed` binary with master, volume, filer, and S3 gateway in a single image. No custom Containerfile needed.
 
 **Container image:** `chrislusf/seaweedfs:4.18`
 **License:** Apache 2.0
@@ -234,12 +234,12 @@ chmod 600 seaweedfs-s3.json
 
 ### Reading Secrets in Go (Code Change Required)
 
-Arkfile's config loader needs a small addition to support the `*_FILE` convention (standard Docker/Podman secrets pattern):
+Arkfile's config loader needs a small addition to support the standard `*_FILE` container-secrets convention:
 
 ```go
 // config/config.go
 func getSecretOrEnv(envKey string) string {
-    // Check for _FILE variant first (Podman/Docker secrets)
+    // Check for _FILE variant first (Podman secrets)
     if filePath := os.Getenv(envKey + "_FILE"); filePath != "" {
         data, err := os.ReadFile(filePath)
         if err == nil {
@@ -304,20 +304,18 @@ services:
   # === 2. Database ===
   rqlite:
     build:
-      context: .
-      dockerfile: Dockerfile.rqlite
+      context: ./containers/rqlite
     volumes:
       - rqlite_data:/data
     networks:
       - internal
     restart: always
-    # HEALTHCHECK defined in Dockerfile
+    # HEALTHCHECK defined in Containerfile.rqlite
 
   # === 3. Application ===
   arkfile:
     build:
       context: .
-      dockerfile: Dockerfile
     secrets:
       - arkfile_master_key
       - rqlite_password
@@ -353,7 +351,7 @@ services:
       rqlite:
         condition: service_healthy
     restart: always
-    # HEALTHCHECK defined in Dockerfile
+    # HEALTHCHECK defined in Containerfile
 
   # === 4. Local S3 Storage (optional profile) ===
   # Activate with: podman-compose --profile local-storage up -d
@@ -425,7 +423,7 @@ sudo dnf install podman podman-compose    # Fedora/RHEL
 
 # Enable rootless Podman socket (for compose compatibility)
 systemctl --user enable --now podman.socket
-export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock
+export CONTAINER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock
 ```
 
 ### First-Time Setup

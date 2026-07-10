@@ -19,7 +19,9 @@ func signedSubscriptionBridgeWebhookContext(t *testing.T, payload subbridge.Call
 	t.Helper()
 	body, err := json.Marshal(payload)
 	require.NoError(t, err)
-	sig := subbridge.SignWebhook(secret, body)
+	keys, err := subbridge.DeriveKeys(secret)
+	require.NoError(t, err)
+	sig := subbridge.SignWebhook(keys.Callback, body)
 
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/subscription-bridge", bytes.NewReader(body))
@@ -37,8 +39,9 @@ func handlerSubscriptionBridgePayload(eventType, eventID, checkoutID, entRef str
 		EventID:            eventID,
 		EventType:          eventType,
 		CheckoutID:         checkoutID,
-		SubscriptionRef:     entRef,
+		SubscriptionRef:    entRef,
 		PlanID:             subscriptionsTestPlanID,
+		StateVersion:       1,
 		Status:             "active",
 		CurrentPeriodStart: now.Format(time.RFC3339),
 		CurrentPeriodEnd:   now.Add(30 * 24 * time.Hour).Format(time.RFC3339),

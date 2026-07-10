@@ -1,6 +1,6 @@
 # Subscription Plans and Subscription Bridge Billing
 
-Arkfile is a privacy-first file vault: usernames are pseudonymous, file data is client-side encrypted, and the server should learn as little as possible about who pays how. Subscription tiers add a fourth commercial layer on top of the existing storage cap, PAYG microcent meter, and BTCPay one-off top-ups already shipped for mid-2026 (1 GiB default marketed as "1.0 GB Free", auto-approval with admin override, registration throttling, PAYG negative-balance upload cap at -$10, and the billing/payments stack in `docs/wip/storage-credits-v2.md` and `docs/wip/payments.md`). Recurring card billing cannot be delegated to the BTCPay Stripe Payments plugin — that plugin adds fiat as a one-off payment method on BTCPay invoices, not pull-based monthly subscriptions. The chosen architecture keeps Arkfile free of payment-processor SDKs and native processor identifiers. Instead, a separate **Subscription Bridge** service (planned at `billing.arkfile.net`) owns Stripe and any future processors (Adyen, Mollie, Worldpay, Square, etc.), converts processor lifecycle events into the **Subscription Bridge Protocol v1**, and notifies Arkfile through one signed webhook. Arkfile stores only opaque `checkout_id` and `subscription_ref` values plus local plan and status rows; usernames never leave the vault host in payment metadata. Operators define a plan catalog (name, display price, storage limit). Subscribed users get a raised effective storage cap and paused PAYG metering. Everyone else stays on the free baseline, hourly meter, and optional BTCPay top-ups. Private or self-hosted instances may choose to disable billing, PAYG, subscriptions, and payments independently, if they so desire.
+Arkfile is a privacy-first file vault: usernames are pseudonymous, file data is client-side encrypted, and the server should learn as little as possible about who pays how. Subscription tiers add a fourth commercial layer on top of the existing storage cap, PAYG microcent meter, and BTCPay one-off top-ups already shipped for mid-2026 (1 GiB default marketed as "1.0 GB Free", auto-approval with admin override, registration throttling, PAYG negative-balance upload cap at -$10, and the billing/payments stack in `docs/wip/storage-credits-v2.md` and `docs/wip/payments.md`). Recurring card billing cannot be delegated to the BTCPay Stripe Payments plugin — that plugin adds fiat as a one-off payment method on BTCPay invoices, not pull-based monthly subscriptions. The chosen architecture keeps Arkfile free of payment-processor SDKs and native processor identifiers. Instead, a separate **Subscription Bridge** service (planned at `billing.arkfile.net`) owns Stripe and any future processors (Adyen, Mollie, Worldpay, Worldline, Square, etc.), converts processor lifecycle events into the **Subscription Bridge Protocol v1**, and notifies Arkfile through one signed webhook. Arkfile stores only opaque `checkout_id` and `subscription_ref` values plus local plan and status rows; usernames never leave the vault host in payment metadata. Operators define a plan catalog (name, display price, storage limit). Subscribed users get a raised effective storage cap and paused PAYG metering. Everyone else stays on the free baseline, hourly meter, and optional BTCPay top-ups. Private or self-hosted instances may choose to disable billing, PAYG, subscriptions, and payments independently, if they so desire.
 
 ## Relationship to existing billing and payments
 
@@ -318,9 +318,9 @@ plans:
     mollie_product_id: ...
 ```
 
-Adding Adyen or Square later means a new bridge adapter and config lines — zero Arkfile schema or API changes.
+Adding another processor later means a new bridge adapter and config lines — zero Arkfile schema or API changes.
 
-**v1 processor target:** Stripe Billing via bridge adapter. Other processors are documented as supported-by-bridge, not by Arkfile.
+**v1 processor targets:** complete Stripe and Adyen adapters. Stripe uses provider-managed subscriptions; Adyen uses the bridge scheduler and stored-payment-method flow. Both remain bridge concerns, not Arkfile concerns.
 
 ## Instance toggles
 
@@ -330,12 +330,13 @@ Split commercial modes so private and gratis instances can disable layers indepe
 |---|---|
 | `ARKFILE_BILLING_ENABLED` | Master switch: scheduler runs; billing APIs respond; projection in `/api/credits` |
 | `ARKFILE_BILLING_PAYG_ENABLED` (new) | Hourly meter + daily sweep + PAYG negative upload cap |
-| `ARKFILE_SUBSCRIPTIONS_ENABLED` (new) | Plan catalog, checkout redirect, subscription bridge webhook, subscription UI **and arkfile-client subscription commands** |
+| `ARKFILE_SUBSCRIPTIONS_ENABLED` (new) | Plan catalog, gift subscriptions, subscription UI **and arkfile-client subscription commands** |
+| `ARKFILE_SUBSCRIPTION_BRIDGE_ENABLED` (new) | Paid checkout/portal, bridge callback, and reconcile integration |
 | `ARKFILE_PAYMENTS_ENABLED` | BTCPay one-off top-ups (existing) |
 
 Suggested defaults: **private / gratis** — all false. **Hosted PAYG-only** — billing + PAYG + payments on, subscriptions off. **Hosted with tiers** — all relevant flags on.
 
-Startup validation when subscriptions enabled: require `ARKFILE_SUBSCRIPTION_BRIDGE_URL` and `ARKFILE_SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET`. Do **not** require processor API keys on Arkfile.
+Gift-only mode requires no bridge URL or pairing secret. When bridge integration is enabled, startup requires an HTTPS bridge URL (HTTP loopback is allowed for development) and `ARKFILE_SUBSCRIPTION_BRIDGE_PAIRING_ROOT` with at least 32 characters. Arkfile derives separate token, callback, and reconcile keys with HKDF-SHA256. Do **not** require processor API keys on Arkfile.
 
 ## Configuration
 
@@ -343,8 +344,9 @@ Startup validation when subscriptions enabled: require `ARKFILE_SUBSCRIPTION_BRI
 
 ```
 ARKFILE_SUBSCRIPTIONS_ENABLED=false
+ARKFILE_SUBSCRIPTION_BRIDGE_ENABLED=false
 ARKFILE_SUBSCRIPTION_BRIDGE_URL=https://billing.arkfile.net
-ARKFILE_SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET=
+ARKFILE_SUBSCRIPTION_BRIDGE_PAIRING_ROOT= # openssl rand -hex 32; same root on bridge
 ARKFILE_SUBSCRIPTION_RETURN_URL=          # default: app origin /?subscription=return
 ARKFILE_GIFT_SUBSCRIPTION_DEFAULT_DAYS=30   # grant-gift-subscription when --days omitted
 ARKFILE_GIFT_SUBSCRIPTION_MAX_DAYS=90     # hard cap on --days / API days field
@@ -416,14 +418,19 @@ CREATE TABLE IF NOT EXISTS user_subscriptions (
     plan_id TEXT NOT NULL,
     checkout_id TEXT NOT NULL,
     subscription_ref TEXT UNIQUE NOT NULL,
+    is_current BOOLEAN NOT NULL DEFAULT 1,
     status TEXT NOT NULL CHECK (status IN (
         'active', 'past_due', 'canceled', 'expired', 'trialing'
     )),
     source TEXT NOT NULL CHECK (source IN ('bridge', 'gift')),
+    state_version BIGINT NOT NULL DEFAULT 0,
+    last_event_at DATETIME,
     current_period_start DATETIME NOT NULL,
     current_period_end DATETIME NOT NULL,
     cancel_at_period_end BOOLEAN NOT NULL DEFAULT 0,
     canceled_at DATETIME,
+    past_due_since DATETIME,
+    gift_note TEXT,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (username) REFERENCES users(username) ON DELETE RESTRICT,
@@ -433,6 +440,8 @@ CREATE TABLE IF NOT EXISTS user_subscriptions (
 CREATE INDEX IF NOT EXISTS idx_user_subscriptions_username ON user_subscriptions(username);
 CREATE INDEX IF NOT EXISTS idx_user_subscriptions_status ON user_subscriptions(status);
 CREATE INDEX IF NOT EXISTS idx_user_subscriptions_subscription_ref ON user_subscriptions(subscription_ref);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_subscriptions_one_current
+    ON user_subscriptions(username) WHERE is_current = 1;
 ```
 
 `source = gift` for operator grants via `grant-gift-subscription` only. Synthetic identifiers (no bridge):
@@ -440,7 +449,7 @@ CREATE INDEX IF NOT EXISTS idx_user_subscriptions_subscription_ref ON user_subsc
 - `subscription_ref`: `sub_gift_<uuid>`
 - `checkout_id`: `subchk_gift_<uuid>` with a matching `subscription_checkouts` row (`status = completed`) to satisfy the FK
 
-Gift rows set `current_period_end = current_period_start + N days` where **N defaults to 30** and **N ≤ 90**. Optional `gift_note` (operator audit) may live in a TEXT column on `user_subscriptions` or in `subscription_events` payload at grant time — implementer choice; document in admin `show` output.
+Gift rows set `current_period_end = current_period_start + N days` where **N defaults to 30** and **N ≤ 90**. `gift_note` is stored on `user_subscriptions`; the grant event stores the acting admin.
 
 No `provider_customer_id`, `provider_subscription_id`, or processor columns on Arkfile.
 
@@ -457,6 +466,11 @@ CREATE TABLE IF NOT EXISTS subscription_events (
     checkout_id TEXT,
     username TEXT,
     plan_id TEXT,
+    state_version BIGINT NOT NULL DEFAULT 0,
+    occurred_at DATETIME,
+    disposition TEXT NOT NULL DEFAULT 'applied'
+        CHECK(disposition IN ('applied', 'duplicate', 'ignored_stale')),
+    admin_username TEXT,
     payload_hash TEXT NOT NULL,
     processed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -725,8 +739,8 @@ Foundation prerequisites remain e2e-verified in earlier groups: billing meter/sw
 1. **Schema + resolver + admin plan CRUD** — **Done.** Unified schema, `billing/effective.go`, admin plan CRUD and gift commands, dev seed plan.
 2. **Meter/storage/top-up integration** — **Done.** `ShouldMeter`, sweep skip, `ShouldAllowTopUp`, `FinalizePaygBeforeSubscribe`, upload gates, `/api/credits` projection; scheduler gift expiry and bridge reconcile hooks in `billing/scheduler.go`.
 3. **Web billing panel + arkfile-client billing/subscription commands** — **Done.** `billing.ts` subscription UI; `cmd/arkfile-client/billing_commands.go` and `subscription_commands.go`.
-4. **Subscription bridge webhook + checkout redirect on Arkfile** — **Done on vault host.** User/admin APIs, `POST /api/webhooks/subscription-bridge`, mock bridge + full `run_subscriptions` e2e.
-5. **Subscription Bridge VPS + Stripe adapter** — **Not started.** Production `billing.arkfile.net` service (separate repo/deployment per `docs/wip/subscription-bridge.md`).
+4. **Subscription bridge consumer on Arkfile** — **Done on vault host.** Ordered transactional callbacks, strict validation, gift atomicity, HKDF-derived keys, authenticated reconcile, user/admin APIs, mock bridge, and `run_subscriptions` e2e.
+5. **Subscription Bridge service + Stripe and Adyen adapters** — **Not started.** Separate repository/deployment per `docs/wip/subscription-bridge.md`.
 6. **Playwright subscription coverage + user/docs polish** — **Partial.** Playwright top-up exists; subscription-specific browser tests, `docs/user-faq.md`, `docs/api.md`, and `docs/scripts-guide.md` client billing section remain open.
 
 ## Documentation updates (when implemented)
@@ -739,7 +753,7 @@ Foundation prerequisites remain e2e-verified in earlier groups: billing meter/sw
 | `docs/api.md` | New endpoints; top-up 409 | TODO |
 | `docs/scripts-guide.md` | Admin CLI subscription commands; **arkfile-client billing/subscription** | TODO |
 | `.env.example` | Subscriptions + bridge vars (no processor keys) | Vars present (commented); review for prod defaults |
-| `scripts/dev-reset.sh`, deploy scripts | Sensible defaults per environment | **Done** for dev-reset (subscriptions on, seed plan, bridge URL/secret for mock) |
+| `scripts/dev-reset.sh`, deploy scripts | Sensible defaults per environment | Dev/e2e use one test pairing root; production deploys remain bridge-disabled unless an admin supplies a generated root |
 
 ## Explicitly out of scope for v1
 
@@ -757,11 +771,11 @@ Foundation prerequisites remain e2e-verified in earlier groups: billing meter/sw
 
 ## Status
 
-**Arkfile subscription layer: implemented and e2e-verified (June 2026).** The vault host ships the full v1 consumer contract: schema, billing resolver, meter/top-up/upload integration, user and admin HTTP APIs, Subscription Bridge webhook handler, `arkfile-admin subscriptions` commands, `arkfile-client billing` / `subscription` commands, billing panel subscription UI, dev mock bridge (`scripts/testing/subscription-bridge-mock.go`), and **`run_subscriptions`** in `scripts/testing/e2e-test.sh` (26 subscription tests; **212/212** total e2e pass after dev-reset). Go unit tests cover resolver, subscription bridge callbacks, gift rules, top-up 409, webhook HMAC, and rqlite-safe plan scanning (`models.ScanBool` / `ScanInt64`).
+**Arkfile subscription layer: implemented; consumer hardening completed July 2026.** The vault host ships the full v1 consumer contract: ordered `state_version` callbacks, event/state database transactions, expired-row lookup, checkout/plan binding, concurrent replay protection, event-derived `past_due_since`, atomic gift grants, disabled/gift-only semantics, consistent top-up policy, HKDF-derived protocol keys, bounded bridge HTTP, user/admin APIs and CLIs, billing UI, and a protocol-faithful dev mock. The existing full shell e2e baseline predates this hardening; focused Go coverage is the required verification for this change and `run_subscriptions` must be rerun before release.
 
 **Still open for production:**
 
-- **Subscription Bridge production service** at `billing.arkfile.net` (Stripe adapter, bridge DB, processor SKU mapping) — see `docs/wip/subscription-bridge.md`; Arkfile is ready to consume it via existing URL, webhook secret, checkout redirect, and portal tokens.
+- **Subscription Bridge production service** (provider-neutral core, PostgreSQL, complete Stripe and Adyen adapters, Adyen scheduler/portal) — see `docs/wip/subscription-bridge.md`; Arkfile consumes it through the bridge URL and one HKDF pairing root.
 - **Playwright** subscription-specific UI tests (plan cards, return URL, top-up hidden when subscribed).
 - **User and operator docs:** `docs/user-faq.md`, `docs/api.md`, `docs/scripts-guide.md`, cross-links in `docs/wip/payments.md`.
 
@@ -773,7 +787,7 @@ Foundation prerequisites remain e2e-verified in earlier groups: billing meter/sw
 - `docs/wip/storage-credits-v2.md` — microcent meter, settlement, free baseline
 - `docs/wip/payments.md` — BTCPay top-ups, opaque `invoice_id`, reconcile model
 - `docs/wip/alma-pay-server.md` — BTCPay hosting on Alma/Podman (pay host)
-- `docs/wip/subscription-bridge.md` — bridge service spec, Stripe adapter, deployment
+- `docs/wip/subscription-bridge.md` — bridge service spec, Stripe/Adyen adapters, deployment
 - `docs/wip/prod-prep/03-roadmap.md` — commercial layer sequencing
 - `handlers/billing_projection.go` — `/api/credits` projection
 - `client/static/js/src/ui/billing.ts` — billing panel UI

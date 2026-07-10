@@ -4,7 +4,9 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/arkfile/Arkfile/config"
 	"github.com/arkfile/Arkfile/models"
@@ -71,6 +73,56 @@ func TestProcessSubscriptionBridgeCallback_Idempotent(t *testing.T) {
 	}
 }
 
+func TestProcessSubscriptionBridgeCallback_ConcurrentIdempotency(t *testing.T) {
+	withBillingSubscriptionEnv(t)
+	db := openFullBillingSubscriptionTestDB(t)
+	defer db.Close()
+
+	seedSubscriptionPlan(t, db)
+	seedSubscriptionUser(t, db, "alice", 0)
+	checkoutID := "subchk_concurrent"
+	subscriptionRef := "sub_concurrent"
+	seedPendingCheckout(t, db, checkoutID, "alice")
+	payload := testSubscriptionBridgePayload("subscription.activated", newEventID(), checkoutID, subscriptionRef, "active")
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- ProcessSubscriptionBridgeCallback(db, payload)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent callback: %v", err)
+		}
+	}
+	if countSubscriptionEvents(t, db, payload.EventID) != 1 {
+		t.Fatal("concurrent replay must produce one event")
+	}
+}
+
+func TestProcessSubscriptionBridgeCallback_RejectsCheckoutMismatch(t *testing.T) {
+	withBillingSubscriptionEnv(t)
+	db := openFullBillingSubscriptionTestDB(t)
+	defer db.Close()
+
+	seedSubscriptionPlan(t, db)
+	seedSubscriptionUser(t, db, "alice", 0)
+	seedPendingCheckout(t, db, "subchk_expected", "alice")
+	payload := testSubscriptionBridgePayload("subscription.activated", newEventID(), "subchk_other", "sub_mismatch", "active")
+	if err := ProcessSubscriptionBridgeCallback(db, payload); err == nil {
+		t.Fatal("expected unknown checkout to be rejected")
+	}
+	if countSubscriptionEvents(t, db, payload.EventID) != 0 {
+		t.Fatal("rejected callback must not create an event")
+	}
+}
+
 func TestProcessSubscriptionBridgeCallback_PastDueSetsTimestamp(t *testing.T) {
 	withBillingSubscriptionEnv(t)
 	db := openFullBillingSubscriptionTestDB(t)
@@ -88,6 +140,9 @@ func TestProcessSubscriptionBridgeCallback_PastDueSetsTimestamp(t *testing.T) {
 	}
 
 	pastDue := testSubscriptionBridgePayload("subscription.past_due", newEventID(), checkoutID, entRef, "past_due")
+	pastDue.StateVersion = 2
+	occurredAt := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
+	pastDue.OccurredAt = occurredAt.Format(time.RFC3339)
 	if err := ProcessSubscriptionBridgeCallback(db, pastDue); err != nil {
 		t.Fatal(err)
 	}
@@ -98,6 +153,51 @@ func TestProcessSubscriptionBridgeCallback_PastDueSetsTimestamp(t *testing.T) {
 	}
 	if sub.Status != "past_due" || sub.PastDueSince == nil {
 		t.Fatalf("expected past_due with timestamp, got %+v", sub)
+	}
+	if !sub.PastDueSince.Equal(occurredAt) {
+		t.Fatalf("past_due_since = %s, want event time %s", sub.PastDueSince, occurredAt)
+	}
+}
+
+func TestProcessSubscriptionBridgeCallback_IgnoresOutOfOrderAndFindsExpiredRow(t *testing.T) {
+	withBillingSubscriptionEnv(t)
+	db := openFullBillingSubscriptionTestDB(t)
+	defer db.Close()
+
+	seedSubscriptionPlan(t, db)
+	seedSubscriptionUser(t, db, "alice", 0)
+	checkoutID := "subchk_ordered"
+	subscriptionRef := "sub_ordered"
+	seedPendingCheckout(t, db, checkoutID, "alice")
+
+	activated := testSubscriptionBridgePayload("subscription.activated", newEventID(), checkoutID, subscriptionRef, "active")
+	if err := ProcessSubscriptionBridgeCallback(db, activated); err != nil {
+		t.Fatal(err)
+	}
+	expired := testSubscriptionBridgePayload("subscription.expired", newEventID(), checkoutID, subscriptionRef, "expired")
+	expired.StateVersion = 3
+	if err := ProcessSubscriptionBridgeCallback(db, expired); err != nil {
+		t.Fatal(err)
+	}
+	stale := testSubscriptionBridgePayload("subscription.past_due", newEventID(), checkoutID, subscriptionRef, "past_due")
+	stale.StateVersion = 2
+	if err := ProcessSubscriptionBridgeCallback(db, stale); err != nil {
+		t.Fatal(err)
+	}
+
+	sub, err := models.GetUserSubscriptionBySubscriptionRef(db, subscriptionRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sub.Status != "expired" || sub.IsCurrent {
+		t.Fatalf("stale callback changed expired row: %+v", sub)
+	}
+	var disposition string
+	if err := db.QueryRow(`SELECT disposition FROM subscription_events WHERE event_id = ?`, stale.EventID).Scan(&disposition); err != nil {
+		t.Fatal(err)
+	}
+	if disposition != "ignored_stale" {
+		t.Fatalf("stale event disposition = %q", disposition)
 	}
 }
 
@@ -115,10 +215,14 @@ func TestProcessSubscriptionBridgeCallback_RenewedClearsPastDue(t *testing.T) {
 	if err := ProcessSubscriptionBridgeCallback(db, testSubscriptionBridgePayload("subscription.activated", newEventID(), checkoutID, entRef, "active")); err != nil {
 		t.Fatal(err)
 	}
-	if err := ProcessSubscriptionBridgeCallback(db, testSubscriptionBridgePayload("subscription.past_due", newEventID(), checkoutID, entRef, "past_due")); err != nil {
+	pastDue := testSubscriptionBridgePayload("subscription.past_due", newEventID(), checkoutID, entRef, "past_due")
+	pastDue.StateVersion = 2
+	if err := ProcessSubscriptionBridgeCallback(db, pastDue); err != nil {
 		t.Fatal(err)
 	}
-	if err := ProcessSubscriptionBridgeCallback(db, testSubscriptionBridgePayload("subscription.renewed", newEventID(), checkoutID, entRef, "active")); err != nil {
+	renewed := testSubscriptionBridgePayload("subscription.renewed", newEventID(), checkoutID, entRef, "active")
+	renewed.StateVersion = 3
+	if err := ProcessSubscriptionBridgeCallback(db, renewed); err != nil {
 		t.Fatal(err)
 	}
 
@@ -145,7 +249,9 @@ func TestProcessSubscriptionBridgeCallback_CanceledAndExpired(t *testing.T) {
 	if err := ProcessSubscriptionBridgeCallback(db, testSubscriptionBridgePayload("subscription.activated", newEventID(), checkoutID, entRef, "active")); err != nil {
 		t.Fatal(err)
 	}
-	if err := ProcessSubscriptionBridgeCallback(db, testSubscriptionBridgePayload("subscription.canceled", newEventID(), checkoutID, entRef, "canceled")); err != nil {
+	canceled := testSubscriptionBridgePayload("subscription.canceled", newEventID(), checkoutID, entRef, "canceled")
+	canceled.StateVersion = 2
+	if err := ProcessSubscriptionBridgeCallback(db, canceled); err != nil {
 		t.Fatal(err)
 	}
 	sub, err := models.GetUserSubscriptionBySubscriptionRef(db, entRef)
@@ -156,7 +262,9 @@ func TestProcessSubscriptionBridgeCallback_CanceledAndExpired(t *testing.T) {
 		t.Fatalf("expected canceled with timestamp, got %+v", sub)
 	}
 
-	if err := ProcessSubscriptionBridgeCallback(db, testSubscriptionBridgePayload("subscription.expired", newEventID(), checkoutID, entRef, "expired")); err != nil {
+	expired := testSubscriptionBridgePayload("subscription.expired", newEventID(), checkoutID, entRef, "expired")
+	expired.StateVersion = 3
+	if err := ProcessSubscriptionBridgeCallback(db, expired); err != nil {
 		t.Fatal(err)
 	}
 	var status string

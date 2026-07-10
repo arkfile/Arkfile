@@ -6,14 +6,14 @@ import (
 	"time"
 
 	"github.com/arkfile/Arkfile/config"
-	"github.com/arkfile/Arkfile/subbridge"
 	"github.com/arkfile/Arkfile/logging"
+	"github.com/arkfile/Arkfile/subbridge"
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 )
 
 const (
-	subTestSecret  = "test_subscription_bridge_secret"
+	subTestSecret  = "test_subscription_bridge_pairing_root"
 	subTestPlanID  = "plan_dev_250gb"
 	subTestPlanGiB = int64(250) << 30
 )
@@ -29,8 +29,9 @@ func withBillingSubscriptionEnv(t *testing.T) {
 	t.Setenv("STORAGE_1_SECRET_KEY", "test")
 	t.Setenv("STORAGE_1_BUCKET", "test-bucket")
 	t.Setenv("ARKFILE_SUBSCRIPTIONS_ENABLED", "true")
+	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_ENABLED", "true")
 	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_URL", "http://127.0.0.1:8081")
-	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET", subTestSecret)
+	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_PAIRING_ROOT", subTestSecret)
 	t.Setenv("ARKFILE_BILLING_ENABLED", "true")
 	t.Setenv("ARKFILE_BILLING_PAYG_ENABLED", "true")
 	t.Setenv("ARKFILE_CUSTOMER_PRICE_USD_PER_TB_PER_MONTH", "10.00")
@@ -124,8 +125,11 @@ func openFullBillingSubscriptionTestDB(t *testing.T) *sql.DB {
 		plan_id TEXT NOT NULL,
 		checkout_id TEXT NOT NULL,
 		subscription_ref TEXT UNIQUE NOT NULL,
+		is_current BOOLEAN NOT NULL DEFAULT 1,
 		status TEXT NOT NULL,
 		source TEXT NOT NULL,
+		state_version BIGINT NOT NULL DEFAULT 0,
+		last_event_at DATETIME,
 		current_period_start DATETIME NOT NULL,
 		current_period_end DATETIME NOT NULL,
 		cancel_at_period_end BOOLEAN NOT NULL DEFAULT 0,
@@ -143,9 +147,15 @@ func openFullBillingSubscriptionTestDB(t *testing.T) *sql.DB {
 		checkout_id TEXT,
 		username TEXT,
 		plan_id TEXT,
+		state_version BIGINT NOT NULL DEFAULT 0,
+		occurred_at DATETIME,
+		disposition TEXT NOT NULL DEFAULT 'applied',
+		admin_username TEXT,
 		payload_hash TEXT NOT NULL,
 		processed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
+	CREATE UNIQUE INDEX idx_user_subscriptions_one_current
+		ON user_subscriptions(username) WHERE is_current = 1;
 	`
 	if _, err := db.Exec(schema); err != nil {
 		t.Fatal(err)
@@ -217,8 +227,9 @@ func testSubscriptionBridgePayload(eventType, eventID, checkoutID, entRef, statu
 		EventID:            eventID,
 		EventType:          eventType,
 		CheckoutID:         checkoutID,
-		SubscriptionRef:     entRef,
+		SubscriptionRef:    entRef,
 		PlanID:             subTestPlanID,
+		StateVersion:       1,
 		Status:             status,
 		CurrentPeriodStart: now.Format(time.RFC3339),
 		CurrentPeriodEnd:   now.Add(30 * 24 * time.Hour).Format(time.RFC3339),

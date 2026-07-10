@@ -56,9 +56,9 @@ func SubscriptionBlocksTopUp(sub *models.UserSubscription) bool {
 		return false
 	}
 	switch sub.Status {
-	case "active", "trialing":
+	case "active", "trialing", "past_due":
 		return true
-	case "canceled", "past_due":
+	case "canceled":
 		return sub.CurrentPeriodEnd.After(time.Now().UTC())
 	default:
 		return false
@@ -78,6 +78,9 @@ func SubscriptionBlocksUpload(sub *models.UserSubscription) bool {
 }
 
 func GetActiveSubscription(db *sql.DB, username string) (*models.UserSubscription, error) {
+	if !subscriptionsEnabled() {
+		return nil, nil
+	}
 	sub, err := models.GetActiveUserSubscription(db, username)
 	if err == sql.ErrNoRows {
 		return nil, nil
