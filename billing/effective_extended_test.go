@@ -92,12 +92,12 @@ func TestSubscriptionUploadBlockedIntegration(t *testing.T) {
 	seedSubscriptionPlan(t, db)
 	seedSubscriptionUser(t, db, "alice", 0)
 	checkoutID := "subchk_upload"
-	entRef := "ent_upload"
+	entRef := "sub_upload"
 	seedPendingCheckout(t, db, checkoutID, "alice")
-	if err := ProcessEntitlementCallback(db, testEntitlementPayload("entitlement.activated", newEventID(), checkoutID, entRef, "active")); err != nil {
+	if err := ProcessSubscriptionBridgeCallback(db, testSubscriptionBridgePayload("subscription.activated", newEventID(), checkoutID, entRef, "active")); err != nil {
 		t.Fatal(err)
 	}
-	if err := ProcessEntitlementCallback(db, testEntitlementPayload("entitlement.past_due", newEventID(), checkoutID, entRef, "past_due")); err != nil {
+	if err := ProcessSubscriptionBridgeCallback(db, testSubscriptionBridgePayload("subscription.past_due", newEventID(), checkoutID, entRef, "past_due")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -110,7 +110,7 @@ func TestSubscriptionUploadBlockedIntegration(t *testing.T) {
 	}
 
 	old := time.Now().UTC().Add(-8 * 24 * time.Hour)
-	if _, err := db.Exec(`UPDATE user_subscriptions SET past_due_since = ? WHERE entitlement_ref = ?`, old, entRef); err != nil {
+	if _, err := db.Exec(`UPDATE user_subscriptions SET past_due_since = ? WHERE subscription_ref = ?`, old, entRef); err != nil {
 		t.Fatal(err)
 	}
 	blocked, err = SubscriptionUploadBlocked(db, "alice")

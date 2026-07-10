@@ -35,7 +35,7 @@ func pastDueGraceDuration() time.Duration {
 }
 
 // SubscriptionMeterPaused reports whether hourly metering and daily settlement
-// should be skipped for the user because of an active subscription entitlement.
+// should be skipped for the user because of an active paid or gift subscription.
 func SubscriptionMeterPaused(sub *models.UserSubscription) bool {
 	if sub == nil {
 		return false

@@ -1,6 +1,6 @@
-# Subscription Plans and Entitlement Bridge Billing
+# Subscription Plans and Subscription Bridge Billing
 
-Arkfile is a privacy-first file vault: usernames are pseudonymous, file data is client-side encrypted, and the server should learn as little as possible about who pays how. Subscription tiers add a fourth commercial layer on top of the existing storage cap, PAYG microcent meter, and BTCPay one-off top-ups already shipped for mid-2026 (1 GiB default marketed as "1.0 GB Free", auto-approval with admin override, registration throttling, PAYG negative-balance upload cap at -$10, and the billing/payments stack in `docs/wip/storage-credits-v2.md` and `docs/wip/payments.md`). Recurring card billing cannot be delegated to the BTCPay Stripe Payments plugin — that plugin adds fiat as a one-off payment method on BTCPay invoices, not pull-based monthly subscriptions. The chosen architecture keeps Arkfile free of payment-processor SDKs and native processor identifiers. Instead, a separate **Entitlement Bridge** service (planned at `billing.arkfile.net`) owns Stripe and any future processors (Adyen, Mollie, Worldpay, Square, etc.), converts processor lifecycle events into a single canonical entitlement protocol, and notifies Arkfile through one signed webhook. Arkfile stores only opaque `checkout_id` and `entitlement_ref` values plus local plan and status rows; usernames never leave the vault host in payment metadata. Operators define a plan catalog (name, display price, storage limit). Subscribed users get a raised effective storage cap and paused PAYG metering. Everyone else stays on the free baseline, hourly meter, and optional BTCPay top-ups. Private or self-hosted instances may choose to disable billing, PAYG, subscriptions, and payments independently, if they so desire.
+Arkfile is a privacy-first file vault: usernames are pseudonymous, file data is client-side encrypted, and the server should learn as little as possible about who pays how. Subscription tiers add a fourth commercial layer on top of the existing storage cap, PAYG microcent meter, and BTCPay one-off top-ups already shipped for mid-2026 (1 GiB default marketed as "1.0 GB Free", auto-approval with admin override, registration throttling, PAYG negative-balance upload cap at -$10, and the billing/payments stack in `docs/wip/storage-credits-v2.md` and `docs/wip/payments.md`). Recurring card billing cannot be delegated to the BTCPay Stripe Payments plugin — that plugin adds fiat as a one-off payment method on BTCPay invoices, not pull-based monthly subscriptions. The chosen architecture keeps Arkfile free of payment-processor SDKs and native processor identifiers. Instead, a separate **Subscription Bridge** service (planned at `billing.arkfile.net`) owns Stripe and any future processors (Adyen, Mollie, Worldpay, Square, etc.), converts processor lifecycle events into the **Subscription Bridge Protocol v1**, and notifies Arkfile through one signed webhook. Arkfile stores only opaque `checkout_id` and `subscription_ref` values plus local plan and status rows; usernames never leave the vault host in payment metadata. Operators define a plan catalog (name, display price, storage limit). Subscribed users get a raised effective storage cap and paused PAYG metering. Everyone else stays on the free baseline, hourly meter, and optional BTCPay top-ups. Private or self-hosted instances may choose to disable billing, PAYG, subscriptions, and payments independently, if they so desire.
 
 ## Relationship to existing billing and payments
 
@@ -11,7 +11,7 @@ Three commercial layers already exist in the codebase. Subscriptions add a fourt
 | **Storage hard cap** | Upload blocked when usage exceeds effective limit | Per-user `users.storage_limit_bytes` (admin baseline, default 1 GiB); admin `set-storage` |
 | **PAYG meter** | Hourly microcent accumulation, daily settlement into `user_credits` | `ARKFILE_BILLING_ENABLED`, `ARKFILE_BILLING_PAYG_ENABLED`, `billing_settings` |
 | **Top-ups** | One-time balance credit via BTCPay invoice | `ARKFILE_PAYMENTS_ENABLED`, BTCPay Greenfield + webhook |
-| **Subscription plan** | Flat monthly fee; raises effective storage cap; pauses PAYG meter while active | `ARKFILE_SUBSCRIPTIONS_ENABLED`, Entitlement Bridge URL + webhook secret |
+| **Subscription plan** | Flat monthly fee; raises effective storage cap; pauses PAYG meter while active | `ARKFILE_SUBSCRIPTIONS_ENABLED`, Subscription Bridge URL + webhook secret |
 
 Paying does **not** automatically raise storage unless the payment activates a **subscription plan** (paid via bridge checkout) or an operator runs **`subscriptions grant-gift-subscription`** (time-limited comp access, no processor). Hard storage cap and credit balance remain separate gates. Upload soft-block at negative PAYG balance applies only when PAYG metering is active for that user.
 
@@ -24,12 +24,12 @@ Commercial traffic splits across three hosts with narrow, explicit responsibilit
 ```
 ┌─────────────────────────┐         ┌────────────────────────────┐         ┌──────────────┐
 │  arkfile.net            │         │  billing.arkfile.net       │         │  Processors  │
-│  (Arkfile app)          │  HMAC   │  (Entitlement Bridge)      │  API    │  Stripe, …   │
+│  (Arkfile app)          │  HMAC   │  (Subscription Bridge)      │  API    │  Stripe, …   │
 │                         │◄───────►│                            │◄───────►│              │
 │  username, files,       │         │  checkout_id join key      │         │              │
-│  checkout_id,           │         │  entitlement_ref           │         │              │
-│  entitlement_ref,       │         │  processor adapters        │         │              │
-│  plan entitlement       │         │  cus_/sub_ etc. (bridge    │         │              │
+│  checkout_id,           │         │  subscription_ref           │         │              │
+│  subscription_ref,       │         │  processor adapters        │         │              │
+│  plan subscription       │         │  cus_/sub_ etc. (bridge    │         │              │
 │                         │         │  DB only, never in Arkfile)│         │              │
 └─────────────────────────┘         └────────────────────────────┘         └──────────────┘
 
@@ -41,11 +41,11 @@ Commercial traffic splits across three hosts with narrow, explicit responsibilit
 
 | Host | Knows | Must not know |
 |---|---|---|
-| **Arkfile** | username, plan catalog, entitlement status, storage, meter state | Processor customer/subscription IDs, card data, processor webhooks |
-| **Entitlement Bridge** | processor objects, checkout sessions, `checkout_id`, `entitlement_ref` | Usernames, file data, OPAQUE secrets |
+| **Arkfile** | username, plan catalog, subscription status, storage, meter state | Processor customer/subscription IDs, card data, processor webhooks |
+| **Subscription Bridge** | processor objects, checkout sessions, `checkout_id`, `subscription_ref` | Usernames, file data, OPAQUE secrets |
 | **BTCPay** | one-off invoice amounts, opaque `invoice_id` in metadata | Same as today; not used for recurring subscription lifecycle |
 
-The BTCPay Stripe Payments plugin remains in scope **only** for fiat settlement on BTCPay top-up invoices. BTCPay native subscriptions (credit-balance or manual renewal) are not the v1 subscription backend. Recurring card pull billing lives entirely on the Entitlement Bridge.
+The BTCPay Stripe Payments plugin remains in scope **only** for fiat settlement on BTCPay top-up invoices. BTCPay native subscriptions (credit-balance or manual renewal) are not the v1 subscription backend. Recurring card pull billing lives entirely on the Subscription Bridge.
 
 ## Privacy and identity correlation
 
@@ -53,7 +53,7 @@ Arkfile's privacy posture depends on minimizing what payment systems can correla
 
 **Opaque checkout linking.** When a user starts checkout, Arkfile creates a local `subscription_checkouts` row with a random `checkout_id` (`subchk_<uuid>`). Only that opaque ID crosses to the bridge and, through the bridge, into processor metadata. Usernames are never placed in bridge tokens, processor metadata, or callback payloads. This mirrors the existing top-up pattern where BTCPay invoice metadata carries only `invoice_id` while `payment_invoices.username` stays local.
 
-**What Arkfile stores.** `checkout_id` and `entitlement_ref` (`ent_<uuid>`) are the only payment-side identifiers in the Arkfile database. No `cus_*`, `sub_*`, or processor price IDs.
+**What Arkfile stores.** `checkout_id` and `subscription_ref` (`sub_<uuid>`) are the only payment-side identifiers in the Arkfile database. No `cus_*`, `sub_*`, or processor price IDs.
 
 **Residual exposure (document honestly).** Card subscribers opt into processor-side financial identity. Hosted checkout pages on the bridge or processor may invite the user to enter an email for receipts. Arkfile must not pre-fill email or real names into bridge start tokens. An operator with access to both Arkfile and bridge databases could manually join `checkout_id` to username; mitigate with separate VPS credentials, minimal staff access, and separate audit trails. Crypto PAYG top-ups via BTCPay remain the higher-privacy funding path. Card subscriptions are a user-opt-in convenience tier, not a zero-knowledge payment path. See persona notes in `docs/AGENTS.md` (cross-border records, self-hosted operator).
 
@@ -70,14 +70,14 @@ Every new user gets immediate access (auto-approval when configured) with:
 
 ### Subscription
 
-User selects a plan from the operator-defined catalog. While entitlement status is **active** or **trialing**:
+User selects a plan from the operator-defined catalog. While subscription status is **active** or **trialing**:
 
 - **Effective storage cap** is the higher of admin baseline and plan limit (see Storage limit source of truth). `users.storage_limit_bytes` is not mutated.
 - **PAYG metering is off** — flat monthly fee covers storage up to the plan limit; no new `usage` rows while subscribed.
 - User is **not** subject to the PAYG negative-balance upload cap.
 - **BTCPay top-ups are not allowed** while subscribed (server, web UI, and `arkfile-client`).
 
-When entitlement **ends** (cancel, expiry, failed payment after grace):
+When subscription **ends** (cancel, expiry, failed payment after grace):
 
 - Effective cap reverts to admin baseline only. PAYG meter resumes if instance PAYG is enabled. Existing PAYG balance is unchanged.
 
@@ -101,7 +101,7 @@ Every account is in exactly one **billing mode** at a time (`billing_mode` on `/
 
 **Prepaid PAYG balance** lives in Arkfile (`user_credits`). Users add funds via BTCPay top-ups. Hourly usage accumulates and is deducted once per day (daily settlement). Subscription fees never post to this balance in v1.
 
-**Subscription plan fees** are billed by the Entitlement Bridge and card processor (`billing.arkfile.net`). Plan payments do not increase or decrease the PAYG balance. Receipt history for subscriptions is on the processor or bridge side, not in `credit_transactions`.
+**Subscription plan fees** are billed by the Subscription Bridge and card processor (`billing.arkfile.net`). Plan payments do not increase or decrease the PAYG balance. Receipt history for subscriptions is on the processor or bridge side, not in `credit_transactions`.
 
 ### Billing modes
 
@@ -123,7 +123,7 @@ Operators may still grant a higher **baseline storage cap** via `arkfile-admin s
 
 ### Gift subscriptions (operator-granted, no payment)
 
-**Gift subscriptions** are time-limited plan entitlements created only on Arkfile (`source = gift`). They use the same meter pause, effective storage cap, and top-up block rules as paid subscriptions while active, but **never touch the Entitlement Bridge or a payment processor**.
+**Gift subscriptions** are time-limited plan subscriptions created only on Arkfile (`source = gift`). They use the same meter pause, effective storage cap, and top-up block rules as paid subscriptions while active, but **never touch the Subscription Bridge or a payment processor**.
 
 | Action | Command / path |
 |---|---|
@@ -133,12 +133,12 @@ Operators may still grant a higher **baseline storage cap** via `arkfile-admin s
 
 **Duration (locked).** Default **30 days** when `--days` is omitted. Maximum **90 days** per grant (`--days` validated server-side; requests above 90 return **400**). Gifts do not auto-renew; when `current_period_end` passes, status becomes `expired` and PAYG resumes.
 
-**One active entitlement per user.** `grant-gift-subscription` is rejected (**409**) if the user already has an active or trialing subscription with `source = bridge` (or an active gift — extend by canceling the gift first or wait for expiry).
+**One active subscription per user.** `grant-gift-subscription` is rejected (**409**) if the user already has an active or trialing subscription with `source = bridge` (or an active gift — extend by canceling the gift first or wait for expiry).
 
-**No admin cancel for paid plans.** Arkfile admin **must not** expose a command that revokes local entitlement for bridge-backed subscriptions without canceling at the processor. That pattern invites sysadmin misuse (vault access removed while Stripe keeps charging). Paid lifecycle changes happen only through:
+**No admin cancel for paid plans.** Arkfile admin **must not** expose a command that revokes local subscription for bridge-backed subscriptions without canceling at the processor. That pattern invites sysadmin misuse (vault access removed while Stripe keeps charging). Paid lifecycle changes happen only through:
 
 1. **User self-service** — web billing panel or `arkfile-client subscription portal` (bridge → processor portal).
-2. **Operator support** — cancel in the **Stripe dashboard** or bridge ops CLI (`bridge show-entitlement`, processor dashboard); Arkfile picks up changes via entitlement webhooks or `subscriptions sync --user`.
+2. **Operator support** — cancel in the **Stripe dashboard** or bridge ops CLI (`bridge show-subscription`, processor dashboard); Arkfile picks up changes via subscription bridge webhooks or `subscriptions sync --user`.
 3. **Verification** — `subscriptions show --user` and `subscriptions sync --user` after operator action.
 
 There is no `arkfile-admin subscriptions cancel` for paid subscriptions.
@@ -178,7 +178,7 @@ Storage limits confused operators when subscribe/cancel logic mutated `users.sto
 
 **Admin baseline (`users.storage_limit_bytes`).** Set at registration (default 1 GiB) and changed only by `arkfile-admin set-storage`. Never modified by subscribe, cancel, or webhooks.
 
-**Plan limit (`subscription_plans.storage_limit_bytes`).** Operator-defined entitlement for each catalog row.
+**Plan limit (`subscription_plans.storage_limit_bytes`).** Operator-defined storage limit for each catalog row.
 
 **Effective upload cap (computed, never stored).**
 
@@ -202,7 +202,7 @@ All upload gates call `EffectiveStorageLimit(username)`. `CheckStorageAvailable`
 ```
 User: alice
   Baseline storage (admin):     1.0 GB
-  Entitlement:                  active (ent_a8f3… via bridge)
+  Subscription:                 active (sub_a8f3… via bridge)
   Plan:                         500 GB ($9/mo) until 2026-07-26
   Effective upload cap:         500 GB
   Billing mode:                 subscribed (usage meter paused; top-ups disabled)
@@ -215,7 +215,7 @@ User: alice
 ```
 User: bob
   Baseline storage (admin):     1.0 GB
-  Entitlement:                  active (ent_gift_c4… via gift)
+  Subscription:                 active (sub_gift_c4… via gift)
   Plan:                         500 GB (gift, 22 days remaining)
   Effective upload cap:         500 GB
   Billing mode:                 subscribed (usage meter paused; top-ups disabled)
@@ -228,7 +228,7 @@ Gates are evaluated in this order. Document and implement consistently.
 
 1. **`is_approved`** — unchanged; unapproved users blocked regardless of plan.
 2. **Storage hard cap** — `EffectiveStorageLimit` as defined above.
-3. **Subscription `past_due`** — after operator-configured grace from bridge `entitlement.past_due` event: block uploads; login and download/delete/export remain allowed.
+3. **Subscription `past_due`** — after operator-configured grace from bridge `subscription.past_due` event: block uploads; login and download/delete/export remain allowed.
 4. **PAYG meter** — skip `TickUser` when user has active or trialing subscription and instance subscriptions enabled.
 5. **Free baseline in projection** — for subscribed users, treat effective free baseline as plan storage limit so `billable_bytes = 0` in UI while under cap.
 6. **PAYG upload cap (402)** — apply only when `ShouldApplyPaygUploadCap` is true (PAYG active, not subscribed).
@@ -236,7 +236,7 @@ Gates are evaluated in this order. Document and implement consistently.
 
 **Mid-period PAYG accumulator.** Covered by **When user subscribes** in the PAYG and metering gating matrix: `FinalizePaygBeforeSubscribe` runs a final partial tick and settlement before `ShouldMeter` becomes false.
 
-## Entitlement Bridge Protocol v1
+## Subscription Bridge Protocol v1
 
 The bridge and Arkfile communicate through one canonical protocol. Any processor adapter inside the bridge (Stripe v1, others later) must emit these events. Arkfile implements only this contract — not Stripe, Adyen, or Mollie webhooks directly.
 
@@ -249,20 +249,20 @@ The bridge and Arkfile communicate through one canonical protocol. Any processor
 5. Bridge validates token, maps `plan_id` to processor SKU in bridge config, creates hosted checkout with processor metadata `{ "checkout_id": "<id>" }` only.
 6. User completes payment on bridge/processor hosted pages. User may optionally enter email on those pages; Arkfile does not supply it.
 
-### Inbound: entitlement lifecycle (bridge → Arkfile)
+### Inbound: subscription lifecycle (bridge → consumer app)
 
-Single endpoint: `POST /api/webhooks/entitlements`
+Single endpoint: `POST /api/webhooks/subscription-bridge`
 
-Header: `Entitlement-Bridge-Signature: t=<unix>,v1=<hmac_sha256_hex>` over raw body (timestamp + HMAC, replay window ~5 minutes).
+Header: `Subscription-Bridge-Signature: t=<unix>,v1=<hmac_sha256_hex>` over raw body (timestamp + HMAC, replay window ~5 minutes).
 
 ```json
 {
-  "protocol": "entitlement-bridge",
+  "protocol": "subscription-bridge",
   "version": 1,
   "event_id": "evt_uuid",
-  "event_type": "entitlement.activated",
+  "event_type": "subscription.activated",
   "checkout_id": "subchk_...",
-  "entitlement_ref": "ent_...",
+  "subscription_ref": "ent_...",
   "plan_id": "plan_500gb",
   "status": "active",
   "current_period_start": "2026-06-26T00:00:00Z",
@@ -275,14 +275,14 @@ Header: `Entitlement-Bridge-Signature: t=<unix>,v1=<hmac_sha256_hex>` over raw b
 
 | `event_type` | Arkfile action |
 |---|---|
-| `entitlement.activated` | Run `FinalizePaygBeforeSubscribe`; link `entitlement_ref`; upsert `user_subscriptions` with status `active` or `trialing` |
-| `entitlement.renewed` | Extend `current_period_end` (and `current_period_start` if provided) |
-| `entitlement.past_due` | Set status `past_due`; start grace timer for upload block |
-| `entitlement.canceled` | Set `cancel_at_period_end` or immediate cancel per payload |
-| `entitlement.expired` | Set status `expired`; meter resumes |
-| `entitlement.plan_changed` | Update `plan_id` (v1: apply immediately) |
+| `subscription.activated` | Run `FinalizePaygBeforeSubscribe`; link `subscription_ref`; upsert `user_subscriptions` with status `active` or `trialing` |
+| `subscription.renewed` | Extend `current_period_end` (and `current_period_start` if provided) |
+| `subscription.past_due` | Set status `past_due`; start grace timer for upload block |
+| `subscription.canceled` | Set `cancel_at_period_end` or immediate cancel per payload |
+| `subscription.expired` | Set status `expired`; meter resumes |
+| `subscription.plan_changed` | Update `plan_id` (v1: apply immediately) |
 
-**Lookup:** prefer `entitlement_ref` when present; on first activation, fall back to `checkout_id` → local checkout row → username.
+**Lookup:** prefer `subscription_ref` when present; on first activation, fall back to `checkout_id` → local checkout row → username.
 
 **Idempotency:** insert `subscription_events` keyed on `event_id`; duplicate events are no-ops.
 
@@ -291,21 +291,21 @@ Header: `Entitlement-Bridge-Signature: t=<unix>,v1=<hmac_sha256_hex>` over raw b
 ### Portal (manage / cancel / update payment method)
 
 1. User `POST /api/subscriptions/portal` (authenticated).
-2. Arkfile reads `entitlement_ref` from active subscription (never sends username to bridge).
-3. Arkfile returns `{ "portal_url": "https://billing.arkfile.net/v1/portal?token=..." }` where token is HMAC-signed `{ entitlement_ref, exp, return_url }`.
+2. Arkfile reads `subscription_ref` from active subscription (never sends username to bridge).
+3. Arkfile returns `{ "portal_url": "https://billing.arkfile.net/v1/portal?token=..." }` where token is HMAC-signed `{ subscription_ref, exp, return_url }`.
 4. Bridge creates processor portal session and redirects user.
 
 ### Sync (reconcile missed webhooks)
 
 Arkfile scheduler or `arkfile-admin subscriptions sync --user` calls bridge:
 
-`GET https://billing.arkfile.net/v1/entitlements/{entitlement_ref}` with HMAC auth.
+`GET https://billing.arkfile.net/v1/subscriptions/{subscription_ref}` with HMAC auth.
 
 Response uses the same field shape as callback payloads (without `event_id`). Arkfile reconciles local status and period dates. Bridge is source of truth for payment state; Arkfile is source of truth for storage and meter behavior.
 
 ## Multi-processor strategy
 
-Processor diversity is isolated inside the Entitlement Bridge. Arkfile never imports processor SDKs for subscriptions and never stores processor-native IDs.
+Processor diversity is isolated inside the Subscription Bridge. Arkfile never imports processor SDKs for subscriptions and never stores processor-native IDs.
 
 **Plan SKU mapping on the bridge.** Arkfile's `subscription_plans.plan_id` (e.g. `plan_500gb`) is the only commercial SKU in the vault database. Bridge configuration maps each `plan_id` to processor-specific offers:
 
@@ -330,12 +330,12 @@ Split commercial modes so private and gratis instances can disable layers indepe
 |---|---|
 | `ARKFILE_BILLING_ENABLED` | Master switch: scheduler runs; billing APIs respond; projection in `/api/credits` |
 | `ARKFILE_BILLING_PAYG_ENABLED` (new) | Hourly meter + daily sweep + PAYG negative upload cap |
-| `ARKFILE_SUBSCRIPTIONS_ENABLED` (new) | Plan catalog, checkout redirect, entitlement webhook, subscription UI **and arkfile-client subscription commands** |
+| `ARKFILE_SUBSCRIPTIONS_ENABLED` (new) | Plan catalog, checkout redirect, subscription bridge webhook, subscription UI **and arkfile-client subscription commands** |
 | `ARKFILE_PAYMENTS_ENABLED` | BTCPay one-off top-ups (existing) |
 
 Suggested defaults: **private / gratis** — all false. **Hosted PAYG-only** — billing + PAYG + payments on, subscriptions off. **Hosted with tiers** — all relevant flags on.
 
-Startup validation when subscriptions enabled: require `ARKFILE_ENTITLEMENT_BRIDGE_URL` and `ARKFILE_ENTITLEMENT_BRIDGE_WEBHOOK_SECRET`. Do **not** require processor API keys on Arkfile.
+Startup validation when subscriptions enabled: require `ARKFILE_SUBSCRIPTION_BRIDGE_URL` and `ARKFILE_SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET`. Do **not** require processor API keys on Arkfile.
 
 ## Configuration
 
@@ -343,8 +343,8 @@ Startup validation when subscriptions enabled: require `ARKFILE_ENTITLEMENT_BRID
 
 ```
 ARKFILE_SUBSCRIPTIONS_ENABLED=false
-ARKFILE_ENTITLEMENT_BRIDGE_URL=https://billing.arkfile.net
-ARKFILE_ENTITLEMENT_BRIDGE_WEBHOOK_SECRET=
+ARKFILE_SUBSCRIPTION_BRIDGE_URL=https://billing.arkfile.net
+ARKFILE_SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET=
 ARKFILE_SUBSCRIPTION_RETURN_URL=          # default: app origin /?subscription=return
 ARKFILE_GIFT_SUBSCRIPTION_DEFAULT_DAYS=30   # grant-gift-subscription when --days omitted
 ARKFILE_GIFT_SUBSCRIPTION_MAX_DAYS=90     # hard cap on --days / API days field
@@ -352,9 +352,9 @@ ARKFILE_GIFT_SUBSCRIPTION_MAX_DAYS=90     # hard cap on --days / API days field
 
 No Stripe, Adyen, Mollie, or Worldpay keys on the Arkfile host.
 
-### Entitlement Bridge (separate VPS, out of Arkfile repo for v1)
+### Subscription Bridge (separate VPS, out of Arkfile repo for v1)
 
-Bridge holds processor credentials, plan SKU mapping, bridge database, and adapter code. Deployment follows the same isolation principles as `docs/wip/alma-pay-server.md` (dedicated unprivileged runtime user, Caddy TLS, rootless Podman). Full bridge service specification: `docs/wip/entitlement-bridge.md`. This document defines the Arkfile-side consumer contract only.
+Bridge holds processor credentials, plan SKU mapping, bridge database, and adapter code. Deployment follows the same isolation principles as `docs/wip/alma-pay-server.md` (dedicated unprivileged runtime user, Caddy TLS, rootless Podman). Full bridge service specification: `docs/wip/subscription-bridge.md`. This document defines the Arkfile-side consumer contract only.
 
 ## Database schema (implemented)
 
@@ -393,7 +393,7 @@ CREATE TABLE IF NOT EXISTS subscription_checkouts (
     plan_id TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK(status IN ('pending', 'completed', 'expired', 'canceled')),
-    entitlement_ref TEXT UNIQUE,
+    subscription_ref TEXT UNIQUE,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (username) REFERENCES users(username) ON DELETE RESTRICT,
@@ -401,8 +401,8 @@ CREATE TABLE IF NOT EXISTS subscription_checkouts (
 );
 CREATE INDEX IF NOT EXISTS idx_subscription_checkouts_username
     ON subscription_checkouts(username);
-CREATE INDEX IF NOT EXISTS idx_subscription_checkouts_entitlement_ref
-    ON subscription_checkouts(entitlement_ref);
+CREATE INDEX IF NOT EXISTS idx_subscription_checkouts_subscription_ref
+    ON subscription_checkouts(subscription_ref);
 ```
 
 ### `user_subscriptions`
@@ -415,7 +415,7 @@ CREATE TABLE IF NOT EXISTS user_subscriptions (
     username TEXT NOT NULL,
     plan_id TEXT NOT NULL,
     checkout_id TEXT NOT NULL,
-    entitlement_ref TEXT UNIQUE NOT NULL,
+    subscription_ref TEXT UNIQUE NOT NULL,
     status TEXT NOT NULL CHECK (status IN (
         'active', 'past_due', 'canceled', 'expired', 'trialing'
     )),
@@ -432,12 +432,12 @@ CREATE TABLE IF NOT EXISTS user_subscriptions (
 );
 CREATE INDEX IF NOT EXISTS idx_user_subscriptions_username ON user_subscriptions(username);
 CREATE INDEX IF NOT EXISTS idx_user_subscriptions_status ON user_subscriptions(status);
-CREATE INDEX IF NOT EXISTS idx_user_subscriptions_entitlement_ref ON user_subscriptions(entitlement_ref);
+CREATE INDEX IF NOT EXISTS idx_user_subscriptions_subscription_ref ON user_subscriptions(subscription_ref);
 ```
 
 `source = gift` for operator grants via `grant-gift-subscription` only. Synthetic identifiers (no bridge):
 
-- `entitlement_ref`: `ent_gift_<uuid>`
+- `subscription_ref`: `sub_gift_<uuid>`
 - `checkout_id`: `subchk_gift_<uuid>` with a matching `subscription_checkouts` row (`status = completed`) to satisfy the FK
 
 Gift rows set `current_period_end = current_period_start + N days` where **N defaults to 30** and **N ≤ 90**. Optional `gift_note` (operator audit) may live in a TEXT column on `user_subscriptions` or in `subscription_events` payload at grant time — implementer choice; document in admin `show` output.
@@ -453,7 +453,7 @@ CREATE TABLE IF NOT EXISTS subscription_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id TEXT UNIQUE NOT NULL,
     event_type TEXT NOT NULL,
-    entitlement_ref TEXT,
+    subscription_ref TEXT,
     checkout_id TEXT,
     username TEXT,
     plan_id TEXT,
@@ -487,8 +487,8 @@ Wire into:
 - `handlers/payments.go` — reject invoice create when `ShouldAllowTopUp` is false
 - `handlers/billing_projection.go` — add `subscription` block and `billing_mode` to `/api/credits`
 - `handlers/uploads.go` — storage cap and PAYG cap guards
-- `billing/scheduler.go` — optional entitlement reconcile tick (daily or piggyback on sweep)
-- Entitlement webhook handler — call `FinalizePaygBeforeSubscribe` on `entitlement.activated`
+- `billing/scheduler.go` — optional subscription reconcile tick (daily or piggyback on sweep)
+- Subscription bridge webhook handler — call `FinalizePaygBeforeSubscribe` on `subscription.activated`
 
 Extend `buildBillingProjection` response:
 
@@ -512,7 +512,7 @@ Extend `buildBillingProjection` response:
 
 `billing_mode` is the single client-facing field: `free`, `payg`, or `subscribed`. Same values in web UI, `arkfile-client`, and `/api/credits`. Matches `EffectiveBillingMode()` in the resolver.
 
-When subscriptions disabled globally, omit or null the block (same pattern as `payments` in `/api/credits`). Do not expose raw `entitlement_ref` or `checkout_id` to the browser unless needed for return-URL polling; prefer status-only responses on public APIs.
+When subscriptions disabled globally, omit or null the block (same pattern as `payments` in `/api/credits`). Do not expose raw `subscription_ref` or `checkout_id` to the browser unless needed for return-URL polling; prefer status-only responses on public APIs.
 
 ## Backend: HTTP API (implemented)
 
@@ -541,20 +541,20 @@ Same rule in **`arkfile-client billing top-up`** (client-side pre-check from `/a
 |---|---|---|
 | GET/POST | `/api/admin/subscriptions/plans` | List / create / update plans |
 | GET | `/api/admin/subscriptions/users/:username` | Subscription detail + checkout history |
-| POST | `/api/admin/subscriptions/users/:username/grant-gift-subscription` | Body: `{ "plan_id", "days"?: 30 default, max 90, "note"?: "..." }` — `source=gift` only; **409** if user has active `source=bridge` entitlement |
+| POST | `/api/admin/subscriptions/users/:username/grant-gift-subscription` | Body: `{ "plan_id", "days"?: 30 default, max 90, "note"?: "..." }` — `source=gift` only; **409** if user has active `source=bridge` subscription |
 | POST | `/api/admin/subscriptions/users/:username/cancel-gift-subscription` | End gift early; **409** if active row is `source=bridge` (“use portal or processor dashboard for paid plans”) |
-| POST | `/api/admin/subscriptions/users/:username/sync` | Poll bridge for `entitlement_ref` (`source=bridge` only) |
-| POST | `/api/admin/subscriptions/reconcile` | Bulk sync active entitlements nearing expiry |
+| POST | `/api/admin/subscriptions/users/:username/sync` | Poll bridge for `subscription_ref` (`source=bridge` only) |
+| POST | `/api/admin/subscriptions/reconcile` | Bulk sync active bridge subscriptions nearing expiry |
 
 ### Webhooks
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/api/webhooks/entitlements` | Entitlement Bridge lifecycle (HMAC signed) |
+| POST | `/api/webhooks/subscription-bridge` | Subscription Bridge lifecycle (HMAC signed) |
 
 Register only when subscriptions enabled. No per-processor webhook routes on Arkfile.
 
-There is no public API to activate a subscription by username. All bridge activations resolve through `checkout_id` or `entitlement_ref` locally.
+There is no public API to activate a subscription by username. All bridge activations resolve through `checkout_id` or `subscription_ref` locally.
 
 ## Lifecycle and robustness
 
@@ -562,7 +562,7 @@ Webhook delivery is the primary path; reconcile is part of normal operations, no
 
 | Source | When |
 |---|---|
-| Bridge webhook | Real-time entitlement changes (`source=bridge`) |
+| Bridge webhook | Real-time subscription changes (`source=bridge`) |
 | Scheduler reconcile | Daily: **`source=bridge`** rows with `current_period_end` within window or past; call bridge GET |
 | Scheduler gift expiry | Daily: **`source=gift`** rows past `current_period_end` → set `expired` locally (no bridge call) |
 | Admin sync/reconcile | Manual repair after bridge or network outage (`source=bridge` only) |
@@ -574,7 +574,7 @@ Webhook delivery is the primary path; reconcile is part of normal operations, no
 | `canceled` (at period end) | Allowed until `current_period_end` | Off until end | **Blocked** until period ends | |
 | `expired`, `canceled` (immediate) | Baseline cap only | On if PAYG enabled | Allowed | |
 
-On `entitlement.activated`: `FinalizePaygBeforeSubscribe`, then meter off.
+On `subscription.activated`: `FinalizePaygBeforeSubscribe`, then meter off.
 
 ## arkfile-admin (implemented)
 
@@ -584,10 +584,10 @@ Command group **`subscriptions`** in `cmd/arkfile-admin/subscriptions_commands.g
 |---|---|
 | `subscriptions list-plans [--json]` | Catalog |
 | `subscriptions set-plan --plan-id ID --name NAME --price USD --storage LIMIT [--active]` | Create/update plan |
-| `subscriptions show --user USER [--json]` | Baseline, plan, effective cap, entitlement summary |
+| `subscriptions show --user USER [--json]` | Baseline, plan, effective cap, subscription summary |
 | `subscriptions grant-gift-subscription --user USER --plan-id ID [--days N] [--note NOTE]` | Gift grant; **default 30 days**, **max 90**; runs `FinalizePaygBeforeSubscribe` |
 | `subscriptions cancel-gift-subscription --user USER [--immediate]` | End gift only; fails with clear error if `source=bridge` |
-| `subscriptions sync --user USER` | Poll bridge by `entitlement_ref` (paid subs only) |
+| `subscriptions sync --user USER` | Poll bridge by `subscription_ref` (paid subs only) |
 | `subscriptions reconcile` | Bulk sync bridge-backed rows |
 
 Extend **`billing show --user`** and **`user-status`** to include subscription summary when enabled.
@@ -609,7 +609,7 @@ End-user billing and subscriptions match the web billing panel (see **Client par
 
 **Top-up while subscribed:** command exits with clear error if `billing_mode` is `subscribed`; server returns 409 if invoked anyway.
 
-### `subscription` (plans and Entitlement Bridge checkout)
+### `subscription` (plans and Subscription Bridge checkout)
 
 | Command | Purpose |
 |---|---|
@@ -685,9 +685,9 @@ Playwright: billing top-up modal is covered in `e2e-playwright.ts`; dedicated su
 Implemented and passing in CI/dev:
 
 - `billing/effective_test.go`, `billing/effective_extended_test.go` — mode, limits, `ShouldMeter`, `ShouldAllowTopUp`, PAYG cap skip when subscribed
-- `billing/subscription_test.go`, `billing/subscription_testdb_test.go` — `FinalizePaygBeforeSubscribe`, entitlement callback state transitions (`activated`, `renewed`, `past_due`, `expired`, `plan_changed`), gift grant/cancel rules
+- `billing/subscription_test.go`, `billing/subscription_testdb_test.go` — `FinalizePaygBeforeSubscribe`, subscription bridge callback state transitions (`activated`, `renewed`, `past_due`, `expired`, `plan_changed`), gift grant/cancel rules
 - `billing/meter_subscription_test.go`, `billing/sweep_subscription_test.go` — meter and sweep skip for subscribed users
-- `entitlements/hmac_test.go` — webhook signature verification and replay window
+- `subbridge/hmac_test.go` — webhook signature verification and replay window
 - `handlers/subscriptions_test.go`, `handlers/billing_projection_test.go` — user/admin HTTP handlers, `/api/credits` projection, top-up 409, `past_due` upload gate after grace
 - `handlers/payments_test.go` — top-up 409 when subscribed (with subscription test helpers)
 - `config/config_test.go` — subscription env validation
@@ -695,9 +695,9 @@ Implemented and passing in CI/dev:
 
 ### Shell e2e (done)
 
-**`run_subscriptions`** group in `scripts/testing/e2e-test.sh` (after `run_payments`), using `scripts/testing/entitlement-bridge-mock.go` on `:8081`. Verified as part of the full suite (**212 tests**, June 2026 dev-reset run):
+**`run_subscriptions`** group in `scripts/testing/e2e-test.sh` (after `run_payments`), using `scripts/testing/subscription-bridge-mock.go` on `:8081`. Verified as part of the full suite (**212 tests**, June 2026 dev-reset run):
 
-- Mock Entitlement Bridge start
+- Mock Subscription Bridge start
 - Dev plan `plan_dev_250gb` present (admin list-plans; exercises rqlite plan reads)
 - Gift grant, credits projection (`billing_mode: subscribed`, 250 GiB effective cap), admin `subscriptions show`
 - CLI: `billing show`, `subscription status`, `subscription plans` while subscribed
@@ -708,7 +708,7 @@ Implemented and passing in CI/dev:
 - Bridge checkout → mock `/v1/mock/activate` webhook → subscribed (`source: bridge`)
 - Grant gift **409** and cancel-gift **409** while bridge subscription active
 - Invoice/CLI top-up blocked while bridge subscribed
-- Duplicate entitlement webhook idempotent (replay snapshot from mock `GET /v1/entitlements/{ref}`)
+- Duplicate subscription bridge webhook idempotent (replay snapshot from mock `GET /v1/subscriptions/{ref}`)
 - Mock `/v1/mock/expire` → not subscribed; invoice allowed again
 
 Session reuse: `run_subscriptions` reuses the test-user session from `run_payments` when still valid (`ensure_user_session`), avoiding extra TOTP login cycles.
@@ -725,16 +725,16 @@ Foundation prerequisites remain e2e-verified in earlier groups: billing meter/sw
 1. **Schema + resolver + admin plan CRUD** — **Done.** Unified schema, `billing/effective.go`, admin plan CRUD and gift commands, dev seed plan.
 2. **Meter/storage/top-up integration** — **Done.** `ShouldMeter`, sweep skip, `ShouldAllowTopUp`, `FinalizePaygBeforeSubscribe`, upload gates, `/api/credits` projection; scheduler gift expiry and bridge reconcile hooks in `billing/scheduler.go`.
 3. **Web billing panel + arkfile-client billing/subscription commands** — **Done.** `billing.ts` subscription UI; `cmd/arkfile-client/billing_commands.go` and `subscription_commands.go`.
-4. **Entitlement webhook + checkout redirect on Arkfile** — **Done on vault host.** User/admin APIs, `POST /api/webhooks/entitlements`, mock bridge + full `run_subscriptions` e2e.
-5. **Entitlement Bridge VPS + Stripe adapter** — **Not started.** Production `billing.arkfile.net` service (separate repo/deployment per `docs/wip/entitlement-bridge.md`).
+4. **Subscription bridge webhook + checkout redirect on Arkfile** — **Done on vault host.** User/admin APIs, `POST /api/webhooks/subscription-bridge`, mock bridge + full `run_subscriptions` e2e.
+5. **Subscription Bridge VPS + Stripe adapter** — **Not started.** Production `billing.arkfile.net` service (separate repo/deployment per `docs/wip/subscription-bridge.md`).
 6. **Playwright subscription coverage + user/docs polish** — **Partial.** Playwright top-up exists; subscription-specific browser tests, `docs/user-faq.md`, `docs/api.md`, and `docs/scripts-guide.md` client billing section remain open.
 
 ## Documentation updates (when implemented)
 
 | File | Change | Status |
 |---|---|---|
-| `docs/wip/entitlement-bridge.md` | Bridge service spec, deployment, processor adapters | Spec exists; production deploy not done |
-| `docs/wip/payments.md` | Cross-link: top-ups = BTCPay PAYG; top-up 409 when subscribed; subscriptions = Entitlement Bridge | TODO |
+| `docs/wip/subscription-bridge.md` | Bridge service spec, deployment, processor adapters | Spec exists; production deploy not done |
+| `docs/wip/payments.md` | Cross-link: top-ups = BTCPay PAYG; top-up 409 when subscribed; subscriptions = Subscription Bridge | TODO |
 | `docs/user-faq.md` | Q&A prose: plans, cancel (portal for paid; gifts are operator-only), PAYG vs subscription, top-ups while subscribed | TODO |
 | `docs/api.md` | New endpoints; top-up 409 | TODO |
 | `docs/scripts-guide.md` | Admin CLI subscription commands; **arkfile-client billing/subscription** | TODO |
@@ -757,11 +757,11 @@ Foundation prerequisites remain e2e-verified in earlier groups: billing meter/sw
 
 ## Status
 
-**Arkfile subscription layer: implemented and e2e-verified (June 2026).** The vault host ships the full v1 consumer contract: schema, billing resolver, meter/top-up/upload integration, user and admin HTTP APIs, Entitlement Bridge webhook handler, `arkfile-admin subscriptions` commands, `arkfile-client billing` / `subscription` commands, billing panel subscription UI, dev mock bridge (`scripts/testing/entitlement-bridge-mock.go`), and **`run_subscriptions`** in `scripts/testing/e2e-test.sh` (26 subscription tests; **212/212** total e2e pass after dev-reset). Go unit tests cover resolver, entitlement callbacks, gift rules, top-up 409, webhook HMAC, and rqlite-safe plan scanning (`models.ScanBool` / `ScanInt64`).
+**Arkfile subscription layer: implemented and e2e-verified (June 2026).** The vault host ships the full v1 consumer contract: schema, billing resolver, meter/top-up/upload integration, user and admin HTTP APIs, Subscription Bridge webhook handler, `arkfile-admin subscriptions` commands, `arkfile-client billing` / `subscription` commands, billing panel subscription UI, dev mock bridge (`scripts/testing/subscription-bridge-mock.go`), and **`run_subscriptions`** in `scripts/testing/e2e-test.sh` (26 subscription tests; **212/212** total e2e pass after dev-reset). Go unit tests cover resolver, subscription bridge callbacks, gift rules, top-up 409, webhook HMAC, and rqlite-safe plan scanning (`models.ScanBool` / `ScanInt64`).
 
 **Still open for production:**
 
-- **Entitlement Bridge production service** at `billing.arkfile.net` (Stripe adapter, bridge DB, processor SKU mapping) — see `docs/wip/entitlement-bridge.md`; Arkfile is ready to consume it via existing URL, webhook secret, checkout redirect, and portal tokens.
+- **Subscription Bridge production service** at `billing.arkfile.net` (Stripe adapter, bridge DB, processor SKU mapping) — see `docs/wip/subscription-bridge.md`; Arkfile is ready to consume it via existing URL, webhook secret, checkout redirect, and portal tokens.
 - **Playwright** subscription-specific UI tests (plan cards, return URL, top-up hidden when subscribed).
 - **User and operator docs:** `docs/user-faq.md`, `docs/api.md`, `docs/scripts-guide.md`, cross-links in `docs/wip/payments.md`.
 
@@ -773,7 +773,7 @@ Foundation prerequisites remain e2e-verified in earlier groups: billing meter/sw
 - `docs/wip/storage-credits-v2.md` — microcent meter, settlement, free baseline
 - `docs/wip/payments.md` — BTCPay top-ups, opaque `invoice_id`, reconcile model
 - `docs/wip/alma-pay-server.md` — BTCPay hosting on Alma/Podman (pay host)
-- `docs/wip/entitlement-bridge.md` — bridge service spec, Stripe adapter, deployment
+- `docs/wip/subscription-bridge.md` — bridge service spec, Stripe adapter, deployment
 - `docs/wip/prod-prep/03-roadmap.md` — commercial layer sequencing
 - `handlers/billing_projection.go` — `/api/credits` projection
 - `client/static/js/src/ui/billing.ts` — billing panel UI

@@ -213,7 +213,7 @@ func RegisterRoutes() {
 	mfaProtectedGroup.POST("/api/billing/invoice", CreateInvoiceHandler)
 	mfaProtectedGroup.GET("/api/billing/invoice/:invoice_id", GetInvoiceStatusHandler)
 
-	// Subscriptions (Entitlement Bridge consumer)
+	// Subscriptions (Subscription Bridge consumer)
 	mfaProtectedGroup.GET("/api/subscriptions/plans", ListSubscriptionPlansHandler)
 	mfaProtectedGroup.GET("/api/subscriptions/me", GetMySubscriptionHandler)
 	mfaProtectedGroup.POST("/api/subscriptions/checkout", CreateSubscriptionCheckoutHandler)
@@ -221,7 +221,7 @@ func RegisterRoutes() {
 
 	// Webhook endpoints (public, unauthenticated)
 	Echo.POST("/api/webhooks/btcpay", BTCPayWebhookHandler)
-	Echo.POST("/api/webhooks/entitlements", EntitlementWebhookHandler)
+	Echo.POST("/api/webhooks/subscription-bridge", SubscriptionBridgeWebhookHandler)
 
 	// Admin API endpoints - structured for future expansion.
 	// Stack: JWTMiddleware (validates aud=arkfile-api, rejects temp tokens at signature/audience)

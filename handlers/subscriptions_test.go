@@ -8,36 +8,36 @@ import (
 	"testing"
 	"time"
 
-	"github.com/arkfile/Arkfile/entitlements"
+	"github.com/arkfile/Arkfile/subbridge"
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func signedEntitlementWebhookContext(t *testing.T, payload entitlements.CallbackPayload, secret string) (echo.Context, *httptest.ResponseRecorder) {
+func signedSubscriptionBridgeWebhookContext(t *testing.T, payload subbridge.CallbackPayload, secret string) (echo.Context, *httptest.ResponseRecorder) {
 	t.Helper()
 	body, err := json.Marshal(payload)
 	require.NoError(t, err)
-	sig := entitlements.SignWebhook(secret, body)
+	sig := subbridge.SignWebhook(secret, body)
 
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/entitlements", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/subscription-bridge", bytes.NewReader(body))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
-	req.Header.Set(entitlements.SignatureHeaderName, sig)
+	req.Header.Set(subbridge.SignatureHeaderName, sig)
 	rec := httptest.NewRecorder()
 	return e.NewContext(req, rec), rec
 }
 
-func handlerEntitlementPayload(eventType, eventID, checkoutID, entRef string) entitlements.CallbackPayload {
+func handlerSubscriptionBridgePayload(eventType, eventID, checkoutID, entRef string) subbridge.CallbackPayload {
 	now := time.Now().UTC()
-	return entitlements.CallbackPayload{
-		Protocol:           "entitlement-bridge",
+	return subbridge.CallbackPayload{
+		Protocol:           "subscription-bridge",
 		Version:            1,
 		EventID:            eventID,
 		EventType:          eventType,
 		CheckoutID:         checkoutID,
-		EntitlementRef:     entRef,
+		SubscriptionRef:     entRef,
 		PlanID:             subscriptionsTestPlanID,
 		Status:             "active",
 		CurrentPeriodStart: now.Format(time.RFC3339),
@@ -46,14 +46,14 @@ func handlerEntitlementPayload(eventType, eventID, checkoutID, entRef string) en
 	}
 }
 
-func TestEntitlementWebhookHandler_ValidSignature(t *testing.T) {
+func TestSubscriptionBridgeWebhookHandler_ValidSignature(t *testing.T) {
 	mock := startMockBTCPayServer(t, nil)
 	defer mock.Close()
 	db, cleanup := withSubscriptionsTestEnv(t, mock.URL)
 	defer cleanup()
 
 	checkoutID := "subchk_webhook_ok"
-	entRef := "ent_webhook_ok"
+	entRef := "sub_webhook_ok"
 	if _, err := db.Exec(
 		`INSERT INTO subscription_checkouts (checkout_id, username, plan_id, status) VALUES (?, ?, ?, 'pending')`,
 		checkoutID, paymentsTestUser, subscriptionsTestPlanID,
@@ -62,10 +62,10 @@ func TestEntitlementWebhookHandler_ValidSignature(t *testing.T) {
 	}
 
 	eventID := "evt_" + uuid.New().String()
-	payload := handlerEntitlementPayload("entitlement.activated", eventID, checkoutID, entRef)
-	c, rec := signedEntitlementWebhookContext(t, payload, subscriptionsTestSecret)
+	payload := handlerSubscriptionBridgePayload("subscription.activated", eventID, checkoutID, entRef)
+	c, rec := signedSubscriptionBridgeWebhookContext(t, payload, subscriptionsTestSecret)
 
-	err := EntitlementWebhookHandler(c)
+	err := SubscriptionBridgeWebhookHandler(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
@@ -76,37 +76,37 @@ func TestEntitlementWebhookHandler_ValidSignature(t *testing.T) {
 	assert.Equal(t, 1, eventCount)
 }
 
-func TestEntitlementWebhookHandler_RejectsBadSignature(t *testing.T) {
+func TestSubscriptionBridgeWebhookHandler_RejectsBadSignature(t *testing.T) {
 	mock := startMockBTCPayServer(t, nil)
 	defer mock.Close()
 	_, cleanup := withSubscriptionsTestEnv(t, mock.URL)
 	defer cleanup()
 
-	payload := handlerEntitlementPayload("entitlement.activated", "evt_bad", "subchk_bad", "ent_bad")
+	payload := handlerSubscriptionBridgePayload("subscription.activated", "evt_bad", "subchk_bad", "sub_bad")
 	body, _ := json.Marshal(payload)
 
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/entitlements", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/subscription-bridge", bytes.NewReader(body))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
-	req.Header.Set(entitlements.SignatureHeaderName, "t=1,v1=deadbeef")
+	req.Header.Set(subbridge.SignatureHeaderName, "t=1,v1=deadbeef")
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	err := EntitlementWebhookHandler(c)
+	err := SubscriptionBridgeWebhookHandler(c)
 	require.Error(t, err)
 	he, ok := err.(*echo.HTTPError)
 	require.True(t, ok)
 	assert.Equal(t, http.StatusUnauthorized, he.Code)
 }
 
-func TestEntitlementWebhookHandler_Idempotent(t *testing.T) {
+func TestSubscriptionBridgeWebhookHandler_Idempotent(t *testing.T) {
 	mock := startMockBTCPayServer(t, nil)
 	defer mock.Close()
 	db, cleanup := withSubscriptionsTestEnv(t, mock.URL)
 	defer cleanup()
 
 	checkoutID := "subchk_webhook_idem"
-	entRef := "ent_webhook_idem"
+	entRef := "sub_webhook_idem"
 	if _, err := db.Exec(
 		`INSERT INTO subscription_checkouts (checkout_id, username, plan_id, status) VALUES (?, ?, ?, 'pending')`,
 		checkoutID, paymentsTestUser, subscriptionsTestPlanID,
@@ -115,12 +115,12 @@ func TestEntitlementWebhookHandler_Idempotent(t *testing.T) {
 	}
 
 	eventID := "evt_" + uuid.New().String()
-	payload := handlerEntitlementPayload("entitlement.activated", eventID, checkoutID, entRef)
-	c1, _ := signedEntitlementWebhookContext(t, payload, subscriptionsTestSecret)
-	require.NoError(t, EntitlementWebhookHandler(c1))
+	payload := handlerSubscriptionBridgePayload("subscription.activated", eventID, checkoutID, entRef)
+	c1, _ := signedSubscriptionBridgeWebhookContext(t, payload, subscriptionsTestSecret)
+	require.NoError(t, SubscriptionBridgeWebhookHandler(c1))
 
-	c2, rec := signedEntitlementWebhookContext(t, payload, subscriptionsTestSecret)
-	require.NoError(t, EntitlementWebhookHandler(c2))
+	c2, rec := signedSubscriptionBridgeWebhookContext(t, payload, subscriptionsTestSecret)
+	require.NoError(t, SubscriptionBridgeWebhookHandler(c2))
 	assert.Equal(t, http.StatusOK, rec.Code)
 
 	var eventCount int
@@ -217,9 +217,9 @@ func TestCreateUploadSession_BlocksPastDueBeyondGrace(t *testing.T) {
 	defer cleanup()
 
 	checkoutID := "subchk_pastdue_upload"
-	entRef := "ent_pastdue_upload"
+	entRef := "sub_pastdue_upload"
 	if _, err := db.Exec(
-		`INSERT INTO subscription_checkouts (checkout_id, username, plan_id, status, entitlement_ref)
+		`INSERT INTO subscription_checkouts (checkout_id, username, plan_id, status, subscription_ref)
 		 VALUES (?, ?, ?, 'completed', ?)`,
 		checkoutID, paymentsTestUser, subscriptionsTestPlanID, entRef,
 	); err != nil {
@@ -228,7 +228,7 @@ func TestCreateUploadSession_BlocksPastDueBeyondGrace(t *testing.T) {
 	old := time.Now().UTC().Add(-8 * 24 * time.Hour)
 	if _, err := db.Exec(`
 		INSERT INTO user_subscriptions
-		  (username, plan_id, checkout_id, entitlement_ref, status, source, current_period_start, current_period_end, past_due_since)
+		  (username, plan_id, checkout_id, subscription_ref, status, source, current_period_start, current_period_end, past_due_since)
 		VALUES (?, ?, ?, ?, 'past_due', 'bridge', datetime('now', '-60 days'), datetime('now', '+1 day'), ?)`,
 		paymentsTestUser, subscriptionsTestPlanID, checkoutID, entRef, old,
 	); err != nil {

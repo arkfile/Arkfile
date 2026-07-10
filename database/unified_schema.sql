@@ -1,7 +1,7 @@
 -- Arkfile Complete Database Schema
 
 -- =====================================================
--- PHASE 1: CORE USER AND FILE MANAGEMENT TABLES
+-- CORE USER AND FILE MANAGEMENT TABLES
 -- =====================================================
 
 -- Users table (foundation for all other tables)
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS file_metadata (
 );
 
 -- =====================================================
--- PHASE 2: SYSTEM SECRETS (MASTER KEY ARCHITECTURE)
+-- SYSTEM SECRETS (MASTER KEY ARCHITECTURE)
 -- =====================================================
 
 -- Encrypted system keys (JWT, TOTP, OPAQUE, Bootstrap)
@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS system_keys (
 );
 
 -- =====================================================
--- PHASE 3: RFC-COMPLIANT OPAQUE AUTHENTICATION
+-- RFC-COMPLIANT OPAQUE AUTHENTICATION
 -- =====================================================
 
 -- OPAQUE server keys (single row table for server-wide keys)
@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS opaque_auth_sessions (
 );
 
 -- =====================================================
--- PHASE 4: JWT TOKEN MANAGEMENT
+-- JWT TOKEN MANAGEMENT
 -- =====================================================
 
 CREATE TABLE IF NOT EXISTS refresh_tokens (
@@ -191,7 +191,7 @@ CREATE TABLE IF NOT EXISTS mfa_backup_usage (
 );
 
 -- =====================================================
--- PHASE 6: FILE SHARING AND ENCRYPTION
+-- FILE SHARING AND ENCRYPTION
 -- =====================================================
 
 -- Cleanup: Remove deprecated file_shares table (superseded by file_share_keys)
@@ -218,7 +218,7 @@ CREATE TABLE IF NOT EXISTS file_share_keys (
 
 
 -- =====================================================
--- PHASE 7: CHUNKED UPLOAD SYSTEM
+-- CHUNKED UPLOAD SYSTEM
 -- =====================================================
 
 -- Upload sessions for chunked uploads
@@ -261,7 +261,7 @@ CREATE TABLE IF NOT EXISTS upload_chunks (
 );
 
 -- =====================================================
--- PHASE 8: SECURITY AND MONITORING
+-- SECURITY AND MONITORING
 -- =====================================================
 
 -- Security events with privacy-preserving entity identification
@@ -323,7 +323,7 @@ CREATE INDEX IF NOT EXISTS idx_registration_attempts_cleanup
     ON registration_attempts(created_at);
 
 -- =====================================================
--- PHASE 9: OPERATIONAL MONITORING
+-- OPERATIONAL MONITORING
 -- =====================================================
 
 -- Entity ID configuration and master secret storage
@@ -365,7 +365,7 @@ CREATE TABLE IF NOT EXISTS security_alerts (
 );
 
 -- =====================================================
--- PHASE 10: ACTIVITY LOGGING
+-- ACTIVITY LOGGING
 -- =====================================================
 
 -- User activity tracking
@@ -390,7 +390,7 @@ CREATE TABLE IF NOT EXISTS admin_logs (
 );
 
 -- =====================================================
--- PHASE 11: CREDITS AND BILLING SYSTEM
+-- CREDITS AND BILLING SYSTEM
 -- =====================================================
 
 -- User credit balances. Denominated in microcents (1 USD = 100 cents = 100,000,000 microcents).
@@ -480,7 +480,7 @@ CREATE TABLE IF NOT EXISTS payment_invoices (
 );
 
 -- =====================================================
--- PHASE 11b: SUBSCRIPTION PLANS AND ENTITLEMENTS
+-- SUBSCRIPTION PLANS AND SUBSCRIPTION BRIDGE
 -- =====================================================
 
 CREATE TABLE IF NOT EXISTS subscription_plans (
@@ -503,7 +503,7 @@ CREATE TABLE IF NOT EXISTS subscription_checkouts (
     plan_id TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK(status IN ('pending', 'completed', 'expired', 'canceled')),
-    entitlement_ref TEXT UNIQUE,
+    subscription_ref TEXT UNIQUE,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (username) REFERENCES users(username) ON DELETE RESTRICT,
@@ -511,15 +511,15 @@ CREATE TABLE IF NOT EXISTS subscription_checkouts (
 );
 CREATE INDEX IF NOT EXISTS idx_subscription_checkouts_username
     ON subscription_checkouts(username);
-CREATE INDEX IF NOT EXISTS idx_subscription_checkouts_entitlement_ref
-    ON subscription_checkouts(entitlement_ref);
+CREATE INDEX IF NOT EXISTS idx_subscription_checkouts_subscription_ref
+    ON subscription_checkouts(subscription_ref);
 
 CREATE TABLE IF NOT EXISTS user_subscriptions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL,
     plan_id TEXT NOT NULL,
     checkout_id TEXT NOT NULL,
-    entitlement_ref TEXT UNIQUE NOT NULL,
+    subscription_ref TEXT UNIQUE NOT NULL,
     status TEXT NOT NULL CHECK (status IN (
         'active', 'past_due', 'canceled', 'expired', 'trialing'
     )),
@@ -538,13 +538,13 @@ CREATE TABLE IF NOT EXISTS user_subscriptions (
 );
 CREATE INDEX IF NOT EXISTS idx_user_subscriptions_username ON user_subscriptions(username);
 CREATE INDEX IF NOT EXISTS idx_user_subscriptions_status ON user_subscriptions(status);
-CREATE INDEX IF NOT EXISTS idx_user_subscriptions_entitlement_ref ON user_subscriptions(entitlement_ref);
+CREATE INDEX IF NOT EXISTS idx_user_subscriptions_subscription_ref ON user_subscriptions(subscription_ref);
 
 CREATE TABLE IF NOT EXISTS subscription_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id TEXT UNIQUE NOT NULL,
     event_type TEXT NOT NULL,
-    entitlement_ref TEXT,
+    subscription_ref TEXT,
     checkout_id TEXT,
     username TEXT,
     plan_id TEXT,
@@ -553,7 +553,7 @@ CREATE TABLE IF NOT EXISTS subscription_events (
 );
 
 -- =====================================================
--- PHASE 12: USER CONTACT INFORMATION
+-- USER CONTACT INFORMATION
 -- =====================================================
 
 -- Encrypted contact details for admin communication
@@ -587,7 +587,7 @@ CREATE TABLE IF NOT EXISTS envelope_master_rotation_mandates (
 );
 
 -- =====================================================
--- PHASE 12B: MULTI-BACKEND STORAGE MANAGEMENT
+-- MULTI-BACKEND STORAGE MANAGEMENT
 -- =====================================================
 
 -- Storage providers: tracks configured S3-compatible backends as first-class entities.
@@ -645,7 +645,7 @@ CREATE TABLE IF NOT EXISTS admin_tasks (
 -- to gracefully handle both fresh installs and existing deployments.
 
 -- =====================================================
--- PHASE 13: INDEXES FOR PERFORMANCE
+-- INDEXES FOR PERFORMANCE
 -- =====================================================
 
 -- Core table indexes
@@ -654,7 +654,7 @@ CREATE INDEX IF NOT EXISTS idx_users_is_approved ON users(is_approved);
 CREATE INDEX IF NOT EXISTS idx_users_is_admin ON users(is_admin);
 
 -- file_metadata.file_id and file_metadata.storage_id are already UNIQUE at the
--- column level (see PHASE 1). No additional non-unique indexes on file_id /
+-- column level (see core user and file management tables above). No additional non-unique indexes on file_id /
 -- storage_id are needed; the implicit unique indexes from the column-level
 -- UNIQUE constraints already serve point lookups.
 CREATE INDEX IF NOT EXISTS idx_file_metadata_owner ON file_metadata(owner_username);
@@ -762,7 +762,7 @@ CREATE INDEX IF NOT EXISTS idx_admin_tasks_type ON admin_tasks(task_type);
 CREATE INDEX IF NOT EXISTS idx_admin_tasks_admin ON admin_tasks(admin_username);
 
 -- =====================================================
--- PHASE 14: TRIGGERS FOR AUTOMATIC UPDATES
+-- TRIGGERS FOR AUTOMATIC UPDATES
 -- =====================================================
 
 -- Update trigger for opaque_user_data
@@ -828,7 +828,7 @@ BEGIN
 END;
 
 -- =====================================================
--- PHASE 15: MONITORING VIEWS
+-- MONITORING VIEWS
 -- =====================================================
 
 -- View for monitoring rate limiting activity

@@ -13,9 +13,9 @@ import (
 	"github.com/arkfile/Arkfile/billing"
 	"github.com/arkfile/Arkfile/config"
 	"github.com/arkfile/Arkfile/database"
-	"github.com/arkfile/Arkfile/entitlements"
 	"github.com/arkfile/Arkfile/logging"
 	"github.com/arkfile/Arkfile/models"
+	"github.com/arkfile/Arkfile/subbridge"
 )
 
 type subscriptionCheckoutRequest struct {
@@ -64,20 +64,20 @@ func GetMySubscriptionHandler(c echo.Context) error {
 	}
 
 	data := map[string]interface{}{
-		"billing_mode":                    string(billing.EffectiveBillingMode(database.DB, username)),
-		"baseline_storage_bytes":          baseline,
-		"effective_storage_limit_bytes":   effectiveLimit,
+		"billing_mode":                  string(billing.EffectiveBillingMode(database.DB, username)),
+		"baseline_storage_bytes":        baseline,
+		"effective_storage_limit_bytes": effectiveLimit,
 	}
 	if sub != nil {
 		data["subscription"] = map[string]interface{}{
-			"status":              sub.Status,
-			"plan_id":             sub.PlanID,
-			"plan_name":           sub.PlanName,
-			"price_usd":           models.FormatPlanPriceUSD(sub.PlanPriceUSDCents),
-			"plan_storage_bytes":  sub.PlanStorageBytes,
-			"current_period_end":  sub.CurrentPeriodEnd.UTC().Format("2006-01-02T15:04:05Z07:00"),
+			"status":               sub.Status,
+			"plan_id":              sub.PlanID,
+			"plan_name":            sub.PlanName,
+			"price_usd":            models.FormatPlanPriceUSD(sub.PlanPriceUSDCents),
+			"plan_storage_bytes":   sub.PlanStorageBytes,
+			"current_period_end":   sub.CurrentPeriodEnd.UTC().Format("2006-01-02T15:04:05Z07:00"),
 			"cancel_at_period_end": sub.CancelAtPeriodEnd,
-			"source":              sub.Source,
+			"source":               sub.Source,
 		}
 	}
 	return c.JSON(http.StatusOK, map[string]interface{}{"success": true, "data": data})
@@ -158,7 +158,7 @@ func CreateSubscriptionPortalHandler(c echo.Context) error {
 	if returnURL == "" {
 		returnURL = strings.TrimRight(cfg.Server.BaseURL, "/") + "/"
 	}
-	portalURL, err := billing.CreatePortalURL(cfg.Subscriptions, sub.EntitlementRef, returnURL)
+	portalURL, err := billing.CreatePortalURL(cfg.Subscriptions, sub.SubscriptionRef, returnURL)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to sign portal token")
 	}
@@ -171,7 +171,7 @@ func CreateSubscriptionPortalHandler(c echo.Context) error {
 	})
 }
 
-func EntitlementWebhookHandler(c echo.Context) error {
+func SubscriptionBridgeWebhookHandler(c echo.Context) error {
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal configuration error")
@@ -184,20 +184,20 @@ func EntitlementWebhookHandler(c echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Failed to read body")
 	}
-	sig := c.Request().Header.Get(entitlements.SignatureHeaderName)
-	if err := entitlements.VerifyWebhookSignature(cfg.Subscriptions.WebhookSecret, body, sig); err != nil {
-		logging.ErrorLogger.Printf("Entitlement webhook signature failed: %v", err)
+	sig := c.Request().Header.Get(subbridge.SignatureHeaderName)
+	if err := subbridge.VerifyWebhookSignature(cfg.Subscriptions.WebhookSecret, body, sig); err != nil {
+		logging.ErrorLogger.Printf("Subscription bridge webhook signature failed: %v", err)
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid signature")
 	}
 
-	var payload entitlements.CallbackPayload
+	var payload subbridge.CallbackPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid JSON")
 	}
 
-	if err := billing.ProcessEntitlementCallback(database.DB, &payload); err != nil {
-		logging.ErrorLogger.Printf("Entitlement webhook processing failed: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process entitlement event")
+	if err := billing.ProcessSubscriptionBridgeCallback(database.DB, &payload); err != nil {
+		logging.ErrorLogger.Printf("Subscription bridge webhook processing failed: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process subscription bridge event")
 	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{"success": true})

@@ -41,7 +41,7 @@ func handleSubscriptionsCommand(client *HTTPClient, config *AdminConfig, args []
 func printSubscriptionsUsage() {
 	fmt.Print(`Usage: arkfile-admin subscriptions SUBCOMMAND [FLAGS]
 
-Subscription plan catalog and entitlement admin operations.
+Subscription plan catalog and subscription admin operations.
 
 SUBCOMMANDS:
     list-plans [--json]                              List subscription plans
@@ -50,7 +50,7 @@ SUBCOMMANDS:
     grant-gift-subscription --user USER --plan-id ID [--days N] [--note NOTE]
     cancel-gift-subscription --user USER [--immediate]
     sync --user USER                                 Poll bridge for paid subscription
-    reconcile [--json]                               Bulk sync bridge entitlements + expire gifts
+    reconcile [--json]                               Bulk sync bridge subscriptions + expire gifts
 
 GLOBAL FLAGS:
     --json                                           Machine-readable JSON output
@@ -150,8 +150,8 @@ func handleSubscriptionsShowCommand(client *HTTPClient, config *AdminConfig, arg
 	fmt.Printf("  Effective upload cap:         %s\n", formatBytes(safeInt64(data, "effective_storage_limit_bytes")))
 	fmt.Printf("  Billing mode:                 %s\n", safeString(data, "billing_mode"))
 	if sub, ok := data["subscription"].(map[string]interface{}); ok && sub != nil {
-		fmt.Printf("  Entitlement:                  %s (%s via %s)\n",
-			safeString(sub, "status"), safeString(sub, "entitlement_ref"), safeString(sub, "source"))
+		fmt.Printf("  Subscription:                 %s (%s via %s)\n",
+			safeString(sub, "status"), safeString(sub, "subscription_ref"), safeString(sub, "source"))
 		fmt.Printf("  Plan:                         %s\n", safeString(sub, "plan_name"))
 	}
 	return nil

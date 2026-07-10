@@ -647,7 +647,7 @@ func TestSubscriptionsConfigValidationRequiresBridgeWhenEnabled(t *testing.T) {
 
 	_, err := LoadConfig()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ARKFILE_ENTITLEMENT_BRIDGE_URL")
+	assert.Contains(t, err.Error(), "ARKFILE_SUBSCRIPTION_BRIDGE_URL")
 }
 
 func TestSubscriptionsConfigValidationRequiresWebhookSecret(t *testing.T) {
@@ -659,7 +659,7 @@ func TestSubscriptionsConfigValidationRequiresWebhookSecret(t *testing.T) {
 		"STORAGE_1_SECRET_KEY":            "test",
 		"STORAGE_1_BUCKET":                "test-bucket",
 		"ARKFILE_SUBSCRIPTIONS_ENABLED":   "true",
-		"ARKFILE_ENTITLEMENT_BRIDGE_URL":  "http://127.0.0.1:8081",
+		"ARKFILE_SUBSCRIPTION_BRIDGE_URL":  "http://127.0.0.1:8081",
 	}
 	originalEnv := map[string]string{}
 	for key := range baseEnv {
@@ -683,5 +683,5 @@ func TestSubscriptionsConfigValidationRequiresWebhookSecret(t *testing.T) {
 
 	_, err := LoadConfig()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ARKFILE_ENTITLEMENT_BRIDGE_WEBHOOK_SECRET")
+	assert.Contains(t, err.Error(), "ARKFILE_SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET")
 }

@@ -1,4 +1,4 @@
-package entitlements
+package subbridge
 
 import (
 	"crypto/hmac"
@@ -18,7 +18,9 @@ import (
 const (
 	TokenLifetime       = 15 * time.Minute
 	SignatureMaxSkew    = 5 * time.Minute
-	SignatureHeaderName = "Entitlement-Bridge-Signature"
+	SignatureHeaderName = "Subscription-Bridge-Signature"
+	ProtocolName        = "subscription-bridge"
+	ProtocolVersion     = 1
 )
 
 type StartTokenPayload struct {
@@ -29,9 +31,9 @@ type StartTokenPayload struct {
 }
 
 type PortalTokenPayload struct {
-	EntitlementRef string `json:"entitlement_ref"`
-	ReturnURL      string `json:"return_url"`
-	Exp            int64  `json:"exp"`
+	SubscriptionRef string `json:"subscription_ref"`
+	ReturnURL       string `json:"return_url"`
+	Exp             int64  `json:"exp"`
 }
 
 type CallbackPayload struct {
@@ -40,7 +42,7 @@ type CallbackPayload struct {
 	EventID            string `json:"event_id"`
 	EventType          string `json:"event_type"`
 	CheckoutID         string `json:"checkout_id"`
-	EntitlementRef     string `json:"entitlement_ref"`
+	SubscriptionRef    string `json:"subscription_ref"`
 	PlanID             string `json:"plan_id"`
 	Status             string `json:"status"`
 	CurrentPeriodStart string `json:"current_period_start"`
@@ -154,7 +156,7 @@ func SignBridgeGET(secret, method, path string) string {
 	base := method + "\n" + path + "\n" + ts
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(base))
-	return "Bridge-HMAC t=" + ts + ",v1=" + hex.EncodeToString(mac.Sum(nil))
+	return "Subscription-Bridge-HMAC t=" + ts + ",v1=" + hex.EncodeToString(mac.Sum(nil))
 }
 
 func VerifyBridgeGET(secret, method, path, authHeader string) error {
@@ -184,7 +186,7 @@ func VerifyBridgeGET(secret, method, path, authHeader string) error {
 }
 
 func parseBridgeHMACHeader(header string) (ts, sig string, err error) {
-	header = strings.TrimPrefix(strings.TrimSpace(header), "Bridge-HMAC")
+	header = strings.TrimPrefix(strings.TrimSpace(header), "Subscription-Bridge-HMAC")
 	header = strings.TrimSpace(header)
 	for _, part := range strings.Split(header, ",") {
 		part = strings.TrimSpace(part)
@@ -201,8 +203,8 @@ func parseBridgeHMACHeader(header string) (ts, sig string, err error) {
 	return ts, sig, nil
 }
 
-func FetchEntitlementSnapshot(bridgeURL, secret, entitlementRef string) (*CallbackPayload, error) {
-	path := "/v1/entitlements/" + entitlementRef
+func FetchSubscriptionSnapshot(bridgeURL, secret, subscriptionRef string) (*CallbackPayload, error) {
+	path := "/v1/subscriptions/" + subscriptionRef
 	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(bridgeURL, "/")+path, nil)
 	if err != nil {
 		return nil, err
@@ -219,7 +221,7 @@ func FetchEntitlementSnapshot(bridgeURL, secret, entitlementRef string) (*Callba
 		return nil, err
 	}
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, fmt.Errorf("entitlement not found")
+		return nil, fmt.Errorf("subscription not found")
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("bridge returned %d: %s", resp.StatusCode, string(body))

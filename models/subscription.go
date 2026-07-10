@@ -31,7 +31,7 @@ type SubscriptionCheckout struct {
 	Username        string    `json:"username"`
 	PlanID          string    `json:"plan_id"`
 	Status          string    `json:"status"`
-	EntitlementRef  string    `json:"entitlement_ref,omitempty"`
+	SubscriptionRef string    `json:"subscription_ref,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }
@@ -41,7 +41,7 @@ type UserSubscription struct {
 	Username           string     `json:"username"`
 	PlanID             string     `json:"plan_id"`
 	CheckoutID         string     `json:"checkout_id"`
-	EntitlementRef     string     `json:"entitlement_ref"`
+	SubscriptionRef    string     `json:"subscription_ref"`
 	Status             string     `json:"status"`
 	Source             string     `json:"source"`
 	CurrentPeriodStart time.Time  `json:"current_period_start"`
@@ -197,10 +197,10 @@ func GetSubscriptionCheckout(db *sql.DB, checkoutID string) (*SubscriptionChecko
 	var createdAtStr, updatedAtStr string
 	err := db.QueryRow(`
 		SELECT checkout_id, username, plan_id, status,
-		       COALESCE(entitlement_ref,''), created_at, updated_at
+		       COALESCE(subscription_ref,''), created_at, updated_at
 		FROM subscription_checkouts WHERE checkout_id = ?`, checkoutID).Scan(
 		&c.CheckoutID, &c.Username, &c.PlanID, &c.Status,
-		&c.EntitlementRef, &createdAtStr, &updatedAtStr,
+		&c.SubscriptionRef, &createdAtStr, &updatedAtStr,
 	)
 	if err != nil {
 		return nil, err
@@ -210,20 +210,20 @@ func GetSubscriptionCheckout(db *sql.DB, checkoutID string) (*SubscriptionChecko
 	return &c, nil
 }
 
-func UpdateSubscriptionCheckout(db *sql.DB, checkoutID, status, entitlementRef string) error {
+func UpdateSubscriptionCheckout(db *sql.DB, checkoutID, status, subscriptionRef string) error {
 	_, err := db.Exec(`
 		UPDATE subscription_checkouts
-		SET status = ?, entitlement_ref = COALESCE(NULLIF(?, ''), entitlement_ref),
+		SET status = ?, subscription_ref = COALESCE(NULLIF(?, ''), subscription_ref),
 		    updated_at = CURRENT_TIMESTAMP
 		WHERE checkout_id = ?`,
-		status, entitlementRef, checkoutID,
+		status, subscriptionRef, checkoutID,
 	)
 	return err
 }
 
 func activeSubscriptionQuery() string {
 	return `
-		SELECT us.id, us.username, us.plan_id, us.checkout_id, us.entitlement_ref,
+		SELECT us.id, us.username, us.plan_id, us.checkout_id, us.subscription_ref,
 		       us.status, us.source, us.current_period_start, us.current_period_end,
 		       us.cancel_at_period_end, us.canceled_at, us.past_due_since,
 		       COALESCE(us.gift_note,''), us.created_at, us.updated_at,
@@ -241,8 +241,8 @@ func GetActiveUserSubscription(db *sql.DB, username string) (*UserSubscription, 
 		ORDER BY us.updated_at DESC LIMIT 1`, username))
 }
 
-func GetUserSubscriptionByEntitlementRef(db *sql.DB, entitlementRef string) (*UserSubscription, error) {
-	return scanUserSubscription(db.QueryRow(activeSubscriptionQuery()+` AND us.entitlement_ref = ?`, entitlementRef))
+func GetUserSubscriptionBySubscriptionRef(db *sql.DB, subscriptionRef string) (*UserSubscription, error) {
+	return scanUserSubscription(db.QueryRow(activeSubscriptionQuery()+` AND us.subscription_ref = ?`, subscriptionRef))
 }
 
 type userSubscriptionScanner interface {
@@ -261,7 +261,7 @@ func scanUserSubscriptionFields(scanner userSubscriptionScanner) (*UserSubscript
 	var periodStartStr, periodEndStr, createdAtStr, updatedAtStr string
 	var planPriceRaw, planStorageRaw interface{}
 	err := scanner.Scan(
-		&idRaw, &s.Username, &s.PlanID, &s.CheckoutID, &s.EntitlementRef,
+		&idRaw, &s.Username, &s.PlanID, &s.CheckoutID, &s.SubscriptionRef,
 		&s.Status, &s.Source, &periodStartStr, &periodEndStr,
 		&cancelAtPeriodEnd, &canceledAt, &pastDueSince,
 		&s.GiftNote, &createdAtStr, &updatedAtStr,
@@ -315,11 +315,11 @@ func InsertUserSubscription(db *sql.DB, s *UserSubscription) error {
 	}
 	_, err := db.Exec(`
 		INSERT INTO user_subscriptions
-		  (username, plan_id, checkout_id, entitlement_ref, status, source,
+		  (username, plan_id, checkout_id, subscription_ref, status, source,
 		   current_period_start, current_period_end, cancel_at_period_end,
 		   canceled_at, past_due_since, gift_note)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		s.Username, s.PlanID, s.CheckoutID, s.EntitlementRef, s.Status, s.Source,
+		s.Username, s.PlanID, s.CheckoutID, s.SubscriptionRef, s.Status, s.Source,
 		s.CurrentPeriodStart.UTC(), s.CurrentPeriodEnd.UTC(), cancelAt,
 		canceledAt, pastDueSince, s.GiftNote,
 	)
@@ -344,9 +344,9 @@ func UpdateUserSubscription(db *sql.DB, s *UserSubscription) error {
 		  cancel_at_period_end = ?, canceled_at = ?, past_due_since = ?,
 		  gift_note = COALESCE(NULLIF(?, ''), gift_note),
 		  updated_at = CURRENT_TIMESTAMP
-		WHERE entitlement_ref = ?`,
+		WHERE subscription_ref = ?`,
 		s.PlanID, s.Status, s.CurrentPeriodStart.UTC(), s.CurrentPeriodEnd.UTC(),
-		cancelAt, canceledAt, pastDueSince, s.GiftNote, s.EntitlementRef,
+		cancelAt, canceledAt, pastDueSince, s.GiftNote, s.SubscriptionRef,
 	)
 	if err != nil {
 		return err
@@ -358,16 +358,16 @@ func UpdateUserSubscription(db *sql.DB, s *UserSubscription) error {
 	return nil
 }
 
-func ExpireUserSubscription(db *sql.DB, entitlementRef string) error {
+func ExpireUserSubscription(db *sql.DB, subscriptionRef string) error {
 	_, err := db.Exec(`
 		UPDATE user_subscriptions SET status = 'expired', updated_at = CURRENT_TIMESTAMP
-		WHERE entitlement_ref = ?`, entitlementRef)
+		WHERE subscription_ref = ?`, subscriptionRef)
 	return err
 }
 
 func ListBridgeSubscriptionsForReconcile(db *sql.DB, withinDays int) ([]UserSubscription, error) {
 	rows, err := db.Query(`
-		SELECT us.id, us.username, us.plan_id, us.checkout_id, us.entitlement_ref,
+		SELECT us.id, us.username, us.plan_id, us.checkout_id, us.subscription_ref,
 		       us.status, us.source, us.current_period_start, us.current_period_end,
 		       us.cancel_at_period_end, us.canceled_at, us.past_due_since,
 		       COALESCE(us.gift_note,''), us.created_at, us.updated_at,
@@ -396,7 +396,7 @@ func ListBridgeSubscriptionsForReconcile(db *sql.DB, withinDays int) ([]UserSubs
 
 func ListExpiredGiftSubscriptions(db *sql.DB) ([]UserSubscription, error) {
 	rows, err := db.Query(`
-		SELECT us.id, us.username, us.plan_id, us.checkout_id, us.entitlement_ref,
+		SELECT us.id, us.username, us.plan_id, us.checkout_id, us.subscription_ref,
 		       us.status, us.source, us.current_period_start, us.current_period_end,
 		       us.cancel_at_period_end, us.canceled_at, us.past_due_since,
 		       COALESCE(us.gift_note,''), us.created_at, us.updated_at,
@@ -428,12 +428,12 @@ func SubscriptionEventExists(db *sql.DB, eventID string) (bool, error) {
 	return n > 0, err
 }
 
-func InsertSubscriptionEvent(db *sql.DB, eventID, eventType, entitlementRef, checkoutID, username, planID, payloadHash string) error {
+func InsertSubscriptionEvent(db *sql.DB, eventID, eventType, subscriptionRef, checkoutID, username, planID, payloadHash string) error {
 	_, err := db.Exec(`
 		INSERT INTO subscription_events
-		  (event_id, event_type, entitlement_ref, checkout_id, username, plan_id, payload_hash)
+		  (event_id, event_type, subscription_ref, checkout_id, username, plan_id, payload_hash)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		eventID, eventType, entitlementRef, checkoutID, username, planID, payloadHash,
+		eventID, eventType, subscriptionRef, checkoutID, username, planID, payloadHash,
 	)
 	return err
 }

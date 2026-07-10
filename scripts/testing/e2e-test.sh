@@ -3385,50 +3385,50 @@ run_payments() {
     info "Payments complete"
 }
 
-start_mock_entitlement_bridge() {
+start_mock_subscription_bridge() {
     local e2e_script_dir="$1"
     local go_bin="$2"
-    local mock_bin="$TEST_DATA_DIR/entitlement-bridge-mock"
-    local mock_log="$TEST_DATA_DIR/entitlement-bridge-mock.log"
-    local mock_src="$e2e_script_dir/entitlement-bridge-mock.go"
+    local mock_bin="$TEST_DATA_DIR/subscription-bridge-mock"
+    local mock_log="$TEST_DATA_DIR/subscription-bridge-mock.log"
+    local mock_src="$e2e_script_dir/subscription-bridge-mock.go"
     local mock_pid
 
     : > "$mock_log"
-    export ENTITLEMENT_BRIDGE_WEBHOOK_SECRET="${ENTITLEMENT_BRIDGE_WEBHOOK_SECRET:-test_entitlement_bridge_secret}"
-    export ARKFILE_WEBHOOK_URL="${SERVER_URL}/api/webhooks/entitlements"
+    export SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET="${SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET:-test_subscription_bridge_secret}"
+    export ARKFILE_WEBHOOK_URL="${SERVER_URL}/api/webhooks/subscription-bridge"
 
-    info "Building mock Entitlement Bridge..."
+    info "Building mock Subscription Bridge..."
     if ! "$go_bin" build -o "$mock_bin" "$mock_src" >>"$mock_log" 2>&1; then
-        error "Failed to build mock Entitlement Bridge"
+        error "Failed to build mock Subscription Bridge"
         cat "$mock_log"
         return 1
     fi
 
-    info "Starting mock Entitlement Bridge on :8081..."
+    info "Starting mock Subscription Bridge on :8081..."
     "$mock_bin" >>"$mock_log" 2>&1 &
     mock_pid=$!
 
     local i
     for i in $(seq 1 60); do
         if curl -s --connect-timeout 1 http://127.0.0.1:8081/health >/dev/null 2>&1; then
-            info "Mock Entitlement Bridge is listening on :8081"
+            info "Mock Subscription Bridge is listening on :8081"
             echo "$mock_pid"
             return 0
         fi
         if ! kill -0 "$mock_pid" 2>/dev/null; then
-            error "Mock Entitlement Bridge exited early"
+            error "Mock Subscription Bridge exited early"
             cat "$mock_log"
             return 1
         fi
         sleep 1
     done
-    error "Mock Entitlement Bridge did not become ready"
+    error "Mock Subscription Bridge did not become ready"
     cat "$mock_log"
     kill "$mock_pid" 2>/dev/null || true
     return 1
 }
 
-stop_mock_entitlement_bridge() {
+stop_mock_subscription_bridge() {
     local mock_pid="$1"
     if [ -n "$mock_pid" ] && kill -0 "$mock_pid" 2>/dev/null; then
         kill "$mock_pid" 2>/dev/null || true
@@ -3458,25 +3458,25 @@ user_credits_json() {
     curl -sk -H "Authorization: Bearer $(user_access_token)" "$SERVER_URL/api/credits"
 }
 
-entitlement_bridge_webhook_signature() {
+subscription_bridge_webhook_signature() {
     local body="$1"
     local ts secret sig
     ts=$(date +%s)
-    secret="${ENTITLEMENT_BRIDGE_WEBHOOK_SECRET:-test_entitlement_bridge_secret}"
+    secret="${SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET:-test_subscription_bridge_secret}"
     sig=$( { printf '%s.' "$ts"; printf '%s' "$body"; } \
         | openssl dgst -sha256 -hmac "$secret" | awk '{print $NF}')
     echo "t=${ts},v1=${sig}"
 }
 
-post_entitlement_webhook() {
+post_subscription_bridge_webhook() {
     local body="$1"
     local sig
-    sig=$(entitlement_bridge_webhook_signature "$body")
+    sig=$(subscription_bridge_webhook_signature "$body")
     curl -sk -X POST \
         -H "Content-Type: application/json" \
-        -H "Entitlement-Bridge-Signature: $sig" \
+        -H "Subscription-Bridge-Signature: $sig" \
         -d "$body" \
-        "$SERVER_URL/api/webhooks/entitlements"
+        "$SERVER_URL/api/webhooks/subscription-bridge"
 }
 
 mock_bridge_activate() {
@@ -3488,10 +3488,10 @@ mock_bridge_activate() {
 }
 
 mock_bridge_expire() {
-    local entitlement_ref="$1"
+    local subscription_ref="$1"
     curl -s -X POST "http://127.0.0.1:8081/v1/mock/expire" \
         -H "Content-Type: application/json" \
-        -d "{\"entitlement_ref\":\"$entitlement_ref\"}"
+        -d "{\"subscription_ref\":\"$subscription_ref\"}"
 }
 
 run_subscriptions() {
@@ -3501,7 +3501,7 @@ run_subscriptions() {
     local dev_plan_storage_bytes=268435456000
     local user_token credits_json billing_mode effective_limit sub_source
     local tx_count_before tx_count_after checkout_id checkout_out checkout_http
-    local invoice_http invoice_body topup_out topup_code bridge_ent_ref
+    local invoice_http invoice_body topup_out topup_code bridge_sub_ref
 
     e2e_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     go_bin="go"
@@ -3516,15 +3516,15 @@ run_subscriptions() {
 
     export ARKFILE_SUBSCRIPTIONS_ENABLED=true
     export ARKFILE_BILLING_PAYG_ENABLED=true
-    export ARKFILE_ENTITLEMENT_BRIDGE_URL="http://127.0.0.1:8081"
-    export ARKFILE_ENTITLEMENT_BRIDGE_WEBHOOK_SECRET="test_entitlement_bridge_secret"
+    export ARKFILE_SUBSCRIPTION_BRIDGE_URL="http://127.0.0.1:8081"
+    export ARKFILE_SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET="test_subscription_bridge_secret"
     export ADMIN_DEV_TEST_API_ENABLED=true
 
-    mock_pid=$(start_mock_entitlement_bridge "$e2e_script_dir" "$go_bin") || {
-        record_test "Start mock Entitlement Bridge" "FAIL"
+    mock_pid=$(start_mock_subscription_bridge "$e2e_script_dir" "$go_bin") || {
+        record_test "Start mock Subscription Bridge" "FAIL"
         return 0
     }
-    record_test "Start mock Entitlement Bridge" "PASS"
+    record_test "Start mock Subscription Bridge" "PASS"
 
     scenario "Dev subscription plan exists"
     local plans_out plans_code
@@ -3564,7 +3564,7 @@ run_subscriptions() {
         record_test "Credits API subscribed after gift grant" "FAIL"
     fi
 
-    scenario "Admin subscriptions show gift entitlement"
+    scenario "Admin subscriptions show gift subscription"
     local admin_sub_out admin_sub_code
     safe_exec admin_sub_out admin_sub_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
@@ -3572,10 +3572,10 @@ run_subscriptions() {
     if [ $admin_sub_code -eq 0 ] \
         && echo "$admin_sub_out" | jq -e '.billing_mode == "subscribed" and .subscription.source == "gift"' >/dev/null 2>&1 \
         && echo "$admin_sub_out" | jq -e ".effective_storage_limit_bytes == $dev_plan_storage_bytes" >/dev/null 2>&1; then
-        record_test "Admin subscriptions show gift entitlement" "PASS"
+        record_test "Admin subscriptions show gift subscription" "PASS"
     else
         error "Admin subscriptions show unexpected: $admin_sub_out"
-        record_test "Admin subscriptions show gift entitlement" "FAIL"
+        record_test "Admin subscriptions show gift subscription" "FAIL"
     fi
 
     scenario "CLI billing show while subscribed"
@@ -3741,8 +3741,8 @@ run_subscriptions() {
     local activate_out activate_code
     if [ -n "$checkout_id" ]; then
         activate_out=$(mock_bridge_activate "$checkout_id" "$TEST_USERNAME")
-        bridge_ent_ref=$(echo "$activate_out" | jq -r '.entitlement_ref // empty' 2>/dev/null)
-        if [ -n "$bridge_ent_ref" ] && echo "$activate_out" | jq -e '.status == "delivered"' >/dev/null 2>&1; then
+        bridge_sub_ref=$(echo "$activate_out" | jq -r '.subscription_ref // empty' 2>/dev/null)
+        if [ -n "$bridge_sub_ref" ] && echo "$activate_out" | jq -e '.status == "delivered"' >/dev/null 2>&1; then
             credits_json=$(user_credits_json)
             billing_mode=$(echo "$credits_json" | jq -r '.billing_mode // empty' 2>/dev/null)
             sub_source=$(echo "$credits_json" | jq -r '.subscription.source // empty' 2>/dev/null)
@@ -3819,35 +3819,35 @@ run_subscriptions() {
         record_test "Top-up rejected while bridge subscribed" "FAIL"
     fi
 
-    scenario "Duplicate entitlement webhook is idempotent"
-    local ent_snap dup_wh1 dup_wh2 admin_sub_before admin_sub_after
-    if [ -n "$bridge_ent_ref" ]; then
-        ent_snap=$(curl -s "http://127.0.0.1:8081/v1/entitlements/$bridge_ent_ref" | jq -c . 2>/dev/null)
+    scenario "Duplicate subscription bridge webhook is idempotent"
+    local sub_snap dup_wh1 dup_wh2 admin_sub_before admin_sub_after
+    if [ -n "$bridge_sub_ref" ]; then
+        sub_snap=$(curl -s "http://127.0.0.1:8081/v1/subscriptions/$bridge_sub_ref" | jq -c . 2>/dev/null)
         safe_exec admin_sub_before admin_sub_before_code \
             $ADMIN --server-url "$SERVER_URL" --tls-insecure \
             subscriptions show --user "$TEST_USERNAME" --json || true
-        dup_wh1=$(post_entitlement_webhook "$ent_snap")
-        dup_wh2=$(post_entitlement_webhook "$ent_snap")
+        dup_wh1=$(post_subscription_bridge_webhook "$sub_snap")
+        dup_wh2=$(post_subscription_bridge_webhook "$sub_snap")
         safe_exec admin_sub_after admin_sub_after_code \
             $ADMIN --server-url "$SERVER_URL" --tls-insecure \
             subscriptions show --user "$TEST_USERNAME" --json || true
-        if [ -n "$ent_snap" ] \
+        if [ -n "$sub_snap" ] \
             && echo "$dup_wh1" | jq -e '.success == true' >/dev/null 2>&1 \
             && echo "$dup_wh2" | jq -e '.success == true' >/dev/null 2>&1 \
             && [ "$admin_sub_before" = "$admin_sub_after" ]; then
-            record_test "Duplicate entitlement webhook idempotent" "PASS"
+            record_test "Duplicate subscription bridge webhook idempotent" "PASS"
         else
             error "Duplicate webhook unexpected: wh1=$dup_wh1 wh2=$dup_wh2"
-            record_test "Duplicate entitlement webhook idempotent" "FAIL"
+            record_test "Duplicate subscription bridge webhook idempotent" "FAIL"
         fi
     else
-        record_test "Duplicate entitlement webhook idempotent" "FAIL"
+        record_test "Duplicate subscription bridge webhook idempotent" "FAIL"
     fi
 
     scenario "Bridge expire webhook ends subscription"
     local expire_out
-    if [ -n "$bridge_ent_ref" ]; then
-        expire_out=$(mock_bridge_expire "$bridge_ent_ref")
+    if [ -n "$bridge_sub_ref" ]; then
+        expire_out=$(mock_bridge_expire "$bridge_sub_ref")
         credits_json=$(user_credits_json)
         billing_mode=$(echo "$credits_json" | jq -r '.billing_mode // empty' 2>/dev/null)
         if echo "$expire_out" | jq -e '.status == "expired"' >/dev/null 2>&1 && [ "$billing_mode" != "subscribed" ]; then
@@ -3877,7 +3877,7 @@ run_subscriptions() {
         info "Stopping mock BTCPay server..."
         stop_mock_btcpay_server "$btcpay_mock_pid"
     fi
-    stop_mock_entitlement_bridge "$mock_pid"
+    stop_mock_subscription_bridge "$mock_pid"
     info "Subscriptions complete"
 }
 

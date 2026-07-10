@@ -58,7 +58,7 @@ COMMANDS:
     decrypt-blob      Decrypt a .arkbackup bundle offline (no network required)
     contact-info      Manage your contact information (get, set, delete)
     billing           PAYG balance, usage, and top-ups
-    subscription      Subscription plans and Entitlement Bridge checkout
+    subscription      Subscription plans and Subscription Bridge checkout
     generate-test-file Generate a test file for upload testing
     logout            Logout and clear session
     agent             Manage the agent (start, stop, status)

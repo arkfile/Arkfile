@@ -10,7 +10,7 @@ import (
 	"github.com/arkfile/Arkfile/models"
 )
 
-func TestProcessEntitlementCallback_ActivatedCreatesSubscription(t *testing.T) {
+func TestProcessSubscriptionBridgeCallback_ActivatedCreatesSubscription(t *testing.T) {
 	withBillingSubscriptionEnv(t)
 	db := openFullBillingSubscriptionTestDB(t)
 	defer db.Close()
@@ -18,18 +18,18 @@ func TestProcessEntitlementCallback_ActivatedCreatesSubscription(t *testing.T) {
 	seedSubscriptionPlan(t, db)
 	seedSubscriptionUser(t, db, "alice", 2<<30)
 	checkoutID := "subchk_activate"
-	entRef := "ent_activate"
+	entRef := "sub_activate"
 	seedPendingCheckout(t, db, checkoutID, "alice")
 
 	eventID := newEventID()
-	payload := testEntitlementPayload("entitlement.activated", eventID, checkoutID, entRef, "active")
-	if err := ProcessEntitlementCallback(db, payload); err != nil {
-		t.Fatalf("ProcessEntitlementCallback: %v", err)
+	payload := testSubscriptionBridgePayload("subscription.activated", eventID, checkoutID, entRef, "active")
+	if err := ProcessSubscriptionBridgeCallback(db, payload); err != nil {
+		t.Fatalf("ProcessSubscriptionBridgeCallback: %v", err)
 	}
 
-	sub, err := models.GetUserSubscriptionByEntitlementRef(db, entRef)
+	sub, err := models.GetUserSubscriptionBySubscriptionRef(db, entRef)
 	if err != nil {
-		t.Fatalf("GetUserSubscriptionByEntitlementRef: %v", err)
+		t.Fatalf("GetUserSubscriptionBySubscriptionRef: %v", err)
 	}
 	if sub.Status != "active" || sub.Source != "bridge" {
 		t.Fatalf("unexpected subscription: %+v", sub)
@@ -47,7 +47,7 @@ func TestProcessEntitlementCallback_ActivatedCreatesSubscription(t *testing.T) {
 	}
 }
 
-func TestProcessEntitlementCallback_Idempotent(t *testing.T) {
+func TestProcessSubscriptionBridgeCallback_Idempotent(t *testing.T) {
 	withBillingSubscriptionEnv(t)
 	db := openFullBillingSubscriptionTestDB(t)
 	defer db.Close()
@@ -55,15 +55,15 @@ func TestProcessEntitlementCallback_Idempotent(t *testing.T) {
 	seedSubscriptionPlan(t, db)
 	seedSubscriptionUser(t, db, "alice", 0)
 	checkoutID := "subchk_idem"
-	entRef := "ent_idem"
+	entRef := "sub_idem"
 	seedPendingCheckout(t, db, checkoutID, "alice")
 
 	eventID := newEventID()
-	payload := testEntitlementPayload("entitlement.activated", eventID, checkoutID, entRef, "active")
-	if err := ProcessEntitlementCallback(db, payload); err != nil {
+	payload := testSubscriptionBridgePayload("subscription.activated", eventID, checkoutID, entRef, "active")
+	if err := ProcessSubscriptionBridgeCallback(db, payload); err != nil {
 		t.Fatal(err)
 	}
-	if err := ProcessEntitlementCallback(db, payload); err != nil {
+	if err := ProcessSubscriptionBridgeCallback(db, payload); err != nil {
 		t.Fatalf("duplicate callback should be no-op: %v", err)
 	}
 	if countSubscriptionEvents(t, db, eventID) != 1 {
@@ -71,7 +71,7 @@ func TestProcessEntitlementCallback_Idempotent(t *testing.T) {
 	}
 }
 
-func TestProcessEntitlementCallback_PastDueSetsTimestamp(t *testing.T) {
+func TestProcessSubscriptionBridgeCallback_PastDueSetsTimestamp(t *testing.T) {
 	withBillingSubscriptionEnv(t)
 	db := openFullBillingSubscriptionTestDB(t)
 	defer db.Close()
@@ -79,20 +79,20 @@ func TestProcessEntitlementCallback_PastDueSetsTimestamp(t *testing.T) {
 	seedSubscriptionPlan(t, db)
 	seedSubscriptionUser(t, db, "alice", 0)
 	checkoutID := "subchk_pastdue"
-	entRef := "ent_pastdue"
+	entRef := "sub_pastdue"
 	seedPendingCheckout(t, db, checkoutID, "alice")
 
-	activate := testEntitlementPayload("entitlement.activated", newEventID(), checkoutID, entRef, "active")
-	if err := ProcessEntitlementCallback(db, activate); err != nil {
+	activate := testSubscriptionBridgePayload("subscription.activated", newEventID(), checkoutID, entRef, "active")
+	if err := ProcessSubscriptionBridgeCallback(db, activate); err != nil {
 		t.Fatal(err)
 	}
 
-	pastDue := testEntitlementPayload("entitlement.past_due", newEventID(), checkoutID, entRef, "past_due")
-	if err := ProcessEntitlementCallback(db, pastDue); err != nil {
+	pastDue := testSubscriptionBridgePayload("subscription.past_due", newEventID(), checkoutID, entRef, "past_due")
+	if err := ProcessSubscriptionBridgeCallback(db, pastDue); err != nil {
 		t.Fatal(err)
 	}
 
-	sub, err := models.GetUserSubscriptionByEntitlementRef(db, entRef)
+	sub, err := models.GetUserSubscriptionBySubscriptionRef(db, entRef)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestProcessEntitlementCallback_PastDueSetsTimestamp(t *testing.T) {
 	}
 }
 
-func TestProcessEntitlementCallback_RenewedClearsPastDue(t *testing.T) {
+func TestProcessSubscriptionBridgeCallback_RenewedClearsPastDue(t *testing.T) {
 	withBillingSubscriptionEnv(t)
 	db := openFullBillingSubscriptionTestDB(t)
 	defer db.Close()
@@ -109,20 +109,20 @@ func TestProcessEntitlementCallback_RenewedClearsPastDue(t *testing.T) {
 	seedSubscriptionPlan(t, db)
 	seedSubscriptionUser(t, db, "alice", 0)
 	checkoutID := "subchk_renew"
-	entRef := "ent_renew"
+	entRef := "sub_renew"
 	seedPendingCheckout(t, db, checkoutID, "alice")
 
-	if err := ProcessEntitlementCallback(db, testEntitlementPayload("entitlement.activated", newEventID(), checkoutID, entRef, "active")); err != nil {
+	if err := ProcessSubscriptionBridgeCallback(db, testSubscriptionBridgePayload("subscription.activated", newEventID(), checkoutID, entRef, "active")); err != nil {
 		t.Fatal(err)
 	}
-	if err := ProcessEntitlementCallback(db, testEntitlementPayload("entitlement.past_due", newEventID(), checkoutID, entRef, "past_due")); err != nil {
+	if err := ProcessSubscriptionBridgeCallback(db, testSubscriptionBridgePayload("subscription.past_due", newEventID(), checkoutID, entRef, "past_due")); err != nil {
 		t.Fatal(err)
 	}
-	if err := ProcessEntitlementCallback(db, testEntitlementPayload("entitlement.renewed", newEventID(), checkoutID, entRef, "active")); err != nil {
+	if err := ProcessSubscriptionBridgeCallback(db, testSubscriptionBridgePayload("subscription.renewed", newEventID(), checkoutID, entRef, "active")); err != nil {
 		t.Fatal(err)
 	}
 
-	sub, err := models.GetUserSubscriptionByEntitlementRef(db, entRef)
+	sub, err := models.GetUserSubscriptionBySubscriptionRef(db, entRef)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestProcessEntitlementCallback_RenewedClearsPastDue(t *testing.T) {
 	}
 }
 
-func TestProcessEntitlementCallback_CanceledAndExpired(t *testing.T) {
+func TestProcessSubscriptionBridgeCallback_CanceledAndExpired(t *testing.T) {
 	withBillingSubscriptionEnv(t)
 	db := openFullBillingSubscriptionTestDB(t)
 	defer db.Close()
@@ -139,16 +139,16 @@ func TestProcessEntitlementCallback_CanceledAndExpired(t *testing.T) {
 	seedSubscriptionPlan(t, db)
 	seedSubscriptionUser(t, db, "alice", 0)
 	checkoutID := "subchk_cancel"
-	entRef := "ent_cancel"
+	entRef := "sub_cancel"
 	seedPendingCheckout(t, db, checkoutID, "alice")
 
-	if err := ProcessEntitlementCallback(db, testEntitlementPayload("entitlement.activated", newEventID(), checkoutID, entRef, "active")); err != nil {
+	if err := ProcessSubscriptionBridgeCallback(db, testSubscriptionBridgePayload("subscription.activated", newEventID(), checkoutID, entRef, "active")); err != nil {
 		t.Fatal(err)
 	}
-	if err := ProcessEntitlementCallback(db, testEntitlementPayload("entitlement.canceled", newEventID(), checkoutID, entRef, "canceled")); err != nil {
+	if err := ProcessSubscriptionBridgeCallback(db, testSubscriptionBridgePayload("subscription.canceled", newEventID(), checkoutID, entRef, "canceled")); err != nil {
 		t.Fatal(err)
 	}
-	sub, err := models.GetUserSubscriptionByEntitlementRef(db, entRef)
+	sub, err := models.GetUserSubscriptionBySubscriptionRef(db, entRef)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,11 +156,11 @@ func TestProcessEntitlementCallback_CanceledAndExpired(t *testing.T) {
 		t.Fatalf("expected canceled with timestamp, got %+v", sub)
 	}
 
-	if err := ProcessEntitlementCallback(db, testEntitlementPayload("entitlement.expired", newEventID(), checkoutID, entRef, "expired")); err != nil {
+	if err := ProcessSubscriptionBridgeCallback(db, testSubscriptionBridgePayload("subscription.expired", newEventID(), checkoutID, entRef, "expired")); err != nil {
 		t.Fatal(err)
 	}
 	var status string
-	if err := db.QueryRow(`SELECT status FROM user_subscriptions WHERE entitlement_ref = ?`, entRef).Scan(&status); err != nil {
+	if err := db.QueryRow(`SELECT status FROM user_subscriptions WHERE subscription_ref = ?`, entRef).Scan(&status); err != nil {
 		t.Fatal(err)
 	}
 	if status != "expired" {
@@ -218,9 +218,9 @@ func TestCancelGiftSubscription_RejectsBridgeSource(t *testing.T) {
 	seedSubscriptionPlan(t, db)
 	seedSubscriptionUser(t, db, "alice", 0)
 	checkoutID := "subchk_bridge"
-	entRef := "ent_bridge"
+	entRef := "sub_bridge"
 	seedPendingCheckout(t, db, checkoutID, "alice")
-	if err := ProcessEntitlementCallback(db, testEntitlementPayload("entitlement.activated", newEventID(), checkoutID, entRef, "active")); err != nil {
+	if err := ProcessSubscriptionBridgeCallback(db, testSubscriptionBridgePayload("subscription.activated", newEventID(), checkoutID, entRef, "active")); err != nil {
 		t.Fatal(err)
 	}
 

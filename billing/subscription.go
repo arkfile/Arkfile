@@ -13,9 +13,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/arkfile/Arkfile/config"
-	"github.com/arkfile/Arkfile/entitlements"
 	"github.com/arkfile/Arkfile/logging"
 	"github.com/arkfile/Arkfile/models"
+	"github.com/arkfile/Arkfile/subbridge"
 )
 
 // SettleUserAccumulator drains pending usage for one user without running a
@@ -72,12 +72,12 @@ func FinalizePaygBeforeSubscribe(db *sql.DB, username string) error {
 	return SettleUserAccumulator(db, username, now)
 }
 
-func ProcessEntitlementCallback(db *sql.DB, payload *entitlements.CallbackPayload) error {
+func ProcessSubscriptionBridgeCallback(db *sql.DB, payload *subbridge.CallbackPayload) error {
 	if payload == nil {
-		return errors.New("nil entitlement payload")
+		return errors.New("nil subscription bridge payload")
 	}
-	if payload.Protocol != "entitlement-bridge" || payload.Version != 1 {
-		return errors.New("unsupported entitlement protocol")
+	if payload.Protocol != subbridge.ProtocolName || payload.Version != subbridge.ProtocolVersion {
+		return errors.New("unsupported subscription bridge protocol")
 	}
 	body, _ := json.Marshal(payload)
 	hash := sha256.Sum256(body)
@@ -92,7 +92,7 @@ func ProcessEntitlementCallback(db *sql.DB, payload *entitlements.CallbackPayloa
 	}
 
 	var username string
-	sub, err := models.GetUserSubscriptionByEntitlementRef(db, payload.EntitlementRef)
+	sub, err := models.GetUserSubscriptionBySubscriptionRef(db, payload.SubscriptionRef)
 	if err == nil {
 		username = sub.Username
 	} else if payload.CheckoutID != "" {
@@ -102,26 +102,26 @@ func ProcessEntitlementCallback(db *sql.DB, payload *entitlements.CallbackPayloa
 		}
 		username = checkout.Username
 	} else {
-		return fmt.Errorf("cannot resolve username for entitlement event")
+		return fmt.Errorf("cannot resolve username for subscription bridge event")
 	}
 
-	if payload.EventType == "entitlement.activated" {
+	if payload.EventType == "subscription.activated" {
 		if err := FinalizePaygBeforeSubscribe(db, username); err != nil {
 			return err
 		}
 	}
 
-	if err := applyEntitlementState(db, username, payload); err != nil {
+	if err := applySubscriptionBridgeState(db, username, payload); err != nil {
 		return err
 	}
 
 	return models.InsertSubscriptionEvent(db,
-		payload.EventID, payload.EventType, payload.EntitlementRef,
+		payload.EventID, payload.EventType, payload.SubscriptionRef,
 		payload.CheckoutID, username, payload.PlanID, payloadHash,
 	)
 }
 
-func applyEntitlementState(db *sql.DB, username string, payload *entitlements.CallbackPayload) error {
+func applySubscriptionBridgeState(db *sql.DB, username string, payload *subbridge.CallbackPayload) error {
 	periodStart, err := time.Parse(time.RFC3339, payload.CurrentPeriodStart)
 	if err != nil {
 		return fmt.Errorf("invalid current_period_start: %w", err)
@@ -131,7 +131,7 @@ func applyEntitlementState(db *sql.DB, username string, payload *entitlements.Ca
 		return fmt.Errorf("invalid current_period_end: %w", err)
 	}
 
-	existing, err := models.GetUserSubscriptionByEntitlementRef(db, payload.EntitlementRef)
+	existing, err := models.GetUserSubscriptionBySubscriptionRef(db, payload.SubscriptionRef)
 	if err == sql.ErrNoRows {
 		checkout, cerr := models.GetSubscriptionCheckout(db, payload.CheckoutID)
 		if cerr != nil {
@@ -144,7 +144,7 @@ func applyEntitlementState(db *sql.DB, username string, payload *entitlements.Ca
 			Username:           username,
 			PlanID:             payload.PlanID,
 			CheckoutID:         payload.CheckoutID,
-			EntitlementRef:     payload.EntitlementRef,
+			SubscriptionRef:    payload.SubscriptionRef,
 			Status:             payload.Status,
 			Source:             "bridge",
 			CurrentPeriodStart: periodStart.UTC(),
@@ -158,7 +158,7 @@ func applyEntitlementState(db *sql.DB, username string, payload *entitlements.Ca
 		if err := models.InsertUserSubscription(db, sub); err != nil {
 			return err
 		}
-		return models.UpdateSubscriptionCheckout(db, payload.CheckoutID, "completed", payload.EntitlementRef)
+		return models.UpdateSubscriptionCheckout(db, payload.CheckoutID, "completed", payload.SubscriptionRef)
 	}
 	if err != nil {
 		return err
@@ -171,35 +171,35 @@ func applyEntitlementState(db *sql.DB, username string, payload *entitlements.Ca
 	existing.CancelAtPeriodEnd = payload.CancelAtPeriodEnd
 
 	switch payload.EventType {
-	case "entitlement.past_due":
+	case "subscription.past_due":
 		if existing.PastDueSince == nil {
 			now := time.Now().UTC()
 			existing.PastDueSince = &now
 		}
-	case "entitlement.renewed", "entitlement.activated":
+	case "subscription.renewed", "subscription.activated":
 		existing.PastDueSince = nil
-	case "entitlement.canceled":
+	case "subscription.canceled":
 		now := time.Now().UTC()
 		existing.CanceledAt = &now
-	case "entitlement.expired":
+	case "subscription.expired":
 		existing.Status = "expired"
 	}
 
 	return models.UpdateUserSubscription(db, existing)
 }
 
-func ReconcileEntitlementFromBridge(db *sql.DB, entitlementRef string) error {
+func ReconcileSubscriptionFromBridge(db *sql.DB, subscriptionRef string) error {
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		return err
 	}
-	snap, err := entitlements.FetchEntitlementSnapshot(cfg.Subscriptions.BridgeURL, cfg.Subscriptions.WebhookSecret, entitlementRef)
+	snap, err := subbridge.FetchSubscriptionSnapshot(cfg.Subscriptions.BridgeURL, cfg.Subscriptions.WebhookSecret, subscriptionRef)
 	if err != nil {
 		return err
 	}
 	snap.EventID = "sync_" + uuid.New().String()
-	snap.EventType = "entitlement.sync"
-	return ProcessEntitlementCallback(db, snap)
+	snap.EventType = "subscription.sync"
+	return ProcessSubscriptionBridgeCallback(db, snap)
 }
 
 func GrantGiftSubscription(db *sql.DB, username, planID string, days int, note, adminUsername string) (*models.UserSubscription, error) {
@@ -232,7 +232,7 @@ func GrantGiftSubscription(db *sql.DB, username, planID string, days int, note, 
 
 	now := time.Now().UTC()
 	checkoutID := "subchk_gift_" + strings.ReplaceAll(uuid.New().String(), "-", "")
-	entRef := "ent_gift_" + strings.ReplaceAll(uuid.New().String(), "-", "")
+	subRef := "sub_gift_" + strings.ReplaceAll(uuid.New().String(), "-", "")
 	end := now.Add(time.Duration(days) * 24 * time.Hour)
 
 	if err := models.CreateSubscriptionCheckout(db, &models.SubscriptionCheckout{
@@ -243,7 +243,7 @@ func GrantGiftSubscription(db *sql.DB, username, planID string, days int, note, 
 	}); err != nil {
 		return nil, err
 	}
-	if err := models.UpdateSubscriptionCheckout(db, checkoutID, "completed", entRef); err != nil {
+	if err := models.UpdateSubscriptionCheckout(db, checkoutID, "completed", subRef); err != nil {
 		return nil, err
 	}
 
@@ -251,7 +251,7 @@ func GrantGiftSubscription(db *sql.DB, username, planID string, days int, note, 
 		Username:           username,
 		PlanID:             planID,
 		CheckoutID:         checkoutID,
-		EntitlementRef:     entRef,
+		SubscriptionRef:    subRef,
 		Status:             "active",
 		Source:             "gift",
 		CurrentPeriodStart: now,
@@ -264,10 +264,10 @@ func GrantGiftSubscription(db *sql.DB, username, planID string, days int, note, 
 
 	eventID := "gift_" + uuid.New().String()
 	hash := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%d", username, planID, days)))
-	_ = models.InsertSubscriptionEvent(db, eventID, "gift.granted", entRef, checkoutID, username, planID, hex.EncodeToString(hash[:]))
+	_ = models.InsertSubscriptionEvent(db, eventID, "gift.granted", subRef, checkoutID, username, planID, hex.EncodeToString(hash[:]))
 	_ = adminUsername
 
-	return models.GetUserSubscriptionByEntitlementRef(db, entRef)
+	return models.GetUserSubscriptionBySubscriptionRef(db, subRef)
 }
 
 func CancelGiftSubscription(db *sql.DB, username string, immediate bool) error {
@@ -282,7 +282,7 @@ func CancelGiftSubscription(db *sql.DB, username string, immediate bool) error {
 		return errors.New("paid subscriptions must be canceled via the billing portal or processor dashboard")
 	}
 	if immediate {
-		return models.ExpireUserSubscription(db, sub.EntitlementRef)
+		return models.ExpireUserSubscription(db, sub.SubscriptionRef)
 	}
 	now := time.Now().UTC()
 	sub.Status = "canceled"
@@ -298,8 +298,8 @@ func ExpireDueGiftSubscriptions(db *sql.DB) (int, error) {
 	}
 	count := 0
 	for _, sub := range subs {
-		if err := models.ExpireUserSubscription(db, sub.EntitlementRef); err != nil {
-			logging.ErrorLogger.Printf("expire gift subscription %s: %v", sub.EntitlementRef, err)
+		if err := models.ExpireUserSubscription(db, sub.SubscriptionRef); err != nil {
+			logging.ErrorLogger.Printf("expire gift subscription %s: %v", sub.SubscriptionRef, err)
 			continue
 		}
 		count++
@@ -314,8 +314,8 @@ func ReconcileBridgeSubscriptions(db *sql.DB, withinDays int) (int, error) {
 	}
 	count := 0
 	for _, sub := range subs {
-		if err := ReconcileEntitlementFromBridge(db, sub.EntitlementRef); err != nil {
-			logging.ErrorLogger.Printf("reconcile entitlement %s: %v", sub.EntitlementRef, err)
+		if err := ReconcileSubscriptionFromBridge(db, sub.SubscriptionRef); err != nil {
+			logging.ErrorLogger.Printf("reconcile subscription %s: %v", sub.SubscriptionRef, err)
 			continue
 		}
 		count++
@@ -324,8 +324,8 @@ func ReconcileBridgeSubscriptions(db *sql.DB, withinDays int) (int, error) {
 }
 
 func CreateCheckoutURL(cfg config.SubscriptionsConfig, checkoutID, planID, returnURL string) (string, error) {
-	exp := time.Now().UTC().Add(entitlements.TokenLifetime).Unix()
-	token, err := entitlements.SignToken(cfg.WebhookSecret, entitlements.StartTokenPayload{
+	exp := time.Now().UTC().Add(subbridge.TokenLifetime).Unix()
+	token, err := subbridge.SignToken(cfg.WebhookSecret, subbridge.StartTokenPayload{
 		CheckoutID: checkoutID,
 		PlanID:     planID,
 		ReturnURL:  returnURL,
@@ -337,12 +337,12 @@ func CreateCheckoutURL(cfg config.SubscriptionsConfig, checkoutID, planID, retur
 	return cfg.BridgeURL + "/v1/start?token=" + token, nil
 }
 
-func CreatePortalURL(cfg config.SubscriptionsConfig, entitlementRef, returnURL string) (string, error) {
-	exp := time.Now().UTC().Add(entitlements.TokenLifetime).Unix()
-	token, err := entitlements.SignToken(cfg.WebhookSecret, entitlements.PortalTokenPayload{
-		EntitlementRef: entitlementRef,
-		ReturnURL:      returnURL,
-		Exp:            exp,
+func CreatePortalURL(cfg config.SubscriptionsConfig, subscriptionRef, returnURL string) (string, error) {
+	exp := time.Now().UTC().Add(subbridge.TokenLifetime).Unix()
+	token, err := subbridge.SignToken(cfg.WebhookSecret, subbridge.PortalTokenPayload{
+		SubscriptionRef: subscriptionRef,
+		ReturnURL:       returnURL,
+		Exp:             exp,
 	})
 	if err != nil {
 		return "", err

@@ -69,14 +69,14 @@ func TestEffectiveStorageLimitWithPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkoutID := "subchk_test1"
-	entRef := "ent_test1"
-	_, err = db.Exec(`INSERT INTO subscription_checkouts (checkout_id, username, plan_id, status, entitlement_ref)
+	entRef := "sub_test1"
+	_, err = db.Exec(`INSERT INTO subscription_checkouts (checkout_id, username, plan_id, status, subscription_ref)
 		VALUES (?, 'alice', 'plan_test', 'completed', ?)`, checkoutID, entRef)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = db.Exec(`INSERT INTO user_subscriptions
-		(username, plan_id, checkout_id, entitlement_ref, status, source, current_period_start, current_period_end)
+		(username, plan_id, checkout_id, subscription_ref, status, source, current_period_start, current_period_end)
 		VALUES ('alice', 'plan_test', ?, ?, 'active', 'gift', datetime('now'), datetime('now', '+30 days'))`,
 		checkoutID, entRef)
 	if err != nil {
@@ -130,7 +130,7 @@ func openSubscriptionTestDB(t *testing.T) *sql.DB {
 		username TEXT NOT NULL,
 		plan_id TEXT NOT NULL,
 		status TEXT NOT NULL DEFAULT 'pending',
-		entitlement_ref TEXT UNIQUE,
+		subscription_ref TEXT UNIQUE,
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
@@ -139,7 +139,7 @@ func openSubscriptionTestDB(t *testing.T) *sql.DB {
 		username TEXT NOT NULL,
 		plan_id TEXT NOT NULL,
 		checkout_id TEXT NOT NULL,
-		entitlement_ref TEXT UNIQUE NOT NULL,
+		subscription_ref TEXT UNIQUE NOT NULL,
 		status TEXT NOT NULL,
 		source TEXT NOT NULL,
 		current_period_start DATETIME NOT NULL,

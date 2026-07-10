@@ -25,18 +25,21 @@ import (
 
 var (
 	webhookSecret string
-	entitlements  sync.Map // entitlement_ref -> snapshot
+	subscriptions sync.Map // subscription_ref -> snapshot
 	checkouts     sync.Map // checkout_id -> plan_id
 )
 
 func main() {
-	webhookSecret = os.Getenv("ENTITLEMENT_BRIDGE_WEBHOOK_SECRET")
+	webhookSecret = os.Getenv("SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET")
 	if webhookSecret == "" {
-		webhookSecret = "test_entitlement_bridge_secret"
+		webhookSecret = "test_subscription_bridge_secret"
 	}
-	arkfileURL := os.Getenv("ARKFILE_WEBHOOK_URL")
-	if arkfileURL == "" {
-		arkfileURL = "https://localhost:8443/api/webhooks/entitlements"
+	consumerURL := os.Getenv("CONSUMER_WEBHOOK_URL")
+	if consumerURL == "" {
+		consumerURL = os.Getenv("ARKFILE_WEBHOOK_URL")
+	}
+	if consumerURL == "" {
+		consumerURL = "https://localhost:8443/api/webhooks/subscription-bridge"
 	}
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -77,24 +80,24 @@ func main() {
 		http.Redirect(w, r, returnURL, http.StatusFound)
 	})
 
-	http.HandleFunc("/v1/entitlements/", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/v1/subscriptions/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		ref := strings.TrimPrefix(r.URL.Path, "/v1/entitlements/")
+		ref := strings.TrimPrefix(r.URL.Path, "/v1/subscriptions/")
 		if ref == "" {
-			http.Error(w, "missing entitlement_ref", http.StatusBadRequest)
+			http.Error(w, "missing subscription_ref", http.StatusBadRequest)
 			return
 		}
-		if v, ok := entitlements.Load(ref); ok {
+		if v, ok := subscriptions.Load(ref); ok {
 			writeJSON(w, v)
 			return
 		}
 		http.Error(w, "not found", http.StatusNotFound)
 	})
 
-	// Test helper: simulate checkout completion and fire webhook to Arkfile.
+	// Test helper: simulate checkout completion and fire webhook to consumer app.
 	http.HandleFunc("/v1/mock/activate", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -113,16 +116,16 @@ func main() {
 		if planStr == "" {
 			planStr = "plan_dev_250gb"
 		}
-		entRef := "ent_" + strings.ReplaceAll(uuid.New().String(), "-", "")
+		subRef := "sub_" + strings.ReplaceAll(uuid.New().String(), "-", "")
 		now := time.Now().UTC()
 		end := now.Add(30 * 24 * time.Hour)
 		snap := map[string]interface{}{
-			"protocol":             "entitlement-bridge",
+			"protocol":             "subscription-bridge",
 			"version":              1,
 			"event_id":             "evt_" + strings.ReplaceAll(uuid.New().String(), "-", ""),
-			"event_type":           "entitlement.activated",
+			"event_type":           "subscription.activated",
 			"checkout_id":          req.CheckoutID,
-			"entitlement_ref":      entRef,
+			"subscription_ref":       subRef,
 			"plan_id":              planStr,
 			"status":               "active",
 			"current_period_start": now.Format(time.RFC3339),
@@ -131,40 +134,40 @@ func main() {
 			"processor_family":     "mock",
 			"occurred_at":          now.Format(time.RFC3339),
 		}
-		entitlements.Store(entRef, snap)
-		if err := postEntitlementWebhook(arkfileURL, snap); err != nil {
+		subscriptions.Store(subRef, snap)
+		if err := postSubscriptionBridgeWebhook(consumerURL, snap); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		writeJSON(w, map[string]interface{}{"entitlement_ref": entRef, "status": "delivered"})
+		writeJSON(w, map[string]interface{}{"subscription_ref": subRef, "status": "delivered"})
 	})
 
 	http.HandleFunc("/v1/mock/expire", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			EntitlementRef string `json:"entitlement_ref"`
+			SubscriptionRef string `json:"subscription_ref"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		v, ok := entitlements.Load(req.EntitlementRef)
+		v, ok := subscriptions.Load(req.SubscriptionRef)
 		if !ok {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
 		snap, _ := v.(map[string]interface{})
 		snap["event_id"] = "evt_" + strings.ReplaceAll(uuid.New().String(), "-", "")
-		snap["event_type"] = "entitlement.expired"
+		snap["event_type"] = "subscription.expired"
 		snap["status"] = "expired"
-		entitlements.Store(req.EntitlementRef, snap)
-		if err := postEntitlementWebhook(arkfileURL, snap); err != nil {
+		subscriptions.Store(req.SubscriptionRef, snap)
+		if err := postSubscriptionBridgeWebhook(consumerURL, snap); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
 		writeJSON(w, map[string]string{"status": "expired"})
 	})
 
-	log.Println("Starting mock Entitlement Bridge on :8081...")
+	log.Println("Starting mock Subscription Bridge on :8081...")
 	if err := http.ListenAndServe(":8081", nil); err != nil {
 		log.Fatal(err)
 	}
@@ -199,7 +202,7 @@ func decodeBase64URL(s string) ([]byte, error) {
 	return base64.RawURLEncoding.DecodeString(s)
 }
 
-func postEntitlementWebhook(url string, payload map[string]interface{}) error {
+func postSubscriptionBridgeWebhook(url string, payload map[string]interface{}) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -215,8 +218,8 @@ func postEntitlementWebhook(url string, payload map[string]interface{}) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Entitlement-Bridge-Signature", sig)
-	req.Header.Set("User-Agent", "entitlement-bridge-mock/1.0")
+	req.Header.Set("Subscription-Bridge-Signature", sig)
+	req.Header.Set("User-Agent", "subscription-bridge-mock/1.0")
 
 	client := &http.Client{
 		Timeout: 15 * time.Second,
@@ -231,7 +234,7 @@ func postEntitlementWebhook(url string, payload map[string]interface{}) error {
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("arkfile webhook %d: %s", resp.StatusCode, string(b))
+		return fmt.Errorf("consumer webhook %d: %s", resp.StatusCode, string(b))
 	}
 	return nil
 }

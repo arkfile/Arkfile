@@ -172,7 +172,7 @@ func (b BillingConfig) PaygNegativeBalanceLimitMicrocents() int64 {
 	return b.paygNegativeBalanceLimitMicrocents
 }
 
-// SubscriptionsConfig is the Entitlement Bridge consumer configuration.
+// SubscriptionsConfig is the Subscription Bridge consumer configuration.
 type SubscriptionsConfig struct {
 	Enabled              bool   `json:"enabled"`
 	BridgeURL            string `json:"bridge_url"`
@@ -347,7 +347,7 @@ func loadDefaultConfig(cfg *Config) error {
 	cfg.Billing.PaygNegativeBalanceLimitUSD = "10.00"
 	cfg.Billing.PaygEnabled = false
 
-	// Subscriptions defaults (Entitlement Bridge consumer)
+	// Subscriptions defaults (Subscription Bridge consumer)
 	cfg.Subscriptions.Enabled = false
 	cfg.Subscriptions.GiftDefaultDays = 30
 	cfg.Subscriptions.GiftMaxDays = 90
@@ -529,10 +529,10 @@ func loadEnvConfig(cfg *Config) error {
 			cfg.Subscriptions.Enabled = parsed
 		}
 	}
-	if v := os.Getenv("ARKFILE_ENTITLEMENT_BRIDGE_URL"); v != "" {
+	if v := os.Getenv("ARKFILE_SUBSCRIPTION_BRIDGE_URL"); v != "" {
 		cfg.Subscriptions.BridgeURL = strings.TrimRight(strings.TrimSpace(v), "/")
 	}
-	if v := os.Getenv("ARKFILE_ENTITLEMENT_BRIDGE_WEBHOOK_SECRET"); v != "" {
+	if v := os.Getenv("ARKFILE_SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET"); v != "" {
 		cfg.Subscriptions.WebhookSecret = v
 	}
 	if v := os.Getenv("ARKFILE_SUBSCRIPTION_RETURN_URL"); v != "" {
@@ -663,10 +663,10 @@ func validateSubscriptionsConfig(cfg *Config) error {
 		return nil
 	}
 	if strings.TrimSpace(cfg.Subscriptions.BridgeURL) == "" {
-		return fmt.Errorf("ARKFILE_ENTITLEMENT_BRIDGE_URL is required when ARKFILE_SUBSCRIPTIONS_ENABLED=true")
+		return fmt.Errorf("ARKFILE_SUBSCRIPTION_BRIDGE_URL is required when ARKFILE_SUBSCRIPTIONS_ENABLED=true")
 	}
 	if strings.TrimSpace(cfg.Subscriptions.WebhookSecret) == "" {
-		return fmt.Errorf("ARKFILE_ENTITLEMENT_BRIDGE_WEBHOOK_SECRET is required when ARKFILE_SUBSCRIPTIONS_ENABLED=true")
+		return fmt.Errorf("ARKFILE_SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET is required when ARKFILE_SUBSCRIPTIONS_ENABLED=true")
 	}
 	if cfg.Subscriptions.GiftDefaultDays < 1 {
 		return fmt.Errorf("ARKFILE_GIFT_SUBSCRIPTION_DEFAULT_DAYS must be at least 1")

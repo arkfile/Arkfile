@@ -1,4 +1,4 @@
-package entitlements
+package subbridge
 
 import (
 	"crypto/hmac"
@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const testSecret = "test_entitlement_bridge_secret"
+const testSecret = "test_subscription_bridge_secret"
 
 func TestSignAndVerifyStartToken(t *testing.T) {
 	exp := time.Now().UTC().Add(5 * time.Minute).Unix()
@@ -49,7 +49,7 @@ func TestVerifyToken_RejectsBadSignature(t *testing.T) {
 
 func TestVerifyToken_RejectsExpired(t *testing.T) {
 	exp := time.Now().UTC().Add(-time.Hour).Unix()
-	token, err := SignToken(testSecret, PortalTokenPayload{EntitlementRef: "ent_x", Exp: exp})
+	token, err := SignToken(testSecret, PortalTokenPayload{SubscriptionRef: "sub_x", Exp: exp})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestVerifyToken_RejectsExpired(t *testing.T) {
 }
 
 func TestWebhookSignatureRoundTrip(t *testing.T) {
-	body := []byte(`{"protocol":"entitlement-bridge","version":1,"event_id":"evt_1"}`)
+	body := []byte(`{"protocol":"subscription-bridge","version":1,"event_id":"evt_1"}`)
 	header := SignWebhook(testSecret, body)
 	if err := VerifyWebhookSignature(testSecret, body, header); err != nil {
 		t.Fatalf("VerifyWebhookSignature: %v", err)
@@ -79,7 +79,7 @@ func TestVerifyWebhookSignature_RejectsStaleTimestamp(t *testing.T) {
 }
 
 func TestBridgeGETAuthRoundTrip(t *testing.T) {
-	path := "/v1/entitlements/ent_abc"
+	path := "/v1/subscriptions/sub_abc"
 	auth := SignBridgeGET(testSecret, "GET", path)
 	if err := VerifyBridgeGET(testSecret, "GET", path, auth); err != nil {
 		t.Fatalf("VerifyBridgeGET: %v", err)

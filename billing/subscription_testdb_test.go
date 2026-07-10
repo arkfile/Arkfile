@@ -6,14 +6,14 @@ import (
 	"time"
 
 	"github.com/arkfile/Arkfile/config"
-	"github.com/arkfile/Arkfile/entitlements"
+	"github.com/arkfile/Arkfile/subbridge"
 	"github.com/arkfile/Arkfile/logging"
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 )
 
 const (
-	subTestSecret  = "test_entitlement_bridge_secret"
+	subTestSecret  = "test_subscription_bridge_secret"
 	subTestPlanID  = "plan_dev_250gb"
 	subTestPlanGiB = int64(250) << 30
 )
@@ -29,8 +29,8 @@ func withBillingSubscriptionEnv(t *testing.T) {
 	t.Setenv("STORAGE_1_SECRET_KEY", "test")
 	t.Setenv("STORAGE_1_BUCKET", "test-bucket")
 	t.Setenv("ARKFILE_SUBSCRIPTIONS_ENABLED", "true")
-	t.Setenv("ARKFILE_ENTITLEMENT_BRIDGE_URL", "http://127.0.0.1:8081")
-	t.Setenv("ARKFILE_ENTITLEMENT_BRIDGE_WEBHOOK_SECRET", subTestSecret)
+	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_URL", "http://127.0.0.1:8081")
+	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET", subTestSecret)
 	t.Setenv("ARKFILE_BILLING_ENABLED", "true")
 	t.Setenv("ARKFILE_BILLING_PAYG_ENABLED", "true")
 	t.Setenv("ARKFILE_CUSTOMER_PRICE_USD_PER_TB_PER_MONTH", "10.00")
@@ -114,7 +114,7 @@ func openFullBillingSubscriptionTestDB(t *testing.T) *sql.DB {
 		username TEXT NOT NULL,
 		plan_id TEXT NOT NULL,
 		status TEXT NOT NULL DEFAULT 'pending',
-		entitlement_ref TEXT UNIQUE,
+		subscription_ref TEXT UNIQUE,
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
@@ -123,7 +123,7 @@ func openFullBillingSubscriptionTestDB(t *testing.T) *sql.DB {
 		username TEXT NOT NULL,
 		plan_id TEXT NOT NULL,
 		checkout_id TEXT NOT NULL,
-		entitlement_ref TEXT UNIQUE NOT NULL,
+		subscription_ref TEXT UNIQUE NOT NULL,
 		status TEXT NOT NULL,
 		source TEXT NOT NULL,
 		current_period_start DATETIME NOT NULL,
@@ -139,7 +139,7 @@ func openFullBillingSubscriptionTestDB(t *testing.T) *sql.DB {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		event_id TEXT UNIQUE NOT NULL,
 		event_type TEXT NOT NULL,
-		entitlement_ref TEXT,
+		subscription_ref TEXT,
 		checkout_id TEXT,
 		username TEXT,
 		plan_id TEXT,
@@ -191,17 +191,17 @@ func seedPendingCheckout(t *testing.T, db *sql.DB, checkoutID, username string) 
 func seedActiveGiftSubscription(t *testing.T, db *sql.DB, username string) {
 	t.Helper()
 	checkoutID := "subchk_gift_" + username
-	entRef := "ent_gift_" + username
+	entRef := "sub_gift_" + username
 	seedPendingCheckout(t, db, checkoutID, username)
 	if _, err := db.Exec(
-		`UPDATE subscription_checkouts SET status = 'completed', entitlement_ref = ? WHERE checkout_id = ?`,
+		`UPDATE subscription_checkouts SET status = 'completed', subscription_ref = ? WHERE checkout_id = ?`,
 		entRef, checkoutID,
 	); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`
 		INSERT INTO user_subscriptions
-		  (username, plan_id, checkout_id, entitlement_ref, status, source, current_period_start, current_period_end)
+		  (username, plan_id, checkout_id, subscription_ref, status, source, current_period_start, current_period_end)
 		VALUES (?, ?, ?, ?, 'active', 'gift', datetime('now'), datetime('now', '+30 days'))`,
 		username, subTestPlanID, checkoutID, entRef,
 	); err != nil {
@@ -209,15 +209,15 @@ func seedActiveGiftSubscription(t *testing.T, db *sql.DB, username string) {
 	}
 }
 
-func testEntitlementPayload(eventType, eventID, checkoutID, entRef, status string) *entitlements.CallbackPayload {
+func testSubscriptionBridgePayload(eventType, eventID, checkoutID, entRef, status string) *subbridge.CallbackPayload {
 	now := time.Now().UTC()
-	return &entitlements.CallbackPayload{
-		Protocol:           "entitlement-bridge",
+	return &subbridge.CallbackPayload{
+		Protocol:           "subscription-bridge",
 		Version:            1,
 		EventID:            eventID,
 		EventType:          eventType,
 		CheckoutID:         checkoutID,
-		EntitlementRef:     entRef,
+		SubscriptionRef:     entRef,
 		PlanID:             subTestPlanID,
 		Status:             status,
 		CurrentPeriodStart: now.Format(time.RFC3339),

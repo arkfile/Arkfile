@@ -25,7 +25,7 @@ const (
 	paymentsTestOtherUser = "pay-other-user"
 	paymentsWebhookSecret = "test_webhook_secret"
 	paymentsStoreID       = "test_store_id"
-	subscriptionsTestSecret = "test_entitlement_bridge_secret"
+	subscriptionsTestSecret = "test_subscription_bridge_secret"
 	subscriptionsTestPlanID = "plan_dev_250gb"
 )
 
@@ -141,7 +141,7 @@ func setupPaymentsSQLiteDB(t *testing.T) *sql.DB {
 			username TEXT NOT NULL,
 			plan_id TEXT NOT NULL,
 			status TEXT NOT NULL DEFAULT 'pending',
-			entitlement_ref TEXT UNIQUE,
+			subscription_ref TEXT UNIQUE,
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);
@@ -150,7 +150,7 @@ func setupPaymentsSQLiteDB(t *testing.T) *sql.DB {
 			username TEXT NOT NULL,
 			plan_id TEXT NOT NULL,
 			checkout_id TEXT NOT NULL,
-			entitlement_ref TEXT UNIQUE NOT NULL,
+			subscription_ref TEXT UNIQUE NOT NULL,
 			status TEXT NOT NULL,
 			source TEXT NOT NULL,
 			current_period_start DATETIME NOT NULL,
@@ -166,7 +166,7 @@ func setupPaymentsSQLiteDB(t *testing.T) *sql.DB {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			event_id TEXT UNIQUE NOT NULL,
 			event_type TEXT NOT NULL,
-			entitlement_ref TEXT,
+			subscription_ref TEXT,
 			checkout_id TEXT,
 			username TEXT,
 			plan_id TEXT,
@@ -243,8 +243,8 @@ func withSubscriptionsTestEnv(t *testing.T, btcpayURL string) (*sql.DB, func()) 
 	db, cleanup := withPaymentsTestEnv(t, btcpayURL, true)
 
 	t.Setenv("ARKFILE_SUBSCRIPTIONS_ENABLED", "true")
-	t.Setenv("ARKFILE_ENTITLEMENT_BRIDGE_URL", "http://127.0.0.1:8081")
-	t.Setenv("ARKFILE_ENTITLEMENT_BRIDGE_WEBHOOK_SECRET", subscriptionsTestSecret)
+	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_URL", "http://127.0.0.1:8081")
+	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_WEBHOOK_SECRET", subscriptionsTestSecret)
 	t.Setenv("ARKFILE_BILLING_PAYG_ENABLED", "true")
 	t.Setenv("ARKFILE_CUSTOMER_PRICE_USD_PER_TB_PER_MONTH", "10.00")
 	t.Setenv("JWT_SECRET", "test-jwt-secret")
@@ -290,9 +290,9 @@ func withSubscriptionsTestEnv(t *testing.T, btcpayURL string) (*sql.DB, func()) 
 func seedHandlerGiftSubscription(t *testing.T, db *sql.DB, username string) {
 	t.Helper()
 	checkoutID := "subchk_gift_" + username
-	entRef := "ent_gift_" + username
+	entRef := "sub_gift_" + username
 	if _, err := db.Exec(
-		`INSERT INTO subscription_checkouts (checkout_id, username, plan_id, status, entitlement_ref)
+		`INSERT INTO subscription_checkouts (checkout_id, username, plan_id, status, subscription_ref)
 		 VALUES (?, ?, ?, 'completed', ?)`,
 		checkoutID, username, subscriptionsTestPlanID, entRef,
 	); err != nil {
@@ -300,7 +300,7 @@ func seedHandlerGiftSubscription(t *testing.T, db *sql.DB, username string) {
 	}
 	if _, err := db.Exec(`
 		INSERT INTO user_subscriptions
-		  (username, plan_id, checkout_id, entitlement_ref, status, source, current_period_start, current_period_end)
+		  (username, plan_id, checkout_id, subscription_ref, status, source, current_period_start, current_period_end)
 		VALUES (?, ?, ?, ?, 'active', 'gift', datetime('now'), datetime('now', '+30 days'))`,
 		username, subscriptionsTestPlanID, checkoutID, entRef,
 	); err != nil {

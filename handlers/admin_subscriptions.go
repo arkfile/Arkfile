@@ -197,7 +197,7 @@ func AdminSyncUserSubscriptionHandler(c echo.Context) error {
 	if sub.Source != "bridge" {
 		return echo.NewHTTPError(http.StatusBadRequest, "Sync applies to bridge-backed subscriptions only")
 	}
-	if err := billing.ReconcileEntitlementFromBridge(database.DB, sub.EntitlementRef); err != nil {
+	if err := billing.ReconcileSubscriptionFromBridge(database.DB, sub.SubscriptionRef); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 	updated, _ := billing.GetActiveSubscription(database.DB, username)
