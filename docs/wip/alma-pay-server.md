@@ -1,3 +1,5 @@
+`PLANNING STATUS: This document is copied from the Arkfile document of the same name and retained as a non-production planning reference. Its commands are illustrative, contain placeholders, and are not a supported clean-host installation procedure. Do not apply them to a production host. The implemented runbook must replace these examples only after upstream pins, exact package installation, pinned checkout, SELinux labeling, generated Compose, backup, restore, and clean-VM behavior have been tested.`
+
 # BTCPay Server on AlmaLinux 10+ (rootless Podman)
 
 This document describes the operator protocol for self-hosted BTCPay Server 2.4+ on AlmaLinux 10+. The stack uses Bitcoin Core 30+, rootless Podman only, and a dedicated `almapay` system account that cannot log in over SSH. It listens on a loopback high port behind host-installed Caddy and can include a pruned Bitcoin node, a pruned Monero node, and optional Boltz (Lightning) and Stripe (card) plugins. One BTCPay instance can host multiple stores with independent API keys and webhooks per store.
@@ -10,9 +12,9 @@ The implementation contract for the separate AlmaPay repository is in [`alma-pay
 
 The payment VPS is a single-purpose host. Day-to-day container operations run as the unprivileged `almapay` user through rootless Podman. Containers do not receive privileged capabilities, host root bind mounts, or access to the host SSH trust store. Administrative login uses a separate operator account over SSH; `almapay` exists only to own data directories, pull images, and run compose under user systemd with linger enabled.
 
-TLS termination and public HTTP ports live on Caddy (or an equivalent reverse proxy) outside the BTCPay compose stack. BTCPay itself binds a high port on loopback (for example `127.0.0.1:8080`), which rootless Podman can expose without capability adjustments.
+TLS termination and public HTTP ports live on host-installed Caddy outside the BTCPay compose stack. BTCPay itself binds a high port on loopback (for example `127.0.0.1:8080`), which rootless Podman can expose without capability adjustments. Alternate reverse proxies are future profiles and are not part of the initial supported configuration.
 
-Rootless Podman means container processes run as `almapay`, not as root. Never run `sudo podman` or `podman` from a root shell for this stack. Operator maintenance uses `sudo -u almapay -H` to drop into the runtime user (`almapay` has `/sbin/nologin`, so you cannot SSH in directly). That is user switching, not a privileged container runtime. Host bootstrap (packages, firewall, user creation) and Caddy installation legitimately use root; the compose stack does not.
+Rootless Podman means Podman and the container lifecycle run under the unprivileged `almapay` host account. A process may have UID 0 inside its container namespace, but that UID maps through `almapay`'s user namespace and is not host root. Never run `sudo podman` or `podman` from a root shell for this stack. Operator maintenance uses `sudo -u almapay -H` to drop into the runtime user (`almapay` has `/sbin/nologin`, so you cannot SSH in directly). That is user switching, not a privileged container runtime. Host bootstrap, active Caddy installation, and host recovery legitimately use root; the compose stack and AlmaPay application backup do not.
 
 ## What upstream assumes (and what we skip)
 
@@ -30,6 +32,8 @@ Integrating applications talk to BTCPay through the Greenfield API and receive s
 
 AlmaPay is application-agnostic. Arkfile is the first reference integration used to prove deployment, checkout, Greenfield API, and webhook behavior, but it is not embedded in or required by the AlmaPay runtime. One deployment may serve multiple independent applications through isolated BTCPay stores and credentials.
 
+The initial supported profile is one AlmaLinux 10+ host with Caddy, a local pruned Bitcoin node, and optional local pruned Monero. Other RHEL-family distributions, external RPC providers, split-host chain nodes, alternate reverse proxies, and other modes require future profiles with their own implementation and tests.
+
 ## Configuration invariants
 
 Replace `pay.example.com` with your real hostname and use that same value everywhere: DNS, runtime `.env` (`BTCPAY_HOST`), and the Caddy site block. Keep `BTCPAY_PROTOCOL=https` when TLS terminates at Caddy. Set `NOREVERSEPROXY_HTTP_PORT=127.0.0.1:8080`; a bare `8080` can publish on every host interface. Keep `NBITCOIN_NETWORK` consistent with wallet policy. Generator `BTCPAYGEN_*` variables define which services appear in compose; runtime `.env` defines how BTCPay presents itself on the network.
@@ -46,6 +50,8 @@ Install Caddy on the host (package or static binary) so it can bind 443 and prox
 
 ## Phase 1 — One-time host bootstrap (operator root)
 
+The following commands illustrate the intended privilege boundary; they are not yet a version-pinned installer. The implemented `bootstrap-host` command must validate existing identities and install exact supported packages without concealing failures behind unconditional success.
+
 Create the service identity and data root:
 
 ```bash
@@ -57,8 +63,9 @@ sudo install -d -o almapay -g almapay -m 0750 /var/lib/almapay
 Ensure rootless Podman subordinate ID ranges exist for `almapay`; verify non-overlapping entries in `/etc/subuid` and `/etc/subgid`. Install Podman and an explicitly selected Compose provider. `podman compose` is a wrapper around an external provider, not a native Compose implementation. The AlmaPay implementation must pin and install a tested `podman-compose` version and set `PODMAN_COMPOSE_PROVIDER=/usr/bin/podman-compose`; it must fail if Docker Compose is selected.
 
 ```bash
+# Illustrative only. The implementation must install every exact supported
+# package version, including Podman and podman-compose, from reviewed sources.
 sudo dnf -y install podman git curl jq shadow-utils
-# Install the exact podman-compose package/version recorded in upstream.lock.
 ```
 
 After changing subordinate IDs on an existing runtime, stop all affected containers and run `podman system migrate` as `almapay`. Never run that migration automatically against a live deployment.
@@ -81,15 +88,21 @@ All Phase 2 onward container work runs as `almapay` from an operator session via
 
 ## Phase 2 — Fetch compose tooling and generate the stack
 
-From an operator session, as the runtime user (substitute your `ALMAPAY_UID` from Phase 1):
+The examples in this phase remain non-production pseudocode until `upstream.lock` exists. A supported implementation must explicitly fetch and detach at the pinned commit; cloning the current default branch is not sufficient. It must also prove that every generator bind mount works with SELinux enforcing and uses reviewed private relabeling such as `:Z`.
+
+Illustrative pinned-checkout sequence from an operator session, as the runtime user:
 
 ```bash
-ALMAPAY_UID=$(id -u almapay)
-
 sudo -u almapay -H git clone https://github.com/btcpayserver/btcpayserver-docker.git /var/lib/almapay/btcpayserver-docker
+sudo -u almapay -H bash -lc '
+  cd /var/lib/almapay/btcpayserver-docker
+  git fetch origin "<PINNED_UPSTREAM_COMMIT>"
+  git checkout --detach "<PINNED_UPSTREAM_COMMIT>"
+  test "$(git rev-parse HEAD)" = "<PINNED_UPSTREAM_COMMIT>"
+'
 ```
 
-Export generation variables. This example uses mainnet Bitcoin Core 30+ (pruned), Monero (pruned), no in-stack Lightning daemon, and no integrated reverse proxy. Substitute the reviewed BTCPay and generator pins from `upstream.lock`; never use `latest`.
+Record the intended profile inputs. This example uses mainnet Bitcoin Core 30+ (pruned), Monero (pruned), no in-stack Lightning daemon, and no integrated reverse proxy. Substitute the reviewed BTCPay and generator pins from `upstream.lock`; never use `latest`. A supported implementation must pass these values explicitly through a protected environment file or the generator invocation and must not assume that caller exports survive a `sudo -u` boundary.
 
 ```bash
 export BTCPAY_HOST="pay.example.com"
@@ -113,9 +126,9 @@ sudo -u almapay -H bash -lc '
   test "$(git rev-parse HEAD)" = "<PINNED_UPSTREAM_COMMIT>"
   podman pull btcpayserver/docker-compose-generator@sha256:<PINNED_GENERATOR_DIGEST>
   podman run --rm \
-    -v "$(pwd)/Generated:/app/Generated" \
-    -v "$(pwd)/docker-compose-generator/docker-fragments:/app/docker-fragments" \
-    -v "$(pwd)/docker-compose-generator/crypto-definitions.json:/app/crypto-definitions.json" \
+    -v "$(pwd)/Generated:/app/Generated:Z" \
+    -v "$(pwd)/docker-compose-generator/docker-fragments:/app/docker-fragments:ro,Z" \
+    -v "$(pwd)/docker-compose-generator/crypto-definitions.json:/app/crypto-definitions.json:ro,Z" \
     -e BTCPAYGEN_CRYPTO1=btc \
     -e BTCPAYGEN_CRYPTO2=xmr \
     -e BTCPAYGEN_REVERSEPROXY=none \
@@ -157,7 +170,7 @@ Initial synchronization for Bitcoin (pruned) and Monero can take hours or days. 
 
 ## Phase 3 — User systemd persistence
 
-Register a user service for `almapay` so the stack survives reboot. Create `/var/lib/almapay/.config/systemd/user/btcpay.service` (replace `ALMAPAY_UID` with the numeric uid from `id -u almapay`):
+Register a user service for `almapay` so the stack survives reboot. Create `/var/lib/almapay/.config/systemd/user/almapay.service` (replace `ALMAPAY_UID` with the numeric uid from `id -u almapay`):
 
 ```ini
 [Unit]
@@ -185,7 +198,7 @@ Enable it from an operator session:
 
 ```bash
 ALMAPAY_UID=$(id -u almapay)
-sudo -u almapay -H XDG_RUNTIME_DIR=/run/user/${ALMAPAY_UID} systemctl --user enable --now btcpay.service
+sudo -u almapay -H XDG_RUNTIME_DIR=/run/user/${ALMAPAY_UID} systemctl --user enable --now almapay.service
 ```
 
 Confirm with `sudo -u almapay -H podman ps` and a loopback HTTP probe once sync allows (`curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/`).
@@ -193,7 +206,7 @@ Confirm with `sudo -u almapay -H podman ps` and a loopback HTTP probe once sync 
 For later restarts use the same pattern:
 
 ```bash
-sudo -u almapay -H XDG_RUNTIME_DIR=/run/user/$(id -u almapay) systemctl --user restart btcpay.service
+sudo -u almapay -H XDG_RUNTIME_DIR=/run/user/$(id -u almapay) systemctl --user restart almapay.service
 ```
 
 ## Phase 4 — Caddy reverse proxy
@@ -205,6 +218,8 @@ pay.example.com {
     reverse_proxy 127.0.0.1:8080
 }
 ```
+
+AlmaPay owns and backs up a non-secret source template for this site block. The active Caddy file and service are installed and protected as root-owned host configuration; the `almapay` account must not be able to modify the public reverse proxy. A typical active file is `root:caddy` mode `0640`, subject to the packaging and service account used on the tested host. Caddy itself runs as its unprivileged service account and receives permission to bind ports 80 and 443 through the host service configuration rather than running as root.
 
 Reload Caddy after DNS points at the host. BTCPay should see HTTPS externally (`BTCPAY_PROTOCOL=https`) while the hop from Caddy to BTCPay stays HTTP on loopback. Caddy sets `X-Forwarded-Proto` and related headers by default.
 
@@ -227,7 +242,7 @@ Open **Plugins → Manage Plugins** in the BTCPay UI. Skip this phase if on-chai
 Install **Boltz** (BoltzExchange). Restart the stack when prompted:
 
 ```bash
-sudo -u almapay -H XDG_RUNTIME_DIR=/run/user/$(id -u almapay) systemctl --user restart btcpay.service
+sudo -u almapay -H XDG_RUNTIME_DIR=/run/user/$(id -u almapay) systemctl --user restart almapay.service
 ```
 
 Choose **Nodeless** mode during setup unless you later add a local Lightning implementation to the compose file. Follow the plugin wizard to create or import a Liquid wallet, review fees, and optionally configure chain swaps from Liquid BTC to on-chain BTC with a maximum Liquid balance you accept. Enable Lightning as a payment method on each store. Boltz does not support zero-amount invoices.
@@ -250,10 +265,17 @@ Updates must be lockfile-driven, never an unreviewed `git pull`. Create and veri
 sudo -u almapay -H bash -lc 'cd /var/lib/almapay/btcpayserver-docker && git fetch origin <PINNED_COMMIT> && git checkout --detach <PINNED_COMMIT>'
 # Re-run the pinned generator, review its diff, then:
 sudo -u almapay -H bash -lc 'cd /var/lib/almapay && podman compose -f btcpayserver-docker/Generated/docker-compose.generated.yml --env-file .env pull'
-sudo -u almapay -H XDG_RUNTIME_DIR=/run/user/$(id -u almapay) systemctl --user restart btcpay.service
+sudo -u almapay -H XDG_RUNTIME_DIR=/run/user/$(id -u almapay) systemctl --user restart almapay.service
 ```
 
-Backups: follow BTCPay backup guidance for PostgreSQL and wallet material, and also retain deployment state that BTCPay's UI does not cover: `/var/lib/almapay/.env`, the generated compose file, the `btcpayserver-docker` git checkout (or pinned commit), and the user systemd unit. Backup jobs should run as a privileged operator reading `almapay`-owned volumes under `/var/lib/almapay` and rootless Podman volume paths (`podman volume inspect` helps locate mount sources). Test restore on a non-production host.
+Backups use two explicit recovery domains:
+
+1. `almapay backup` runs as `almapay`. It creates a consistent PostgreSQL dump; service-aware or Podman-aware exports of BTCPay, plugin, and wallet state; protected application configuration and secrets; generated Compose; `upstream.lock`; the user systemd unit; and the non-secret AlmaPay-owned Caddy source template. It must not use root to copy live rootless Podman storage. Chain data is reconstructible and excluded by default. The resulting artifact is checksummed, encrypted, verified, and transferred off-host.
+2. Ordinary root-owned host backup tooling captures only the required host recovery state: active Caddy configuration and systemd overrides, root-owned DNS-provider credentials if applicable, the `almapay` UID and its specific subordinate-ID allocations, linger state, relevant firewall state, AlmaPay-specific SELinux customization, and package inventory. Its manifest references the matching AlmaPay application-backup identifier and checksums. It does not indiscriminately copy SSH keys, unrelated `/etc` state, live Podman storage, or reconstructible ACME certificates.
+
+A root-owned timer or established backup system may coordinate the process by invoking `almapay backup` through `sudo -u almapay`, waiting for the verified encrypted application artifact, and then creating the host recovery bundle. Root never invokes Podman. The two bundles may have separate encryption keys and access controls.
+
+Restore proceeds in phases: rebuild the supported host; recreate the recorded `almapay` identity and non-overlapping subordinate-ID ranges; install pinned host packages and required host configuration; run `almapay restore` as `almapay`; install or validate the active root-owned Caddy configuration from the reviewed source or host bundle; then start and verify the complete deployment. Test the entire paired restore on a non-production host.
 
 Disk monitoring is critical on pruned-BTC plus Monero layouts. If space tightens, adjust prune tier (`opt-save-storage-s` vs `opt-save-storage`) only with planning: changing prune fragments requires regenerating compose and resync policy review.
 

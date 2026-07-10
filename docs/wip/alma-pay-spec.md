@@ -8,6 +8,8 @@ AlmaPay is not an application billing engine, account ledger, payment gateway ab
 
 The first production target is an already-provisioned VPS. Repository implementation and local or disposable-VM testing do not authorize access to that VPS. Agents must not attempt to access or modify the VPS directly. Agents must instead build automation, tooling, scripts, and instructions that a human administrator or developer can use.
 
+The initial supported deployment profile is deliberately narrow: AlmaLinux 10+, one host, host-installed Caddy, a local pruned Bitcoin node, and optional local pruned Monero. Other RHEL-family distributions, alternate reverse proxies, external RPC providers, split-host chain nodes, and other deployment modes are future profiles. They must not be described as supported until they have explicit implementation, security validation, and integration tests.
+
 The companion operator runbook is [`alma-pay-server.md`](alma-pay-server.md).
 
 ## Required baseline
@@ -35,7 +37,7 @@ The July 10, 2026 research baseline uses the [AlmaLinux 10.2 release notes](http
 
 AlmaPay must turn a clean, supported AlmaLinux host into a reproducible and operable payment service while preserving these invariants:
 
-- Container processes run as the dedicated unprivileged `almapay` user.
+- Podman and the container lifecycle run under the dedicated unprivileged `almapay` host account; container UIDs map through its rootless user namespace and never become host root.
 - No AlmaPay runtime command invokes Podman as root.
 - BTCPay is published only on `127.0.0.1:8080`.
 - Only host Caddy binds public HTTP and HTTPS ports.
@@ -60,7 +62,7 @@ AlmaPay owns:
 - Acquisition and verification of pinned upstream sources.
 - Generation and security inspection of BTCPay Compose.
 - BTCPay, PostgreSQL, NBXplorer, Bitcoin, Monero, and supporting containers.
-- Host Caddy configuration.
+- AlmaPay-owned Caddy source rendering, validation, and root installation guidance.
 - User systemd persistence.
 - Firewall validation and optional safe configuration.
 - Version, health, synchronization, exposure, and integration diagnostics.
@@ -146,6 +148,8 @@ At minimum, validate these values:
 Unknown modes or contradictory settings must fail closed.
 
 Use a separate `secrets.env`, excluded from Git and created with mode `0600`, for provider tokens and credentials. Scripts must disable shell tracing before reading secrets. Secret values must be passed through protected environment files or standard input where supported, not command-line arguments.
+
+Root-owned host secrets, including DNS-provider credentials used by a custom Caddy build, are outside the AlmaPay application secret file and require separate operator-controlled backup and recovery.
 
 ## Repository layout
 
@@ -236,6 +240,8 @@ General command requirements:
 - Diagnostics redact secrets.
 - Commands support noninteractive testing without weakening production confirmation gates.
 
+`almapay backup` and `almapay restore` are application-domain commands and run as `almapay`. They do not claim to provide a complete bare-host backup. Root-owned host recovery state is handled separately through ordinary host administration tooling.
+
 ## Host inspection and bootstrap
 
 `almapay doctor` must verify:
@@ -258,7 +264,7 @@ General command requirements:
 - DNS, time synchronization, firewall state, and required outbound connectivity are suitable.
 - Ports 80 and 443 are available to Caddy and port 8080 is not publicly bound.
 
-Host bootstrap is the only root-required part. It may:
+Privileged host administration is limited to bootstrap and host-level configuration or recovery. It may:
 
 - Install Podman, Git, curl, jq, `shadow-utils`, SELinux container policy, and required systemd/networking tools.
 - Install the exact supported `podman-compose` version through a documented package source.
@@ -269,7 +275,7 @@ Host bootstrap is the only root-required part. It may:
 - Install and configure Caddy when requested.
 - Apply a reviewed firewall change that preserves the actual operator SSH port.
 
-Host bootstrap must never run Podman as root, disable SELinux, lower the unprivileged-port threshold, expose port 8080, overwrite unrelated firewall policy, or alter SSH configuration without explicit operator approval.
+Privileged host operations must never run Podman as root, inspect or copy live rootless Podman storage as a substitute for application backup, disable SELinux, lower the unprivileged-port threshold, expose port 8080, overwrite unrelated firewall policy, or alter SSH configuration without explicit operator approval.
 
 After subordinate-ID changes, all affected containers must be stopped before running `podman system migrate` as `almapay`. This migration must never run implicitly on a live deployment.
 
@@ -371,11 +377,13 @@ Generation must:
 
 - Run as `almapay`.
 - Use the pinned upstream commit and generator digest.
+- Fetch and check out the pinned upstream commit explicitly; a clone of the current default branch is not a pin.
 - Produce deterministic output from committed configuration and lockfile inputs.
 - Preserve the previous generated output before replacement.
 - Produce a human-readable diff.
 - Never edit the upstream checkout in place to conceal required overrides.
 - Store AlmaPay-owned overlays or post-generation validation rules in the AlmaPay repository.
+- Work with SELinux enforcing. Bind mounts used by the generator must have reviewed read/write access and appropriate private relabeling such as `:Z`; weakening SELinux is not an alternative.
 
 ## Rendered Compose security validation
 
@@ -647,7 +655,11 @@ Do not promise binary rollback after a BTCPay database migration. The safe rollb
 
 ## Backup
 
-Backups must include:
+Backup is divided into two recovery domains.
+
+### AlmaPay application backup
+
+`almapay backup` runs as `almapay` and must include:
 
 - A consistent PostgreSQL backup.
 - BTCPay data and plugin state.
@@ -658,8 +670,10 @@ Backups must include:
 - Generated Compose.
 - `upstream.lock`.
 - User systemd unit.
-- Caddy configuration.
+- The non-secret AlmaPay-owned Caddy source template.
 - A signed or authenticated manifest containing versions, checksums, timestamps, and included components.
+
+Application backup must use logical database exports and service-aware or Podman-aware data exports. It must not require root to copy live rootless Podman storage, overlay storage, or inconsistent live volume contents.
 
 Chain data is reconstructible and may be excluded by default. Inclusion must be configurable and capacity-checked.
 
@@ -672,7 +686,33 @@ A backup succeeds only after:
 - The encrypted archive can be opened with the configured recovery method.
 - The destination confirms durable storage.
 
+### Root-owned host recovery backup
+
+Ordinary root-owned host backup tooling, outside `almapay backup`, must preserve the minimal host state needed to reconstruct the deployment:
+
+- The active Caddy configuration and relevant systemd overrides.
+- Root-owned Caddy or ACME DNS-provider credentials, when applicable.
+- The `almapay` UID and its specific `/etc/subuid` and `/etc/subgid` allocations.
+- Linger state.
+- Relevant firewall configuration.
+- AlmaPay-specific SELinux policy or file-context customization.
+- Installed package and version inventory.
+- A host manifest that references the matching AlmaPay application-backup identifier and checksums.
+
+The host recovery bundle must not indiscriminately include SSH host or operator keys, unrelated `/etc` state, live Podman storage, or reconstructible ACME certificates. Existing organization-wide host backup policy may be broader, but AlmaPay must document its own minimum recovery set.
+
+A root-owned scheduler may coordinate the two domains by invoking `almapay backup` through `sudo -u almapay`, waiting for its verified encrypted artifact, and then creating the host recovery bundle. Coordination does not authorize rootful Podman. The two artifacts may use separate access controls and encryption keys, but their manifests must identify the matching recovery set.
+
 ## Restore
+
+Host recovery proceeds in this order:
+
+1. Rebuild or restore the supported host.
+2. Recreate the `almapay` identity and the recorded non-overlapping subordinate-ID ranges.
+3. Install pinned host packages and restore the required root-owned host configuration without yet reopening production traffic.
+4. Run `almapay restore` as `almapay`.
+5. Verify the restored application on loopback, validate or reinstall the active root-owned Caddy configuration from the reviewed AlmaPay source template or host recovery bundle, and then reopen public traffic.
+6. Run the complete public and internal verification suite.
 
 `almapay restore` must:
 
@@ -686,6 +726,7 @@ A backup succeeds only after:
 - Start through user systemd.
 - Run the complete verification suite.
 - Require a non-production restore exercise before production sign-off.
+- Refuse UID 0 and never invoke Podman through a privileged host context.
 
 ## Verification
 
@@ -712,7 +753,8 @@ A backup succeeds only after:
 - Store existence.
 - Restricted Greenfield key invoice creation and read access.
 - Webhook HTTPS reachability.
-- Backup recency and last verification result.
+- Application-backup recency and last verification result.
+- Matching host-recovery manifest recency and its reference to the application backup.
 
 Checks must distinguish not-ready synchronization from failure. Secret values must be redacted.
 
@@ -750,7 +792,8 @@ Repository tests must include:
 - Tests proving required `BITCOIN_EXTRA_ARGS` survive fragment composition.
 - Caddy configuration validation.
 - systemd unit validation.
-- Backup manifest and restore tests.
+- Application and host manifest-pairing tests.
+- Paired application and host restore tests.
 - AlmaLinux 10.2 VM integration testing.
 - Testnet or regtest BTCPay integration testing.
 - Generic consumer integration tests using an application-neutral fixture.
@@ -800,8 +843,8 @@ Mainnet acceptance requires operator sign-off that:
 - BTCPay and Bitcoin version floors pass through runtime queries.
 - Required chains are synchronized.
 - Wallet backups and recovery instructions are secured.
-- Off-host encrypted backup passes.
-- A clean-host restore passes.
+- An off-host encrypted AlmaPay application backup and matching protected host recovery bundle pass.
+- A clean-host restore from the paired recovery set passes.
 - Separate, store-scoped production keys and webhook secrets exist for every consumer and environment.
 - Plugin versions are pinned and tested.
 - Test payments and webhook replay tests pass.
@@ -823,7 +866,7 @@ Mainnet acceptance requires operator sign-off that:
 - Avoid Git commits unless the operator explicitly requests one.
 - Avoid emojis.
 
-README must provide a short route from a clean AlmaLinux 10 host to a reachable BTCPay UI, while clearly separating automated installation from manual wallet, plugin, synchronization, backup, and mainnet-readiness work.
+During planning and initial implementation, README must clearly state that the repository is not production-ready, identify the current authoritative documents, and summarize the narrow supported profile. Once clean-VM installation is implemented and tested, README must provide a short route from a clean AlmaLinux 10 host to a reachable BTCPay UI while clearly separating automated installation from manual wallet, plugin, synchronization, backup, host recovery, and mainnet-readiness work.
 
 ## Agent execution instructions
 
