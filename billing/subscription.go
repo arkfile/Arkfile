@@ -302,7 +302,7 @@ func validateSubscriptionBridgePayload(payload *subbridge.CallbackPayload) (time
 		!validBridgeIdentifier(payload.SubscriptionRef, "sub_") {
 		return time.Time{}, time.Time{}, time.Time{}, errors.New("invalid subscription bridge identifier")
 	}
-	if strings.TrimSpace(payload.PlanID) == "" || len(payload.PlanID) > 128 || payload.StateVersion < 1 {
+	if subbridge.ValidatePlanID(payload.PlanID) != nil || payload.StateVersion < 1 {
 		return time.Time{}, time.Time{}, time.Time{}, errors.New("invalid subscription bridge state metadata")
 	}
 	if !eventStatusCompatible(payload.EventType, payload.Status) {
@@ -323,7 +323,7 @@ func validateSubscriptionBridgeSnapshot(snapshot *subbridge.SnapshotPayload) (ti
 	}
 	if !validBridgeIdentifier(snapshot.CheckoutID, "subchk_") ||
 		!validBridgeIdentifier(snapshot.SubscriptionRef, "sub_") ||
-		strings.TrimSpace(snapshot.PlanID) == "" || len(snapshot.PlanID) > 128 ||
+		subbridge.ValidatePlanID(snapshot.PlanID) != nil ||
 		snapshot.StateVersion < 1 {
 		return time.Time{}, time.Time{}, time.Time{}, errors.New("invalid subscription bridge snapshot metadata")
 	}

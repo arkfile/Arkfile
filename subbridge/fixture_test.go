@@ -1,6 +1,7 @@
 package subbridge
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -146,6 +147,32 @@ func TestDecodeCallbackRejectsMissingUnknownAndDuplicateFields(t *testing.T) {
 		if err := DecodeCallback([]byte(body), &payload); err == nil {
 			t.Fatalf("%s payload should fail", name)
 		}
+	}
+}
+
+func TestDecodeCallbackAcceptsAnyKeyOrderAndRejectsInvalidUTF8(t *testing.T) {
+	fixture := loadProtocolFixture(t)
+	var unordered map[string]interface{}
+	if err := json.Unmarshal([]byte(fixture.Callback.BodyJSON), &unordered); err != nil {
+		t.Fatal(err)
+	}
+	reordered, err := json.Marshal(unordered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload CallbackPayload
+	if err := DecodeCallback(reordered, &payload); err != nil {
+		t.Fatalf("reordered callback keys should be accepted: %v", err)
+	}
+
+	invalid := bytes.Replace(
+		[]byte(fixture.Callback.BodyJSON),
+		[]byte("plan_500gb"),
+		[]byte{'p', 'l', 'a', 'n', '_', 0xff},
+		1,
+	)
+	if err := DecodeCallback(invalid, &payload); err == nil {
+		t.Fatal("invalid UTF-8 callback should fail")
 	}
 }
 

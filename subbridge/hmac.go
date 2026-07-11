@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/hkdf"
 )
@@ -128,8 +129,11 @@ type SnapshotResponse struct {
 }
 
 func SignStartToken(key Key, payload StartTokenPayload) (string, error) {
-	if payload.CheckoutID == "" || payload.PlanID == "" {
+	if payload.CheckoutID == "" {
 		return "", errors.New("token missing checkout fields")
+	}
+	if err := ValidatePlanID(payload.PlanID); err != nil {
+		return "", err
 	}
 	if err := validateSignedReturnURL(payload.ReturnURL); err != nil {
 		return "", err
@@ -171,8 +175,11 @@ func VerifyStartToken(key Key, token string) (*StartTokenPayload, error) {
 	if err != nil {
 		return nil, err
 	}
-	if payload.CheckoutID == "" || payload.PlanID == "" {
+	if payload.CheckoutID == "" {
 		return nil, errors.New("token missing checkout fields")
+	}
+	if err := ValidatePlanID(payload.PlanID); err != nil {
+		return nil, err
 	}
 	if err := validateSignedReturnURL(payload.ReturnURL); err != nil {
 		return nil, err
@@ -258,6 +265,19 @@ func validateSignedReturnURL(returnURL string) error {
 	}
 	if normalized != returnURL {
 		return errors.New("return_url is not normalized")
+	}
+	return nil
+}
+
+func ValidatePlanID(planID string) error {
+	if !utf8.ValidString(planID) {
+		return errors.New("plan_id must be valid UTF-8")
+	}
+	if strings.TrimSpace(planID) == "" {
+		return errors.New("plan_id must be nonempty after Unicode whitespace trimming")
+	}
+	if len(planID) > 128 {
+		return errors.New("plan_id must not exceed 128 UTF-8 bytes")
 	}
 	return nil
 }
@@ -479,6 +499,9 @@ func NormalizeReturnURL(value string) (string, error) {
 }
 
 func decodeExactObject(body []byte, dest interface{}, fields []string) error {
+	if !utf8.Valid(body) {
+		return errors.New("protocol payload must be valid UTF-8")
+	}
 	allowed := make(map[string]struct{}, len(fields))
 	for _, field := range fields {
 		allowed[field] = struct{}{}

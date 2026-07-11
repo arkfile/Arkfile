@@ -1,5 +1,7 @@
 # Subscription Bridge — Standalone Service Specification (v1)
 
+Arkfile mirror of the canonical SubscriptionBridge specification at [`5c4539154c7286d3d5dfcd7bc40ec20957ac0504`](https://github.com/arkfile/SubscriptionBridge/commit/5c4539154c7286d3d5dfcd7bc40ec20957ac0504).
+
 This document is the **normative build spec** for a small, reusable **Subscription Bridge** service. The bridge sits between exactly one **consumer application** per deployment (any SaaS that sells recurring plan-based access) and the required v1 payment processors, **Stripe and Adyen**. The consumer holds user identity and business rules; the bridge holds processor API keys and maps both processor lifecycles into **Subscription Bridge Protocol v1**. The only cross-system join identifiers are opaque `checkout_id` (one checkout attempt) and `subscription_ref` (one ongoing paid subscription). `plan_id` is a shared catalog key; `event_id` is an idempotency and audit identifier. **No consumer user identifiers** appear in the bridge database or processor metadata.
 
 A reference consumer implementation exists in the Arkfile monorepo (`docs/wip/prod-prep/05-subscriptions.md`, package `subbridge/`). This spec is product-neutral so the bridge can be deployed separately for different products. A v1 deployment serves one consumer protocol namespace, one consumer webhook URL, and one pairing-root set. Multi-consumer and public multi-merchant operation are out of scope.
@@ -26,7 +28,7 @@ The bridge is **not** a general billing platform: no one-off payments, no multi-
 | **Consumer app** | Your main product (e.g. a file vault, API service). Holds usernames, plan catalog, feature gates. |
 | **Subscription Bridge** | This service. Processor adapters + protocol notifier. |
 | **Processor** | Stripe or Adyen; both adapters are required for a complete v1 release. |
-| **plan_id** | Shared immutable catalog key defined by the consumer (`plan_500gb`). Bridge maps it to trusted processor configuration. |
+| **plan_id** | Shared immutable catalog key defined by the consumer (`plan_500gb`). Valid UTF-8, nonempty after Unicode whitespace trimming, and at most 128 UTF-8 bytes. Bridge maps it to trusted processor configuration. |
 | **checkout_id** | Opaque per-attempt cross-system join ID from the consumer (`subchk_<uuid>`). Only join ID sent to processor metadata. |
 | **subscription_ref** | Opaque ongoing cross-system join ID (`sub_<uuid>`). Stable across renewals. |
 | **event_id** | Opaque identifier for one immutable callback; used for idempotency and audit, not identity joining. |
@@ -109,10 +111,13 @@ Consumer signs when user initiates checkout. Bridge receives `GET /v1/start?toke
 2. `sig = HMAC-SHA256(token_key, body)` → lowercase hex.
 3. `token = base64url(body) + "." + hex(sig)` (RawURLEncoding, no padding).
 
+The token wire representation is canonical: exactly one `.` separator; an unpadded Raw URL-safe Base64 payload whose decode/re-encode is byte-identical; and exactly 64 lowercase hexadecimal signature characters. Reject Base64 padding, non-canonical Base64 spellings, uppercase hex, whitespace, extra separators, missing/duplicate/unknown JSON fields, duplicate JSON object keys, trailing JSON values, and tokens longer than 8192 bytes. JSON object key order itself is not canonical; verification authenticates the received raw payload bytes and then decodes the required fields in any order.
+
 **Validation**
 
 - Verify HMAC with the HKDF-derived token key using constant-time comparison before acting on the payload.
 - Require exactly `checkout_id`, `plan_id`, `return_url`, `iat`, and `exp`; reject unknown fields and enforce the lifetime rules in section 4.
+- Require `plan_id` to be valid UTF-8, nonempty after Unicode whitespace trimming, and at most 128 bytes in its UTF-8 representation.
 - Require a normalized HTTPS `return_url`, except explicit loopback development URLs.
 - **No username field** — it and every other consumer identity field must be rejected.
 - Resolve `plan_id` and processor family from trusted configuration before accepting the checkout.
@@ -136,7 +141,7 @@ Derive three 32-byte keys using HKDF-SHA256:
 - callback key info: ASCII `bridge-to-consumer/callback`
 - reconcile key info: ASCII `consumer-to-bridge/reconcile`
 
-Keys are binary HKDF output, not hex text. Implementations must never use the decoded pairing root directly as an HMAC key. Protocol v1 configures exactly one active pairing root and defines no overlapping two-root verification window. Rotation is a coordinated operational change that temporarily interrupts cross-service authentication until both sides use the new root; a future protocol version may define an explicit overlap mechanism.
+Keys are binary HKDF output, not hex text. Implementations must never use the decoded pairing root directly as an HMAC key. Protocol v1 configures exactly one active pairing root and defines no overlapping two-root verification window. Rotation is a coordinated operational cutover that temporarily interrupts cross-service authentication until both sides use the new root; a future protocol version may define an explicit overlap mechanism.
 
 Canonical derivation vector:
 
@@ -153,7 +158,7 @@ callback key     069dddf506c40199b88267dbc754808242339730f5cb042f3d72e4e19dbe946
 reconcile key    c090ac1d8b5c248d45c8ce7ca9f9b463b1f6ad4a2086061d53111214e24a433c
 ```
 
-`fixtures/protocol-v1.json` is the canonical machine-readable fixture for this derivation and the signed protocol examples. The consumer repository mirrors that file and records the source bridge commit or release.
+`fixtures/protocol-v1.json` is the canonical machine-readable fixture for this derivation and the signed protocol examples. The consumer repository mirrors that file byte-for-byte and records the source bridge commit or release. The current fixture was introduced by SubscriptionBridge commit [`28c2c9965d32a44fe2ea572c89fbc4f15662f371`](https://github.com/arkfile/SubscriptionBridge/commit/28c2c9965d32a44fe2ea572c89fbc4f15662f371).
 
 ### 5.2 Portal token (consumer → bridge, via browser)
 
@@ -181,6 +186,8 @@ Default path in reference consumer: `/api/webhooks/subscription-bridge`
 
 **Signature base string:** `<unix> + "." + raw_json_body`  
 **HMAC key:** HKDF-derived callback key.
+
+The header value is exactly `t=<unix>,v1=<hex>` in that order, without whitespace or additional components. `<unix>` is canonical non-negative base-10 notation with no leading zero except the value `0`; `<hex>` is exactly 64 lowercase hexadecimal characters. Reject reordered, duplicated, missing, unknown, uppercase, whitespace-padded, signed, or otherwise non-canonical components. The timestamp must be within ±300 seconds of the receiver's current UTC time.
 
 **Body:**
 
@@ -214,7 +221,7 @@ Default path in reference consumer: `/api/webhooks/subscription-bridge`
 
 **`status` values:** `active`, `trialing`, `past_due`, `canceled`, `expired`.
 
-`canceled` means non-renewing but still effective through `current_period_end`; it always has `cancel_at_period_end=true`. `expired` means no longer effective and always has `cancel_at_period_end=false`. Immediate cancellation transitions directly to `expired` and emits `subscription.expired`. Consumer entitlement during `past_due` is governed by the consumer's independently documented local grace policy; bridge dunning determines only whether billing recovery continues and when the canonical state transitions to `expired`.
+`canceled` means non-renewing but still effective through `current_period_end`; it always has `cancel_at_period_end=true`. `expired` means no longer effective and always has `cancel_at_period_end=false`. **Only `expired` is terminal.** A provider-authoritative restoration may transition `canceled` back to `active` through `subscription.renewed`. Immediate cancellation transitions directly to `expired` and emits `subscription.expired`. Consumer entitlement during `past_due` is governed by the consumer's independently documented local grace policy; bridge dunning determines only whether billing recovery continues and when the canonical state transitions to `expired`.
 
 Allowed bridge callback pairs are exact: `subscription.activated` with `active` or `trialing`; `subscription.renewed` with `active`; `subscription.past_due` with `past_due`; `subscription.canceled` with `canceled`; `subscription.expired` with `expired`; and `subscription.plan_changed` with `active`. `subscription.sync` is not a callback pair. Every other event/status combination fails closed.
 
@@ -226,9 +233,9 @@ Allowed bridge callback pairs are exact: `subscription.activated` with `active` 
 - Consumer deduplicates on `event_id` (insert into `subscription_events` with UNIQUE).
 - Consumer applies a callback only when `state_version` is greater than its stored version. It records lower/equal versions as `ignored_stale` and returns 2xx.
 
-The notifier sends the exact immutable bytes stored in `payload_body`; JSONB serialization is never authoritative. Any 2xx marks delivery complete. Network failures, 408, 425, 429, and 5xx retry with full jitter over 1 minute, 5 minutes, 15 minutes, 1 hour, then a 6-hour cap. Other 4xx responses transition to `dead_lettered` because they indicate a protocol/configuration defect. Attempts continue while state is `pending` until delivery or audited operator abandonment. Alert after 1 hour and again after 24 hours. Concurrent notifiers claim rows using leases and `FOR UPDATE SKIP LOCKED`.
+Ordinary callback and snapshot JSON object key order is not protocol-canonical. Producers may serialize fields in any order, and receivers accept any order while rejecting missing, duplicate, or unknown fields. For a callback, the first serialization committed as `payload_body` becomes authoritative: the notifier signs and sends those exact immutable bytes on every attempt and never reconstructs them from JSONB. Any 2xx marks delivery complete. Network failures, 408, 425, 429, and 5xx retry with full jitter over 1 minute, 5 minutes, 15 minutes, 1 hour, then a 6-hour cap. Other 4xx responses transition to `dead_lettered` because they indicate a protocol/configuration defect. Attempts continue while state is `pending` until delivery or audited operator abandonment. Alert after 1 hour and again after 24 hours. Concurrent notifiers claim rows using leases and `FOR UPDATE SKIP LOCKED`.
 
-`event_id`, `checkout_id`, and `subscription_ref` are opaque values with the `evt_`, `subchk_`, and `sub_` prefixes respectively. Each is at most 160 ASCII characters in total and has a non-empty suffix containing only letters, digits, `_`, or `-`. Every shown callback field is required; no other field is permitted. `processor_family` is intentionally absent because consumer behavior must be provider-neutral. Timestamps use second-precision UTC RFC3339 with `Z`; period end must be after period start. `state_changed_at` is the time at which the canonical state represented by `state_version` was committed, never callback-send or retrieval time. The receiver must reject unknown fields, unknown event/status values, malformed identifiers, unordered periods, and incompatible event/status pairs.
+`event_id`, `checkout_id`, and `subscription_ref` are opaque values with the `evt_`, `subchk_`, and `sub_` prefixes respectively. In every token, callback, snapshot, URL path, and operator input, each is at most 160 ASCII characters in total and has a non-empty suffix containing only ASCII letters, digits, `_`, or `-`; equivalently, validate the exact prefix followed by `[A-Za-z0-9_-]+` and the total length bound. Every callback and snapshot `plan_id` obeys the same valid-UTF-8, trimmed-nonempty, 128-byte rule as the start token. Every shown callback field is required; no other field is permitted. `processor_family` is intentionally absent because consumer behavior must be provider-neutral. Timestamps use second-precision UTC RFC3339 with `Z`; period end must be after start. `state_changed_at` is the time at which the canonical state represented by `state_version` was committed, never callback-send or retrieval time. The receiver must reject unknown or duplicate fields, unknown event/status values, malformed identifiers, unordered periods, and incompatible event/status pairs.
 
 ### 5.4 Subscription snapshot (consumer → bridge, server-to-server)
 
@@ -237,6 +244,8 @@ The notifier sends the exact immutable bytes stored in `payload_body`; JSONB ser
 **Auth header:** `Authorization: Subscription-Bridge-HMAC t=<unix>,v1=<hex>`
 
 **String to sign:** `GET\n/v1/subscriptions/{subscription_ref}\n<unix>`
+
+The authorization value is exactly the ASCII scheme `Subscription-Bridge-HMAC`, one space, then the same canonical `t=<unix>,v1=<hex>` component grammar and ±300-second replay window as callback signatures. The method is exactly uppercase `GET`; the signed path is the exact request path with no query string. Reject alternate schemes, whitespace, reordered or extra components, non-canonical timestamps, uppercase signatures, and path/signature mismatches.
 
 **Response 200:** the exact snapshot schema below. Every field is required and unknown fields are rejected:
 
@@ -430,7 +439,7 @@ CREATE DOMAIN sb_utc_second AS TIMESTAMPTZ
 
 CREATE TABLE sb_checkouts (
     checkout_id TEXT PRIMARY KEY,
-    plan_id TEXT NOT NULL,
+    plan_id TEXT NOT NULL CHECK (octet_length(plan_id) BETWEEN 1 AND 128),
     normalized_return_url TEXT NOT NULL,
     processor_family TEXT NOT NULL CHECK (processor_family IN ('stripe', 'adyen')),
     request_fingerprint BYTEA NOT NULL CHECK (octet_length(request_fingerprint) = 32),
@@ -448,7 +457,7 @@ CREATE TABLE sb_checkouts (
 CREATE TABLE sb_subscriptions (
     subscription_ref TEXT PRIMARY KEY,
     checkout_id TEXT NOT NULL UNIQUE REFERENCES sb_checkouts(checkout_id),
-    plan_id TEXT NOT NULL,
+    plan_id TEXT NOT NULL CHECK (octet_length(plan_id) BETWEEN 1 AND 128),
     status TEXT NOT NULL CHECK (status IN ('active', 'trialing', 'past_due', 'canceled', 'expired')),
     state_version BIGINT NOT NULL CHECK (state_version >= 1),
     processor_family TEXT NOT NULL CHECK (processor_family IN ('stripe', 'adyen')),
@@ -737,7 +746,7 @@ plans:
       country_code: DE
 ```
 
-`plan_id` keys must match consumer catalog rows. Amount and currency are immutable for an existing plan ID; changing either requires a new plan ID. Checkout processor selection is deterministic: the plan's optional `processor`, otherwise `default_processor`. Both selected providers must have a complete configuration and adapter. Provider selection must not come from user-controlled query parameters.
+`plan_id` keys must match consumer catalog rows and obey the protocol UTF-8, trimmed-nonempty, and 128-byte limit. Application validation enforces Unicode whitespace trimming; the database byte-length constraints provide defense in depth. Amount and currency are immutable for an existing plan ID; changing either requires a new plan ID. Checkout processor selection is deterministic: the plan's optional `processor`, otherwise `default_processor`. Both selected providers must have a complete configuration and adapter. Provider selection must not come from user-controlled query parameters.
 
 ---
 
@@ -947,7 +956,10 @@ Paid subscription cancel: processor dashboard or portal — not consumer admin C
 - HKDF golden vectors above; start/portal token, callback, and reconcile signatures must interoperate with the consumer `subbridge` package.
 - Replay-window boundaries, malformed headers, invalid identifiers, unknown JSON fields, body limits, and URL validation.
 - Pairing-root acceptance for exactly 64 lowercase hex characters and rejection of wrong lengths, uppercase, whitespace, prefixes, and non-hex input.
+- Proof that v1 loads and verifies with exactly one active pairing root and provides no previous-root fallback.
 - Start and portal token `iat`/`exp` boundaries, bounded future issue time, excessive lifetime, exact replay, checkout-property conflicts, and provider timeouts before and after request acceptance.
+- Canonical token/Base64/signature parsing and canonical callback/reconciliation HMAC headers, including rejection of padding, leading-zero timestamps, reordered or duplicate components, whitespace, uppercase hex, and unknown components.
+- Opaque identifier acceptance at the 160-character total boundary and rejection of empty suffixes, overlong values, non-ASCII, punctuation outside `_`/`-`, and incorrect prefixes in every protocol location.
 - State transition matrix for every event/status pair and monotonic `state_version`.
 - Stripe and Adyen fixtures for every mapping in sections 10–11, including duplicate and out-of-order provider events.
 - Calendar-period tests for month ends and leap years.
@@ -980,6 +992,7 @@ Run the same black-box suite against Stripe and Adyen. Each adapter must create 
 - Logs and HTTP responses contain no pairing root, derived key, payment-method reference, provider customer ID, or raw provider payload.
 - Both provider conformance suites pass from a clean database.
 - `fixtures/protocol-v1.json` passes in this repository and its byte-identical mirrored copy passes in the consumer repository.
+- The conformance suite consumes `fixtures/protocol-v1.json` directly and verifies every derived key, signed token, exact callback body/header, reconciliation header, and snapshot body without independently re-entered expected values.
 
 **Cross-repo e2e**
 
@@ -1060,7 +1073,7 @@ subscription-bridge/
 
 ## 20. Status
 
-**Greenfield — specification repository created; provider implementation has not begun.** Arkfile's consumer currently implements the earlier protocol draft and requires the atomic compatibility update described by the canonical fixture and this specification. Finalize and test the protocol, migrations, schemas, interfaces, state machines, and crash-recovery behavior before implementing either provider. Stripe and Adyen are both required v1 adapters and must pass the common conformance suite before release.
+**Greenfield — specification repository created; provider implementation has not begun.** Arkfile's consumer implements current protocol v1 and passes the canonical fixture tests. Finalize and test the bridge migrations, protocol package, schemas, interfaces, state machines, and crash-recovery behavior before implementing either provider. Stripe and Adyen are both required v1 adapters and must pass the common conformance suite before release.
 
 ---
 
@@ -1076,66 +1089,3 @@ subscription-bridge/
 - [Adyen recurring payments](https://docs.adyen.com/online-payments/tokenization/make-recurring-payments/)
 - [Adyen API idempotency](https://docs.adyen.com/development-resources/api-idempotency)
 - [Adyen webhook HMAC verification](https://docs.adyen.com/development-resources/webhooks/verify-hmac-signatures/)
-
----
-
-# protocol-v1.json
-
-```
-{
-  "fixture": "subscription-bridge/protocol-v1",
-  "fixture_version": 1,
-  "pairing_root": {
-    "configured_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-    "decoded_bytes_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-    "salt_ascii": "subscription-bridge/v1",
-    "keys": {
-      "token": {
-        "info_ascii": "consumer-to-bridge/token",
-        "derived_key_hex": "1c3ffa613421f6a4958704b3090e9b970af7dd9107ce328cc9c5d33546701fa2"
-      },
-      "callback": {
-        "info_ascii": "bridge-to-consumer/callback",
-        "derived_key_hex": "069dddf506c40199b88267dbc754808242339730f5cb042f3d72e4e19dbe946d"
-      },
-      "reconcile": {
-        "info_ascii": "consumer-to-bridge/reconcile",
-        "derived_key_hex": "c090ac1d8b5c248d45c8ce7ca9f9b463b1f6ad4a2086061d53111214e24a433c"
-      }
-    }
-  },
-  "start_token": {
-    "payload_json_utf8": "{\"checkout_id\":\"subchk_7f3a9c2e\",\"plan_id\":\"plan_500gb\",\"return_url\":\"https://app.example.com/billing/return\",\"iat\":1767225600,\"exp\":1767226500}",
-    "payload_base64url": "eyJjaGVja291dF9pZCI6InN1YmNoa183ZjNhOWMyZSIsInBsYW5faWQiOiJwbGFuXzUwMGdiIiwicmV0dXJuX3VybCI6Imh0dHBzOi8vYXBwLmV4YW1wbGUuY29tL2JpbGxpbmcvcmV0dXJuIiwiaWF0IjoxNzY3MjI1NjAwLCJleHAiOjE3NjcyMjY1MDB9",
-    "signature_hex": "027b8e022a531a1fb51da0c21cb4c2495f3f1b616707b058e33e0fda48ef21e5",
-    "token": "eyJjaGVja291dF9pZCI6InN1YmNoa183ZjNhOWMyZSIsInBsYW5faWQiOiJwbGFuXzUwMGdiIiwicmV0dXJuX3VybCI6Imh0dHBzOi8vYXBwLmV4YW1wbGUuY29tL2JpbGxpbmcvcmV0dXJuIiwiaWF0IjoxNzY3MjI1NjAwLCJleHAiOjE3NjcyMjY1MDB9.027b8e022a531a1fb51da0c21cb4c2495f3f1b616707b058e33e0fda48ef21e5"
-  },
-  "portal_token": {
-    "payload_json_utf8": "{\"subscription_ref\":\"sub_a8f3c1d2\",\"return_url\":\"https://app.example.com/billing\",\"iat\":1767225600,\"exp\":1767226500}",
-    "payload_base64url": "eyJzdWJzY3JpcHRpb25fcmVmIjoic3ViX2E4ZjNjMWQyIiwicmV0dXJuX3VybCI6Imh0dHBzOi8vYXBwLmV4YW1wbGUuY29tL2JpbGxpbmciLCJpYXQiOjE3NjcyMjU2MDAsImV4cCI6MTc2NzIyNjUwMH0",
-    "signature_hex": "8a28b6bdd3fb8f5d9172e2d82e3d9971cbdef79611c9c6cdfddbf324f65e700b",
-    "token": "eyJzdWJzY3JpcHRpb25fcmVmIjoic3ViX2E4ZjNjMWQyIiwicmV0dXJuX3VybCI6Imh0dHBzOi8vYXBwLmV4YW1wbGUuY29tL2JpbGxpbmciLCJpYXQiOjE3NjcyMjU2MDAsImV4cCI6MTc2NzIyNjUwMH0.8a28b6bdd3fb8f5d9172e2d82e3d9971cbdef79611c9c6cdfddbf324f65e700b"
-  },
-  "callback": {
-    "body_json_utf8": "{\"protocol\":\"subscription-bridge\",\"version\":1,\"event_id\":\"evt_550e8400-e29b-41d4-a716-446655440000\",\"event_type\":\"subscription.activated\",\"checkout_id\":\"subchk_7f3a9c2e\",\"subscription_ref\":\"sub_a8f3c1d2\",\"plan_id\":\"plan_500gb\",\"state_version\":1,\"status\":\"active\",\"current_period_start\":\"2026-01-01T00:00:00Z\",\"current_period_end\":\"2026-02-01T00:00:00Z\",\"cancel_at_period_end\":false,\"state_changed_at\":\"2026-01-01T00:00:00Z\"}",
-    "signature_timestamp": 1767225605,
-    "signature_base_utf8": "1767225605.{\"protocol\":\"subscription-bridge\",\"version\":1,\"event_id\":\"evt_550e8400-e29b-41d4-a716-446655440000\",\"event_type\":\"subscription.activated\",\"checkout_id\":\"subchk_7f3a9c2e\",\"subscription_ref\":\"sub_a8f3c1d2\",\"plan_id\":\"plan_500gb\",\"state_version\":1,\"status\":\"active\",\"current_period_start\":\"2026-01-01T00:00:00Z\",\"current_period_end\":\"2026-02-01T00:00:00Z\",\"cancel_at_period_end\":false,\"state_changed_at\":\"2026-01-01T00:00:00Z\"}",
-    "signature_hex": "9d6700ac9f9f8926d13b1cd5de608a1d2806bf987defe28d1667bfd88725be31",
-    "signature_header": "t=1767225605,v1=9d6700ac9f9f8926d13b1cd5de608a1d2806bf987defe28d1667bfd88725be31"
-  },
-  "reconciliation_request": {
-    "method": "GET",
-    "path": "/v1/subscriptions/sub_a8f3c1d2",
-    "signature_timestamp": 1767225605,
-    "signature_base_utf8": "GET\n/v1/subscriptions/sub_a8f3c1d2\n1767225605",
-    "signature_hex": "2432943b8b6253160b5676091c56a14a0ea7b2d178289a76d1598360bfb58475",
-    "authorization_header": "Subscription-Bridge-HMAC t=1767225605,v1=2432943b8b6253160b5676091c56a14a0ea7b2d178289a76d1598360bfb58475"
-  },
-  "snapshot": {
-    "response_status": 200,
-    "content_type": "application/json",
-    "response_is_independently_signed": false,
-    "body_json_utf8": "{\"protocol\":\"subscription-bridge\",\"version\":1,\"checkout_id\":\"subchk_7f3a9c2e\",\"subscription_ref\":\"sub_a8f3c1d2\",\"plan_id\":\"plan_500gb\",\"state_version\":1,\"status\":\"active\",\"current_period_start\":\"2026-01-01T00:00:00Z\",\"current_period_end\":\"2026-02-01T00:00:00Z\",\"cancel_at_period_end\":false,\"state_changed_at\":\"2026-01-01T00:00:00Z\"}"
-  }
-}
-```

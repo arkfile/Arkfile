@@ -245,7 +245,7 @@ The bridge and Arkfile communicate through one canonical, provider-neutral proto
 1. User `POST /api/subscriptions/checkout` with `{ "plan_id": "..." }`.
 2. Arkfile inserts `subscription_checkouts` (`checkout_id`, `username`, `plan_id`, `status=pending`).
 3. Arkfile returns `{ "checkout_url": "https://billing.arkfile.net/v1/start?token=..." }`.
-4. Token is HMAC-signed with the HKDF-derived token key: `{ checkout_id, plan_id, return_url, iat, exp }` — **no username**. Its lifetime is at most 15 minutes.
+4. Token is HMAC-signed with the HKDF-derived token key: `{ checkout_id, plan_id, return_url, iat, exp }` — **no username**. Its lifetime is at most 15 minutes. `plan_id` must be valid UTF-8, nonempty after Unicode whitespace trimming, and at most 128 UTF-8 bytes.
 5. Bridge validates token, maps `plan_id` to processor SKU in bridge config, creates hosted checkout with processor metadata `{ "checkout_id": "<id>" }` only.
 6. User completes payment on bridge/processor hosted pages. User may optionally enter email on those pages; Arkfile does not supply it.
 
@@ -284,7 +284,7 @@ Header: `Subscription-Bridge-Signature: t=<unix>,v1=<hmac_sha256_hex>` over raw 
 
 **Lookup:** prefer `subscription_ref` when present; on first activation, fall back to `checkout_id` → local checkout row → username.
 
-**Idempotency and ordering:** store the SHA-256 hash of the exact verified callback bytes, insert `subscription_events` keyed on `event_id`, reject reuse of an event ID with different bytes, and apply only a strictly newer `state_version`. Reconciliation snapshots use the same state transition path.
+**Idempotency and ordering:** JSON object key order is not canonical. Store the SHA-256 hash of the exact verified callback bytes, insert `subscription_events` keyed on `event_id`, reject reuse of an event ID with different bytes, and apply only a strictly newer `state_version`. Reconciliation snapshots use the same state transition path.
 
 ### Portal (manage / cancel / update payment method)
 

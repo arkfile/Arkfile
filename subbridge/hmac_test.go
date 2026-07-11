@@ -99,15 +99,69 @@ func TestVerifyToken_RejectsNonCanonicalPayloads(t *testing.T) {
 	iat := time.Now().UTC().Unix()
 	validPrefix := `{"checkout_id":"x","plan_id":"y","return_url":"https://example.com/","iat":`
 	for name, body := range map[string]string{
-		"missing":   `{"checkout_id":"x","plan_id":"y","return_url":"https://example.com/","exp":9999999999}`,
-		"unknown":   validPrefix + strconv.FormatInt(iat, 10) + `,"exp":` + strconv.FormatInt(iat+300, 10) + `,"extra":true}`,
-		"duplicate": validPrefix + strconv.FormatInt(iat, 10) + `,"exp":` + strconv.FormatInt(iat+300, 10) + `,"plan_id":"z"}`,
-		"too_long":  validPrefix + strconv.FormatInt(iat, 10) + `,"exp":` + strconv.FormatInt(iat+int64(TokenLifetime.Seconds())+1, 10) + `}`,
+		"missing":    `{"checkout_id":"x","plan_id":"y","return_url":"https://example.com/","exp":9999999999}`,
+		"unknown":    validPrefix + strconv.FormatInt(iat, 10) + `,"exp":` + strconv.FormatInt(iat+300, 10) + `,"extra":true}`,
+		"duplicate":  validPrefix + strconv.FormatInt(iat, 10) + `,"exp":` + strconv.FormatInt(iat+300, 10) + `,"plan_id":"z"}`,
+		"too_long":   validPrefix + strconv.FormatInt(iat, 10) + `,"exp":` + strconv.FormatInt(iat+int64(TokenLifetime.Seconds())+1, 10) + `}`,
+		"blank_plan": `{"checkout_id":"x","plan_id":" \t","return_url":"https://example.com/","iat":` + strconv.FormatInt(iat, 10) + `,"exp":` + strconv.FormatInt(iat+300, 10) + `}`,
+		"long_plan":  `{"checkout_id":"x","plan_id":"` + strings.Repeat("a", 129) + `","return_url":"https://example.com/","iat":` + strconv.FormatInt(iat, 10) + `,"exp":` + strconv.FormatInt(iat+300, 10) + `}`,
 	} {
 		token := signRawToken(keys.Token, []byte(body))
 		if _, err := VerifyStartToken(keys.Token, token); err == nil {
 			t.Fatalf("%s token should fail", name)
 		}
+	}
+}
+
+func TestStartTokenRejectsInvalidPlanIDs(t *testing.T) {
+	keys := testKeys(t)
+	iat := time.Now().UTC().Unix()
+	for name, planID := range map[string]string{
+		"blank":        "\u2003",
+		"too long":     strings.Repeat("a", 129),
+		"invalid UTF8": string([]byte{0xff}),
+	} {
+		_, err := SignStartToken(keys.Token, StartTokenPayload{
+			CheckoutID: "subchk_test",
+			PlanID:     planID,
+			ReturnURL:  "https://example.com/",
+			Iat:        iat,
+			Exp:        iat + 300,
+		})
+		if err == nil {
+			t.Fatalf("%s plan_id should fail", name)
+		}
+	}
+}
+
+func TestVerifyStartTokenRejectsInvalidUTF8(t *testing.T) {
+	keys := testKeys(t)
+	iat := time.Now().UTC().Unix()
+	body := []byte(`{"checkout_id":"x","plan_id":"`)
+	body = append(body, 0xff)
+	body = append(body, []byte(`","return_url":"https://example.com/","iat":`+strconv.FormatInt(iat, 10)+`,"exp":`+strconv.FormatInt(iat+300, 10)+`}`)...)
+	if _, err := VerifyStartToken(keys.Token, signRawToken(keys.Token, body)); err == nil {
+		t.Fatal("invalid UTF-8 token should fail")
+	}
+}
+
+func TestVerifyStartTokenAcceptsAnyJSONKeyOrder(t *testing.T) {
+	keys := testKeys(t)
+	iat := time.Now().UTC().Unix()
+	body := []byte(`{"exp":` + strconv.FormatInt(iat+300, 10) +
+		`,"iat":` + strconv.FormatInt(iat, 10) +
+		`,"return_url":"https://example.com/","plan_id":"plan_test","checkout_id":"subchk_test"}`)
+	if _, err := VerifyStartToken(keys.Token, signRawToken(keys.Token, body)); err != nil {
+		t.Fatalf("reordered token keys should be accepted: %v", err)
+	}
+}
+
+func TestValidatePlanIDUsesUTF8ByteLimit(t *testing.T) {
+	if err := ValidatePlanID(strings.Repeat("é", 64)); err != nil {
+		t.Fatalf("128-byte plan_id should be accepted: %v", err)
+	}
+	if err := ValidatePlanID(strings.Repeat("é", 65)); err == nil {
+		t.Fatal("130-byte plan_id should fail")
 	}
 }
 
