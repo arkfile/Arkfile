@@ -3394,7 +3394,7 @@ start_mock_subscription_bridge() {
     local mock_pid
 
     : > "$mock_log"
-    export SUBSCRIPTION_BRIDGE_PAIRING_ROOT="${SUBSCRIPTION_BRIDGE_PAIRING_ROOT:-test_subscription_bridge_pairing_root}"
+    export SUBSCRIPTION_BRIDGE_PAIRING_ROOT="${SUBSCRIPTION_BRIDGE_PAIRING_ROOT:-000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f}"
     export ARKFILE_WEBHOOK_URL="${SERVER_URL}/api/webhooks/subscription-bridge"
 
     info "Building mock Subscription Bridge..."
@@ -3504,7 +3504,7 @@ run_subscriptions() {
     export ARKFILE_SUBSCRIPTION_BRIDGE_ENABLED=true
     export ARKFILE_BILLING_PAYG_ENABLED=true
     export ARKFILE_SUBSCRIPTION_BRIDGE_URL="http://127.0.0.1:8081"
-    export ARKFILE_SUBSCRIPTION_BRIDGE_PAIRING_ROOT="test_subscription_bridge_pairing_root"
+    export ARKFILE_SUBSCRIPTION_BRIDGE_PAIRING_ROOT="000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
     export ADMIN_DEV_TEST_API_ENABLED=true
 
     mock_pid=$(start_mock_subscription_bridge "$e2e_script_dir" "$go_bin") || {

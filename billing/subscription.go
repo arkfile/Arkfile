@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -21,6 +22,8 @@ import (
 )
 
 var subscriptionMutationMu sync.Mutex
+
+var ErrInvalidSubscriptionBridgePayload = errors.New("invalid subscription bridge payload")
 
 // SettleUserAccumulator drains pending usage for one user without running a
 // full sweep. Used before pausing the meter on subscribe.
@@ -77,14 +80,60 @@ func FinalizePaygBeforeSubscribe(db *sql.DB, username string) error {
 }
 
 func ProcessSubscriptionBridgeCallback(db *sql.DB, payload *subbridge.CallbackPayload) error {
-	subscriptionMutationMu.Lock()
-	defer subscriptionMutationMu.Unlock()
-
-	periodStart, periodEnd, occurredAt, err := validateSubscriptionBridgePayload(payload)
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	body, _ := json.Marshal(payload)
+	return ProcessSubscriptionBridgeCallbackBody(db, payload, body)
+}
+
+func ProcessSubscriptionBridgeCallbackBody(db *sql.DB, payload *subbridge.CallbackPayload, body []byte) error {
+	subscriptionMutationMu.Lock()
+	defer subscriptionMutationMu.Unlock()
+
+	var decoded subbridge.CallbackPayload
+	if err := subbridge.DecodeCallback(body, &decoded); err != nil || payload == nil || decoded != *payload {
+		return invalidSubscriptionBridgePayload("callback body does not match decoded payload")
+	}
+	periodStart, periodEnd, stateChangedAt, err := validateSubscriptionBridgePayload(payload)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidSubscriptionBridgePayload, err)
+	}
+	return applySubscriptionBridgeState(db, payload, body, periodStart, periodEnd, stateChangedAt)
+}
+
+func ProcessSubscriptionBridgeSnapshot(db *sql.DB, snapshot *subbridge.SnapshotPayload, body []byte) error {
+	subscriptionMutationMu.Lock()
+	defer subscriptionMutationMu.Unlock()
+
+	var decoded subbridge.SnapshotPayload
+	if err := subbridge.DecodeSnapshot(body, &decoded); err != nil || snapshot == nil || decoded != *snapshot {
+		return invalidSubscriptionBridgePayload("snapshot body does not match decoded payload")
+	}
+	periodStart, periodEnd, stateChangedAt, err := validateSubscriptionBridgeSnapshot(snapshot)
+	if err != nil {
+		return err
+	}
+	snapshotHash := sha256.Sum256(body)
+	payload := &subbridge.CallbackPayload{
+		Protocol:           snapshot.Protocol,
+		Version:            snapshot.Version,
+		EventID:            "evt_sync_" + hex.EncodeToString(snapshotHash[:]),
+		EventType:          "subscription.sync",
+		CheckoutID:         snapshot.CheckoutID,
+		SubscriptionRef:    snapshot.SubscriptionRef,
+		PlanID:             snapshot.PlanID,
+		StateVersion:       snapshot.StateVersion,
+		Status:             snapshot.Status,
+		CurrentPeriodStart: snapshot.CurrentPeriodStart,
+		CurrentPeriodEnd:   snapshot.CurrentPeriodEnd,
+		CancelAtPeriodEnd:  snapshot.CancelAtPeriodEnd,
+		StateChangedAt:     snapshot.StateChangedAt,
+	}
+	return applySubscriptionBridgeState(db, payload, body, periodStart, periodEnd, stateChangedAt)
+}
+
+func applySubscriptionBridgeState(db *sql.DB, payload *subbridge.CallbackPayload, body []byte, periodStart, periodEnd, stateChangedAt time.Time) error {
 	hash := sha256.Sum256(body)
 	payloadHash := hex.EncodeToString(hash[:])
 
@@ -93,10 +142,10 @@ func ProcessSubscriptionBridgeCallback(db *sql.DB, payload *subbridge.CallbackPa
 	if err == nil {
 		username = sub.Username
 		if payload.CheckoutID != sub.CheckoutID {
-			return errors.New("subscription checkout mismatch")
+			return invalidSubscriptionBridgePayload("subscription checkout mismatch")
 		}
 		if payload.EventType != "subscription.plan_changed" && payload.EventType != "subscription.sync" && payload.PlanID != sub.PlanID {
-			return errors.New("subscription plan mismatch")
+			return invalidSubscriptionBridgePayload("subscription plan mismatch")
 		}
 	} else if err == sql.ErrNoRows && payload.CheckoutID != "" {
 		checkout, cerr := models.GetSubscriptionCheckout(db, payload.CheckoutID)
@@ -104,7 +153,7 @@ func ProcessSubscriptionBridgeCallback(db *sql.DB, payload *subbridge.CallbackPa
 			return fmt.Errorf("resolve checkout %s: %w", payload.CheckoutID, cerr)
 		}
 		if payload.EventType != "subscription.plan_changed" && payload.PlanID != checkout.PlanID {
-			return errors.New("checkout plan mismatch")
+			return invalidSubscriptionBridgePayload("checkout plan mismatch")
 		}
 		username = checkout.Username
 	} else {
@@ -129,10 +178,21 @@ func ProcessSubscriptionBridgeCallback(db *sql.DB, payload *subbridge.CallbackPa
 	}
 	if existing != nil {
 		if payload.CheckoutID != existing.CheckoutID {
-			return errors.New("subscription checkout mismatch")
+			return invalidSubscriptionBridgePayload("subscription checkout mismatch")
 		}
 		if payload.EventType != "subscription.plan_changed" && payload.EventType != "subscription.sync" && payload.PlanID != existing.PlanID {
-			return errors.New("subscription plan mismatch")
+			return invalidSubscriptionBridgePayload("subscription plan mismatch")
+		}
+		if payload.StateVersion > existing.StateVersion {
+			if existing.Status == "expired" {
+				return invalidSubscriptionBridgePayload("subscription bridge attempted to regress a terminal state")
+			}
+			if existing.StateChangedAt != nil && stateChangedAt.Before(*existing.StateChangedAt) {
+				return invalidSubscriptionBridgePayload("subscription bridge state_changed_at regressed")
+			}
+			if periodStart.Before(existing.CurrentPeriodStart) || periodEnd.Before(existing.CurrentPeriodEnd) {
+				return invalidSubscriptionBridgePayload("subscription bridge period boundary regressed")
+			}
 		}
 	}
 	disposition := "applied"
@@ -143,12 +203,22 @@ func ProcessSubscriptionBridgeCallback(db *sql.DB, payload *subbridge.CallbackPa
 	inserted, err := models.TryInsertSubscriptionEventTx(tx,
 		payload.EventID, payload.EventType, payload.SubscriptionRef,
 		payload.CheckoutID, username, payload.PlanID, payload.StateVersion,
-		&occurredAt, disposition, "", payloadHash,
+		&stateChangedAt, disposition, "", payloadHash,
 	)
 	if err != nil {
 		return err
 	}
-	if !inserted || disposition == "ignored_stale" {
+	if !inserted {
+		var storedPayloadHash string
+		if err := tx.QueryRow(`SELECT payload_hash FROM subscription_events WHERE event_id = ?`, payload.EventID).Scan(&storedPayloadHash); err != nil {
+			return err
+		}
+		if !hmac.Equal([]byte(storedPayloadHash), []byte(payloadHash)) {
+			return invalidSubscriptionBridgePayload("subscription bridge event_id reused with different payload")
+		}
+		return tx.Commit()
+	}
+	if disposition == "ignored_stale" {
 		return tx.Commit()
 	}
 
@@ -158,7 +228,7 @@ func ProcessSubscriptionBridgeCallback(db *sql.DB, payload *subbridge.CallbackPa
 			return cerr
 		}
 		if checkout.Username != username {
-			return errors.New("checkout username mismatch")
+			return invalidSubscriptionBridgePayload("checkout username mismatch")
 		}
 		sub := &models.UserSubscription{
 			Username:           username,
@@ -169,16 +239,16 @@ func ProcessSubscriptionBridgeCallback(db *sql.DB, payload *subbridge.CallbackPa
 			Status:             payload.Status,
 			Source:             "bridge",
 			StateVersion:       payload.StateVersion,
-			LastEventAt:        &occurredAt,
+			StateChangedAt:     &stateChangedAt,
 			CurrentPeriodStart: periodStart.UTC(),
 			CurrentPeriodEnd:   periodEnd.UTC(),
 			CancelAtPeriodEnd:  payload.CancelAtPeriodEnd,
 		}
 		if payload.Status == "past_due" {
-			sub.PastDueSince = &occurredAt
+			sub.PastDueSince = &stateChangedAt
 		}
 		if payload.Status == "canceled" {
-			sub.CanceledAt = &occurredAt
+			sub.CanceledAt = &stateChangedAt
 		}
 		if err := models.InsertUserSubscriptionTx(tx, sub); err != nil {
 			return err
@@ -193,7 +263,7 @@ func ProcessSubscriptionBridgeCallback(db *sql.DB, payload *subbridge.CallbackPa
 	existing.IsCurrent = payload.Status != "expired"
 	existing.Status = payload.Status
 	existing.StateVersion = payload.StateVersion
-	existing.LastEventAt = &occurredAt
+	existing.StateChangedAt = &stateChangedAt
 	existing.CurrentPeriodStart = periodStart.UTC()
 	existing.CurrentPeriodEnd = periodEnd.UTC()
 	existing.CancelAtPeriodEnd = payload.CancelAtPeriodEnd
@@ -201,18 +271,23 @@ func ProcessSubscriptionBridgeCallback(db *sql.DB, payload *subbridge.CallbackPa
 	switch payload.Status {
 	case "past_due":
 		if existing.PastDueSince == nil {
-			existing.PastDueSince = &occurredAt
+			existing.PastDueSince = &stateChangedAt
 		}
 	case "active", "trialing":
 		existing.PastDueSince = nil
+		existing.CanceledAt = nil
 	}
 	if payload.Status == "canceled" && existing.CanceledAt == nil {
-		existing.CanceledAt = &occurredAt
+		existing.CanceledAt = &stateChangedAt
 	}
 	if err := models.UpdateUserSubscriptionTx(tx, existing); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+func invalidSubscriptionBridgePayload(message string) error {
+	return fmt.Errorf("%w: %s", ErrInvalidSubscriptionBridgePayload, message)
 }
 
 func validateSubscriptionBridgePayload(payload *subbridge.CallbackPayload) (time.Time, time.Time, time.Time, error) {
@@ -230,27 +305,65 @@ func validateSubscriptionBridgePayload(payload *subbridge.CallbackPayload) (time
 	if strings.TrimSpace(payload.PlanID) == "" || len(payload.PlanID) > 128 || payload.StateVersion < 1 {
 		return time.Time{}, time.Time{}, time.Time{}, errors.New("invalid subscription bridge state metadata")
 	}
-	allowedStatus := map[string]bool{"active": true, "trialing": true, "past_due": true, "canceled": true, "expired": true}
-	if !allowedStatus[payload.Status] || !eventStatusCompatible(payload.EventType, payload.Status) {
+	if !eventStatusCompatible(payload.EventType, payload.Status) {
 		return time.Time{}, time.Time{}, time.Time{}, errors.New("invalid subscription bridge event transition")
 	}
-	periodStart, err := time.Parse(time.RFC3339, payload.CurrentPeriodStart)
+	return validateSubscriptionBridgeState(
+		payload.Status, payload.CurrentPeriodStart, payload.CurrentPeriodEnd,
+		payload.StateChangedAt, payload.CancelAtPeriodEnd,
+	)
+}
+
+func validateSubscriptionBridgeSnapshot(snapshot *subbridge.SnapshotPayload) (time.Time, time.Time, time.Time, error) {
+	if snapshot == nil {
+		return time.Time{}, time.Time{}, time.Time{}, errors.New("nil subscription bridge snapshot")
+	}
+	if snapshot.Protocol != subbridge.ProtocolName || snapshot.Version != subbridge.ProtocolVersion {
+		return time.Time{}, time.Time{}, time.Time{}, errors.New("unsupported subscription bridge protocol")
+	}
+	if !validBridgeIdentifier(snapshot.CheckoutID, "subchk_") ||
+		!validBridgeIdentifier(snapshot.SubscriptionRef, "sub_") ||
+		strings.TrimSpace(snapshot.PlanID) == "" || len(snapshot.PlanID) > 128 ||
+		snapshot.StateVersion < 1 {
+		return time.Time{}, time.Time{}, time.Time{}, errors.New("invalid subscription bridge snapshot metadata")
+	}
+	return validateSubscriptionBridgeState(
+		snapshot.Status, snapshot.CurrentPeriodStart, snapshot.CurrentPeriodEnd,
+		snapshot.StateChangedAt, snapshot.CancelAtPeriodEnd,
+	)
+}
+
+func validateSubscriptionBridgeState(status, periodStartValue, periodEndValue, stateChangedValue string, cancelAtPeriodEnd bool) (time.Time, time.Time, time.Time, error) {
+	allowedStatus := map[string]bool{"active": true, "trialing": true, "past_due": true, "canceled": true, "expired": true}
+	if !allowedStatus[status] || (status == "canceled") != cancelAtPeriodEnd {
+		return time.Time{}, time.Time{}, time.Time{}, errors.New("invalid subscription bridge state")
+	}
+	periodStart, err := subbridge.ParseUTCSecond(periodStartValue)
 	if err != nil {
 		return time.Time{}, time.Time{}, time.Time{}, fmt.Errorf("invalid current_period_start: %w", err)
 	}
-	periodEnd, err := time.Parse(time.RFC3339, payload.CurrentPeriodEnd)
+	periodEnd, err := subbridge.ParseUTCSecond(periodEndValue)
 	if err != nil || !periodEnd.After(periodStart) {
 		return time.Time{}, time.Time{}, time.Time{}, errors.New("invalid current_period_end")
 	}
-	occurredAt, err := time.Parse(time.RFC3339, payload.OccurredAt)
+	stateChangedAt, err := subbridge.ParseUTCSecond(stateChangedValue)
 	if err != nil {
-		return time.Time{}, time.Time{}, time.Time{}, fmt.Errorf("invalid occurred_at: %w", err)
+		return time.Time{}, time.Time{}, time.Time{}, fmt.Errorf("invalid state_changed_at: %w", err)
 	}
-	return periodStart.UTC(), periodEnd.UTC(), occurredAt.UTC(), nil
+	return periodStart, periodEnd, stateChangedAt, nil
 }
 
 func validBridgeIdentifier(value, prefix string) bool {
-	return strings.HasPrefix(value, prefix) && len(value) > len(prefix) && len(value) <= 160
+	if !strings.HasPrefix(value, prefix) || len(value) <= len(prefix) || len(value) > 160 {
+		return false
+	}
+	for _, char := range value[len(prefix):] {
+		if !((char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || char == '_' || char == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 func eventStatusCompatible(eventType, status string) bool {
@@ -265,8 +378,8 @@ func eventStatusCompatible(eventType, status string) bool {
 		return status == "canceled"
 	case "subscription.expired":
 		return status == "expired"
-	case "subscription.plan_changed", "subscription.sync":
-		return true
+	case "subscription.plan_changed":
+		return status == "active"
 	default:
 		return false
 	}
@@ -284,13 +397,11 @@ func ReconcileSubscriptionFromBridge(db *sql.DB, subscriptionRef string) error {
 	if err != nil {
 		return err
 	}
-	snap, err := subbridge.FetchSubscriptionSnapshot(cfg.Subscriptions.BridgeURL, keys.Reconcile, subscriptionRef)
+	snapshot, err := subbridge.FetchSubscriptionSnapshot(cfg.Subscriptions.BridgeURL, keys.Reconcile, subscriptionRef)
 	if err != nil {
 		return err
 	}
-	snap.EventID = "evt_sync_" + strings.ReplaceAll(uuid.New().String(), "-", "")
-	snap.EventType = "subscription.sync"
-	return ProcessSubscriptionBridgeCallback(db, snap)
+	return ProcessSubscriptionBridgeSnapshot(db, &snapshot.Payload, snapshot.Body)
 }
 
 func GrantGiftSubscription(db *sql.DB, username, planID string, days int, note, adminUsername string) (*models.UserSubscription, error) {
@@ -360,7 +471,7 @@ func GrantGiftSubscription(db *sql.DB, username, planID string, days int, note, 
 		IsCurrent:          true,
 		Status:             "active",
 		Source:             "gift",
-		LastEventAt:        &now,
+		StateChangedAt:     &now,
 		CurrentPeriodStart: now,
 		CurrentPeriodEnd:   end,
 		GiftNote:           note,
@@ -442,12 +553,17 @@ func CreateCheckoutURL(cfg config.SubscriptionsConfig, checkoutID, planID, retur
 	if err != nil {
 		return "", err
 	}
-	exp := time.Now().UTC().Add(subbridge.TokenLifetime).Unix()
-	token, err := subbridge.SignToken(keys.Token, subbridge.StartTokenPayload{
+	normalizedReturnURL, err := subbridge.NormalizeReturnURL(returnURL)
+	if err != nil {
+		return "", err
+	}
+	issuedAt := time.Now().UTC().Truncate(time.Second)
+	token, err := subbridge.SignStartToken(keys.Token, subbridge.StartTokenPayload{
 		CheckoutID: checkoutID,
 		PlanID:     planID,
-		ReturnURL:  returnURL,
-		Exp:        exp,
+		ReturnURL:  normalizedReturnURL,
+		Iat:        issuedAt.Unix(),
+		Exp:        issuedAt.Add(subbridge.TokenLifetime).Unix(),
 	})
 	if err != nil {
 		return "", err
@@ -463,11 +579,16 @@ func CreatePortalURL(cfg config.SubscriptionsConfig, subscriptionRef, returnURL 
 	if err != nil {
 		return "", err
 	}
-	exp := time.Now().UTC().Add(subbridge.TokenLifetime).Unix()
-	token, err := subbridge.SignToken(keys.Token, subbridge.PortalTokenPayload{
+	normalizedReturnURL, err := subbridge.NormalizeReturnURL(returnURL)
+	if err != nil {
+		return "", err
+	}
+	issuedAt := time.Now().UTC().Truncate(time.Second)
+	token, err := subbridge.SignPortalToken(keys.Token, subbridge.PortalTokenPayload{
 		SubscriptionRef: subscriptionRef,
-		ReturnURL:       returnURL,
-		Exp:             exp,
+		ReturnURL:       normalizedReturnURL,
+		Iat:             issuedAt.Unix(),
+		Exp:             issuedAt.Add(subbridge.TokenLifetime).Unix(),
 	})
 	if err != nil {
 		return "", err

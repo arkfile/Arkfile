@@ -12,6 +12,7 @@ import (
 
 	"github.com/joho/godotenv"
 
+	"github.com/arkfile/Arkfile/subbridge"
 	"github.com/arkfile/Arkfile/utils"
 )
 
@@ -690,13 +691,36 @@ func validateSubscriptionsConfig(cfg *Config) error {
 	if err != nil || bridgeURL.Host == "" || (bridgeURL.Scheme != "https" && bridgeURL.Scheme != "http") {
 		return fmt.Errorf("ARKFILE_SUBSCRIPTION_BRIDGE_URL must be an absolute HTTP(S) URL")
 	}
+	if bridgeURL.User != nil || bridgeURL.Fragment != "" || bridgeURL.RawQuery != "" || (bridgeURL.Path != "" && bridgeURL.Path != "/") {
+		return fmt.Errorf("ARKFILE_SUBSCRIPTION_BRIDGE_URL must be an origin URL without userinfo, query, fragment, or path")
+	}
 	if bridgeURL.Scheme != "https" && bridgeURL.Hostname() != "127.0.0.1" && bridgeURL.Hostname() != "localhost" && bridgeURL.Hostname() != "::1" {
 		return fmt.Errorf("ARKFILE_SUBSCRIPTION_BRIDGE_URL must use HTTPS except on loopback")
 	}
-	if len(cfg.Subscriptions.BridgePairingRoot) < 32 {
-		return fmt.Errorf("ARKFILE_SUBSCRIPTION_BRIDGE_PAIRING_ROOT must contain at least 32 characters")
+	if !isLowerHexSecret(cfg.Subscriptions.BridgePairingRoot, 64) {
+		return fmt.Errorf("ARKFILE_SUBSCRIPTION_BRIDGE_PAIRING_ROOT must be exactly 64 lowercase hexadecimal characters")
+	}
+	returnURL := cfg.Subscriptions.ReturnURL
+	if returnURL == "" && cfg.Server.BaseURL != "" {
+		returnURL = strings.TrimRight(cfg.Server.BaseURL, "/") + "/?subscription=return"
+	}
+	normalized, err := subbridge.NormalizeReturnURL(returnURL)
+	if err != nil || normalized != returnURL {
+		return fmt.Errorf("ARKFILE_SUBSCRIPTION_RETURN_URL (or BASE_URL fallback) must be a normalized HTTPS URL; HTTP is allowed only on loopback")
 	}
 	return nil
+}
+
+func isLowerHexSecret(value string, length int) bool {
+	if len(value) != length {
+		return false
+	}
+	for _, char := range value {
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 func validatePaymentsConfig(cfg *Config) error {

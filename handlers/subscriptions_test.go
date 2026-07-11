@@ -45,7 +45,7 @@ func handlerSubscriptionBridgePayload(eventType, eventID, checkoutID, entRef str
 		Status:             "active",
 		CurrentPeriodStart: now.Format(time.RFC3339),
 		CurrentPeriodEnd:   now.Add(30 * 24 * time.Hour).Format(time.RFC3339),
-		OccurredAt:         now.Format(time.RFC3339),
+		StateChangedAt:     now.Format(time.RFC3339),
 	}
 }
 
@@ -100,6 +100,30 @@ func TestSubscriptionBridgeWebhookHandler_RejectsBadSignature(t *testing.T) {
 	he, ok := err.(*echo.HTTPError)
 	require.True(t, ok)
 	assert.Equal(t, http.StatusUnauthorized, he.Code)
+}
+
+func TestSubscriptionBridgeWebhookHandler_RejectsSemanticDefectWith4xx(t *testing.T) {
+	mock := startMockBTCPayServer(t, nil)
+	defer mock.Close()
+	db, cleanup := withSubscriptionsTestEnv(t, mock.URL)
+	defer cleanup()
+
+	checkoutID := "subchk_invalid_semantics"
+	if _, err := db.Exec(
+		`INSERT INTO subscription_checkouts (checkout_id, username, plan_id, status) VALUES (?, ?, ?, 'pending')`,
+		checkoutID, paymentsTestUser, subscriptionsTestPlanID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	payload := handlerSubscriptionBridgePayload("subscription.activated", "evt_invalid_semantics", checkoutID, "sub_invalid_semantics")
+	payload.CancelAtPeriodEnd = true
+	c, _ := signedSubscriptionBridgeWebhookContext(t, payload, subscriptionsTestSecret)
+
+	err := SubscriptionBridgeWebhookHandler(c)
+	require.Error(t, err)
+	httpError, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusBadRequest, httpError.Code)
 }
 
 func TestSubscriptionBridgeWebhookHandler_Idempotent(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -25,10 +26,15 @@ var (
 	checkouts     sync.Map // checkout_id -> plan_id
 )
 
+type mockSubscription struct {
+	Callback map[string]interface{}
+	Body     []byte
+}
+
 func main() {
 	pairingRoot := os.Getenv("SUBSCRIPTION_BRIDGE_PAIRING_ROOT")
 	if pairingRoot == "" {
-		pairingRoot = "test_subscription_bridge_pairing_root"
+		pairingRoot = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 	}
 	var err error
 	bridgeKeys, err = subbridge.DeriveKeys(pairingRoot)
@@ -50,35 +56,32 @@ func main() {
 
 	http.HandleFunc("/v1/start", func(w http.ResponseWriter, r *http.Request) {
 		token := r.URL.Query().Get("token")
-		payload, err := verifyToken(token)
+		payload, err := subbridge.VerifyStartToken(bridgeKeys.Token, token)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		checkoutID, _ := payload["checkout_id"].(string)
-		planID, _ := payload["plan_id"].(string)
-		returnURL, _ := payload["return_url"].(string)
-		if checkoutID == "" || planID == "" {
-			http.Error(w, "missing checkout_id or plan_id", http.StatusBadRequest)
+		checkouts.Store(payload.CheckoutID, payload.PlanID)
+		redirectURL, err := url.Parse(payload.ReturnURL)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		checkouts.Store(checkoutID, planID)
-		redirect := fmt.Sprintf("%s&checkout_id=%s&mock=1", strings.TrimRight(returnURL, "&"), checkoutID)
-		http.Redirect(w, r, redirect, http.StatusFound)
+		query := redirectURL.Query()
+		query.Set("checkout_id", payload.CheckoutID)
+		query.Set("mock", "1")
+		redirectURL.RawQuery = query.Encode()
+		http.Redirect(w, r, redirectURL.String(), http.StatusFound)
 	})
 
 	http.HandleFunc("/v1/portal", func(w http.ResponseWriter, r *http.Request) {
 		token := r.URL.Query().Get("token")
-		payload, err := verifyToken(token)
+		payload, err := subbridge.VerifyPortalToken(bridgeKeys.Token, token)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		returnURL, _ := payload["return_url"].(string)
-		if returnURL == "" {
-			returnURL = "/"
-		}
-		http.Redirect(w, r, returnURL, http.StatusFound)
+		http.Redirect(w, r, payload.ReturnURL, http.StatusFound)
 	})
 
 	http.HandleFunc("/v1/subscriptions/", func(w http.ResponseWriter, r *http.Request) {
@@ -96,9 +99,9 @@ func main() {
 			return
 		}
 		if v, ok := subscriptions.Load(ref); ok {
-			stored, _ := v.(map[string]interface{})
-			snapshot := make(map[string]interface{}, len(stored))
-			for key, value := range stored {
+			stored, _ := v.(mockSubscription)
+			snapshot := make(map[string]interface{}, len(stored.Callback))
+			for key, value := range stored.Callback {
 				snapshot[key] = value
 			}
 			delete(snapshot, "event_id")
@@ -129,7 +132,7 @@ func main() {
 			planStr = "plan_dev_250gb"
 		}
 		subRef := "sub_" + strings.ReplaceAll(uuid.New().String(), "-", "")
-		now := time.Now().UTC()
+		now := time.Now().UTC().Truncate(time.Second)
 		end := now.Add(30 * 24 * time.Hour)
 		snap := map[string]interface{}{
 			"protocol":             "subscription-bridge",
@@ -144,11 +147,15 @@ func main() {
 			"current_period_start": now.Format(time.RFC3339),
 			"current_period_end":   end.Format(time.RFC3339),
 			"cancel_at_period_end": false,
-			"processor_family":     "mock",
-			"occurred_at":          now.Format(time.RFC3339),
+			"state_changed_at":     now.Format(time.RFC3339),
 		}
-		subscriptions.Store(subRef, snap)
-		if err := postSubscriptionBridgeWebhook(consumerURL, snap); err != nil {
+		body, err := json.Marshal(snap)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		subscriptions.Store(subRef, mockSubscription{Callback: snap, Body: body})
+		if err := postSubscriptionBridgeWebhook(consumerURL, body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
@@ -168,18 +175,24 @@ func main() {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		stored, _ := v.(map[string]interface{})
-		snap := make(map[string]interface{}, len(stored))
-		for key, value := range stored {
+		stored, _ := v.(mockSubscription)
+		snap := make(map[string]interface{}, len(stored.Callback))
+		for key, value := range stored.Callback {
 			snap[key] = value
 		}
 		snap["event_id"] = "evt_" + strings.ReplaceAll(uuid.New().String(), "-", "")
 		snap["event_type"] = "subscription.expired"
 		snap["status"] = "expired"
 		snap["state_version"] = 2
-		snap["occurred_at"] = time.Now().UTC().Format(time.RFC3339)
-		subscriptions.Store(req.SubscriptionRef, snap)
-		if err := postSubscriptionBridgeWebhook(consumerURL, snap); err != nil {
+		snap["cancel_at_period_end"] = false
+		snap["state_changed_at"] = time.Now().UTC().Truncate(time.Second).Format(time.RFC3339)
+		body, err := json.Marshal(snap)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		subscriptions.Store(req.SubscriptionRef, mockSubscription{Callback: snap, Body: body})
+		if err := postSubscriptionBridgeWebhook(consumerURL, body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
@@ -204,12 +217,8 @@ func main() {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		stored, _ := v.(map[string]interface{})
-		callback := make(map[string]interface{}, len(stored))
-		for key, value := range stored {
-			callback[key] = value
-		}
-		if err := postSubscriptionBridgeWebhook(consumerURL, callback); err != nil {
+		stored, _ := v.(mockSubscription)
+		if err := postSubscriptionBridgeWebhook(consumerURL, stored.Body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
@@ -226,19 +235,7 @@ func main() {
 	}
 }
 
-func verifyToken(token string) (map[string]interface{}, error) {
-	var payload map[string]interface{}
-	if err := subbridge.VerifyToken(bridgeKeys.Token, token, &payload); err != nil {
-		return nil, err
-	}
-	return payload, nil
-}
-
-func postSubscriptionBridgeWebhook(url string, payload map[string]interface{}) error {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
+func postSubscriptionBridgeWebhook(url string, body []byte) error {
 	sig := subbridge.SignWebhook(bridgeKeys.Callback, body)
 
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))

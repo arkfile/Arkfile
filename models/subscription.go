@@ -46,7 +46,7 @@ type UserSubscription struct {
 	Status             string     `json:"status"`
 	Source             string     `json:"source"`
 	StateVersion       int64      `json:"state_version"`
-	LastEventAt        *time.Time `json:"last_event_at,omitempty"`
+	StateChangedAt     *time.Time `json:"state_changed_at,omitempty"`
 	CurrentPeriodStart time.Time  `json:"current_period_start"`
 	CurrentPeriodEnd   time.Time  `json:"current_period_end"`
 	CancelAtPeriodEnd  bool       `json:"cancel_at_period_end"`
@@ -255,7 +255,7 @@ func updateSubscriptionCheckout(exec subscriptionExecutor, checkoutID, status, s
 func activeSubscriptionQuery() string {
 	return `
 		SELECT us.id, us.username, us.plan_id, us.checkout_id, us.subscription_ref,
-		       us.is_current, us.status, us.source, us.state_version, us.last_event_at,
+		       us.is_current, us.status, us.source, us.state_version, us.state_changed_at,
 		       us.current_period_start, us.current_period_end,
 		       us.cancel_at_period_end, us.canceled_at, us.past_due_since,
 		       COALESCE(us.gift_note,''), us.created_at, us.updated_at,
@@ -281,7 +281,7 @@ func GetActiveUserSubscriptionTx(tx *sql.Tx, username string) (*UserSubscription
 func subscriptionByRefQuery() string {
 	return `
 		SELECT us.id, us.username, us.plan_id, us.checkout_id, us.subscription_ref,
-		       us.is_current, us.status, us.source, us.state_version, us.last_event_at,
+		       us.is_current, us.status, us.source, us.state_version, us.state_changed_at,
 		       us.current_period_start, us.current_period_end,
 		       us.cancel_at_period_end, us.canceled_at, us.past_due_since,
 		       COALESCE(us.gift_note,''), us.created_at, us.updated_at,
@@ -311,12 +311,12 @@ func scanUserSubscriptionFields(scanner userSubscriptionScanner) (*UserSubscript
 	var s UserSubscription
 	var idRaw interface{}
 	var isCurrent, cancelAtPeriodEnd interface{}
-	var lastEventAt, canceledAt, pastDueSince sql.NullString
+	var stateChangedAt, canceledAt, pastDueSince sql.NullString
 	var periodStartStr, periodEndStr, createdAtStr, updatedAtStr string
 	var stateVersionRaw, planPriceRaw, planStorageRaw interface{}
 	err := scanner.Scan(
 		&idRaw, &s.Username, &s.PlanID, &s.CheckoutID, &s.SubscriptionRef,
-		&isCurrent, &s.Status, &s.Source, &stateVersionRaw, &lastEventAt,
+		&isCurrent, &s.Status, &s.Source, &stateVersionRaw, &stateChangedAt,
 		&periodStartStr, &periodEndStr,
 		&cancelAtPeriodEnd, &canceledAt, &pastDueSince,
 		&s.GiftNote, &createdAtStr, &updatedAtStr,
@@ -335,9 +335,9 @@ func scanUserSubscriptionFields(scanner userSubscriptionScanner) (*UserSubscript
 	s.PlanPriceUSDCents = ScanInt(planPriceRaw)
 	s.PlanStorageBytes = ScanInt64(planStorageRaw)
 	s.CancelAtPeriodEnd = ScanBool(cancelAtPeriodEnd)
-	if lastEventAt.Valid && lastEventAt.String != "" {
-		if t, err := parseFlexibleTime(lastEventAt.String); err == nil {
-			s.LastEventAt = &t
+	if stateChangedAt.Valid && stateChangedAt.String != "" {
+		if t, err := parseFlexibleTime(stateChangedAt.String); err == nil {
+			s.StateChangedAt = &t
 		}
 	}
 	if canceledAt.Valid && canceledAt.String != "" {
@@ -390,12 +390,12 @@ func insertUserSubscription(exec subscriptionExecutor, s *UserSubscription) erro
 	_, err := exec.Exec(`
 		INSERT INTO user_subscriptions
 		  (username, plan_id, checkout_id, subscription_ref, is_current, status, source,
-		   state_version, last_event_at,
+		   state_version, state_changed_at,
 		   current_period_start, current_period_end, cancel_at_period_end,
 		   canceled_at, past_due_since, gift_note)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		s.Username, s.PlanID, s.CheckoutID, s.SubscriptionRef, boolInt(s.IsCurrent), s.Status, s.Source,
-		s.StateVersion, nullableTime(s.LastEventAt),
+		s.StateVersion, nullableTime(s.StateChangedAt),
 		s.CurrentPeriodStart.UTC(), s.CurrentPeriodEnd.UTC(), cancelAt,
 		canceledAt, pastDueSince, s.GiftNote,
 	)
@@ -424,13 +424,13 @@ func updateUserSubscription(exec subscriptionExecutor, s *UserSubscription) erro
 	}
 	res, err := exec.Exec(`
 		UPDATE user_subscriptions SET
-		  plan_id = ?, is_current = ?, status = ?, state_version = ?, last_event_at = ?,
+		  plan_id = ?, is_current = ?, status = ?, state_version = ?, state_changed_at = ?,
 		  current_period_start = ?, current_period_end = ?,
 		  cancel_at_period_end = ?, canceled_at = ?, past_due_since = ?,
 		  gift_note = COALESCE(NULLIF(?, ''), gift_note),
 		  updated_at = CURRENT_TIMESTAMP
 		WHERE subscription_ref = ?`,
-		s.PlanID, boolInt(s.IsCurrent), s.Status, s.StateVersion, nullableTime(s.LastEventAt),
+		s.PlanID, boolInt(s.IsCurrent), s.Status, s.StateVersion, nullableTime(s.StateChangedAt),
 		s.CurrentPeriodStart.UTC(), s.CurrentPeriodEnd.UTC(),
 		cancelAt, canceledAt, pastDueSince, s.GiftNote, s.SubscriptionRef,
 	)
@@ -454,7 +454,7 @@ func ExpireUserSubscription(db *sql.DB, subscriptionRef string) error {
 func ListBridgeSubscriptionsForReconcile(db *sql.DB, withinDays int) ([]UserSubscription, error) {
 	rows, err := db.Query(`
 		SELECT us.id, us.username, us.plan_id, us.checkout_id, us.subscription_ref,
-		       us.is_current, us.status, us.source, us.state_version, us.last_event_at,
+		       us.is_current, us.status, us.source, us.state_version, us.state_changed_at,
 		       us.current_period_start, us.current_period_end,
 		       us.cancel_at_period_end, us.canceled_at, us.past_due_since,
 		       COALESCE(us.gift_note,''), us.created_at, us.updated_at,
@@ -484,7 +484,7 @@ func ListBridgeSubscriptionsForReconcile(db *sql.DB, withinDays int) ([]UserSubs
 func ListExpiredGiftSubscriptions(db *sql.DB) ([]UserSubscription, error) {
 	rows, err := db.Query(`
 		SELECT us.id, us.username, us.plan_id, us.checkout_id, us.subscription_ref,
-		       us.is_current, us.status, us.source, us.state_version, us.last_event_at,
+		       us.is_current, us.status, us.source, us.state_version, us.state_changed_at,
 		       us.current_period_start, us.current_period_end,
 		       us.cancel_at_period_end, us.canceled_at, us.past_due_since,
 		       COALESCE(us.gift_note,''), us.created_at, us.updated_at,
@@ -524,22 +524,22 @@ func subscriptionEventExists(query subscriptionRowQuerier, eventID string) (bool
 	return n > 0, err
 }
 
-func InsertSubscriptionEvent(db *sql.DB, eventID, eventType, subscriptionRef, checkoutID, username, planID string, stateVersion int64, occurredAt *time.Time, disposition, adminUsername, payloadHash string) error {
-	return insertSubscriptionEvent(db, eventID, eventType, subscriptionRef, checkoutID, username, planID, stateVersion, occurredAt, disposition, adminUsername, payloadHash)
+func InsertSubscriptionEvent(db *sql.DB, eventID, eventType, subscriptionRef, checkoutID, username, planID string, stateVersion int64, stateChangedAt *time.Time, disposition, adminUsername, payloadHash string) error {
+	return insertSubscriptionEvent(db, eventID, eventType, subscriptionRef, checkoutID, username, planID, stateVersion, stateChangedAt, disposition, adminUsername, payloadHash)
 }
 
-func InsertSubscriptionEventTx(tx *sql.Tx, eventID, eventType, subscriptionRef, checkoutID, username, planID string, stateVersion int64, occurredAt *time.Time, disposition, adminUsername, payloadHash string) error {
-	return insertSubscriptionEvent(tx, eventID, eventType, subscriptionRef, checkoutID, username, planID, stateVersion, occurredAt, disposition, adminUsername, payloadHash)
+func InsertSubscriptionEventTx(tx *sql.Tx, eventID, eventType, subscriptionRef, checkoutID, username, planID string, stateVersion int64, stateChangedAt *time.Time, disposition, adminUsername, payloadHash string) error {
+	return insertSubscriptionEvent(tx, eventID, eventType, subscriptionRef, checkoutID, username, planID, stateVersion, stateChangedAt, disposition, adminUsername, payloadHash)
 }
 
-func TryInsertSubscriptionEventTx(tx *sql.Tx, eventID, eventType, subscriptionRef, checkoutID, username, planID string, stateVersion int64, occurredAt *time.Time, disposition, adminUsername, payloadHash string) (bool, error) {
+func TryInsertSubscriptionEventTx(tx *sql.Tx, eventID, eventType, subscriptionRef, checkoutID, username, planID string, stateVersion int64, stateChangedAt *time.Time, disposition, adminUsername, payloadHash string) (bool, error) {
 	result, err := tx.Exec(`
 		INSERT OR IGNORE INTO subscription_events
 		  (event_id, event_type, subscription_ref, checkout_id, username, plan_id,
-		   state_version, occurred_at, disposition, admin_username, payload_hash)
+		   state_version, state_changed_at, disposition, admin_username, payload_hash)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		eventID, eventType, subscriptionRef, checkoutID, username, planID,
-		stateVersion, nullableTime(occurredAt), disposition, adminUsername, payloadHash,
+		stateVersion, nullableTime(stateChangedAt), disposition, adminUsername, payloadHash,
 	)
 	if err != nil {
 		return false, err
@@ -548,14 +548,14 @@ func TryInsertSubscriptionEventTx(tx *sql.Tx, eventID, eventType, subscriptionRe
 	return affected == 1, err
 }
 
-func insertSubscriptionEvent(exec subscriptionExecutor, eventID, eventType, subscriptionRef, checkoutID, username, planID string, stateVersion int64, occurredAt *time.Time, disposition, adminUsername, payloadHash string) error {
+func insertSubscriptionEvent(exec subscriptionExecutor, eventID, eventType, subscriptionRef, checkoutID, username, planID string, stateVersion int64, stateChangedAt *time.Time, disposition, adminUsername, payloadHash string) error {
 	_, err := exec.Exec(`
 		INSERT INTO subscription_events
 		  (event_id, event_type, subscription_ref, checkout_id, username, plan_id,
-		   state_version, occurred_at, disposition, admin_username, payload_hash)
+		   state_version, state_changed_at, disposition, admin_username, payload_hash)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		eventID, eventType, subscriptionRef, checkoutID, username, planID,
-		stateVersion, nullableTime(occurredAt), disposition, adminUsername, payloadHash,
+		stateVersion, nullableTime(stateChangedAt), disposition, adminUsername, payloadHash,
 	)
 	return err
 }

@@ -238,14 +238,14 @@ Gates are evaluated in this order. Document and implement consistently.
 
 ## Subscription Bridge Protocol v1
 
-The bridge and Arkfile communicate through one canonical protocol. Any processor adapter inside the bridge (Stripe v1, others later) must emit these events. Arkfile implements only this contract — not Stripe, Adyen, or Mollie webhooks directly.
+The bridge and Arkfile communicate through one canonical, provider-neutral protocol. The complete v1 bridge includes Stripe and Adyen adapters. Arkfile implements only this contract — never provider webhooks directly.
 
 ### Outbound: user starts checkout (Arkfile → browser → bridge)
 
 1. User `POST /api/subscriptions/checkout` with `{ "plan_id": "..." }`.
 2. Arkfile inserts `subscription_checkouts` (`checkout_id`, `username`, `plan_id`, `status=pending`).
 3. Arkfile returns `{ "checkout_url": "https://billing.arkfile.net/v1/start?token=..." }`.
-4. Token is HMAC-signed by Arkfile (shared secret with bridge): `{ checkout_id, plan_id, exp, return_url }` — **no username**.
+4. Token is HMAC-signed with the HKDF-derived token key: `{ checkout_id, plan_id, return_url, iat, exp }` — **no username**. Its lifetime is at most 15 minutes.
 5. Bridge validates token, maps `plan_id` to processor SKU in bridge config, creates hosted checkout with processor metadata `{ "checkout_id": "<id>" }` only.
 6. User completes payment on bridge/processor hosted pages. User may optionally enter email on those pages; Arkfile does not supply it.
 
@@ -262,14 +262,14 @@ Header: `Subscription-Bridge-Signature: t=<unix>,v1=<hmac_sha256_hex>` over raw 
   "event_id": "evt_uuid",
   "event_type": "subscription.activated",
   "checkout_id": "subchk_...",
-  "subscription_ref": "ent_...",
+  "subscription_ref": "sub_...",
   "plan_id": "plan_500gb",
+  "state_version": 1,
   "status": "active",
   "current_period_start": "2026-06-26T00:00:00Z",
   "current_period_end": "2026-07-26T00:00:00Z",
   "cancel_at_period_end": false,
-  "processor_family": "stripe",
-  "occurred_at": "2026-06-26T12:00:00Z"
+  "state_changed_at": "2026-06-26T12:00:00Z"
 }
 ```
 
@@ -278,21 +278,19 @@ Header: `Subscription-Bridge-Signature: t=<unix>,v1=<hmac_sha256_hex>` over raw 
 | `subscription.activated` | Run `FinalizePaygBeforeSubscribe`; link `subscription_ref`; upsert `user_subscriptions` with status `active` or `trialing` |
 | `subscription.renewed` | Extend `current_period_end` (and `current_period_start` if provided) |
 | `subscription.past_due` | Set status `past_due`; start grace timer for upload block |
-| `subscription.canceled` | Set `cancel_at_period_end` or immediate cancel per payload |
+| `subscription.canceled` | Set status `canceled` and `cancel_at_period_end=true`; access remains effective through `current_period_end` |
 | `subscription.expired` | Set status `expired`; meter resumes |
 | `subscription.plan_changed` | Update `plan_id` (v1: apply immediately) |
 
 **Lookup:** prefer `subscription_ref` when present; on first activation, fall back to `checkout_id` → local checkout row → username.
 
-**Idempotency:** insert `subscription_events` keyed on `event_id`; duplicate events are no-ops.
-
-`processor_family` (`stripe`, `adyen`, etc.) is an optional log label for operators. It is not a join key and not stored as a foreign identifier.
+**Idempotency and ordering:** store the SHA-256 hash of the exact verified callback bytes, insert `subscription_events` keyed on `event_id`, reject reuse of an event ID with different bytes, and apply only a strictly newer `state_version`. Reconciliation snapshots use the same state transition path.
 
 ### Portal (manage / cancel / update payment method)
 
 1. User `POST /api/subscriptions/portal` (authenticated).
 2. Arkfile reads `subscription_ref` from active subscription (never sends username to bridge).
-3. Arkfile returns `{ "portal_url": "https://billing.arkfile.net/v1/portal?token=..." }` where token is HMAC-signed `{ subscription_ref, exp, return_url }`.
+3. Arkfile returns `{ "portal_url": "https://billing.arkfile.net/v1/portal?token=..." }` where token is HMAC-signed `{ subscription_ref, return_url, iat, exp }`.
 4. Bridge creates processor portal session and redirects user.
 
 ### Sync (reconcile missed webhooks)
@@ -301,7 +299,7 @@ Arkfile scheduler or `arkfile-admin subscriptions sync --user` calls bridge:
 
 `GET https://billing.arkfile.net/v1/subscriptions/{subscription_ref}` with HMAC auth.
 
-Response uses the same field shape as callback payloads (without `event_id`). Arkfile reconciles local status and period dates. Bridge is source of truth for payment state; Arkfile is source of truth for storage and meter behavior.
+The response has the exact snapshot schema in `docs/wip/subscription-bridge.md`: the callback state fields without `event_id` and `event_type`. Arkfile strictly decodes it, retains the exact response bytes for its audit hash, and applies it through the same ordered state transition path as callbacks. Bridge is source of truth for payment state; Arkfile is source of truth for storage and meter behavior.
 
 ## Multi-processor strategy
 
@@ -315,7 +313,8 @@ plans:
   plan_500gb:
     stripe_price_id: price_...
   plan_1tb:
-    mollie_product_id: ...
+    processor: adyen
+    # provider-specific offer data stays inside the bridge
 ```
 
 Adding another processor later means a new bridge adapter and config lines — zero Arkfile schema or API changes.
@@ -336,7 +335,7 @@ Split commercial modes so private and gratis instances can disable layers indepe
 
 Suggested defaults: **private / gratis** — all false. **Hosted PAYG-only** — billing + PAYG + payments on, subscriptions off. **Hosted with tiers** — all relevant flags on.
 
-Gift-only mode requires no bridge URL or pairing secret. When bridge integration is enabled, startup requires an HTTPS bridge URL (HTTP loopback is allowed for development) and `ARKFILE_SUBSCRIPTION_BRIDGE_PAIRING_ROOT` with at least 32 characters. Arkfile derives separate token, callback, and reconcile keys with HKDF-SHA256. Do **not** require processor API keys on Arkfile.
+Gift-only mode requires no bridge URL or pairing root. When bridge integration is enabled, startup requires an HTTPS bridge URL (HTTP loopback is allowed for development), a normalized HTTPS return URL (or valid `BASE_URL` fallback), and `ARKFILE_SUBSCRIPTION_BRIDGE_PAIRING_ROOT` as exactly 64 lowercase hexadecimal characters representing 32 decoded bytes. Arkfile hex-decodes the root, then derives binary token, callback, and reconcile keys with HKDF-SHA256. Do **not** require processor API keys on Arkfile.
 
 ## Configuration
 
@@ -424,7 +423,7 @@ CREATE TABLE IF NOT EXISTS user_subscriptions (
     )),
     source TEXT NOT NULL CHECK (source IN ('bridge', 'gift')),
     state_version BIGINT NOT NULL DEFAULT 0,
-    last_event_at DATETIME,
+    state_changed_at DATETIME,
     current_period_start DATETIME NOT NULL,
     current_period_end DATETIME NOT NULL,
     cancel_at_period_end BOOLEAN NOT NULL DEFAULT 0,
@@ -467,7 +466,7 @@ CREATE TABLE IF NOT EXISTS subscription_events (
     username TEXT,
     plan_id TEXT,
     state_version BIGINT NOT NULL DEFAULT 0,
-    occurred_at DATETIME,
+    state_changed_at DATETIME,
     disposition TEXT NOT NULL DEFAULT 'applied'
         CHECK(disposition IN ('applied', 'duplicate', 'ignored_stale')),
     admin_username TEXT,
@@ -739,7 +738,7 @@ Foundation prerequisites remain e2e-verified in earlier groups: billing meter/sw
 1. **Schema + resolver + admin plan CRUD** — **Done.** Unified schema, `billing/effective.go`, admin plan CRUD and gift commands, dev seed plan.
 2. **Meter/storage/top-up integration** — **Done.** `ShouldMeter`, sweep skip, `ShouldAllowTopUp`, `FinalizePaygBeforeSubscribe`, upload gates, `/api/credits` projection; scheduler gift expiry and bridge reconcile hooks in `billing/scheduler.go`.
 3. **Web billing panel + arkfile-client billing/subscription commands** — **Done.** `billing.ts` subscription UI; `cmd/arkfile-client/billing_commands.go` and `subscription_commands.go`.
-4. **Subscription bridge consumer on Arkfile** — **Done on vault host.** Ordered transactional callbacks, strict validation, gift atomicity, HKDF-derived keys, authenticated reconcile, user/admin APIs, mock bridge, and `run_subscriptions` e2e.
+4. **Subscription bridge consumer on Arkfile** — **Done on vault host.** Ordered transactional callbacks and snapshots, exact-field decoding, raw-byte audit hashes, gift atomicity, hex-decoded pairing root and HKDF-derived keys, authenticated reconcile, canonical fixture tests, user/admin APIs, mock bridge, and `run_subscriptions` e2e.
 5. **Subscription Bridge service + Stripe and Adyen adapters** — **Not started.** Separate repository/deployment per `docs/wip/subscription-bridge.md`.
 6. **Playwright subscription coverage + user/docs polish** — **Partial.** Playwright top-up exists; subscription-specific browser tests, `docs/user-faq.md`, `docs/api.md`, and `docs/scripts-guide.md` client billing section remain open.
 
@@ -771,7 +770,7 @@ Foundation prerequisites remain e2e-verified in earlier groups: billing meter/sw
 
 ## Status
 
-**Arkfile subscription layer: implemented; consumer hardening completed July 2026.** The vault host ships the full v1 consumer contract: ordered `state_version` callbacks, event/state database transactions, expired-row lookup, checkout/plan binding, concurrent replay protection, event-derived `past_due_since`, atomic gift grants, disabled/gift-only semantics, consistent top-up policy, HKDF-derived protocol keys, bounded bridge HTTP, user/admin APIs and CLIs, billing UI, and a protocol-faithful dev mock. The existing full shell e2e baseline predates this hardening; focused Go coverage is the required verification for this change and `run_subscriptions` must be rerun before release.
+**Arkfile subscription layer: implemented; consumer hardening completed July 2026.** The vault host ships the full v1 consumer contract: ordered `state_version` callbacks and dedicated snapshots, event/state database transactions, exact verified-byte hashing, expired-row lookup, checkout/plan binding, concurrent replay protection, canonical `state_changed_at` persistence, atomic gift grants, disabled/gift-only semantics, consistent top-up policy, exact lowercase-hex root decoding with binary HKDF keys, bounded bridge HTTP, canonical protocol fixture tests, user/admin APIs and CLIs, billing UI, and a protocol-faithful dev mock. The existing full shell e2e baseline predates this hardening; focused Go coverage is the required verification for this change and `run_subscriptions` must be rerun before release.
 
 **Still open for production:**
 

@@ -1,8 +1,7 @@
 package handlers
 
 import (
-	"bytes"
-	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -205,17 +204,15 @@ func SubscriptionBridgeWebhookHandler(c echo.Context) error {
 	}
 
 	var payload subbridge.CallbackPayload
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&payload); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid JSON")
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+	if err := subbridge.DecodeCallback(body, &payload); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid JSON")
 	}
 
-	if err := billing.ProcessSubscriptionBridgeCallback(database.DB, &payload); err != nil {
+	if err := billing.ProcessSubscriptionBridgeCallbackBody(database.DB, &payload, body); err != nil {
 		logging.ErrorLogger.Printf("Subscription bridge webhook processing failed: %v", err)
+		if errors.Is(err, billing.ErrInvalidSubscriptionBridgePayload) {
+			return echo.NewHTTPError(http.StatusBadRequest, "Invalid subscription bridge event")
+		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process subscription bridge event")
 	}
 

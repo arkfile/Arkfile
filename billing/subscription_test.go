@@ -1,7 +1,10 @@
 package billing
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -10,7 +13,25 @@ import (
 
 	"github.com/arkfile/Arkfile/config"
 	"github.com/arkfile/Arkfile/models"
+	"github.com/arkfile/Arkfile/subbridge"
 )
+
+func TestValidateSubscriptionBridgePayloadRejectsMalformedWireValues(t *testing.T) {
+	base := testSubscriptionBridgePayload("subscription.activated", "evt_valid", "subchk_valid", "sub_valid", "active")
+	tests := map[string]func(*subbridge.CallbackPayload){
+		"event identifier": func(payload *subbridge.CallbackPayload) { payload.EventID = "evt_bad/value" },
+		"timestamp offset": func(payload *subbridge.CallbackPayload) { payload.StateChangedAt = "2026-01-01T01:00:00+01:00" },
+		"fractional time":  func(payload *subbridge.CallbackPayload) { payload.CurrentPeriodStart = "2026-01-01T00:00:00.1Z" },
+		"cancel mismatch":  func(payload *subbridge.CallbackPayload) { payload.CancelAtPeriodEnd = true },
+	}
+	for name, mutate := range tests {
+		payload := *base
+		mutate(&payload)
+		if _, _, _, err := validateSubscriptionBridgePayload(&payload); err == nil {
+			t.Fatalf("%s should fail", name)
+		}
+	}
+}
 
 func TestProcessSubscriptionBridgeCallback_ActivatedCreatesSubscription(t *testing.T) {
 	withBillingSubscriptionEnv(t)
@@ -135,6 +156,7 @@ func TestProcessSubscriptionBridgeCallback_PastDueSetsTimestamp(t *testing.T) {
 	seedPendingCheckout(t, db, checkoutID, "alice")
 
 	activate := testSubscriptionBridgePayload("subscription.activated", newEventID(), checkoutID, entRef, "active")
+	activate.StateChangedAt = time.Now().UTC().Add(-3 * time.Hour).Truncate(time.Second).Format(time.RFC3339)
 	if err := ProcessSubscriptionBridgeCallback(db, activate); err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +164,7 @@ func TestProcessSubscriptionBridgeCallback_PastDueSetsTimestamp(t *testing.T) {
 	pastDue := testSubscriptionBridgePayload("subscription.past_due", newEventID(), checkoutID, entRef, "past_due")
 	pastDue.StateVersion = 2
 	occurredAt := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
-	pastDue.OccurredAt = occurredAt.Format(time.RFC3339)
+	pastDue.StateChangedAt = occurredAt.Format(time.RFC3339)
 	if err := ProcessSubscriptionBridgeCallback(db, pastDue); err != nil {
 		t.Fatal(err)
 	}
@@ -251,6 +273,7 @@ func TestProcessSubscriptionBridgeCallback_CanceledAndExpired(t *testing.T) {
 	}
 	canceled := testSubscriptionBridgePayload("subscription.canceled", newEventID(), checkoutID, entRef, "canceled")
 	canceled.StateVersion = 2
+	canceled.CancelAtPeriodEnd = true
 	if err := ProcessSubscriptionBridgeCallback(db, canceled); err != nil {
 		t.Fatal(err)
 	}
@@ -262,8 +285,27 @@ func TestProcessSubscriptionBridgeCallback_CanceledAndExpired(t *testing.T) {
 		t.Fatalf("expected canceled with timestamp, got %+v", sub)
 	}
 
+	renewed := testSubscriptionBridgePayload("subscription.renewed", newEventID(), checkoutID, entRef, "active")
+	renewed.StateVersion = 3
+	if err := ProcessSubscriptionBridgeCallback(db, renewed); err != nil {
+		t.Fatal(err)
+	}
+	sub, err = models.GetUserSubscriptionBySubscriptionRef(db, entRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sub.Status != "active" || sub.CancelAtPeriodEnd || sub.CanceledAt != nil {
+		t.Fatalf("expected authoritative cancellation reversal, got %+v", sub)
+	}
+
+	canceled = testSubscriptionBridgePayload("subscription.canceled", newEventID(), checkoutID, entRef, "canceled")
+	canceled.StateVersion = 4
+	canceled.CancelAtPeriodEnd = true
+	if err := ProcessSubscriptionBridgeCallback(db, canceled); err != nil {
+		t.Fatal(err)
+	}
 	expired := testSubscriptionBridgePayload("subscription.expired", newEventID(), checkoutID, entRef, "expired")
-	expired.StateVersion = 3
+	expired.StateVersion = 5
 	if err := ProcessSubscriptionBridgeCallback(db, expired); err != nil {
 		t.Fatal(err)
 	}
@@ -273,6 +315,100 @@ func TestProcessSubscriptionBridgeCallback_CanceledAndExpired(t *testing.T) {
 	}
 	if status != "expired" {
 		t.Fatalf("expected expired status, got %q", status)
+	}
+}
+
+func TestProcessSubscriptionBridgeCallback_StoresExactRawBodyHash(t *testing.T) {
+	withBillingSubscriptionEnv(t)
+	db := openFullBillingSubscriptionTestDB(t)
+	defer db.Close()
+
+	seedSubscriptionPlan(t, db)
+	seedSubscriptionUser(t, db, "alice", 0)
+	checkoutID := "subchk_raw_hash"
+	subscriptionRef := "sub_raw_hash"
+	seedPendingCheckout(t, db, checkoutID, "alice")
+	payload := testSubscriptionBridgePayload("subscription.activated", newEventID(), checkoutID, subscriptionRef, "active")
+	body, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ProcessSubscriptionBridgeCallbackBody(db, payload, body); err != nil {
+		t.Fatal(err)
+	}
+	wantHash := sha256.Sum256(body)
+	var gotHash string
+	if err := db.QueryRow(`SELECT payload_hash FROM subscription_events WHERE event_id = ?`, payload.EventID).Scan(&gotHash); err != nil {
+		t.Fatal(err)
+	}
+	if gotHash != hex.EncodeToString(wantHash[:]) {
+		t.Fatalf("payload hash = %q, want exact raw body hash", gotHash)
+	}
+	if err := ProcessSubscriptionBridgeCallbackBody(db, payload, append(body, ' ')); err == nil {
+		t.Fatal("expected event_id reuse with different raw body to fail")
+	}
+}
+
+func TestProcessSubscriptionBridgeSnapshot_LifecycleAndReplay(t *testing.T) {
+	withBillingSubscriptionEnv(t)
+	db := openFullBillingSubscriptionTestDB(t)
+	defer db.Close()
+
+	seedSubscriptionPlan(t, db)
+	seedSubscriptionUser(t, db, "alice", 0)
+	checkoutID := "subchk_snapshot"
+	subscriptionRef := "sub_snapshot"
+	seedPendingCheckout(t, db, checkoutID, "alice")
+	activated := testSubscriptionBridgePayload("subscription.activated", newEventID(), checkoutID, subscriptionRef, "active")
+	if err := ProcessSubscriptionBridgeCallback(db, activated); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := subbridge.SnapshotPayload{
+		Protocol:           activated.Protocol,
+		Version:            activated.Version,
+		CheckoutID:         checkoutID,
+		SubscriptionRef:    subscriptionRef,
+		PlanID:             activated.PlanID,
+		StateVersion:       2,
+		Status:             "past_due",
+		CurrentPeriodStart: activated.CurrentPeriodStart,
+		CurrentPeriodEnd:   activated.CurrentPeriodEnd,
+		CancelAtPeriodEnd:  false,
+		StateChangedAt:     activated.StateChangedAt,
+	}
+	applySnapshot := func() error {
+		body, err := json.Marshal(snapshot)
+		if err != nil {
+			return err
+		}
+		return ProcessSubscriptionBridgeSnapshot(db, &snapshot, body)
+	}
+	if err := applySnapshot(); err != nil {
+		t.Fatal(err)
+	}
+	if err := applySnapshot(); err != nil {
+		t.Fatalf("snapshot replay: %v", err)
+	}
+
+	snapshot.StateVersion = 3
+	snapshot.Status = "canceled"
+	snapshot.CancelAtPeriodEnd = true
+	if err := applySnapshot(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.StateVersion = 4
+	snapshot.Status = "expired"
+	snapshot.CancelAtPeriodEnd = false
+	if err := applySnapshot(); err != nil {
+		t.Fatal(err)
+	}
+	subscription, err := models.GetUserSubscriptionBySubscriptionRef(db, subscriptionRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subscription.Status != "expired" || subscription.IsCurrent {
+		t.Fatalf("snapshot lifecycle ended at %+v", subscription)
 	}
 }
 

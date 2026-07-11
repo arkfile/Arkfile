@@ -526,7 +526,7 @@ CREATE TABLE IF NOT EXISTS user_subscriptions (
     )),
     source TEXT NOT NULL CHECK (source IN ('bridge', 'gift')),
     state_version BIGINT NOT NULL DEFAULT 0,
-    last_event_at DATETIME,
+    state_changed_at DATETIME,
     current_period_start DATETIME NOT NULL,
     current_period_end DATETIME NOT NULL,
     cancel_at_period_end BOOLEAN NOT NULL DEFAULT 0,
@@ -554,7 +554,7 @@ CREATE TABLE IF NOT EXISTS subscription_events (
     username TEXT,
     plan_id TEXT,
     state_version BIGINT NOT NULL DEFAULT 0,
-    occurred_at DATETIME,
+    state_changed_at DATETIME,
     disposition TEXT NOT NULL DEFAULT 'applied'
         CHECK(disposition IN ('applied', 'duplicate', 'ignored_stale')),
     admin_username TEXT,

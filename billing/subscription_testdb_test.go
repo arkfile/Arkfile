@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	subTestSecret  = "test_subscription_bridge_pairing_root"
+	subTestSecret  = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 	subTestPlanID  = "plan_dev_250gb"
 	subTestPlanGiB = int64(250) << 30
 )
@@ -32,6 +32,7 @@ func withBillingSubscriptionEnv(t *testing.T) {
 	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_ENABLED", "true")
 	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_URL", "http://127.0.0.1:8081")
 	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_PAIRING_ROOT", subTestSecret)
+	t.Setenv("ARKFILE_SUBSCRIPTION_RETURN_URL", "https://arkfile.test/?subscription=return")
 	t.Setenv("ARKFILE_BILLING_ENABLED", "true")
 	t.Setenv("ARKFILE_BILLING_PAYG_ENABLED", "true")
 	t.Setenv("ARKFILE_CUSTOMER_PRICE_USD_PER_TB_PER_MONTH", "10.00")
@@ -129,7 +130,7 @@ func openFullBillingSubscriptionTestDB(t *testing.T) *sql.DB {
 		status TEXT NOT NULL,
 		source TEXT NOT NULL,
 		state_version BIGINT NOT NULL DEFAULT 0,
-		last_event_at DATETIME,
+		state_changed_at DATETIME,
 		current_period_start DATETIME NOT NULL,
 		current_period_end DATETIME NOT NULL,
 		cancel_at_period_end BOOLEAN NOT NULL DEFAULT 0,
@@ -148,7 +149,7 @@ func openFullBillingSubscriptionTestDB(t *testing.T) *sql.DB {
 		username TEXT,
 		plan_id TEXT,
 		state_version BIGINT NOT NULL DEFAULT 0,
-		occurred_at DATETIME,
+		state_changed_at DATETIME,
 		disposition TEXT NOT NULL DEFAULT 'applied',
 		admin_username TEXT,
 		payload_hash TEXT NOT NULL,
@@ -233,7 +234,7 @@ func testSubscriptionBridgePayload(eventType, eventID, checkoutID, entRef, statu
 		Status:             status,
 		CurrentPeriodStart: now.Format(time.RFC3339),
 		CurrentPeriodEnd:   now.Add(30 * 24 * time.Hour).Format(time.RFC3339),
-		OccurredAt:         now.Format(time.RFC3339),
+		StateChangedAt:     now.Format(time.RFC3339),
 	}
 }
 

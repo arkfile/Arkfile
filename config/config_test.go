@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -706,4 +707,39 @@ func TestSubscriptionsConfigAllowsGiftOnlyMode(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, cfg.Subscriptions.Enabled)
 	assert.False(t, cfg.Subscriptions.BridgeEnabled)
+}
+
+func TestSubscriptionsConfigRequiresCanonicalPairingRootAndReturnURL(t *testing.T) {
+	validRoot := "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+	base := Config{}
+	base.Server.BaseURL = "https://arkfile.example"
+	base.Subscriptions = SubscriptionsConfig{
+		Enabled:           true,
+		BridgeEnabled:     true,
+		BridgeURL:         "https://bridge.example",
+		BridgePairingRoot: validRoot,
+		GiftDefaultDays:   30,
+		GiftMaxDays:       90,
+	}
+	if err := validateSubscriptionsConfig(&base); err != nil {
+		t.Fatalf("valid subscriptions config: %v", err)
+	}
+
+	for _, root := range []string{
+		validRoot[:63],
+		strings.ToUpper(validRoot),
+		"0x" + validRoot,
+	} {
+		cfg := base
+		cfg.Subscriptions.BridgePairingRoot = root
+		if err := validateSubscriptionsConfig(&cfg); err == nil {
+			t.Fatalf("pairing root %q should fail", root)
+		}
+	}
+
+	cfg := base
+	cfg.Subscriptions.ReturnURL = "https://ARKFILE.example/billing"
+	if err := validateSubscriptionsConfig(&cfg); err == nil {
+		t.Fatal("non-normalized return URL should fail")
+	}
 }

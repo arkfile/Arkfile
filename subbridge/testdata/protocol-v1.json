@@ -1,0 +1,56 @@
+{
+  "fixture": "subscription-bridge/protocol-v1",
+  "fixture_version": 1,
+  "pairing_root": {
+    "configured_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "decoded_bytes_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "salt_ascii": "subscription-bridge/v1",
+    "keys": {
+      "token": {
+        "info_ascii": "consumer-to-bridge/token",
+        "derived_key_hex": "1c3ffa613421f6a4958704b3090e9b970af7dd9107ce328cc9c5d33546701fa2"
+      },
+      "callback": {
+        "info_ascii": "bridge-to-consumer/callback",
+        "derived_key_hex": "069dddf506c40199b88267dbc754808242339730f5cb042f3d72e4e19dbe946d"
+      },
+      "reconcile": {
+        "info_ascii": "consumer-to-bridge/reconcile",
+        "derived_key_hex": "c090ac1d8b5c248d45c8ce7ca9f9b463b1f6ad4a2086061d53111214e24a433c"
+      }
+    }
+  },
+  "start_token": {
+    "payload_json_utf8": "{\"checkout_id\":\"subchk_7f3a9c2e\",\"plan_id\":\"plan_500gb\",\"return_url\":\"https://app.example.com/billing/return\",\"iat\":1767225600,\"exp\":1767226500}",
+    "payload_base64url": "eyJjaGVja291dF9pZCI6InN1YmNoa183ZjNhOWMyZSIsInBsYW5faWQiOiJwbGFuXzUwMGdiIiwicmV0dXJuX3VybCI6Imh0dHBzOi8vYXBwLmV4YW1wbGUuY29tL2JpbGxpbmcvcmV0dXJuIiwiaWF0IjoxNzY3MjI1NjAwLCJleHAiOjE3NjcyMjY1MDB9",
+    "signature_hex": "027b8e022a531a1fb51da0c21cb4c2495f3f1b616707b058e33e0fda48ef21e5",
+    "token": "eyJjaGVja291dF9pZCI6InN1YmNoa183ZjNhOWMyZSIsInBsYW5faWQiOiJwbGFuXzUwMGdiIiwicmV0dXJuX3VybCI6Imh0dHBzOi8vYXBwLmV4YW1wbGUuY29tL2JpbGxpbmcvcmV0dXJuIiwiaWF0IjoxNzY3MjI1NjAwLCJleHAiOjE3NjcyMjY1MDB9.027b8e022a531a1fb51da0c21cb4c2495f3f1b616707b058e33e0fda48ef21e5"
+  },
+  "portal_token": {
+    "payload_json_utf8": "{\"subscription_ref\":\"sub_a8f3c1d2\",\"return_url\":\"https://app.example.com/billing\",\"iat\":1767225600,\"exp\":1767226500}",
+    "payload_base64url": "eyJzdWJzY3JpcHRpb25fcmVmIjoic3ViX2E4ZjNjMWQyIiwicmV0dXJuX3VybCI6Imh0dHBzOi8vYXBwLmV4YW1wbGUuY29tL2JpbGxpbmciLCJpYXQiOjE3NjcyMjU2MDAsImV4cCI6MTc2NzIyNjUwMH0",
+    "signature_hex": "8a28b6bdd3fb8f5d9172e2d82e3d9971cbdef79611c9c6cdfddbf324f65e700b",
+    "token": "eyJzdWJzY3JpcHRpb25fcmVmIjoic3ViX2E4ZjNjMWQyIiwicmV0dXJuX3VybCI6Imh0dHBzOi8vYXBwLmV4YW1wbGUuY29tL2JpbGxpbmciLCJpYXQiOjE3NjcyMjU2MDAsImV4cCI6MTc2NzIyNjUwMH0.8a28b6bdd3fb8f5d9172e2d82e3d9971cbdef79611c9c6cdfddbf324f65e700b"
+  },
+  "callback": {
+    "body_json_utf8": "{\"protocol\":\"subscription-bridge\",\"version\":1,\"event_id\":\"evt_550e8400-e29b-41d4-a716-446655440000\",\"event_type\":\"subscription.activated\",\"checkout_id\":\"subchk_7f3a9c2e\",\"subscription_ref\":\"sub_a8f3c1d2\",\"plan_id\":\"plan_500gb\",\"state_version\":1,\"status\":\"active\",\"current_period_start\":\"2026-01-01T00:00:00Z\",\"current_period_end\":\"2026-02-01T00:00:00Z\",\"cancel_at_period_end\":false,\"state_changed_at\":\"2026-01-01T00:00:00Z\"}",
+    "signature_timestamp": 1767225605,
+    "signature_base_utf8": "1767225605.{\"protocol\":\"subscription-bridge\",\"version\":1,\"event_id\":\"evt_550e8400-e29b-41d4-a716-446655440000\",\"event_type\":\"subscription.activated\",\"checkout_id\":\"subchk_7f3a9c2e\",\"subscription_ref\":\"sub_a8f3c1d2\",\"plan_id\":\"plan_500gb\",\"state_version\":1,\"status\":\"active\",\"current_period_start\":\"2026-01-01T00:00:00Z\",\"current_period_end\":\"2026-02-01T00:00:00Z\",\"cancel_at_period_end\":false,\"state_changed_at\":\"2026-01-01T00:00:00Z\"}",
+    "signature_hex": "9d6700ac9f9f8926d13b1cd5de608a1d2806bf987defe28d1667bfd88725be31",
+    "signature_header": "t=1767225605,v1=9d6700ac9f9f8926d13b1cd5de608a1d2806bf987defe28d1667bfd88725be31"
+  },
+  "reconciliation_request": {
+    "method": "GET",
+    "path": "/v1/subscriptions/sub_a8f3c1d2",
+    "signature_timestamp": 1767225605,
+    "signature_base_utf8": "GET\n/v1/subscriptions/sub_a8f3c1d2\n1767225605",
+    "signature_hex": "2432943b8b6253160b5676091c56a14a0ea7b2d178289a76d1598360bfb58475",
+    "authorization_header": "Subscription-Bridge-HMAC t=1767225605,v1=2432943b8b6253160b5676091c56a14a0ea7b2d178289a76d1598360bfb58475"
+  },
+  "snapshot": {
+    "response_status": 200,
+    "content_type": "application/json",
+    "response_is_independently_signed": false,
+    "body_json_utf8": "{\"protocol\":\"subscription-bridge\",\"version\":1,\"checkout_id\":\"subchk_7f3a9c2e\",\"subscription_ref\":\"sub_a8f3c1d2\",\"plan_id\":\"plan_500gb\",\"state_version\":1,\"status\":\"active\",\"current_period_start\":\"2026-01-01T00:00:00Z\",\"current_period_end\":\"2026-02-01T00:00:00Z\",\"cancel_at_period_end\":false,\"state_changed_at\":\"2026-01-01T00:00:00Z\"}"
+  }
+}

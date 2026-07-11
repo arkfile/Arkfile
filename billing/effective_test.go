@@ -144,7 +144,7 @@ func openSubscriptionTestDB(t *testing.T) *sql.DB {
 		status TEXT NOT NULL,
 		source TEXT NOT NULL,
 		state_version BIGINT NOT NULL DEFAULT 0,
-		last_event_at DATETIME,
+		state_changed_at DATETIME,
 		current_period_start DATETIME NOT NULL,
 		current_period_end DATETIME NOT NULL,
 		cancel_at_period_end BOOLEAN NOT NULL DEFAULT 0,
