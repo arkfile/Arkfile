@@ -821,6 +821,7 @@ function showTopUpModal(cfg: PaymentsConfig): void {
   overlay.appendChild(modal);
   document.body.appendChild(overlay);
 
+  const paymentRequestID = crypto.randomUUID();
   form.onsubmit = async (e) => {
     e.preventDefault();
     errorEl.style.display = 'none';
@@ -834,7 +835,7 @@ function showTopUpModal(cfg: PaymentsConfig): void {
       const response = await authenticatedFetch('/api/billing/invoice', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount_usd: amountStr }),
+        body: JSON.stringify({ amount_usd: amountStr, request_id: paymentRequestID }),
       });
 
       if (!response.ok) {

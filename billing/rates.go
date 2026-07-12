@@ -159,8 +159,7 @@ func SetCustomerPrice(db *sql.DB, priceStr, updatedBy string) (*Rate, error) {
 	if err != nil {
 		return nil, err
 	}
-	logging.InfoLogger.Printf("billing: set customer price to %q (%d microcents/GiB/hour) by %s",
-		priceStr, rate.MicrocentsPerGiBPerHour, updatedBy)
+	logging.InfoLogger.Printf("billing: customer price updated")
 	return rate, nil
 }
 

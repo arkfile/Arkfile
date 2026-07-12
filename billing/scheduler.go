@@ -122,8 +122,8 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			if sweepErr != nil {
 				logging.ErrorLogger.Printf("billing.Scheduler: sweep failed: %v", sweepErr)
 			} else {
-				logging.InfoLogger.Printf("billing.Scheduler: sweep at %s; %d users settled, total drained = %d microcents, %d users now negative",
-					now.Format(time.RFC3339), summary.UsersSettled, summary.TotalDrainedMicrocents, summary.UsersWithNegativeBalance)
+				logging.InfoLogger.Printf("billing.Scheduler: sweep at %s; %d users settled, %d users now negative",
+					now.Format(time.RFC3339), summary.UsersSettled, summary.UsersWithNegativeBalance)
 			}
 			lastSweepDate = todayDate
 

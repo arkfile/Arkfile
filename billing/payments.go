@@ -4,10 +4,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
-	"github.com/arkfile/Arkfile/logging"
 	"github.com/arkfile/Arkfile/models"
 )
 
@@ -62,6 +62,9 @@ func processPaymentInTx(tx *sql.Tx, username string, amountMicrocents int64, pro
 		return nil, fmt.Errorf("billing.ProcessPayment: read balance: %w", err)
 	}
 
+	if currentBalance > math.MaxInt64-amountMicrocents {
+		return nil, errors.New("billing.ProcessPayment: balance overflow")
+	}
 	newBalance := currentBalance + amountMicrocents
 	_, err = tx.Exec(
 		`UPDATE user_credits SET balance_usd_microcents = ?, updated_at = CURRENT_TIMESTAMP
@@ -84,21 +87,6 @@ func processPaymentInTx(tx *sql.Tx, username string, amountMicrocents int64, pro
 		return nil, fmt.Errorf("billing.ProcessPayment: insert transaction (likely duplicate transaction_id): %w", err)
 	}
 	id, _ := res.LastInsertId()
-
-	logging.LogSecurityEvent(
-		logging.EventAdminAccess,
-		nil,
-		&username,
-		nil,
-		map[string]interface{}{
-			"operation":         "billing_payment",
-			"target_username":   username,
-			"amount_microcents": amountMicrocents,
-			"new_balance":       newBalance,
-			"transaction_id":    providerTxID,
-			"payment_type":      paymentType,
-		},
-	)
 
 	return &models.CreditTransaction{
 		ID:                        id,
@@ -173,6 +161,14 @@ func SettlePaymentInvoice(db *sql.DB, invoice *models.PaymentInvoice, paymentTyp
 	}
 	rows, _ := res.RowsAffected()
 	if rows == 0 {
+		_ = tx.Rollback()
+		latest, getErr := models.GetPaymentInvoice(db, invoice.InvoiceID)
+		if getErr == nil && latest.Status == "paid" {
+			exists, checkErr := models.CreditTransactionExistsForProviderID(db, invoice.ProviderInvoiceID)
+			if checkErr == nil && exists {
+				return nil, nil
+			}
+		}
 		return nil, fmt.Errorf("billing.SettlePaymentInvoice: invoice %s is no longer pending", invoice.InvoiceID)
 	}
 

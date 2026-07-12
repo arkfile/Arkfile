@@ -10,7 +10,7 @@ import (
 // IsProductionEnvironment checks if the application is running in production
 func IsProductionEnvironment() bool {
 	// Check multiple environment variable patterns
-	envVars := []string{"ENVIRONMENT", "NODE_ENV", "GO_ENV", "ENV"}
+	envVars := []string{"ARKFILE_ENV", "ENVIRONMENT", "NODE_ENV", "GO_ENV", "ENV"}
 
 	for _, envVar := range envVars {
 		value := strings.ToLower(os.Getenv(envVar))
@@ -76,7 +76,7 @@ func IsDevAdminAccount(username string) bool {
 
 // GetEnvironmentName returns the current environment name
 func GetEnvironmentName() string {
-	envVars := []string{"ENVIRONMENT", "NODE_ENV", "GO_ENV", "ENV"}
+	envVars := []string{"ARKFILE_ENV", "ENVIRONMENT", "NODE_ENV", "GO_ENV", "ENV"}
 
 	for _, envVar := range envVars {
 		value := os.Getenv(envVar)

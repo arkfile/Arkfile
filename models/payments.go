@@ -91,6 +91,78 @@ func UpdatePaymentInvoiceStatus(db DBTX, invoiceID, status string) error {
 	return err
 }
 
+// AttachPaymentProviderInvoice completes the local-before-remote creation
+// transition. It is safe to repeat with the same provider invoice ID.
+func AttachPaymentProviderInvoice(db DBTX, invoiceID, providerInvoiceID string) error {
+	if invoiceID == "" || providerInvoiceID == "" {
+		return sql.ErrNoRows
+	}
+	result, err := db.Exec(`
+		UPDATE payment_invoices
+		SET provider_invoice_id = ?, status = 'pending', updated_at = CURRENT_TIMESTAMP
+		WHERE invoice_id = ?
+		  AND status IN ('creating', 'pending')
+		  AND (provider_invoice_id IS NULL OR provider_invoice_id = '' OR provider_invoice_id = ?)
+	`, providerInvoiceID, invoiceID, providerInvoiceID)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// ListPendingPaymentInvoices returns a bounded oldest-first reconciliation batch.
+func ListPendingPaymentInvoices(db *sql.DB, provider string, limit int) ([]*PaymentInvoice, error) {
+	if limit < 1 || limit > 500 {
+		return nil, sql.ErrNoRows
+	}
+	rows, err := db.Query(`
+		SELECT invoice_id, username, amount_usd_microcents, status, provider,
+		       COALESCE(provider_invoice_id, ''), created_at, updated_at
+		FROM payment_invoices
+		WHERE status = 'pending' AND provider = ?
+		  AND provider_invoice_id IS NOT NULL AND provider_invoice_id != ''
+		ORDER BY created_at ASC
+		LIMIT ?
+	`, provider, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var invoices []*PaymentInvoice
+	for rows.Next() {
+		invoice := &PaymentInvoice{}
+		var amountF float64
+		var createdAt, updatedAt string
+		if err := rows.Scan(
+			&invoice.InvoiceID, &invoice.Username, &amountF, &invoice.Status,
+			&invoice.Provider, &invoice.ProviderInvoiceID, &createdAt, &updatedAt,
+		); err != nil {
+			return nil, err
+		}
+		invoice.AmountUSDMicrocents = int64(amountF)
+		invoice.CreatedAt = parsePaymentTimestamp(createdAt)
+		invoice.UpdatedAt = parsePaymentTimestamp(updatedAt)
+		invoices = append(invoices, invoice)
+	}
+	return invoices, rows.Err()
+}
+
+func parsePaymentTimestamp(value string) time.Time {
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed
+	}
+	parsed, _ := time.Parse("2006-01-02 15:04:05", value)
+	return parsed
+}
+
 func ListPaymentInvoices(db DBTX, username string, status string) ([]*PaymentInvoice, error) {
 	var rows *sql.Rows
 	var err error

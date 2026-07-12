@@ -247,6 +247,7 @@ RQLITE_USERNAME=arkfile-db
 RQLITE_PASSWORD=${rqlite_password}
 
 # Arkfile Application Configuration
+ARKFILE_ENV=production
 PORT=8080
 BASE_URL=https://${DOMAIN}
 CORS_ALLOWED_ORIGINS=https://${DOMAIN}

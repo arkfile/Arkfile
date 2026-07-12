@@ -501,6 +501,7 @@ func TestPaymentsConfigFromEnv(t *testing.T) {
 		"STORAGE_1_ACCESS_KEY":          "test",
 		"STORAGE_1_SECRET_KEY":          "test",
 		"STORAGE_1_BUCKET":              "test-bucket",
+		"BASE_URL":                      "https://arkfile.example.com",
 		"ARKFILE_PAYMENTS_ENABLED":      "true",
 		"ARKFILE_BTCPAY_SERVER_URL":     "https://btcpay.example.com",
 		"ARKFILE_BTCPAY_STORE_ID":       "store-abc",
@@ -583,6 +584,7 @@ func TestPaymentsConfigValidationRejectsInvalidTopUpRange(t *testing.T) {
 		"STORAGE_1_ACCESS_KEY":          "test",
 		"STORAGE_1_SECRET_KEY":          "test",
 		"STORAGE_1_BUCKET":              "test-bucket",
+		"BASE_URL":                      "https://arkfile.example.com",
 		"ARKFILE_PAYMENTS_ENABLED":      "true",
 		"ARKFILE_BTCPAY_SERVER_URL":     "https://btcpay.example.com",
 		"ARKFILE_BTCPAY_STORE_ID":       "store-abc",
@@ -741,5 +743,89 @@ func TestSubscriptionsConfigRequiresCanonicalPairingRootAndReturnURL(t *testing.
 	cfg.Subscriptions.ReturnURL = "https://ARKFILE.example/billing"
 	if err := validateSubscriptionsConfig(&cfg); err == nil {
 		t.Fatal("non-normalized return URL should fail")
+	}
+}
+
+func TestPaymentsProductionOrigins(t *testing.T) {
+	base := Config{}
+	base.Deployment.Environment = "production"
+	base.Server.BaseURL = "https://arkfile.example.com"
+	base.Payments = PaymentsConfig{
+		Enabled:             true,
+		BTCPayServerURL:     "https://pay.example.com",
+		BTCPayStoreID:       "store",
+		BTCPayAPIKey:        "key",
+		BTCPayWebhookSecret: "secret",
+		MinTopUpUSD:         "0.50",
+		MaxTopUpUSD:         "1000.00",
+	}
+	if err := validatePaymentsConfig(&base); err != nil {
+		t.Fatalf("valid production payment origins rejected: %v", err)
+	}
+
+	invalid := []string{
+		"http://pay.example.com",
+		"https://localhost",
+		"https://127.0.0.1:8080",
+		"https://user:pass@pay.example.com",
+		"https://pay.example.com/",
+		"https://pay.example.com/api",
+		"https://pay.example.com?x=1",
+		"https://pay.example.com/#fragment",
+		"https://10.0.0.5",
+		"https://btcpay.internal",
+		"not a URL",
+	}
+	for _, candidate := range invalid {
+		cfg := base
+		cfg.Payments = base.Payments
+		cfg.Payments.BTCPayServerURL = candidate
+		if err := validatePaymentsConfig(&cfg); err == nil {
+			t.Errorf("production BTCPay origin %q should fail", candidate)
+		}
+	}
+	base.Server.BaseURL = "https://arkfile.example.com/app"
+	if err := validatePaymentsConfig(&base); err == nil {
+		t.Fatal("production BASE_URL with a path should fail")
+	}
+}
+
+func TestPaymentsDevelopmentAllowsOnlyLoopbackHTTP(t *testing.T) {
+	base := Config{}
+	base.Deployment.Environment = "development"
+	base.Server.BaseURL = "http://127.0.0.1:8088"
+	base.Payments = PaymentsConfig{
+		Enabled:             true,
+		BTCPayServerURL:     "http://127.0.0.1:23000",
+		BTCPayStoreID:       "store",
+		BTCPayAPIKey:        "key",
+		BTCPayWebhookSecret: "secret",
+		MinTopUpUSD:         "0.50",
+		MaxTopUpUSD:         "1000.00",
+	}
+	if err := validatePaymentsConfig(&base); err != nil {
+		t.Fatalf("loopback development origins rejected: %v", err)
+	}
+	base.Payments.BTCPayServerURL = "http://pay.example.com"
+	if err := validatePaymentsConfig(&base); err == nil {
+		t.Fatal("public HTTP origin should be rejected in development")
+	}
+}
+
+func TestPaygNegativeBalanceLimitUsesCanonicalScale(t *testing.T) {
+	t.Setenv("STORAGE_PROVIDER_1", "generic-s3")
+	t.Setenv("STORAGE_1_ENDPOINT", "http://localhost:9332")
+	t.Setenv("STORAGE_1_ACCESS_KEY", "test")
+	t.Setenv("STORAGE_1_SECRET_KEY", "test")
+	t.Setenv("STORAGE_1_BUCKET", "test")
+	t.Setenv("ARKFILE_PAYG_NEGATIVE_BALANCE_LIMIT_USD", "10.00")
+	ResetConfigForTest()
+	defer ResetConfigForTest()
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if got := cfg.Billing.PaygNegativeBalanceLimitMicrocents(); got != 1_000_000_000 {
+		t.Fatalf("negative limit = %d, want 1000000000", got)
 	}
 }

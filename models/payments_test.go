@@ -30,13 +30,13 @@ func openPaymentInvoicesTestDB(t *testing.T) *sql.DB {
 			invoice_id TEXT PRIMARY KEY,
 			username TEXT NOT NULL,
 			amount_usd_microcents BIGINT NOT NULL,
-			status TEXT NOT NULL DEFAULT 'pending',
+			status TEXT NOT NULL DEFAULT 'creating',
 			provider TEXT NOT NULL,
 			provider_invoice_id TEXT UNIQUE,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY(username) REFERENCES users(username) ON DELETE RESTRICT,
-			CHECK(status IN ('pending', 'paid', 'expired', 'failed')),
+			CHECK(status IN ('creating', 'pending', 'paid', 'expired', 'failed')),
 			CHECK(provider IN ('btcpay'))
 		);
 	`

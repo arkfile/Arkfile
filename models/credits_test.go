@@ -85,6 +85,33 @@ func TestParseCreditsFromUSD(t *testing.T) {
 	})
 }
 
+func TestParseUSDToMicrocentsCanonicalScaleAndPrecision(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int64
+	}{
+		{"10.00", 1_000_000_000},
+		{"1.23", 123_000_000},
+		{"0.01", 1_000_000},
+		{"+$5.5", 550_000_000},
+	}
+	for _, test := range tests {
+		got, err := ParseUSDToMicrocents(test.input, 2, false)
+		if err != nil {
+			t.Fatalf("ParseUSDToMicrocents(%q): %v", test.input, err)
+		}
+		if got != test.want {
+			t.Errorf("ParseUSDToMicrocents(%q) = %d, want %d", test.input, got, test.want)
+		}
+	}
+
+	for _, input := range []string{"1.234", "1.2345", "-10.00", "10.", "1e2", "92233720369.00"} {
+		if _, err := ParseUSDToMicrocents(input, 2, false); err == nil {
+			t.Errorf("ParseUSDToMicrocents(%q) should fail", input)
+		}
+	}
+}
+
 func TestFormatParseRoundTrip(t *testing.T) {
 	// FormatCreditsUSD truncates below 10_000 microcents (one tenth-thousandth
 	// of a dollar). For values that are exact multiples of 10_000, Format then

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/arkfile/Arkfile/logging"
 	"github.com/arkfile/Arkfile/models"
 )
 
@@ -23,9 +22,6 @@ import (
 // The credit_transactions row's metadata is empty for gifts -- gifts carry
 // the operator's reason in the reason column and the responsible admin in
 // admin_username, with no other observable per-gift state.
-//
-// On a successful gift, emits a logging.LogSecurityEvent so the operation
-// shows up in the security event log alongside admin actions.
 func GiftCredits(db *sql.DB, username string, amountUSDMicrocents int64, reason, adminUsername string) (*models.CreditTransaction, error) {
 	if username == "" {
 		return nil, errors.New("billing.GiftCredits: empty target username")
@@ -93,19 +89,6 @@ func GiftCredits(db *sql.DB, username string, amountUSDMicrocents int64, reason,
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("billing.GiftCredits: commit: %w", err)
 	}
-
-	logging.LogSecurityEvent(
-		logging.EventAdminAccess,
-		nil,
-		&adminUsername,
-		nil,
-		map[string]interface{}{
-			"operation":         "billing_gift",
-			"target_username":   username,
-			"amount_microcents": amountUSDMicrocents,
-			"new_balance":       newBalance,
-		},
-	)
 
 	reasonCopy := reason
 	adminCopy := adminUsername

@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
+
+	"github.com/arkfile/Arkfile/models"
 )
 
 type BTCPayClient struct {
@@ -32,17 +35,20 @@ func NewBTCPayClient(baseURL, storeID, apiKey string) *BTCPayClient {
 }
 
 func (c *BTCPayClient) CreateInvoice(ctx context.Context, invoiceID string, amountMicrocents int64, redirectURL string) (*ProviderInvoice, error) {
-	amountUSD := float64(amountMicrocents) / 100000000.0
+	amountUSD, err := formatTopUpUSD(amountMicrocents)
+	if err != nil {
+		return nil, err
+	}
 	payload := map[string]interface{}{
-		"amount":   fmt.Sprintf("%.2f", amountUSD),
+		"amount":   amountUSD,
 		"currency": "USD",
 		"metadata": map[string]string{
 			"invoice_id": invoiceID,
 		},
 		"checkout": map[string]interface{}{
-			"speedPolicy":         "HighSpeed",
-			"redirectURL":         redirectURL,
-			"expirationMinutes":   DefaultInvoiceExpirationMinutes,
+			"speedPolicy":       "LowMediumSpeed",
+			"redirectURL":       redirectURL,
+			"expirationMinutes": DefaultInvoiceExpirationMinutes,
 		},
 	}
 	bodyBytes, err := json.Marshal(payload)
@@ -74,11 +80,45 @@ func (c *BTCPayClient) CreateInvoice(ctx context.Context, invoiceID string, amou
 	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
 		return nil, err
 	}
+	if respData.ID == "" {
+		return nil, fmt.Errorf("btcpay response omitted invoice ID")
+	}
+	if err := validateCheckoutURL(c.BaseURL, respData.CheckoutLink); err != nil {
+		return nil, err
+	}
 
 	return &ProviderInvoice{
 		ProviderInvoiceID: respData.ID,
 		CheckoutURL:       respData.CheckoutLink,
 	}, nil
+}
+
+func formatTopUpUSD(amountMicrocents int64) (string, error) {
+	const microcentsPerCent = models.MicrocentsPerUSD / 100
+	if amountMicrocents <= 0 {
+		return "", fmt.Errorf("top-up amount must be positive")
+	}
+	if amountMicrocents%microcentsPerCent != 0 {
+		return "", fmt.Errorf("top-up amount must have at most two decimal places")
+	}
+	dollars := amountMicrocents / models.MicrocentsPerUSD
+	cents := (amountMicrocents % models.MicrocentsPerUSD) / microcentsPerCent
+	return fmt.Sprintf("%d.%02d", dollars, cents), nil
+}
+
+func validateCheckoutURL(baseURL, checkoutLink string) error {
+	base, err := url.Parse(baseURL)
+	if err != nil || base.Scheme == "" || base.Host == "" {
+		return fmt.Errorf("invalid configured BTCPay origin")
+	}
+	checkout, err := url.Parse(checkoutLink)
+	if err != nil || checkout.Scheme == "" || checkout.Host == "" || checkout.User != nil {
+		return fmt.Errorf("btcpay returned an invalid checkout link")
+	}
+	if !strings.EqualFold(base.Scheme, checkout.Scheme) || !strings.EqualFold(base.Host, checkout.Host) {
+		return fmt.Errorf("btcpay checkout link origin does not match configured origin")
+	}
+	return nil
 }
 
 func (c *BTCPayClient) GetInvoiceStatus(ctx context.Context, providerInvoiceID string) (string, error) {

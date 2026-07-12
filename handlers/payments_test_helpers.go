@@ -35,6 +35,7 @@ func setupPaymentsSQLiteDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
+	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
 		t.Fatalf("enable foreign keys: %v", err)
 	}
@@ -114,13 +115,13 @@ func setupPaymentsSQLiteDB(t *testing.T) *sql.DB {
 			invoice_id TEXT PRIMARY KEY,
 			username TEXT NOT NULL,
 			amount_usd_microcents BIGINT NOT NULL,
-			status TEXT NOT NULL DEFAULT 'pending',
+			status TEXT NOT NULL DEFAULT 'creating',
 			provider TEXT NOT NULL,
 			provider_invoice_id TEXT UNIQUE,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY(username) REFERENCES users(username) ON DELETE RESTRICT,
-			CHECK(status IN ('pending', 'paid', 'expired', 'failed')),
+			CHECK(status IN ('creating', 'pending', 'paid', 'expired', 'failed')),
 			CHECK(provider IN ('btcpay'))
 		);
 		CREATE TABLE subscription_plans (
@@ -231,7 +232,7 @@ func withPaymentsTestEnv(t *testing.T, btcpayURL string, paymentsEnabled bool) (
 	t.Setenv("ARKFILE_BTCPAY_WEBHOOK_SECRET", paymentsWebhookSecret)
 	t.Setenv("ARKFILE_MIN_TOP_UP_USD", "0.50")
 	t.Setenv("ARKFILE_MAX_TOP_UP_USD", "1000.00")
-	t.Setenv("ARKFILE_SERVER_BASE_URL", "https://arkfile.test")
+	t.Setenv("BASE_URL", "https://arkfile.test")
 
 	if _, err := config.LoadConfig(); err != nil {
 		t.Fatalf("LoadConfig: %v", err)
@@ -274,7 +275,7 @@ func withSubscriptionsTestEnv(t *testing.T, btcpayURL string) (*sql.DB, func()) 
 	t.Setenv("ARKFILE_BTCPAY_WEBHOOK_SECRET", paymentsWebhookSecret)
 	t.Setenv("ARKFILE_MIN_TOP_UP_USD", "0.50")
 	t.Setenv("ARKFILE_MAX_TOP_UP_USD", "1000.00")
-	t.Setenv("ARKFILE_SERVER_BASE_URL", "https://arkfile.test")
+	t.Setenv("BASE_URL", "https://arkfile.test")
 	if _, err := config.LoadConfig(); err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
@@ -366,7 +367,7 @@ func startMockBTCPayServer(t *testing.T, getStatus map[string]string) *httptest.
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(map[string]string{
 				"id":           "btcpay_mock_" + payload.Metadata["invoice_id"],
-				"checkoutLink": "https://btcpay.test/checkout/" + payload.Metadata["invoice_id"],
+				"checkoutLink": "http://" + r.Host + "/checkout/" + payload.Metadata["invoice_id"],
 			})
 		case r.Method == http.MethodGet:
 			// /api/v1/stores/{store}/invoices/{providerID}

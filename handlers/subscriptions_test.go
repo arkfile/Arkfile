@@ -223,7 +223,7 @@ func TestCreateUploadSession_SubscribedSkipsPaygCap(t *testing.T) {
 	seedHandlerGiftSubscription(t, db, paymentsTestUser)
 	if _, err := db.Exec(
 		`INSERT INTO user_credits (username, balance_usd_microcents) VALUES (?, ?)`,
-		paymentsTestUser, -11_000_000,
+		paymentsTestUser, -1_100_000_000,
 	); err != nil {
 		t.Fatalf("seed credits: %v", err)
 	}

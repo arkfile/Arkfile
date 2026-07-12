@@ -2,10 +2,10 @@ package models
 
 import (
 	"database/sql"
-	"errors"
 	"fmt"
-	"strings"
 	"time"
+
+	"github.com/arkfile/Arkfile/money"
 )
 
 // UserCredit is a user's microcent-denominated credit balance.
@@ -53,7 +53,7 @@ const (
 
 // MicrocentsPerUSD is the canonical conversion factor.
 // 1 USD = 100 cents = 100,000,000 microcents.
-const MicrocentsPerUSD int64 = 100_000_000
+const MicrocentsPerUSD int64 = money.MicrocentsPerUSD
 
 // GetOrCreateUserCredits returns the user's credit row, creating one with a
 // zero balance if no row exists yet.
@@ -327,85 +327,12 @@ func FormatCreditsUSD(microcents int64) string {
 //	"$19.99"   -> 1_999_000_000
 //	"10.00001" -> error (too many decimal places)
 func ParseCreditsFromUSD(s string) (int64, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0, errors.New("amount is empty")
-	}
+	return ParseUSDToMicrocents(s, 4, true)
+}
 
-	negative := false
-	switch s[0] {
-	case '-':
-		negative = true
-		s = s[1:]
-	case '+':
-		s = s[1:]
-	}
-	if len(s) > 0 && s[0] == '$' {
-		s = s[1:]
-	}
-	if s == "" {
-		return 0, errors.New("amount has no digits")
-	}
-
-	dotIdx := strings.IndexByte(s, '.')
-	var dollarsPart, fractionalPart string
-	if dotIdx < 0 {
-		dollarsPart = s
-		fractionalPart = ""
-	} else {
-		dollarsPart = s[:dotIdx]
-		fractionalPart = s[dotIdx+1:]
-	}
-
-	if dollarsPart == "" && fractionalPart == "" {
-		return 0, errors.New("amount has no digits")
-	}
-	for _, r := range dollarsPart {
-		if r < '0' || r > '9' {
-			return 0, fmt.Errorf("invalid digit in dollars part: %q", s)
-		}
-	}
-	for _, r := range fractionalPart {
-		if r < '0' || r > '9' {
-			return 0, fmt.Errorf("invalid digit in fractional part: %q", s)
-		}
-	}
-	if len(fractionalPart) > 4 {
-		return 0, fmt.Errorf("too many decimal places (max 4): %q", s)
-	}
-
-	var dollars int64
-	if dollarsPart != "" {
-		var err error
-		// Use Sscanf for overflow detection; cap at a sane max (1 trillion USD).
-		_, err = fmt.Sscanf(dollarsPart, "%d", &dollars)
-		if err != nil {
-			return 0, fmt.Errorf("invalid dollars part: %w", err)
-		}
-		if dollars < 0 {
-			return 0, fmt.Errorf("invalid dollars part: %q", s)
-		}
-	}
-
-	// Pad fractionalPart to exactly 4 digits so the conversion is uniform.
-	padded := fractionalPart
-	for len(padded) < 4 {
-		padded += "0"
-	}
-	var fractional int64
-	if padded != "" {
-		_, err := fmt.Sscanf(padded, "%d", &fractional)
-		if err != nil {
-			return 0, fmt.Errorf("invalid fractional part: %w", err)
-		}
-	}
-
-	// Each unit of `fractional` is 1/10_000 of a dollar = 10_000 microcents.
-	microcents := dollars*MicrocentsPerUSD + fractional*10_000
-	if negative {
-		microcents = -microcents
-	}
-	return microcents, nil
+// ParseUSDToMicrocents exposes the canonical parser from the money package.
+func ParseUSDToMicrocents(s string, maxFractionalDigits int, allowNegative bool) (int64, error) {
+	return money.ParseUSDToMicrocents(s, maxFractionalDigits, allowNegative)
 }
 
 // CreditsSummaryResponse is the shape returned by GetUserCreditsSummary.

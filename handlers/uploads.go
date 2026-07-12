@@ -139,7 +139,7 @@ func CreateUploadSession(c echo.Context) error {
 	if err == nil && cfg.Billing.Enabled && cfg.Billing.PaygEnabled && billing.ShouldApplyPaygUploadCap(database.DB, username) {
 		credits, creditsErr := models.GetUserCredits(database.DB, username)
 		if creditsErr != nil {
-			logging.ErrorLogger.Printf("Upload balance check failed for %s: %v", username, creditsErr)
+			logging.ErrorLogger.Printf("Upload balance check failed: %v", creditsErr)
 		} else if credits != nil && credits.BalanceUSDMicrocents <= -cfg.Billing.PaygNegativeBalanceLimitMicrocents() {
 			return JSONErrorCode(c, http.StatusPaymentRequired, "payment_required",
 				"Your credit balance has reached the negative balance limit. Please top up to upload new files.")

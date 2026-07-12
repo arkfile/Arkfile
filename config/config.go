@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/joho/godotenv"
 
+	"github.com/arkfile/Arkfile/money"
 	"github.com/arkfile/Arkfile/subbridge"
 	"github.com/arkfile/Arkfile/utils"
 )
@@ -186,7 +188,7 @@ type SubscriptionsConfig struct {
 	SeedDevPlan       bool   `json:"seed_dev_plan"`
 }
 
-// PaymentsConfig is the BTCPay Server / Stripe extension payments configuration.
+// PaymentsConfig is the BTCPay Server one-time top-up configuration.
 type PaymentsConfig struct {
 	Enabled             bool   `json:"enabled"`
 	BTCPayServerURL     string `json:"btcpay_server_url"`
@@ -222,6 +224,10 @@ func LoadConfig() (*Config, error) {
 			if err = loadJSONConfig(config, configPath); err != nil {
 				return
 			}
+		}
+
+		if microcents, parseErr := money.ParseUSDToMicrocents(config.Billing.PaygNegativeBalanceLimitUSD, 2, false); parseErr == nil {
+			config.Billing.paygNegativeBalanceLimitMicrocents = microcents
 		}
 
 		// Validate configuration
@@ -591,12 +597,6 @@ func loadEnvConfig(cfg *Config) error {
 		cfg.Payments.MaxTopUpUSD = v
 	}
 
-	// Parse the PAYG negative-balance cap into microcents for the upload gate.
-	// Invalid values fall through to 0 here; validateConfig reports the error.
-	if microcents, err := parseUSDToMicrocents(cfg.Billing.PaygNegativeBalanceLimitUSD); err == nil {
-		cfg.Billing.paygNegativeBalanceLimitMicrocents = microcents
-	}
-
 	return nil
 }
 
@@ -619,7 +619,7 @@ func validateConfig(cfg *Config) error {
 	// Validate the PAYG negative-balance cap regardless of whether billing is
 	// enabled; the default ("10.00") must always parse cleanly.
 	if cfg.Billing.PaygNegativeBalanceLimitUSD != "" {
-		if _, err := parseUSDToMicrocents(cfg.Billing.PaygNegativeBalanceLimitUSD); err != nil {
+		if _, err := money.ParseUSDToMicrocents(cfg.Billing.PaygNegativeBalanceLimitUSD, 2, false); err != nil {
 			return fmt.Errorf("ARKFILE_PAYG_NEGATIVE_BALANCE_LIMIT_USD: %w", err)
 		}
 	}
@@ -739,6 +739,17 @@ func validatePaymentsConfig(cfg *Config) error {
 	if strings.TrimSpace(cfg.Payments.BTCPayWebhookSecret) == "" {
 		return fmt.Errorf("ARKFILE_BTCPAY_WEBHOOK_SECRET is required when ARKFILE_PAYMENTS_ENABLED=true")
 	}
+	production := strings.EqualFold(strings.TrimSpace(cfg.Deployment.Environment), "production") || utils.IsProductionEnvironment()
+	allowLoopbackHTTP := !production && isExplicitDevelopmentOrTest(cfg.Deployment.Environment)
+	if _, err := validatePaymentOrigin(cfg.Payments.BTCPayServerURL, production, allowLoopbackHTTP); err != nil {
+		return fmt.Errorf("ARKFILE_BTCPAY_SERVER_URL: %w", err)
+	}
+	if strings.TrimSpace(cfg.Server.BaseURL) == "" {
+		return fmt.Errorf("BASE_URL is required when ARKFILE_PAYMENTS_ENABLED=true")
+	}
+	if _, err := validatePaymentOrigin(cfg.Server.BaseURL, production, allowLoopbackHTTP); err != nil {
+		return fmt.Errorf("BASE_URL: %w", err)
+	}
 
 	minMicrocents, err := parsePositiveTopUpUSD(cfg.Payments.MinTopUpUSD, "ARKFILE_MIN_TOP_UP_USD")
 	if err != nil {
@@ -754,81 +765,75 @@ func validatePaymentsConfig(cfg *Config) error {
 	return nil
 }
 
-// parseUSDToMicrocents parses a non-negative dollars-and-cents string (e.g.
-// "10.00", "$10", "0.50") into microcents (1 USD = 1_000_000 microcents).
-// Used for the PAYG negative-balance cap, which may be 0 (block at zero).
-func parseUSDToMicrocents(value string) (int64, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return 0, fmt.Errorf("must be a non-negative USD amount")
+func isExplicitDevelopmentOrTest(environment string) bool {
+	switch strings.ToLower(strings.TrimSpace(environment)) {
+	case "development", "dev", "test", "testing":
+		return true
+	default:
+		return false
 	}
-	negative := false
-	if strings.HasPrefix(value, "-") {
-		negative = true
-		value = strings.TrimPrefix(value, "-")
-	}
-	if strings.HasPrefix(value, "+") {
-		value = strings.TrimPrefix(value, "+")
-	}
-	if strings.HasPrefix(value, "$") {
-		value = strings.TrimPrefix(value, "$")
-	}
-	f, err := strconv.ParseFloat(value, 64)
-	if err != nil || negative || f < 0 {
-		return 0, fmt.Errorf("must be a non-negative USD amount")
-	}
-	return int64(f*1e6 + 0.5), nil
 }
 
 func parsePositiveTopUpUSD(value, name string) (int64, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return 0, fmt.Errorf("%s must be a positive USD amount when payments are enabled", name)
+	total, err := money.ParseUSDToMicrocents(value, 2, false)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a valid USD amount with at most two decimal places: %w", name, err)
 	}
-	negative := false
-	if strings.HasPrefix(value, "-") {
-		negative = true
-		value = strings.TrimPrefix(value, "-")
-	}
-	if strings.HasPrefix(value, "+") {
-		value = strings.TrimPrefix(value, "+")
-	}
-	if strings.HasPrefix(value, "$") {
-		value = strings.TrimPrefix(value, "$")
-	}
-	parts := strings.SplitN(value, ".", 2)
-	dollarsPart := parts[0]
-	if dollarsPart == "" || negative {
-		return 0, fmt.Errorf("%s must be a positive USD amount", name)
-	}
-	for _, ch := range dollarsPart {
-		if ch < '0' || ch > '9' {
-			return 0, fmt.Errorf("%s must be a valid USD decimal amount", name)
-		}
-	}
-	centsPart := "00"
-	if len(parts) == 2 {
-		centsPart = parts[1]
-		if len(centsPart) > 2 {
-			return 0, fmt.Errorf("%s must have at most two decimal places", name)
-		}
-		for len(centsPart) < 2 {
-			centsPart += "0"
-		}
-		for _, ch := range centsPart {
-			if ch < '0' || ch > '9' {
-				return 0, fmt.Errorf("%s must be a valid USD decimal amount", name)
-			}
-		}
-	}
-	var dollars, cents int64
-	fmt.Sscanf(dollarsPart, "%d", &dollars)
-	fmt.Sscanf(centsPart, "%d", &cents)
-	total := dollars*100000000 + cents*1000000
 	if total <= 0 {
 		return 0, fmt.Errorf("%s must be a positive USD amount", name)
 	}
 	return total, nil
+}
+
+func validatePaymentOrigin(raw string, production, allowLoopbackHTTP bool) (*url.URL, error) {
+	if raw != strings.TrimSpace(raw) || raw == "" {
+		return nil, fmt.Errorf("must be a normalized origin")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" || parsed.Scheme == "" {
+		return nil, fmt.Errorf("must be an absolute HTTP(S) origin")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "" || parsed.RawPath != "" {
+		return nil, fmt.Errorf("must not contain credentials, query, fragment, or path")
+	}
+	if parsed.Scheme != "https" && parsed.Scheme != "http" {
+		return nil, fmt.Errorf("must use HTTPS")
+	}
+	if parsed.Scheme != strings.ToLower(parsed.Scheme) || parsed.Host != strings.ToLower(parsed.Host) {
+		return nil, fmt.Errorf("must use a lowercase normalized origin")
+	}
+	if (parsed.Scheme == "https" && parsed.Port() == "443") || (parsed.Scheme == "http" && parsed.Port() == "80") {
+		return nil, fmt.Errorf("must omit the default port")
+	}
+	hostname := strings.ToLower(parsed.Hostname())
+	if hostname == "" {
+		return nil, fmt.Errorf("must include a hostname")
+	}
+	loopback := hostname == "localhost" || strings.HasSuffix(hostname, ".localhost")
+	ip := net.ParseIP(hostname)
+	if ip != nil {
+		loopback = ip.IsLoopback()
+		if production && (loopback || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()) {
+			return nil, fmt.Errorf("must use a public network origin in production")
+		}
+	}
+	if production {
+		if parsed.Scheme != "https" {
+			return nil, fmt.Errorf("must use HTTPS in production")
+		}
+		if loopback {
+			return nil, fmt.Errorf("must not use a loopback origin in production")
+		}
+		if ip == nil && (!strings.Contains(hostname, ".") || strings.HasSuffix(hostname, ".local") || strings.HasSuffix(hostname, ".internal")) {
+			return nil, fmt.Errorf("must use a public hostname in production")
+		}
+	} else if parsed.Scheme == "http" && !(allowLoopbackHTTP && loopback) {
+		return nil, fmt.Errorf("HTTP is allowed only for loopback development and test origins")
+	}
+	if parsed.String() != raw {
+		return nil, fmt.Errorf("must be a normalized origin")
+	}
+	return parsed, nil
 }
 
 // ValidateProductionConfig validates that the configuration is safe for production
