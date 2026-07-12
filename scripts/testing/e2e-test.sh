@@ -3120,7 +3120,7 @@ run_payments() {
     # steps run here — after post-admin-reset MFA re-enrollment — so upload
     # and download probes have a valid session.  Invoice top-up below restores
     # balance afterward.
-    local cap_microcents=10000000   # $10.00 in microcents
+    local cap_microcents=1000000000   # $10.00 in microcents
     local cap_test_file="$TEST_DATA_DIR/payg_cap_probe.bin"
     head -c 2048 /dev/urandom > "$cap_test_file" 2>/dev/null || \
         printf 'x%.0s' $(seq 1 2048) > "$cap_test_file"
@@ -3145,12 +3145,12 @@ run_payments() {
     fi
 
     # --- Step 2: drive balance below the -$10 cap ----------------------
-    # Each tick-now --sweep bills only one simulated hour (~55-70k µ¢ at
-    # dev storage + 9999.99 price), so 40 sweeps cannot reach -$10.  Batch
-    # tick-only calls to fill the accumulator, then sweep once per round.
+    # Each tick-now --sweep bills only one simulated hour (~5.5-7M µ¢ at
+    # dev storage + 999999.99 price). Batch tick-only calls fill the
+    # accumulator, then one sweep settles each round.
     safe_exec _cap_sp_out _cap_sp_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        billing set-price 9999.99 || true
+        billing set-price 999999.99 || true
 
     local cap_drain_round=0
     local cap_max_drain_rounds=5

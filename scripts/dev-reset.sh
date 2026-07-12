@@ -419,6 +419,8 @@ RQLITE_USERNAME=dev-user
 RQLITE_PASSWORD=${RQLITE_PASSWORD}
 
 # Arkfile Application Configuration
+ARKFILE_ENV=development
+BASE_URL=https://localhost:8443
 PORT=8080
 CORS_ALLOWED_ORIGINS=https://localhost:8443
 
