@@ -103,22 +103,22 @@ func TestCreateUploadSession_FileIDConflictStableError(t *testing.T) {
 	// uniqueness check: user lookup (approval + storage limit) and the
 	// per-user in-progress sweep + count. Each sub-test reuses this.
 	mockStorageGate := func(mock sqlmock.Sqlmock) {
-		// GetUserByUsername(database.DB, username) — column set must match
-		// models.GetUserByUsername query exactly: id, username, created_at,
-		// total_storage_bytes, storage_limit_bytes, is_approved, approved_by,
-		// approved_at, is_admin.
-		userRows := sqlmock.NewRows([]string{
-			"id", "username", "created_at", "total_storage_bytes",
-			"storage_limit_bytes", "is_approved", "approved_by", "approved_at",
-			"is_admin",
-		}).AddRow(
-			int64(1), username, "2024-01-01 00:00:00", int64(0),
-			int64(1<<30), true, sql.NullString{String: "admin", Valid: true},
-			sql.NullString{String: "2024-01-01 00:00:00", Valid: true},
-			false,
-		)
-		mock.ExpectQuery(`SELECT id, username, created_at,\s+total_storage_bytes, storage_limit_bytes,\s+is_approved, approved_by, approved_at, is_admin\s+FROM users WHERE username = \?`).
-			WithArgs(username).WillReturnRows(userRows)
+		// CreateUploadSession reads the user once for approval, then
+		// CheckStorageAvailable reads it twice to determine usage and limit.
+		for range 3 {
+			userRows := sqlmock.NewRows([]string{
+				"id", "username", "created_at", "total_storage_bytes",
+				"storage_limit_bytes", "is_approved", "approved_by", "approved_at",
+				"is_admin",
+			}).AddRow(
+				int64(1), username, "2024-01-01 00:00:00", int64(0),
+				int64(1<<30), true, sql.NullString{String: "admin", Valid: true},
+				sql.NullString{String: "2024-01-01 00:00:00", Valid: true},
+				false,
+			)
+			mock.ExpectQuery(`SELECT id, username, created_at,\s+total_storage_bytes, storage_limit_bytes,\s+is_approved, approved_by, approved_at, is_admin\s+FROM users WHERE username = \?`).
+				WithArgs(username).WillReturnRows(userRows)
+		}
 
 		// BEGIN transaction
 		mock.ExpectBegin()

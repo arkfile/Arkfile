@@ -3293,7 +3293,7 @@ run_payments() {
     # Settle the invoice by sending a signed webhook payload to /api/webhooks/btcpay
     # Payload format
     local webhook_payload
-    webhook_payload='{"type":"InvoiceSettled","invoiceId":"test_provider_id","metadata":{"invoice_id":"'"$invoice_id"'"}}'
+    webhook_payload='{"type":"InvoiceSettled","storeId":"test_store_id","invoiceId":"test_provider_id","metadata":{"invoice_id":"'"$invoice_id"'"}}'
     
     # Compute signature: hmac sha256 of payload with secret "test_webhook_secret"
     local signature

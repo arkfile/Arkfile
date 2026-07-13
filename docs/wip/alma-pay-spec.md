@@ -1,5 +1,7 @@
 # AlmaPay implementation specification
 
+This document is outdated and is no longer authoritative. Consult the AlmaPay repository for the current implementation specification and integration contract.
+
 ## Purpose
 
 This document is the implementation contract for a new `AlmaPay` repository. AlmaPay is a reusable, application-agnostic deployment and operations toolkit that builds, deploys, verifies, updates, backs up, and restores a self-hosted BTCPay Server installation on AlmaLinux 10+ using rootless Podman. It may serve multiple independent consumer applications through separate BTCPay stores, credentials, and webhooks.

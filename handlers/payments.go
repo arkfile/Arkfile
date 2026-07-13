@@ -207,7 +207,7 @@ func BTCPayWebhookHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid JSON payload")
 	}
 
-	if payload.StoreID != "" && payload.StoreID != cfg.Payments.BTCPayStoreID {
+	if payload.StoreID != cfg.Payments.BTCPayStoreID {
 		return echo.NewHTTPError(http.StatusForbidden, "Webhook store does not match")
 	}
 	if payload.Type != "InvoiceSettled" {

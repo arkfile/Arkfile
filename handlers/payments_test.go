@@ -252,7 +252,7 @@ func TestBTCPayWebhookHandler_SettlesInvoiceAndCreditsUser(t *testing.T) {
 
 	seedPendingInvoice(t, db, "inv_webhook1", paymentsTestUser, "prov_webhook1", 1_000_000_000)
 
-	payload := `{"type":"InvoiceSettled","invoiceId":"prov_webhook1","metadata":{"invoice_id":"inv_webhook1"}}`
+	payload := `{"type":"InvoiceSettled","storeId":"test_store_id","invoiceId":"prov_webhook1","metadata":{"invoice_id":"inv_webhook1"}}`
 	c, rec := signedWebhookRequest(t, payload)
 
 	err := BTCPayWebhookHandler(c)
@@ -332,7 +332,7 @@ func TestBTCPayWebhookHandler_IgnoresUnhandledEventType(t *testing.T) {
 	_, cleanup := withPaymentsTestEnv(t, mock.URL, true)
 	defer cleanup()
 
-	payload := `{"type":"InvoiceCreated","invoiceId":"prov_x","metadata":{"invoice_id":"inv_x"}}`
+	payload := `{"type":"InvoiceCreated","storeId":"test_store_id","invoiceId":"prov_x","metadata":{"invoice_id":"inv_x"}}`
 	c, rec := signedWebhookRequest(t, payload)
 
 	err := BTCPayWebhookHandler(c)
@@ -358,7 +358,7 @@ func TestBTCPayWebhookHandler_IgnoresInvoiceCompleted(t *testing.T) {
 	assert.Equal(t, "pending", invoice.Status)
 }
 
-func TestBTCPayWebhookHandler_RejectsWrongStoreAndIdentifierConflict(t *testing.T) {
+func TestBTCPayWebhookHandler_RejectsMissingOrWrongStoreAndIdentifierConflict(t *testing.T) {
 	mock := startMockBTCPayServer(t, nil)
 	defer mock.Close()
 	db, cleanup := withPaymentsTestEnv(t, mock.URL, true)
@@ -366,9 +366,15 @@ func TestBTCPayWebhookHandler_RejectsWrongStoreAndIdentifierConflict(t *testing.
 	seedPendingInvoice(t, db, "inv_store", paymentsTestUser, "prov_store", 100_000_000)
 	seedPendingInvoice(t, db, "inv_other", paymentsTestOtherUser, "prov_other", 100_000_000)
 
-	wrongStore := `{"type":"InvoiceSettled","storeId":"wrong","invoiceId":"prov_store","metadata":{"invoice_id":"inv_store"}}`
-	c, _ := signedWebhookRequest(t, wrongStore)
+	missingStore := `{"type":"InvoiceSettled","invoiceId":"prov_store","metadata":{"invoice_id":"inv_store"}}`
+	c, _ := signedWebhookRequest(t, missingStore)
 	err := BTCPayWebhookHandler(c)
+	require.Error(t, err)
+	assert.Equal(t, http.StatusForbidden, err.(*echo.HTTPError).Code)
+
+	wrongStore := `{"type":"InvoiceSettled","storeId":"wrong","invoiceId":"prov_store","metadata":{"invoice_id":"inv_store"}}`
+	c, _ = signedWebhookRequest(t, wrongStore)
+	err = BTCPayWebhookHandler(c)
 	require.Error(t, err)
 	assert.Equal(t, http.StatusForbidden, err.(*echo.HTTPError).Code)
 
@@ -461,7 +467,7 @@ func TestBTCPayWebhookHandler_IdempotentWhenAlreadyPaid(t *testing.T) {
 	_, err := billing.ProcessPayment(db, paymentsTestUser, 500_000_000, "prov_paid1", "btcpay")
 	require.NoError(t, err)
 
-	payload := `{"type":"InvoiceSettled","invoiceId":"prov_paid1","metadata":{"invoice_id":"inv_paid1"}}`
+	payload := `{"type":"InvoiceSettled","storeId":"test_store_id","invoiceId":"prov_paid1","metadata":{"invoice_id":"inv_paid1"}}`
 	c, rec := signedWebhookRequest(t, payload)
 
 	err = BTCPayWebhookHandler(c)
@@ -485,7 +491,7 @@ func TestBTCPayWebhookHandler_SettlementFailureLeavesInvoicePending(t *testing.T
 
 	seedPendingInvoice(t, db, "inv_fail1", paymentsTestUser, "prov_fail1", 100_000_000)
 
-	payload := `{"type":"InvoiceSettled","invoiceId":"prov_fail1","metadata":{"invoice_id":"inv_fail1"}}`
+	payload := `{"type":"InvoiceSettled","storeId":"test_store_id","invoiceId":"prov_fail1","metadata":{"invoice_id":"inv_fail1"}}`
 	c, rec := signedWebhookRequest(t, payload)
 
 	err := BTCPayWebhookHandler(c)
@@ -513,7 +519,7 @@ func TestBTCPayWebhookHandler_RecoversPaidInvoiceMissingCredit(t *testing.T) {
 	seedPendingInvoice(t, db, "inv_recover1", paymentsTestUser, "prov_recover1", 300_000_000)
 	require.NoError(t, models.UpdatePaymentInvoiceStatus(db, "inv_recover1", "paid"))
 
-	payload := `{"type":"InvoiceSettled","invoiceId":"prov_recover1","metadata":{"invoice_id":"inv_recover1"}}`
+	payload := `{"type":"InvoiceSettled","storeId":"test_store_id","invoiceId":"prov_recover1","metadata":{"invoice_id":"inv_recover1"}}`
 	c, rec := signedWebhookRequest(t, payload)
 
 	err := BTCPayWebhookHandler(c)

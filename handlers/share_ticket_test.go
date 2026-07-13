@@ -13,6 +13,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/arkfile/Arkfile/crypto"
+	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -50,6 +51,8 @@ func TestIssueShareDownloadTicket_Success(t *testing.T) {
 
 	reqBody, _ := json.Marshal(map[string]string{"download_token": tokenB64})
 	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/public/shares/"+testShareID+"/ticket", bytes.NewReader(reqBody))
+	c.SetParamNames("id")
+	c.SetParamValues(testShareID)
 
 	expectRateLimitCheck(mock, testShareID)
 
@@ -88,7 +91,9 @@ func TestIssueShareDownloadTicket_InvalidToken(t *testing.T) {
 	badRaw := bytes.Repeat([]byte{0x07}, 32)
 	badTokenB64 := base64.StdEncoding.EncodeToString(badRaw)
 	reqBody, _ := json.Marshal(map[string]string{"download_token": badTokenB64})
-	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/public/shares/"+testShareID+"/ticket", bytes.NewReader(reqBody))
+	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/api/public/shares/"+testShareID+"/ticket", bytes.NewReader(reqBody))
+	c.SetParamNames("id")
+	c.SetParamValues(testShareID)
 
 	expectRateLimitCheck(mock, testShareID)
 
@@ -112,14 +117,18 @@ func TestIssueShareDownloadTicket_InvalidToken(t *testing.T) {
 	mock.ExpectCommit()
 
 	err := IssueShareDownloadTicket(c)
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusForbidden, rec.Code)
+	require.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusForbidden, httpErr.Code)
 }
 
 func TestIssueShareDownloadTicket_ShareNotFound(t *testing.T) {
 	tokenB64, _ := ticketTokenAndHash(t)
 	reqBody, _ := json.Marshal(map[string]string{"download_token": tokenB64})
-	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/public/shares/"+testShareID+"/ticket", bytes.NewReader(reqBody))
+	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/api/public/shares/"+testShareID+"/ticket", bytes.NewReader(reqBody))
+	c.SetParamNames("id")
+	c.SetParamValues(testShareID)
 
 	expectRateLimitCheck(mock, testShareID)
 
@@ -128,19 +137,25 @@ func TestIssueShareDownloadTicket_ShareNotFound(t *testing.T) {
 		WillReturnError(sql.ErrNoRows)
 
 	err := IssueShareDownloadTicket(c)
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusNotFound, rec.Code)
+	require.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusNotFound, httpErr.Code)
 }
 
 func TestIssueShareDownloadTicket_MissingToken(t *testing.T) {
 	reqBody, _ := json.Marshal(map[string]string{"download_token": ""})
-	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/public/shares/"+testShareID+"/ticket", bytes.NewReader(reqBody))
+	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/api/public/shares/"+testShareID+"/ticket", bytes.NewReader(reqBody))
+	c.SetParamNames("id")
+	c.SetParamValues(testShareID)
 
 	// checkRateLimit runs before the body/token check; mock it so the handler
 	// reaches the "Download token is required" 400 path.
 	expectRateLimitCheck(mock, testShareID)
 
 	err := IssueShareDownloadTicket(c)
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
 }

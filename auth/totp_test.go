@@ -720,8 +720,9 @@ func TestTOTPSkew_AcceptsPreviousWindow(t *testing.T) {
 	username := "skew-user"
 	setup := setupFullTOTP(t, db, username)
 
-	// Generate a code for 35 seconds ago (previous 30s window).
-	prevWindow := time.Now().UTC().Add(-35 * time.Second)
+	// Subtract exactly one TOTP period so the timestamp is always in the
+	// immediately preceding window, regardless of the current window offset.
+	prevWindow := time.Now().UTC().Add(-time.Duration(TOTPPeriod) * time.Second)
 	prevCode, err := totp.GenerateCode(setup.Secret, prevWindow)
 	if err != nil {
 		t.Fatalf("GenerateCode for previous window: %v", err)
