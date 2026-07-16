@@ -591,7 +591,14 @@ func TestRefreshToken_Success(t *testing.T) {
 	updateSupersededSQL := `UPDATE refresh_tokens SET superseded_by_hash = \?, last_used = \? WHERE id = \?`
 	mock.ExpectExec(updateSupersededSQL).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "token-id-1").WillReturnResult(sqlmock.NewResult(0, 1))
 
-	// auth.GenerateFullAccessToken works thanks to TestMain (Ed25519 keys initialized)
+	// Mock: GetUserByUsername for approval gate after refresh
+	getUserSQL := `SELECT id, username, created_at,
+		       total_storage_bytes, storage_limit_bytes,
+		       is_approved, approved_by, approved_at, is_admin
+		FROM users WHERE username = \? AND deleted_at IS NULL`
+	mock.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+			AddRow(1, username, time.Now(), int64(0), models.DefaultStorageLimit, true, nil, nil, false))
 
 	// Mock: LogUserAction
 	logSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
@@ -610,6 +617,50 @@ func TestRefreshToken_Success(t *testing.T) {
 	assert.NotEmpty(t, data["token"], "new JWT token should be returned")
 	assert.NotEmpty(t, data["refresh_token"], "new refresh token should be returned")
 	assert.NotNil(t, data["expires_at"], "expiration should be set")
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestRefreshToken_UnapprovedUser verifies unapproved users cannot rotate refresh tokens.
+func TestRefreshToken_UnapprovedUser(t *testing.T) {
+	refreshTokenValue := "valid-refresh-token-unapproved"
+	username := "pending-user"
+
+	body, _ := json.Marshal(map[string]string{"refresh_token": refreshTokenValue})
+	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/auth/refresh", bytes.NewReader(body))
+
+	validateSQL := `SELECT id, username, expires_at, revoked, last_used, family_id, superseded_by_hash, family_revoked_at FROM refresh_tokens WHERE token_hash = \?`
+	futureExpiry := time.Now().Add(14 * 24 * time.Hour).Format(time.RFC3339)
+	rows := sqlmock.NewRows([]string{
+		"id", "username", "expires_at", "revoked", "last_used",
+		"family_id", "superseded_by_hash", "family_revoked_at",
+	}).AddRow("token-id-1", username, futureExpiry, false, nil, "fam-abc", nil, nil)
+	mock.ExpectQuery(validateSQL).WithArgs(sqlmock.AnyArg()).WillReturnRows(rows)
+
+	insertNewSQL := `INSERT INTO refresh_tokens`
+	mock.ExpectExec(insertNewSQL).WithArgs(
+		sqlmock.AnyArg(), username, sqlmock.AnyArg(), sqlmock.AnyArg(),
+		sqlmock.AnyArg(), false, nil, "fam-abc", nil, nil,
+	).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	updateSupersededSQL := `UPDATE refresh_tokens SET superseded_by_hash = \?, last_used = \? WHERE id = \?`
+	mock.ExpectExec(updateSupersededSQL).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "token-id-1").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	getUserSQL := `SELECT id, username, created_at,
+		       total_storage_bytes, storage_limit_bytes,
+		       is_approved, approved_by, approved_at, is_admin
+		FROM users WHERE username = \? AND deleted_at IS NULL`
+	mock.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+			AddRow(1, username, time.Now(), int64(0), models.DefaultStorageLimit, false, nil, nil, false))
+
+	err := RefreshToken(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "Account pending approval", resp["message"])
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

@@ -2,13 +2,12 @@ package auth
 
 import (
 	"encoding/base64"
-	"os"
-	"strings"
+
+	"github.com/arkfile/Arkfile/utils"
 )
 
 func isDebugMode() bool {
-	debug := strings.ToLower(os.Getenv("DEBUG_MODE"))
-	return debug == "true" || debug == "1"
+	return utils.IsDebugMode()
 }
 
 // decodeBase64IfNeeded attempts to detect and decode base64-encoded data.

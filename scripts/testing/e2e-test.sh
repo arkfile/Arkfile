@@ -635,10 +635,15 @@ run_preflight() {
     group "Preflight"
 
     scenario "Checking server connectivity"
-    if curl -sk --connect-timeout 5 "$SERVER_URL/health" >/dev/null 2>&1; then
-        record_test "Server connectivity" "PASS"
+    local readyz_body readyz_code
+    readyz_body=$(curl -sk --connect-timeout 5 -w '\n%{http_code}' "$SERVER_URL/readyz" 2>/dev/null || echo -e '\n000')
+    readyz_code=$(echo "$readyz_body" | tail -n1)
+    readyz_body=$(echo "$readyz_body" | sed '$d')
+    if [ "$readyz_code" = "200" ] && echo "$readyz_body" | jq -e '.status == "ready"' >/dev/null 2>&1; then
+        record_test "Server connectivity (/readyz)" "PASS"
     else
-        record_test "Server connectivity" "FAIL"
+        record_test "Server connectivity (/readyz)" "FAIL"
+        error "Preflight /readyz failed (HTTP $readyz_code)"
     fi
 
     scenario "Checking CLI tools"
@@ -1118,8 +1123,11 @@ run_files_custom_password() {
     if echo "$list_raw_output" | grep -q "custom_test_file.bin" || echo "$list_raw_output" | grep -q "$CUSTOM_FILE_SHA256"; then
         error "Security failure: Raw list API exposed plaintext name or hash for custom-password file!"
         record_test "Raw List API Privacy (custom file)" "FAIL"
-    else
+    elif echo "$list_raw_output" | jq -e '.data.files[] | select(.encrypted_filename != null and .encrypted_filename != "")' >/dev/null 2>&1; then
         record_test "Raw List API Privacy (custom file)" "PASS"
+    else
+        error "Security failure: Raw list API missing encrypted metadata for custom-password file!"
+        record_test "Raw List API Privacy (custom file)" "FAIL"
     fi
     # This proves the server-side metadata record is reachable through the CLI's own decryption flow.
     scenario "Verifying custom-password file is accessible via list-files"
@@ -1246,11 +1254,14 @@ run_files_standard() {
     safe_exec list_raw_output list_raw_exit_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure list-files --raw
         
-    if echo "$list_raw_output" | grep -q "$UPLOADED_FILE_SHA256" || echo "$list_raw_output" | grep -q "test_file.bin"; then
+    if echo "$list_raw_output" | jq -e '.data.files[] | select(.encrypted_filename != null and .encrypted_filename != "")' >/dev/null 2>&1 \
+        && ! echo "$list_raw_output" | jq -e '.data.files[] | select(.filename != null)' >/dev/null 2>&1 \
+        && ! echo "$list_raw_output" | grep -q "$UPLOADED_FILE_SHA256" \
+        && ! echo "$list_raw_output" | grep -q "test_file.bin"; then
+        record_test "Raw List API Privacy" "PASS"
+    else
         error "Security failure: Raw API list exposed plaintext filename or hashes!"
         record_test "Raw List API Privacy" "FAIL"
-    else
-        record_test "Raw List API Privacy" "PASS"
     fi
     scenario "Downloading file (decryption handled by arkfile-client)"
     local downloaded_file="$TEST_DATA_DIR/downloaded.bin"
@@ -1767,12 +1778,14 @@ run_shares() {
     safe_exec list_shares_raw_output list_shares_raw_exit_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure share list --raw
         
-    # Raw GET /api/shares must not expose plaintext filenames for either share type
     if echo "$list_shares_raw_output" | grep -q "test_file.bin" || echo "$list_shares_raw_output" | grep -q "custom_test_file.bin"; then
         error "Security failure: Raw shares API list exposed plaintext filename!"
         record_test "Raw Shares API Privacy" "FAIL"
-    else
+    elif echo "$list_shares_raw_output" | jq -e '.data.shares[] | select(.encrypted_filename != null and .encrypted_filename != "")' >/dev/null 2>&1; then
         record_test "Raw Shares API Privacy" "PASS"
+    else
+        error "Security failure: Raw shares API missing encrypted filenames!"
+        record_test "Raw Shares API Privacy" "FAIL"
     fi
     scenario "Unapprove user blocks session; re-approve restores access"
 
@@ -2040,18 +2053,25 @@ run_shares() {
         local BAD_TOKEN
         BAD_TOKEN=$(echo "deliberately-wrong-token-value" | base64)
 
-        # Send 4 requests with bad token to trigger progressive penalty
+        local token_fail=0
         for i in 1 2 3 4; do
             local token_code
             token_code=$(curl -sk -o /dev/null -w '%{http_code}' \
                 -H "X-Download-Token: $BAD_TOKEN" \
                 "${SERVER_URL}/api/public/shares/${SHARE_B_ID}/chunks/0" 2>/dev/null)
-            if [ "$token_code" = "403" ] || [ "$token_code" = "429" ]; then
+            if [ "$token_code" = "403" ]; then
                 info "Invalid token attempt $i/4: HTTP $token_code"
             else
-                warning "Invalid token attempt $i/4: unexpected HTTP $token_code"
+                warning "Invalid token attempt $i/4: expected HTTP 403, got $token_code"
+                token_fail=1
             fi
         done
+
+        if [ "$token_fail" -eq 0 ]; then
+            record_test "Invalid download token attempts 1-4 return 403" "PASS"
+        else
+            record_test "Invalid download token attempts 1-4 return 403" "FAIL"
+        fi
 
         # 5th attempt should be rate limited (429)
         sleep 1
@@ -2063,9 +2083,8 @@ run_shares() {
             record_test "Invalid download token rate limiting (HTTP 429 after failures)" "PASS"
             info "Per-share rate limiter returned 429 after repeated invalid tokens"
         else
-            # The rate limiter applies progressive delays; 403 with delay is also acceptable
-            record_test "Invalid download token rate limiting (HTTP $token_code_5)" "PASS"
-            warning "Per-share rate limiter returned HTTP $token_code_5 (429 expected but delay may be applied instead)"
+            record_test "Invalid download token rate limiting (HTTP 429 after failures)" "FAIL"
+            error "Per-share rate limiter returned HTTP $token_code_5 (expected 429)"
         fi
     else
         warning "Share B ID not available, skipping invalid download token test"
@@ -2231,8 +2250,8 @@ run_shares() {
     if [ ! -f "$HOME/.arkfile-session.json" ]; then
         record_test "Session file cleared after revoke-all" "PASS"
     else
-        warning "Session file still exists after revoke-all (unexpected)"
-        record_test "Session file cleared after revoke-all" "PASS"
+        error "Session file still exists after revoke-all (expected removal)"
+        record_test "Session file cleared after revoke-all" "FAIL"
     fi
 
     # Re-login so the CLI session is fresh for the 10.23 logout step and
@@ -2339,6 +2358,37 @@ run_admin_operations() {
     else
         record_test "Admin system-status storage size non-zero" "PASS"
     fi
+
+    scenario "Admin health-check (no placeholder disk metrics)"
+    local health_out health_code
+    safe_exec health_out health_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure health-check --detailed
+    if [ $health_code -eq 0 ] \
+        && ! echo "$health_out" | grep -qi "disk" \
+        && echo "$health_out" | grep -qi "healthy"; then
+        record_test "Admin health-check --detailed (no disk placeholders)" "PASS"
+    else
+        error "health-check --detailed failed or contained disk section"
+        echo "$health_out"
+        record_test "Admin health-check --detailed (no disk placeholders)" "FAIL"
+    fi
+
+    scenario "Admin contacts API contract"
+    local contacts_body contacts_code
+    contacts_body=$(curl -sk -w '\n%{http_code}' "${SERVER_URL}/api/admin-contacts" 2>/dev/null || echo -e '\n000')
+    contacts_code=$(echo "$contacts_body" | tail -n1)
+    contacts_body=$(echo "$contacts_body" | sed '$d')
+    if [ "$contacts_code" = "200" ] \
+        && echo "$contacts_body" | jq -e '.configured == true' >/dev/null 2>&1 \
+        && ! echo "$contacts_body" | grep -q "admin@example.com" \
+        && ! echo "$contacts_body" | grep -q "default-admin"; then
+        record_test "Admin contacts API (configured, no fake defaults)" "PASS"
+    else
+        error "Admin contacts API contract failed"
+        echo "$contacts_body"
+        record_test "Admin contacts API (configured, no fake defaults)" "FAIL"
+    fi
+
     scenario "Admin reads user contact info"
     local admin_ci_output admin_ci_code
     safe_exec admin_ci_output admin_ci_code \
@@ -2604,18 +2654,9 @@ run_security_rate_limits() {
         record_test "Flood guard: security event recorded (unauthorized_flood)" "PASS"
         info "Admin can see flood guard event in security-events"
     else
-        # Also check endpoint_abuse in case the threshold was high enough
-        safe_exec sec_flood_output sec_flood_code \
-            $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-            security-events --type endpoint_abuse --json
-        if [ $sec_flood_code -eq 0 ] && echo "$sec_flood_output" | grep -q "unauthorized_flood"; then
-            record_test "Flood guard: security event recorded (unauthorized_flood)" "PASS"
-            info "Admin can see flood guard event in security-events (endpoint_abuse)"
-        else
-            error "Flood guard security event not found in admin security-events"
-            echo "$sec_flood_output"
-            record_test "Flood guard: security event recorded (unauthorized_flood)" "FAIL"
-        fi
+        error "Flood guard security event not found in admin security-events (suspicious_pattern)"
+        echo "$sec_flood_output"
+        record_test "Flood guard: security event recorded (unauthorized_flood)" "FAIL"
     fi
 
     success "Security rate limits complete"
@@ -2961,15 +3002,16 @@ run_billing() {
     local setprice_out setprice_code
     safe_exec setprice_out setprice_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        billing set-price 19.99
+        billing set-price 19.99 --json
 
-    if [ $setprice_code -eq 0 ] \
-        && echo "$setprice_out" | grep -qE "2711|microcents" ; then
+    local setprice_rate
+    setprice_rate=$(echo "$setprice_out" | jq -r '.microcents_per_gib_per_hour // empty' 2>/dev/null)
+    if [ $setprice_code -eq 0 ] && [ "$setprice_rate" = "2711" ]; then
         record_test "set-price 19.99 updates to 2711 microcents/GiB/hour" "PASS"
         info "set-price output:"
         echo "$setprice_out"
     else
-        error "set-price 19.99 failed or did not show new rate"
+        error "set-price 19.99 failed or did not return microcents_per_gib_per_hour=2711"
         echo "$setprice_out"
         record_test "set-price 19.99 updates to 2711 microcents/GiB/hour" "FAIL"
     fi

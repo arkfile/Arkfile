@@ -25,10 +25,6 @@ import (
 //
 // GET /api/admin/billing/price
 func AdminGetBillingPrice(c echo.Context) error {
-	if errResp := requireAdmin(c); errResp != nil {
-		return errResp
-	}
-
 	rateMicrocentsPerGiBPerHour, customerPrice, available := resolveBillingRate(database.DB)
 	resp := map[string]interface{}{
 		"customer_price_usd_per_tb_per_month": customerPrice,
@@ -46,10 +42,7 @@ func AdminGetBillingPrice(c echo.Context) error {
 // POST /api/admin/billing/set-price
 // Body: { "customer_price_usd_per_tb_per_month": "19.99" }
 func AdminSetBillingPrice(c echo.Context) error {
-	adminUsername, errResp := requireAdminWithUsername(c)
-	if errResp != nil {
-		return errResp
-	}
+	adminUsername := auth.GetUsernameFromToken(c)
 
 	if billingSetPriceFn == nil {
 		return JSONError(c, http.StatusServiceUnavailable, "Billing not initialized")
@@ -94,10 +87,6 @@ func AdminSetBillingPrice(c echo.Context) error {
 //
 // GET /api/admin/billing/sweep-summary?days=7
 func AdminGetBillingSweepSummary(c echo.Context) error {
-	if errResp := requireAdmin(c); errResp != nil {
-		return errResp
-	}
-
 	days := 7
 	if d := c.QueryParam("days"); d != "" {
 		if parsed, err := strconv.Atoi(d); err == nil && parsed > 0 && parsed <= 365 {
@@ -158,10 +147,6 @@ func AdminGetBillingSweepSummary(c echo.Context) error {
 //
 // GET /api/admin/billing/overdrawn
 func AdminGetBillingOverdrawn(c echo.Context) error {
-	if errResp := requireAdmin(c); errResp != nil {
-		return errResp
-	}
-
 	users, err := models.GetOverdrawnUsers(database.DB)
 	if err != nil {
 		return JSONError(c, http.StatusInternalServerError, fmt.Sprintf("Failed to list overdrawn users: %v", err))
@@ -197,10 +182,7 @@ func AdminGetBillingOverdrawn(c echo.Context) error {
 // POST /api/admin/billing/gift
 // Body: { "target_username": "...", "amount_usd": "5.00", "reason": "..." }
 func AdminBillingGift(c echo.Context) error {
-	adminUsername, errResp := requireAdminWithUsername(c)
-	if errResp != nil {
-		return errResp
-	}
+	adminUsername := auth.GetUsernameFromToken(c)
 
 	if billingGiftFn == nil {
 		return JSONError(c, http.StatusServiceUnavailable, "Billing not initialized")
@@ -280,10 +262,7 @@ func AdminBillingGift(c echo.Context) error {
 // POST /api/admin/billing/tick-now
 // Body: { "sweep": false }
 func AdminBillingTickNow(c echo.Context) error {
-	adminUsername, errResp := requireAdminWithUsername(c)
-	if errResp != nil {
-		return errResp
-	}
+	adminUsername := auth.GetUsernameFromToken(c)
 
 	if billingTickNowFn == nil || billingSweepNowFn == nil {
 		return JSONError(c, http.StatusServiceUnavailable, "Billing not initialized")
@@ -315,39 +294,4 @@ func AdminBillingTickNow(c echo.Context) error {
 		"swept":     swept,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	})
-}
-
-// requireAdmin returns nil when the caller is a verified admin; otherwise
-// returns the JSON error response that should be returned from the handler.
-// Used by handlers that don't need the admin's username for logging.
-func requireAdmin(c echo.Context) error {
-	adminUsername := auth.GetUsernameFromToken(c)
-	if adminUsername == "" {
-		return JSONError(c, http.StatusUnauthorized, "Authentication required")
-	}
-	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
-	if err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to get admin user")
-	}
-	if !adminUser.IsAdmin {
-		return JSONError(c, http.StatusForbidden, "Admin privileges required")
-	}
-	return nil
-}
-
-// requireAdminWithUsername is the same as requireAdmin but also returns the
-// admin's username for use in LogAdminAction.
-func requireAdminWithUsername(c echo.Context) (string, error) {
-	adminUsername := auth.GetUsernameFromToken(c)
-	if adminUsername == "" {
-		return "", JSONError(c, http.StatusUnauthorized, "Authentication required")
-	}
-	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
-	if err != nil {
-		return "", JSONError(c, http.StatusInternalServerError, "Failed to get admin user")
-	}
-	if !adminUser.IsAdmin {
-		return "", JSONError(c, http.StatusForbidden, "Admin privileges required")
-	}
-	return adminUsername, nil
 }

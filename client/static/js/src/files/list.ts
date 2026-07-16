@@ -325,8 +325,8 @@ async function fetchAdminContactForStorage(): Promise<void> {
   if (!noteEl) return;
 
   try {
-    const { contact } = await fetchAdminContacts();
-    if (contact && contact !== 'admin@example.com') {
+    const { contact, configured } = await fetchAdminContacts();
+    if (configured && contact) {
       noteEl.textContent = `To request a storage limit increase, contact the admin: ${contact}`;
     } else {
       noteEl.textContent = 'To request a storage limit increase, contact your admin.';

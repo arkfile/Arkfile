@@ -1469,23 +1469,12 @@ EXAMPLES:
 		}
 	}
 
-	// Step 1: Set is_approved = false via the generic update endpoint.
-	payload := map[string]interface{}{"is_approved": false}
-	_, err = client.makeRequest("PUT", "/api/admin/users/"+*usernameFlag, payload, session.AccessToken)
+	// Step 1: Revoke approval and terminate sessions in one server call.
+	_, err = client.makeRequest("POST", "/api/admin/users/"+*usernameFlag+"/revoke", nil, session.AccessToken)
 	if err != nil {
 		return fmt.Errorf("failed to unapprove user: %w", err)
 	}
 	fmt.Printf("User %s approval revoked\n", *usernameFlag)
-
-	// Step 2: Revoke all active tokens so the change takes effect immediately.
-	_, err = client.makeRequest("POST", "/api/admin/users/"+*usernameFlag+"/force-logout", nil, session.AccessToken)
-	if err != nil {
-		// Non-fatal: approval is already revoked. Log the warning and continue.
-		fmt.Printf("[!] Warning: approval revoked but token revocation failed: %v\n", err)
-		fmt.Printf("    Run 'arkfile-admin force-logout --username %s' to complete session termination.\n", *usernameFlag)
-		return nil
-	}
-
 	fmt.Printf("User %s sessions terminated (all tokens revoked)\n", *usernameFlag)
 	return nil
 }
@@ -1549,22 +1538,12 @@ EXAMPLES:
 		}
 	}
 
-	// Revoke user (sets is_approved = false via dedicated revoke endpoint)
+	// Revoke user (unapprove and terminate sessions via canonical endpoint).
 	_, err = client.makeRequest("POST", "/api/admin/users/"+*usernameFlag+"/revoke", nil, session.AccessToken)
 	if err != nil {
 		return fmt.Errorf("user revocation failed: %w", err)
 	}
 	fmt.Printf("User %s access revoked successfully\n", *usernameFlag)
-
-	// Terminate all active sessions so the revocation takes effect immediately.
-	_, err = client.makeRequest("POST", "/api/admin/users/"+*usernameFlag+"/force-logout", nil, session.AccessToken)
-	if err != nil {
-		// Non-fatal: access is already revoked. Warn and let the operator follow up.
-		fmt.Printf("[!] Warning: access revoked but token revocation failed: %v\n", err)
-		fmt.Printf("    Run 'arkfile-admin force-logout --username %s' to complete session termination.\n", *usernameFlag)
-		return nil
-	}
-
 	fmt.Printf("User %s sessions terminated (all tokens revoked)\n", *usernameFlag)
 	return nil
 }

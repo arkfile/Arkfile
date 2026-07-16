@@ -230,3 +230,14 @@ func AdminOpaqueAuthFinalize(c echo.Context) error {
 		"is_admin":      true,
 	})
 }
+
+// requireAdminWithUsername returns the admin username from the JWT. Admin routes
+// are already gated by AdminMiddleware; this helper exists for handlers that
+// need the username for audit logging.
+func requireAdminWithUsername(c echo.Context) (string, error) {
+	adminUsername := auth.GetUsernameFromToken(c)
+	if adminUsername == "" {
+		return "", JSONError(c, http.StatusUnauthorized, "Authentication required")
+	}
+	return adminUsername, nil
+}

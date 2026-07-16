@@ -54,7 +54,7 @@ phase "PREFLIGHT CHECKS"
 
 # Check server connectivity
 section "Checking server connectivity"
-if curl -sk --connect-timeout 5 "$SERVER_URL/health" >/dev/null 2>&1; then
+if curl -sk --connect-timeout 5 -f "$SERVER_URL/readyz" >/dev/null 2>&1; then
     success "Server is running at $SERVER_URL"
 else
     error "Server not reachable at $SERVER_URL"

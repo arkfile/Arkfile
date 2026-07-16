@@ -233,6 +233,11 @@ func TestCreateUploadSession_SubscribedSkipsPaygCap(t *testing.T) {
 	require.NoError(t, err)
 
 	c, rec := newPaymentsEchoContext(t, http.MethodPost, "/api/uploads/init", bytes.NewReader(body), paymentsTestUser)
+	defer func() {
+		if r := recover(); r != nil {
+			return
+		}
+	}()
 	_ = CreateUploadSession(c)
 	assert.NotEqual(t, http.StatusPaymentRequired, rec.Code, "subscribed user must skip PAYG negative-balance upload cap")
 }

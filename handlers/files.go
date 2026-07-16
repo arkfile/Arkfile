@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 
@@ -289,50 +290,24 @@ func ListFiles(c echo.Context) error {
 	})
 }
 
-// formatBytes converts bytes to human-readable format
-func formatBytes(bytes int64) string {
-	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%d B", bytes)
-	}
-	div, exp := int64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
-}
-
-// AdminContactsHandler returns admin contact information for user support
+// AdminContactsHandler returns admin contact information for user support.
 func AdminContactsHandler(c echo.Context) error {
-	// Get admin usernames from configuration system
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to load config for admin contacts: %v", err)
-		// Fallback to default
-		return c.JSON(http.StatusOK, map[string]interface{}{
-			"adminUsernames": []string{"default-admin"},
-			"adminContact":   "admin@example.com",
-			"message":        "Contact information for administrators",
-		})
+		return JSONError(c, http.StatusServiceUnavailable, "Configuration unavailable")
 	}
 
 	adminUsernames := cfg.Deployment.AdminUsernames
-	adminContact := cfg.Deployment.AdminContact
-
-	// Fallback if no admin usernames configured
-	if len(adminUsernames) == 0 {
-		adminUsernames = []string{"default-admin"}
+	if adminUsernames == nil {
+		adminUsernames = []string{}
 	}
-
-	// Fallback for admin contact if not configured
-	if adminContact == "" {
-		adminContact = "admin@example.com"
-	}
+	adminContact := strings.TrimSpace(cfg.Deployment.AdminContact)
+	configured := adminContact != "" || len(adminUsernames) > 0
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"adminUsernames": adminUsernames,
-		"adminContact":   adminContact,
-		"message":        "Contact information for administrators",
+		"admin_usernames": adminUsernames,
+		"admin_contact":   adminContact,
+		"configured":      configured,
 	})
 }

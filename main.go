@@ -23,6 +23,7 @@ import (
 	"github.com/arkfile/Arkfile/handlers"
 	"github.com/arkfile/Arkfile/logging"
 	"github.com/arkfile/Arkfile/models"
+	"github.com/arkfile/Arkfile/monitoring"
 	"github.com/arkfile/Arkfile/storage"
 	"github.com/arkfile/Arkfile/utils"
 )
@@ -199,6 +200,8 @@ func main() {
 	}
 	logging.InfoLogger.Printf("Security event logger initialized successfully")
 
+	monitoring.InitDefaultHealthMonitor(database.DB, cfg, config.Version)
+
 	// Initialize storage
 	if err := storage.InitS3(); err != nil {
 		log.Fatalf("Failed to initialize storage: %v", err)
@@ -308,20 +311,8 @@ func main() {
 	tlsPort := cfg.Server.TLSPort
 	tlsEnabled := cfg.Server.TLSEnabled
 
-	// Override with legacy environment variables if present
-	if prodPort := os.Getenv("PROD_PORT"); prodPort != "" {
-		port = prodPort
-	}
-	if testPort := os.Getenv("TEST_PORT"); testPort != "" {
-		testDomain := os.Getenv("TEST_DOMAIN")
-		host := os.Getenv("HOST")
-		if host == testDomain {
-			port = testPort
-		}
-	}
-
 	if port == "" {
-		port = "8080" // Default fallback
+		port = "8080"
 	}
 
 	if tlsEnabled {

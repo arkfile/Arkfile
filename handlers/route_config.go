@@ -338,7 +338,6 @@ func RegisterRoutes() {
 		devTestAdminGroup.Use(RequireMFA)
 		devTestAdminGroup.Use(AdminMiddleware)
 		devTestAdminGroup.POST("/users/cleanup", AdminCleanupTestUser)
-		devTestAdminGroup.GET("/mfa/decrypt-check/:username", AdminMFADecryptCheck)
 
 		// Billing tick-now: forces an immediate tick (and optional sweep).
 		// Lives under /dev-test so it is physically not registered as a

@@ -171,9 +171,9 @@ export function showPendingApprovalSection(): void {
 
   // Fetch admin contact info and display it for the pending user (best-effort)
   import('../utils/auth.js').then(({ fetchAdminContacts }) => {
-    fetchAdminContacts().then(({ contact }) => {
+    fetchAdminContacts().then(({ contact, configured }) => {
       const el = document.getElementById('pending-admin-contact-display');
-      if (el && contact && contact !== 'admin@example.com') {
+      if (el && configured && contact) {
         el.textContent = ` You can reach the admin at: ${contact}`;
       }
     }).catch(() => {});

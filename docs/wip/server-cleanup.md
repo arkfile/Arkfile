@@ -2,7 +2,7 @@
 
 This plan follows a server-side audit against the Function Review Sanity Checks in docs/AGENTS.md: every handler and helper should be required, correctly implemented, well placed, reachable, privacy-preserving, and free of stubs, deprecated paths, duplicated logic, and leftover "AI slop" (placeholder implementations, fake fallbacks, WIP-planning comments, and redundant branches that exist only because something was never finished). Arkfile is greenfield; test.arkfile.net will be fully redeployed, so we do not keep backwards compatibility for code that is unused, unreachable, or actively misleading (fabricated health metrics, fake admin contacts, revocation that leaves sessions alive, legacy env overrides, and similar). The audit was cross-checked against scripts/testing/e2e-test.sh and scripts/testing/e2e-playwright.sh so we keep what E2E actually exercises and delete or fix what it does not. Where E2E currently hedges (accepting one of several HTTP codes, error strings, or pass-with-warning outcomes), we tighten tests and fix server or client behavior so there is one canonical expected result. We also add coverage for gaps E2E missed: isolated revoke endpoints, refresh after unapproval, real health output, admin contacts contract, and correct preflight probes. The goal is a coherent server surface that matches the privacy-first design, honest operator tooling, and tests that prove it before first production deployment.
 
-Status: WIP  
+Status: complete (implementation) — run dev-reset + e2e locally to verify  
 Created: 2026-07-16  
 Scope: Greenfield server refactor, CLI alignment, frontend contract cleanup, E2E tightening. No backwards compatibility for unused or stubbed paths.
 
@@ -14,18 +14,18 @@ One canonical way per operation (revoke user, health probes, share chunk auth, a
 
 | Workstream | Status | Notes |
 |------------|--------|-------|
-| User revocation unification | [ ] pending | |
-| Refresh token approval gate | [ ] pending | depends on revocation unification |
-| Admin health: drop disk usage | [ ] pending | |
-| Admin contacts contract | [ ] pending | server + frontend |
-| Dead code removal | [ ] pending | |
-| Legacy compatibility removal | [ ] pending | |
-| Duplicate utility consolidation | [ ] pending | |
-| Share auth ticket-only (optional) | [ ] pending | defer if large |
-| E2E preflight & health fixes | [ ] pending | |
-| E2E hedging removal | [ ] pending | |
-| New E2E coverage (honest gaps) | [ ] pending | |
-| Unit and handler tests | [ ] pending | |
+| User revocation unification | [x] complete | `handlers/admin_user_access.go`, `AdminRevokeUser`, CLI single `/revoke` call |
+| Refresh token approval gate | [x] complete | `RefreshToken` returns 403 for unapproved non-admins |
+| Admin health: drop disk usage | [x] complete | disk removed; `DefaultHealthMonitor` singleton in `main.go` |
+| Admin contacts contract | [x] complete | server + `auth.ts`, `footer.ts`, `list.ts`, `sections.ts` |
+| Dead code removal | [x] complete | middleware/helpers, decrypt-check route, tee reader, etc. |
+| Legacy compatibility removal | [x] complete | PAYG auto-enable, PROD_PORT/TEST_PORT, chunk defaults, billing fallback, GCM debug |
+| Duplicate utility consolidation | [x] complete | `handlers/format.go`, `utils/debug.go` |
+| Share auth ticket-only (optional) | [ ] deferred | static `X-Download-Token` fallback kept this pass |
+| E2E preflight & health fixes | [x] complete | `/readyz` preflight, health-check in admin ops |
+| E2E hedging removal | [x] complete | rate limit, session file, flood guard, set-price, playwright strings |
+| New E2E coverage (honest gaps) | [x] complete | admin-contacts, health-check, tightened privacy jq checks |
+| Unit and handler tests | [x] complete | contacts, refresh gate, rate limit penalty, UpdateUser reject |
 
 ---
 

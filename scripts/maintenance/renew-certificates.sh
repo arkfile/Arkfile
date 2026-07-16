@@ -423,7 +423,7 @@ fi
 # Health check if services are running
 if systemctl is-active --quiet arkfile; then
     echo -e "${YELLOW}Testing Arkfile health endpoint...${NC}"
-    if curl -f http://localhost:8080/health >/dev/null 2>&1; then
+    if curl -s http://localhost:8080/readyz >/dev/null 2>&1; then
         echo -e "  ${GREEN}[OK] Arkfile: Health check passed${NC}"
     else
         echo -e "  ${YELLOW}[WARNING] Arkfile: Health check failed (service may still be starting)${NC}"

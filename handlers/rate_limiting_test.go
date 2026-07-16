@@ -34,3 +34,8 @@ func TestMaybePruneShareAccessAttemptsIsThrottled(t *testing.T) {
 	maybePruneShareAccessAttempts(time.Now().Add(5 * time.Minute))
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestShareRateLimit_FourthFailureAppliesThirtySecondPenalty(t *testing.T) {
+	penalty := calculateSharePenalty(4)
+	assert.Equal(t, 30*time.Second, penalty)
+}

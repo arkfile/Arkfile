@@ -30,13 +30,9 @@ func flagUserForReregistration(tx *sql.Tx, username string) error {
 	return models.SetUserRequiresReregistration(tx, username, true)
 }
 
-// forceLogoutUser revokes the user's refresh tokens and outstanding JWTs so the
-// rotation takes effect immediately rather than after token expiry.
+// forceLogoutUser revokes the user's refresh tokens and outstanding JWTs.
 func forceLogoutUser(username, reason string) error {
-	if err := models.RevokeAllUserTokens(database.DB, username); err != nil {
-		return err
-	}
-	return auth.RevokeAllUserJWTTokens(database.DB, username, reason)
+	return terminateUserSessions(username, reason)
 }
 
 // AdminFlagUserReregistration flags a single account for OPAQUE re-registration.

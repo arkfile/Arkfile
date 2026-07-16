@@ -886,12 +886,9 @@ func GetShareDownloadMetadata(c echo.Context) error {
 	chunkCountInt := int64(chunkCount)
 	chunkSizeBytesInt := int64(chunkSizeBytes)
 
-	// Handle legacy files without chunk info
-	if chunkCountInt == 0 {
-		chunkCountInt = 1
-	}
-	if chunkSizeBytesInt == 0 {
-		chunkSizeBytesInt = arkcrypto.PlaintextChunkSize() // default from config
+	if chunkCountInt <= 0 || chunkSizeBytesInt <= 0 {
+		logging.ErrorLogger.Printf("File %s missing chunk metadata (count=%d, size=%d)", share.FileID, chunkCountInt, chunkSizeBytesInt)
+		return echo.NewHTTPError(http.StatusInternalServerError, "File chunk metadata unavailable")
 	}
 
 	logging.InfoLogger.Printf("Share chunk info accessed: share_id=%s..., file=%s, entity_id=%s", shareID[:8], share.FileID, entityID)
@@ -1011,12 +1008,9 @@ func DownloadShareChunk(c echo.Context) error {
 	chunkCount := int64(chunkCountF)
 	chunkSizeBytes := int64(chunkSizeBytesF)
 
-	// Handle legacy files without chunk info
-	if chunkCount == 0 {
-		chunkCount = 1
-	}
-	if chunkSizeBytes == 0 {
-		chunkSizeBytes = arkcrypto.PlaintextChunkSize() // default from config
+	if chunkCount <= 0 || chunkSizeBytes <= 0 {
+		logging.ErrorLogger.Printf("File %s missing chunk metadata (count=%d, size=%d)", share.FileID, chunkCount, chunkSizeBytes)
+		return echo.NewHTTPError(http.StatusInternalServerError, "File chunk metadata unavailable")
 	}
 
 	// Validate chunk index

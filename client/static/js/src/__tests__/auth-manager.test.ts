@@ -124,16 +124,20 @@ describe('AuthManager.clearAllSessionData', () => {
 // ============================================================================
 
 describe('AuthManager admin contact defaults', () => {
-  test('getAdminUsernames returns default list', () => {
+  test('getAdminUsernames returns empty list before fetch', () => {
     const usernames = AuthManager.getAdminUsernames();
     expect(Array.isArray(usernames)).toBe(true);
-    expect(usernames.length).toBeGreaterThan(0);
+    expect(usernames.length).toBe(0);
   });
 
-  test('getAdminContact returns non-empty default', () => {
+  test('getAdminContact returns empty string before fetch', () => {
     const contact = AuthManager.getAdminContact();
     expect(typeof contact).toBe('string');
-    expect(contact.length).toBeGreaterThan(0);
+    expect(contact.length).toBe(0);
+  });
+
+  test('isAdminContactsConfigured returns false before fetch', () => {
+    expect(AuthManager.isAdminContactsConfigured()).toBe(false);
   });
 });
 

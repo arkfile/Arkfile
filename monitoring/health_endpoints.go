@@ -3,16 +3,12 @@ package monitoring
 import (
 	"database/sql"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"time"
 
-	"github.com/labstack/echo/v4"
-
 	"github.com/arkfile/Arkfile/config"
-	"github.com/arkfile/Arkfile/logging"
 )
 
 // HealthStatus represents the overall health status
@@ -59,15 +55,6 @@ type SystemInfo struct {
 		NumGC      uint32 `json:"num_gc"`
 		LastGC     string `json:"last_gc"`
 	} `json:"memory"`
-	DiskUsage map[string]DiskInfo `json:"disk_usage"`
-}
-
-// DiskInfo provides disk usage information
-type DiskInfo struct {
-	Total     uint64  `json:"total"`
-	Used      uint64  `json:"used"`
-	Available uint64  `json:"available"`
-	UsedPct   float64 `json:"used_percent"`
 }
 
 // HealthSummary provides summary statistics
@@ -167,7 +154,6 @@ func (hm *HealthMonitor) getSystemInfo() SystemInfo {
 		GoVersion:    runtime.Version(),
 		NumGoroutine: runtime.NumGoroutine(),
 		NumCPU:       runtime.NumCPU(),
-		DiskUsage:    make(map[string]DiskInfo),
 	}
 
 	info.MemStats.Alloc = memStats.Alloc
@@ -176,22 +162,6 @@ func (hm *HealthMonitor) getSystemInfo() SystemInfo {
 	info.MemStats.NumGC = memStats.NumGC
 	if memStats.LastGC > 0 {
 		info.MemStats.LastGC = time.Unix(0, int64(memStats.LastGC)).Format(time.RFC3339)
-	}
-
-	// Add disk usage for key directories
-	if hm.config != nil {
-		paths := []string{
-			hm.config.KeyManagement.KeyDirectory,
-			hm.config.Deployment.DataDirectory,
-			hm.config.Deployment.LogDirectory,
-			"./", // Current directory
-		}
-
-		for _, path := range paths {
-			if diskInfo := getDiskUsage(path); diskInfo != nil {
-				info.DiskUsage[path] = *diskInfo
-			}
-		}
 	}
 
 	return info
@@ -388,150 +358,10 @@ func (s *SystemHealthCheck) Check() HealthCheck {
 	return check
 }
 
-// HTTP Handlers
+// DefaultHealthMonitor is the process-wide health monitor for admin API queries.
+var DefaultHealthMonitor *HealthMonitor
 
-// HealthHandler returns the complete health status
-func (hm *HealthMonitor) HealthHandler(c echo.Context) error {
-	status := hm.GetHealthStatus()
-
-	// Log health check for monitoring
-	logging.LogSecurityEvent(
-		logging.EventKeyHealthCheck,
-		nil, // No IP for health checks
-		nil, // No username for health checks
-		nil, // No device profile for health checks
-		map[string]interface{}{
-			"status":       string(status.Status),
-			"total_checks": status.Summary.Total,
-			"healthy":      status.Summary.Healthy,
-			"degraded":     status.Summary.Degraded,
-			"unhealthy":    status.Summary.Unhealthy,
-		},
-	)
-
-	// Set appropriate HTTP status code
-	httpStatus := http.StatusOK
-	if status.Status == StatusUnhealthy {
-		httpStatus = http.StatusServiceUnavailable
-	} else if status.Status == StatusDegraded {
-		httpStatus = http.StatusOK // Still operational
-	}
-
-	return c.JSON(httpStatus, status)
-}
-
-// ReadinessHandler returns readiness status (simplified health check)
-func (hm *HealthMonitor) ReadinessHandler(c echo.Context) error {
-	// Quick readiness check - database ping only
-	ready := true
-	message := "Ready"
-
-	if hm.db != nil {
-		if err := hm.db.Ping(); err != nil {
-			ready = false
-			message = "Database not ready"
-		}
-	}
-
-	status := http.StatusOK
-	if !ready {
-		status = http.StatusServiceUnavailable
-	}
-
-	return c.JSON(status, map[string]interface{}{
-		"ready":     ready,
-		"message":   message,
-		"timestamp": time.Now(),
-	})
-}
-
-// LivenessHandler returns liveness status (minimal check)
-func (hm *HealthMonitor) LivenessHandler(c echo.Context) error {
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"alive":     true,
-		"timestamp": time.Now(),
-		"uptime":    time.Since(hm.startTime).String(),
-	})
-}
-
-// MetricsHandler returns Prometheus-compatible metrics
-func (hm *HealthMonitor) MetricsHandler(c echo.Context) error {
-	status := hm.GetHealthStatus()
-
-	// Generate Prometheus metrics format
-	metrics := fmt.Sprintf(`# HELP arkfile_health_status Overall health status (0=unhealthy, 1=degraded, 2=healthy)
-# TYPE arkfile_health_status gauge
-arkfile_health_status{version="%s"} %d
-
-# HELP arkfile_uptime_seconds Uptime in seconds
-# TYPE arkfile_uptime_seconds counter
-arkfile_uptime_seconds %f
-
-# HELP arkfile_memory_bytes Memory usage in bytes
-# TYPE arkfile_memory_bytes gauge
-arkfile_memory_bytes %d
-
-# HELP arkfile_goroutines Number of goroutines
-# TYPE arkfile_goroutines gauge
-arkfile_goroutines %d
-
-# HELP arkfile_checks_total Total number of health checks
-# TYPE arkfile_checks_total counter
-arkfile_checks_total %d
-
-# HELP arkfile_checks_healthy Number of healthy checks
-# TYPE arkfile_checks_healthy gauge
-arkfile_checks_healthy %d
-
-# HELP arkfile_checks_degraded Number of degraded checks
-# TYPE arkfile_checks_degraded gauge
-arkfile_checks_degraded %d
-
-# HELP arkfile_checks_unhealthy Number of unhealthy checks
-# TYPE arkfile_checks_unhealthy gauge
-arkfile_checks_unhealthy %d
-`,
-		status.Version,
-		healthStatusToInt(status.Status),
-		status.Uptime.Seconds(),
-		status.System.MemStats.Alloc,
-		status.System.NumGoroutine,
-		status.Summary.Total,
-		status.Summary.Healthy,
-		status.Summary.Degraded,
-		status.Summary.Unhealthy,
-	)
-
-	return c.String(http.StatusOK, metrics)
-}
-
-// healthStatusToInt converts HealthStatus to integer for Prometheus
-func healthStatusToInt(status HealthStatus) int {
-	switch status {
-	case StatusUnhealthy:
-		return 0
-	case StatusDegraded:
-		return 1
-	case StatusHealthy:
-		return 2
-	default:
-		return 0
-	}
-}
-
-// getDiskUsage gets disk usage information for a path
-func getDiskUsage(path string) *DiskInfo {
-	// This is a simple implementation - in production might use syscall
-	// For now, just check if path exists
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return nil
-	}
-
-	// Placeholder values - would use syscall.Statfs on Unix systems
-	return &DiskInfo{
-		Total:     1000000000, // 1GB placeholder
-		Used:      500000000,  // 500MB placeholder
-		Available: 500000000,  // 500MB placeholder
-		UsedPct:   50.0,       // 50% placeholder
-	}
+// InitDefaultHealthMonitor creates and stores the singleton health monitor.
+func InitDefaultHealthMonitor(db *sql.DB, cfg *config.Config, version string) {
+	DefaultHealthMonitor = NewHealthMonitor(db, cfg, version)
 }

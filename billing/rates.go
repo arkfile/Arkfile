@@ -38,10 +38,7 @@ func (r *Rate) FormatHumanReadable() string {
 // BillingSettingsKeyCustomerPrice is the row key in billing_settings.
 const BillingSettingsKeyCustomerPrice = "customer_price_usd_per_tb_per_month"
 
-// HardcodedSafetyPriceUSDPerTBPerMonth is the last-resort fallback used when
-// neither billing_settings nor the env var contain a parseable price. The
-// meter logs ERROR and continues running so it never silently stops billing.
-const HardcodedSafetyPriceUSDPerTBPerMonth = "10.00"
+// HardcodedSafetyPriceUSDPerTBPerMonth was removed; billing requires an explicit price.
 
 // cachedRate is the live rate atomically swapped by SetCachedRate and read by
 // each tick. nil = "not yet resolved", caller falls back to ResolveRate.
@@ -65,9 +62,8 @@ func SetCachedRate(r *Rate) {
 // Resolution order:
 //  1. billing_settings row (authoritative).
 //  2. cfg.Billing.CustomerPriceUSDPerTBPerMonth (env-var-derived seed).
-//  3. HardcodedSafetyPriceUSDPerTBPerMonth ("10.00").
 //
-// Each fallback step logs an ERROR so silent degradation is visible.
+// Returns an error when no price is configured anywhere.
 func ResolveRate(db *sql.DB, cfg config.BillingConfig) (*Rate, error) {
 	priceStr, err := readCustomerPriceFromDB(db)
 	if err == nil && priceStr != "" {
@@ -78,7 +74,6 @@ func ResolveRate(db *sql.DB, cfg config.BillingConfig) (*Rate, error) {
 			BillingSettingsKeyCustomerPrice, err)
 	}
 
-	// Fallback 1: env-var-derived seed.
 	if cfg.CustomerPriceUSDPerTBPerMonth != "" {
 		logging.ErrorLogger.Printf(
 			"billing: billing_settings missing %s; falling back to ARKFILE_CUSTOMER_PRICE_USD_PER_TB_PER_MONTH=%q",
@@ -86,11 +81,8 @@ func ResolveRate(db *sql.DB, cfg config.BillingConfig) (*Rate, error) {
 		return finalizeRate(cfg.CustomerPriceUSDPerTBPerMonth)
 	}
 
-	// Fallback 2: hardcoded safety value.
-	logging.ErrorLogger.Printf(
-		"billing: no customer price configured anywhere; falling back to safety value %q",
-		HardcodedSafetyPriceUSDPerTBPerMonth)
-	return finalizeRate(HardcodedSafetyPriceUSDPerTBPerMonth)
+	return nil, fmt.Errorf("billing: no customer price configured; set billing_settings.%s or ARKFILE_CUSTOMER_PRICE_USD_PER_TB_PER_MONTH",
+		BillingSettingsKeyCustomerPrice)
 }
 
 // SeedCustomerPriceIfMissing inserts the env-derived customer price into
@@ -107,7 +99,7 @@ func SeedCustomerPriceIfMissing(db *sql.DB, cfg config.BillingConfig) (string, e
 
 	price := cfg.CustomerPriceUSDPerTBPerMonth
 	if price == "" {
-		price = HardcodedSafetyPriceUSDPerTBPerMonth
+		return "", fmt.Errorf("billing: no customer price configured for seeding")
 	}
 
 	// Validate before persisting.

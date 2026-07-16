@@ -87,6 +87,10 @@ func setupPaymentsSQLiteDB(t *testing.T) *sql.DB {
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_by TEXT
 		);
+		CREATE TABLE file_metadata (
+			file_id VARCHAR(36) PRIMARY KEY,
+			owner_username TEXT NOT NULL
+		);
 		CREATE TABLE upload_sessions (
 			id TEXT PRIMARY KEY,
 			file_id VARCHAR(36) NOT NULL UNIQUE,
@@ -225,6 +229,7 @@ func withPaymentsTestEnv(t *testing.T, btcpayURL string, paymentsEnabled bool) (
 	// PAYG negative-balance cap. Enable billing for the payments/billing test
 	// suite so the gate is exercised; the cap defaults to $10.00.
 	t.Setenv("ARKFILE_BILLING_ENABLED", "true")
+	t.Setenv("ARKFILE_BILLING_PAYG_ENABLED", "true")
 	t.Setenv("ARKFILE_PAYG_NEGATIVE_BALANCE_LIMIT_USD", "10.00")
 	t.Setenv("ARKFILE_BTCPAY_SERVER_URL", btcpayURL)
 	t.Setenv("ARKFILE_BTCPAY_STORE_ID", paymentsStoreID)
@@ -268,6 +273,7 @@ func withSubscriptionsTestEnv(t *testing.T, btcpayURL string) (*sql.DB, func()) 
 	config.ResetConfigForTest()
 	t.Setenv("ARKFILE_PAYMENTS_ENABLED", "true")
 	t.Setenv("ARKFILE_BILLING_ENABLED", "true")
+	t.Setenv("ARKFILE_BILLING_PAYG_ENABLED", "true")
 	t.Setenv("ARKFILE_PAYG_NEGATIVE_BALANCE_LIMIT_USD", "10.00")
 	t.Setenv("ARKFILE_BTCPAY_SERVER_URL", btcpayURL)
 	t.Setenv("ARKFILE_BTCPAY_STORE_ID", paymentsStoreID)

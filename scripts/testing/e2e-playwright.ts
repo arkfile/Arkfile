@@ -364,12 +364,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
 
     logStep('4', 'Waiting for duplicate error message...');
     await sharedPage.waitForFunction(
-      () => {
-        const body = document.body.innerText.toLowerCase();
-        return body.includes('duplicate') ||
-               body.includes('already uploaded') ||
-               body.includes('already exists');
-      },
+      () => document.body.innerText.toLowerCase().includes('duplicate file detected'),
       { timeout: 30_000 },
     );
 
@@ -567,10 +562,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await sharedPage.locator('#password-modal-submit-btn').click();
 
     await sharedPage.waitForFunction(
-      () => {
-        const body = document.body.innerText.toLowerCase();
-        return body.includes('failed') || body.includes('error') || body.includes('incorrect') || body.includes('check your password');
-      },
+      () => document.body.innerText.toLowerCase().includes('check your password'),
       { timeout: 60_000 },
     );
 

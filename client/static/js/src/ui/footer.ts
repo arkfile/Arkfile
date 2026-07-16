@@ -4,8 +4,6 @@
 
 import { fetchAdminContacts } from '../utils/auth.js';
 
-const DEFAULT_ADMIN_CONTACT = 'admin@example.com';
-
 /**
  * Populate Contact Admin spans and instance info in all sitewide footers.
  */
@@ -19,9 +17,8 @@ async function populateAdminContacts(): Promise<void> {
   if (elements.length === 0) return;
 
   try {
-    const { contact } = await fetchAdminContacts();
-    const display =
-      contact && contact !== DEFAULT_ADMIN_CONTACT ? contact : 'not configured';
+    const { contact, configured } = await fetchAdminContacts();
+    const display = configured && contact ? contact : 'not configured';
     for (const el of elements) {
       el.textContent = display;
     }
@@ -57,8 +54,8 @@ async function populateInstanceInfo(): Promise<void> {
  */
 export async function getAdminContactForDisplay(): Promise<string | null> {
   try {
-    const { contact } = await fetchAdminContacts();
-    if (contact && contact !== DEFAULT_ADMIN_CONTACT) {
+    const { contact, configured } = await fetchAdminContacts();
+    if (configured && contact) {
       return contact;
     }
   } catch {

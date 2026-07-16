@@ -526,9 +526,7 @@ func loadEnvConfig(cfg *Config) error {
 			cfg.Billing.PaygEnabled = parsed
 		}
 	} else if cfg.Billing.Enabled {
-		// Backward compatibility: existing billing-enabled deployments keep PAYG on
-		// until ARKFILE_BILLING_PAYG_ENABLED is explicitly set to false.
-		cfg.Billing.PaygEnabled = true
+		cfg.Billing.PaygEnabled = false
 	}
 
 	// Subscriptions envs

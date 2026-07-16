@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
-	"os"
 	"runtime"
 	"strings"
 	"time"
@@ -12,7 +11,6 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/arkfile/Arkfile/auth"
-	"github.com/arkfile/Arkfile/config"
 	"github.com/arkfile/Arkfile/database"
 	"github.com/arkfile/Arkfile/logging"
 	"github.com/arkfile/Arkfile/models"
@@ -148,15 +146,7 @@ func AdminCleanupTestUser(c echo.Context) error {
 	}
 
 	for _, op := range cleanupOperations {
-		var result sql.Result
-		var err error
-
-		// Handle tables that need different parameter patterns
-		if op.table == "opaque_user_data" {
-			result, err = tx.Exec(op.query, req.Username)
-		} else {
-			result, err = tx.Exec(op.query, req.Username)
-		}
+		result, err := tx.Exec(op.query, req.Username)
 
 		if err != nil {
 			// Log error but continue with other tables
@@ -201,74 +191,6 @@ func AdminCleanupTestUser(c echo.Context) error {
 	}
 
 	return JSONResponse(c, http.StatusOK, "Test user cleanup completed", response)
-}
-
-// AdminMFADecryptCheck provides TOTP diagnostic information for development
-func AdminMFADecryptCheck(c echo.Context) error {
-	// Only available in debug mode
-	debugMode := strings.ToLower(os.Getenv("DEBUG_MODE"))
-	if debugMode != "true" && debugMode != "1" {
-		return JSONError(c, http.StatusNotFound, "Endpoint not available")
-	}
-
-	targetUsername := c.Param("username")
-	if targetUsername == "" {
-		// Use current user if no username specified
-		targetUsername = auth.GetUsernameFromToken(c)
-		if targetUsername == "" {
-			return JSONError(c, http.StatusBadRequest, "Username required")
-		}
-	}
-
-	// Get admin username for audit logging
-	adminUsername := auth.GetUsernameFromToken(c)
-
-	// Use the diagnostic helper in auth/mfa_totp.go
-	present, decryptable, enabled, setupCompleted, err := auth.CanDecryptMFASecret(database.DB, targetUsername)
-	if err != nil {
-		logging.ErrorLogger.Printf("TOTP decrypt check failed for %s: %v", targetUsername, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to check TOTP decrypt status")
-	}
-
-	// Get additional metadata for debugging
-	var createdAt, lastUsed interface{}
-	err = database.DB.QueryRow(`
-		SELECT created_at, last_used 
-		FROM user_mfa_credentials 
-		WHERE username = ?`,
-		targetUsername,
-	).Scan(&createdAt, &lastUsed)
-
-	response := map[string]interface{}{
-		"username":        targetUsername,
-		"present":         present,
-		"decryptable":     decryptable,
-		"enabled":         enabled,
-		"setup_completed": setupCompleted,
-		"created_at":      createdAt,
-		"last_used":       lastUsed,
-		"debug_info": map[string]interface{}{
-			"checked_by":    adminUsername,
-			"checked_at":    time.Now().UTC(),
-			"debug_enabled": true,
-		},
-	}
-
-	// Log admin action for audit trail
-	logging.LogSecurityEvent(
-		logging.EventAdminAccess,
-		nil,
-		&adminUsername,
-		nil,
-		map[string]interface{}{
-			"operation":       "totp_decrypt_check",
-			"target_username": targetUsername,
-			"present":         present,
-			"decryptable":     decryptable,
-		},
-	)
-
-	return JSONResponse(c, http.StatusOK, "TOTP decrypt check completed", response)
 }
 
 // ApproveUser approves a user and optionally updates their storage limit
@@ -502,17 +424,6 @@ func buildAdminBillingStatus(db *sql.DB, username string) *AdminBillingStatus {
 
 // GetPendingUsers returns a list of users pending approval
 func GetPendingUsers(c echo.Context) error {
-	// Get admin user and verify admin privileges
-	adminUsername := auth.GetUsernameFromToken(c)
-	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
-	if err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to get user")
-	}
-
-	if !adminUser.IsAdmin {
-		return JSONError(c, http.StatusForbidden, "Admin privileges required")
-	}
-
 	// Get pending users
 	pendingUsers, err := models.GetPendingUsers(database.DB)
 	if err != nil {
@@ -524,16 +435,7 @@ func GetPendingUsers(c echo.Context) error {
 
 // DeleteUser deletes a user and all associated data
 func DeleteUser(c echo.Context) error {
-	// Get admin user and verify admin privileges first
 	adminUsername := auth.GetUsernameFromToken(c)
-	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
-	if err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to get admin user")
-	}
-
-	if !adminUser.IsAdmin {
-		return JSONError(c, http.StatusForbidden, "Admin privileges required")
-	}
 
 	targetUsername := c.Param("username")
 	if targetUsername == "" {
@@ -622,16 +524,7 @@ func DeleteUser(c echo.Context) error {
 
 // UpdateUser updates user properties
 func UpdateUser(c echo.Context) error {
-	// Get admin user and verify admin privileges first
 	adminUsername := auth.GetUsernameFromToken(c)
-	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
-	if err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to get admin user")
-	}
-
-	if !adminUser.IsAdmin {
-		return JSONError(c, http.StatusForbidden, "Admin privileges required")
-	}
 
 	targetUsername := c.Param("username")
 	if targetUsername == "" {
@@ -680,6 +573,10 @@ func UpdateUser(c echo.Context) error {
 		if targetUsername == adminUsername && !*req.IsApproved {
 			return JSONError(c, http.StatusBadRequest, "Admins cannot revoke their own approval status.")
 		}
+		if !*req.IsApproved {
+			return JSONError(c, http.StatusBadRequest,
+				"Use POST /api/admin/users/:username/revoke to unapprove a user and terminate sessions")
+		}
 		setParts = append(setParts, "is_approved = ?")
 		args = append(args, *req.IsApproved)
 		details = append(details, fmt.Sprintf("isApproved: %t", *req.IsApproved))
@@ -719,27 +616,12 @@ func UpdateUser(c echo.Context) error {
 		return JSONError(c, http.StatusInternalServerError, "Failed to commit transaction")
 	}
 
-	// If revoking approval, tokens would be invalidated in a real implementation
-	// For now, just log the action
-	if req.IsApproved != nil && !*req.IsApproved {
-		logging.InfoLogger.Printf("User %s approval revoked by admin %s", targetUsername, adminUsername)
-	}
-
 	return JSONResponse(c, http.StatusOK, "User updated successfully", nil)
 }
 
 // ListUsers returns a list of all users
 func ListUsers(c echo.Context) error {
-	// Get admin user and verify admin privileges
 	adminUsername := auth.GetUsernameFromToken(c)
-	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
-	if err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to get admin user")
-	}
-
-	if !adminUser.IsAdmin {
-		return JSONError(c, http.StatusForbidden, "Admin privileges required")
-	}
 
 	// Get all users with TOTP status and file count
 	rows, err := database.DB.Query(`
@@ -855,16 +737,7 @@ func ListUsers(c echo.Context) error {
 
 // UpdateUserStorageLimit updates a user's storage limit
 func UpdateUserStorageLimit(c echo.Context) error {
-	// Get admin user and verify admin privileges first
 	adminUsername := auth.GetUsernameFromToken(c)
-	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
-	if err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to get admin user")
-	}
-
-	if !adminUser.IsAdmin {
-		return JSONError(c, http.StatusForbidden, "Admin privileges required")
-	}
 
 	targetUsername := c.Param("username")
 	if targetUsername == "" {
@@ -885,7 +758,7 @@ func UpdateUserStorageLimit(c echo.Context) error {
 	}
 
 	// Update storage limit
-	_, err = database.DB.Exec("UPDATE users SET storage_limit_bytes = ? WHERE username = ?",
+	_, err := database.DB.Exec("UPDATE users SET storage_limit_bytes = ? WHERE username = ?",
 		req.StorageLimitBytes, targetUsername)
 	if err != nil {
 		return JSONError(c, http.StatusInternalServerError, "Failed to update storage limit")
@@ -924,32 +797,23 @@ func AdminRevokeUser(c echo.Context) error {
 
 	// Check if already revoked
 	if !user.IsApproved {
-		return JSONResponse(c, http.StatusOK, "User is already revoked", map[string]interface{}{
+		if err := terminateUserSessions(targetUsername, "admin revoke (already unapproved)"); err != nil {
+			logging.ErrorLogger.Printf("Failed to terminate sessions for already-revoked user %s: %v", targetUsername, err)
+			return JSONError(c, http.StatusInternalServerError, "Failed to terminate user sessions")
+		}
+		return JSONResponse(c, http.StatusOK, "User is already revoked; sessions terminated", map[string]interface{}{
 			"username":    targetUsername,
 			"is_approved": false,
 		})
 	}
 
-	// Revoke user by setting is_approved to false
-	_, err = database.DB.Exec("UPDATE users SET is_approved = 0 WHERE username = ?", targetUsername)
-	if err != nil {
+	if err := revokeUserAccess(database.DB, targetUsername, adminUsername, "admin user revoke"); err != nil {
+		if err == sql.ErrNoRows {
+			return JSONError(c, http.StatusNotFound, fmt.Sprintf("User '%s' not found", targetUsername))
+		}
 		logging.ErrorLogger.Printf("Failed to revoke user %s: %v", targetUsername, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to revoke user")
 	}
-
-	// Log admin action for audit trail
-	logging.LogSecurityEvent(
-		logging.EventAdminAccess,
-		nil,
-		&adminUsername,
-		nil,
-		map[string]interface{}{
-			"operation":       "user_revoke",
-			"target_username": targetUsername,
-		},
-	)
-
-	LogAdminAction(database.DB, adminUsername, "revoke_user", targetUsername, "User access revoked")
 
 	return JSONResponse(c, http.StatusOK, "User access revoked successfully", map[string]interface{}{
 		"username":    targetUsername,
@@ -1033,24 +897,16 @@ func AdminSystemStatus(c echo.Context) error {
 	return JSONResponse(c, http.StatusOK, "System status retrieved", response)
 }
 
-// AdminSystemHealth bridges existing monitoring infrastructure to admin API endpoints
+// AdminSystemHealth returns aggregated component health for the admin API.
 func AdminSystemHealth(c echo.Context) error {
-	// Get admin username for audit logging
 	adminUsername := auth.GetUsernameFromToken(c)
 
-	// Create a HealthMonitor instance for this request
-	// Note: In a production system, this would ideally be a global instance
-	// but for Phase 2 we're implementing the quick bridge approach
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to load config for health check: %v", err)
-		return JSONError(c, http.StatusInternalServerError, "Configuration error")
+	if monitoring.DefaultHealthMonitor == nil {
+		return JSONError(c, http.StatusInternalServerError, "Health monitor not initialized")
 	}
 
-	healthMonitor := monitoring.NewHealthMonitor(database.DB, cfg, "arkfile-server")
-	status := healthMonitor.GetHealthStatus()
+	status := monitoring.DefaultHealthMonitor.GetHealthStatus()
 
-	// Log admin action for audit trail
 	logging.LogSecurityEvent(
 		logging.EventAdminAccess,
 		nil,

@@ -5,7 +5,6 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"fmt"
-	"os"
 )
 
 // EncryptGCM encrypts data using AES-256-GCM
@@ -63,14 +62,6 @@ func DecryptGCM(data, key []byte) ([]byte, error) {
 	minSize := nonceSize + tagSize
 
 	if len(data) < minSize {
-		// Enhanced debug logging for insufficient data
-		if isDebugMode() {
-			fmt.Printf("GCM decrypt: insufficient data length %d, need at least %d (nonce=%d + tag=%d)\n",
-				len(data), minSize, nonceSize, tagSize)
-			if len(data) > 0 {
-				fmt.Printf("GCM decrypt: data preview first_8_bytes=%x\n", data[:min(8, len(data))])
-			}
-		}
 		return nil, fmt.Errorf("ciphertext too short: got %d bytes, need at least %d", len(data), minSize)
 	}
 
@@ -78,48 +69,13 @@ func DecryptGCM(data, key []byte) ([]byte, error) {
 	nonce := data[:nonceSize]
 	ciphertext := data[nonceSize:]
 
-	// Enhanced debug logging for GCM decryption context
-	if isDebugMode() {
-		fmt.Printf("GCM decrypt context: total_data=%d, nonce_size=%d, ciphertext_size=%d, nonce=%x\n",
-			len(data), len(nonce), len(ciphertext), nonce)
-	}
-
 	// Decrypt data
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
-		// Enhanced debug logging for decryption failures
-		if isDebugMode() {
-			fmt.Printf("GCM decryption failed: %v\n", err)
-			fmt.Printf("GCM decrypt failure context: key_len=%d, nonce_len=%d, ciphertext_len=%d\n",
-				len(key), len(nonce), len(ciphertext))
-			if len(ciphertext) >= 16 {
-				fmt.Printf("GCM decrypt failure: last_16_bytes_of_ciphertext=%x (includes tag)\n",
-					ciphertext[len(ciphertext)-16:])
-			}
-		}
 		return nil, fmt.Errorf("failed to decrypt: %w", err)
 	}
 
-	// Debug logging for successful decryption
-	if isDebugMode() {
-		fmt.Printf("GCM decrypt successful: plaintext_len=%d\n", len(plaintext))
-	}
-
 	return plaintext, nil
-}
-
-// Helper function for safe min operation
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-// isDebugMode checks if debug mode is enabled for crypto operations
-func isDebugMode() bool {
-	debug := os.Getenv("DEBUG_MODE")
-	return debug == "true" || debug == "1"
 }
 
 // GenerateAESKey generates a cryptographically secure 256-bit AES key
@@ -188,9 +144,6 @@ func DecryptGCMWithAAD(data, key, aad []byte) ([]byte, error) {
 	minSize := nonceSize + tagSize
 
 	if len(data) < minSize {
-		if isDebugMode() {
-			fmt.Printf("GCM-AAD decrypt: insufficient data length %d, need at least %d\n", len(data), minSize)
-		}
 		return nil, fmt.Errorf("ciphertext too short: got %d bytes, need at least %d", len(data), minSize)
 	}
 
@@ -198,22 +151,10 @@ func DecryptGCMWithAAD(data, key, aad []byte) ([]byte, error) {
 	nonce := data[:nonceSize]
 	ciphertext := data[nonceSize:]
 
-	if isDebugMode() {
-		fmt.Printf("GCM-AAD decrypt: data=%d, nonce=%d, ciphertext=%d, aad=%d\n",
-			len(data), len(nonce), len(ciphertext), len(aad))
-	}
-
 	// Decrypt data with AAD verification
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, aad)
 	if err != nil {
-		if isDebugMode() {
-			fmt.Printf("GCM-AAD decryption failed (AAD mismatch or tampering): %v\n", err)
-		}
 		return nil, fmt.Errorf("failed to decrypt with AAD (tampering detected or wrong context): %w", err)
-	}
-
-	if isDebugMode() {
-		fmt.Printf("GCM-AAD decrypt successful: plaintext_len=%d\n", len(plaintext))
 	}
 
 	return plaintext, nil

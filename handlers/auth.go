@@ -61,8 +61,16 @@ func RefreshToken(c echo.Context) error {
 		return JSONError(c, http.StatusUnauthorized, "Invalid or expired refresh token")
 	}
 
-	// Generate new full-tier JWT. Refresh flow always produces a full token; a user
-	// who has not completed TOTP never receives a refresh token in the first place.
+	user, err := models.GetUserByUsername(database.DB, username)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to load user for refresh %s: %v", username, err)
+		return JSONError(c, http.StatusInternalServerError, "Failed to refresh token")
+	}
+	if !user.IsApproved && !user.HasAdminPrivileges() {
+		return JSONError(c, http.StatusForbidden, "Account pending approval")
+	}
+
+	// Generate new full-tier JWT.
 	token, expirationTime, err := auth.GenerateFullAccessToken(username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate token for %s: %v", username, err)
@@ -200,19 +208,9 @@ func AdminForceLogout(c echo.Context) error {
 		return JSONError(c, http.StatusBadRequest, "Username is required")
 	}
 
-	// Verify admin privileges (this should be handled by AdminMiddleware)
-	// Force revoke all tokens for target user
-	err := models.RevokeAllUserTokens(database.DB, targetUsername)
-	if err != nil {
+	if err := terminateUserSessions(targetUsername, "admin force logout"); err != nil {
 		logging.ErrorLogger.Printf("Admin %s failed to revoke tokens for %s: %v", adminUsername, targetUsername, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to revoke user tokens")
-	}
-
-	// Add user-specific JWT revocation
-	err = auth.RevokeAllUserJWTTokens(database.DB, targetUsername, "admin force logout")
-	if err != nil {
-		logging.ErrorLogger.Printf("Admin %s failed to revoke JWT tokens for %s: %v", adminUsername, targetUsername, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to revoke user JWT tokens")
 	}
 
 	// Log security event

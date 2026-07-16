@@ -221,12 +221,7 @@ func (g *floodGuardService) RecordUnauthorizedHit(entityID string) time.Duration
 		t.windowHits == floodTier4Threshold ||
 		t.windowHits == floodTier5Threshold {
 
-		var eventType logging.SecurityEventType
-		if effectiveTier >= 3 {
-			eventType = logging.EventEndpointAbuse
-		} else {
-			eventType = logging.EventSuspiciousPattern
-		}
+		var eventType logging.SecurityEventType = logging.EventSuspiciousPattern
 
 		logging.LogSecurityEventWithEntityID(
 			eventType,

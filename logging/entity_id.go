@@ -326,15 +326,6 @@ func InitializeEntityIDService(config EntityIDConfig) error {
 	return nil
 }
 
-// GetEntityIDForIP is a convenience function that uses the default service
-// with IP-only input. For better NAT disambiguation, use GetCompositeEntityIDFromContext.
-func GetEntityIDForIP(ip net.IP) string {
-	if DefaultEntityIDService == nil {
-		return "uninitialized"
-	}
-	return DefaultEntityIDService.GetEntityID(ip)
-}
-
 // GetCompositeEntityIDForRequest generates an entity ID from an HTTP request,
 // using IP plus coarse User-Agent and Accept-Language buckets for anonymous
 // disambiguation. See GetCompositeEntityID for the bucketing rationale.
