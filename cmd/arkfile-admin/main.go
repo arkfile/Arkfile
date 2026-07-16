@@ -2093,7 +2093,7 @@ EXAMPLES:
 	fmt.Printf("System Health Check\n")
 	fmt.Printf("=====================\n\n")
 
-	if overall, ok := health["overall_status"].(string); ok {
+	if overall, ok := health["status"].(string); ok {
 		statusIcon := "OK"
 		if overall != "healthy" {
 			statusIcon = "[X]"
@@ -2102,11 +2102,11 @@ EXAMPLES:
 	}
 
 	// Display component health
-	if components, ok := health["components"].(map[string]interface{}); ok {
+	if checks, ok := health["checks"].(map[string]interface{}); ok {
 		fmt.Printf("Component Health:\n")
 		fmt.Printf("-----------------\n")
 
-		for component, status := range components {
+		for component, status := range checks {
 			statusMap := status.(map[string]interface{})
 			statusStr := statusMap["status"].(string)
 			statusIcon := "OK"

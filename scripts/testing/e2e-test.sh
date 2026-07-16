@@ -1692,6 +1692,26 @@ run_shares() {
         error "Share C creation failed:"; echo "$create_c_output"
         record_test "Share C creation (expires_after=1m)" "FAIL"
     fi
+    # Share C expiry: run immediately after create — expires_at is 1m from creation.
+    scenario "Visitor share expiry enforcement"
+
+    local dl_c1_file="$TEST_DATA_DIR/share_c_dl1.bin"
+    share_download_with_password "$SHARE_C_PASSWORD" "$SHARE_C_ID" "$dl_c1_file" "Share C download before expiry" "false"
+    rm -f "$dl_c1_file"
+
+    local now_ts
+    now_ts=$(date +%s)
+    local expiry_ts=$((SHARE_C_CREATED_AT + 60 + 5))
+    local wait_seconds=$((expiry_ts - now_ts))
+    if [ $wait_seconds -lt 0 ]; then
+        wait_seconds=0
+    fi
+    info "Smart sleep: waiting ${wait_seconds}s for Share C to expire..."
+    sleep "$wait_seconds"
+
+    local dl_c2_file="$TEST_DATA_DIR/share_c_dl2.bin"
+    share_download_with_password "$SHARE_C_PASSWORD" "$SHARE_C_ID" "$dl_c2_file" "Share C download after expiry rejected" "true"
+    assert_output_file_absent_or_empty "$dl_c2_file" "Share C rejected file hygiene"
     # CLI stdin order for a custom-file share: custom password first, share password second
     scenario "Create share from custom-password file"
 
@@ -1950,28 +1970,6 @@ run_shares() {
     local dl_b3_file="$TEST_DATA_DIR/share_b_dl3.bin"
     share_download_with_password "$SHARE_B_PASSWORD" "$SHARE_B_ID" "$dl_b3_file" "Share B download 3 rejected (max_accesses)" "true"
     assert_output_file_absent_or_empty "$dl_b3_file" "Share B rejected file hygiene"
-    scenario "Visitor share expiry enforcement"
-
-    # Download before expiry - should succeed
-    local dl_c1_file="$TEST_DATA_DIR/share_c_dl1.bin"
-    share_download_with_password "$SHARE_C_PASSWORD" "$SHARE_C_ID" "$dl_c1_file" "Share C download before expiry" "false"
-    rm -f "$dl_c1_file"
-
-    # Smart sleep: wait only the remaining time until 1 min after creation + 5s buffer
-    local now_ts
-    now_ts=$(date +%s)
-    local expiry_ts=$((SHARE_C_CREATED_AT + 60 + 5))
-    local wait_seconds=$((expiry_ts - now_ts))
-    if [ $wait_seconds -lt 0 ]; then
-        wait_seconds=0
-    fi
-    info "Smart sleep: waiting ${wait_seconds}s for Share C to expire..."
-    sleep "$wait_seconds"
-
-    # Download after expiry - should FAIL
-    local dl_c2_file="$TEST_DATA_DIR/share_c_dl2.bin"
-    share_download_with_password "$SHARE_C_PASSWORD" "$SHARE_C_ID" "$dl_c2_file" "Share C download after expiry rejected" "true"
-    assert_output_file_absent_or_empty "$dl_c2_file" "Share C rejected file hygiene"
     scenario "Non-existent share download fails"
 
     sleep 2  # Rate limit buffer
