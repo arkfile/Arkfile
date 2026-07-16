@@ -1851,16 +1851,16 @@ run_shares() {
     # state via 404/500.
     #
     # ORDERING NOTE: this scenario MUST run before the "Share enumeration rate
-    # limiting" and "Invalid download token rate limiting" sub-tests below.
-    # ShareEnumerationMiddleware (the FIRST middleware on the public-share group)
+    # limiting" sub-test below (and before invalid-token probes, which now run
+    # immediately after non-existent share download). ShareEnumerationMiddleware
     # keys on the loopback test entity and blocks the entire /api/public/shares/*
     # namespace once ~4 unique 404s accumulate in a 10-minute window. Running
-    # these probes after the enumeration/abuse flood would receive 429 from the
+    # handler probes after the enumeration flood would receive 429 from the
     # guard instead of the real 400/403/404 from the handler, masking the
     # behavior under test. Here the entity is clean (only successful downloads
     # so far), so the handler responses are genuine. We also keep to a single
     # unknown-share probe so we add only one unique 404 to the entity's counter
-    # before the enumeration flood begins.
+    # before the invalid-token and enumeration sub-tests begin.
     if [ -n "$SHARE_A_ID" ]; then
         local ticket_ep="${SERVER_URL}/api/public/shares/${SHARE_A_ID}/ticket"
 
@@ -1978,6 +1978,54 @@ run_shares() {
 
     share_download_with_password "$DUMMY_SHARE_PASSWORD" "$NONEXISTENT_SHARE_ID" "$TEST_DATA_DIR/nonexistent.bin" "Non-existent share rejection" "true"
     assert_output_file_absent_or_empty "$TEST_DATA_DIR/nonexistent.bin" "Non-existent share file hygiene"
+    # ORDERING NOTE: "Invalid download token rate limiting" MUST run before
+    # "Share enumeration rate limiting" below. ShareEnumerationMiddleware blocks
+    # the entire /api/public/shares/* namespace once ~4 unique 404s accumulate;
+    # running invalid-token probes after that flood would get 429 from the guard
+    # instead of 403/429 from the per-share token limiter.
+    scenario "Invalid download token rate limiting"
+
+    if [ -n "$SHARE_B_ID" ]; then
+        local BAD_TOKEN
+        BAD_TOKEN=$(echo "deliberately-wrong-token-value" | base64)
+
+        local token_fail=0
+        for i in 1 2 3 4; do
+            local token_code
+            token_code=$(curl -sk -o /dev/null -w '%{http_code}' \
+                -H "X-Download-Token: $BAD_TOKEN" \
+                "${SERVER_URL}/api/public/shares/${SHARE_B_ID}/chunks/0" 2>/dev/null)
+            if [ "$token_code" = "403" ]; then
+                info "Invalid token attempt $i/4: HTTP $token_code"
+            else
+                warning "Invalid token attempt $i/4: expected HTTP 403, got $token_code"
+                token_fail=1
+            fi
+        done
+
+        if [ "$token_fail" -eq 0 ]; then
+            record_test "Invalid download token attempts 1-4 return 403" "PASS"
+        else
+            record_test "Invalid download token attempts 1-4 return 403" "FAIL"
+        fi
+
+        # 5th attempt should be rate limited (429)
+        sleep 1
+        local token_code_5
+        token_code_5=$(curl -sk -o /dev/null -w '%{http_code}' \
+            -H "X-Download-Token: $BAD_TOKEN" \
+            "${SERVER_URL}/api/public/shares/${SHARE_B_ID}/chunks/0" 2>/dev/null)
+        if [ "$token_code_5" = "429" ]; then
+            record_test "Invalid download token rate limiting (HTTP 429 after failures)" "PASS"
+            info "Per-share rate limiter returned 429 after repeated invalid tokens"
+        else
+            record_test "Invalid download token rate limiting (HTTP 429 after failures)" "FAIL"
+            error "Per-share rate limiter returned HTTP $token_code_5 (expected 429)"
+        fi
+    else
+        warning "Share B ID not available, skipping invalid download token test"
+        record_test "Invalid download token rate limiting" "SKIP"
+    fi
     # Hit unique fake share IDs via curl to trigger the enumeration threshold.
     # The enumeration guard tracks unique 404s per entity in a 10-minute window
     # and blocks (429) after ~4 unique 404s. Earlier sub-tests (Non-existent
@@ -2044,51 +2092,6 @@ run_shares() {
         record_test "Share enumeration threshold (429 after unique 404s)" "FAIL"
         record_test "Share enumeration rate limiting (HTTP 429 after threshold)" "FAIL"
         error "Enumeration guard did not return 429 after ${enum_max_probes} unique-404 probes"
-    fi
-    # Use a valid share ID (Share B) with a deliberately bad download token.
-    # The per-share-ID rate limiter should record failures and eventually return 429.
-    scenario "Invalid download token rate limiting"
-
-    if [ -n "$SHARE_B_ID" ]; then
-        local BAD_TOKEN
-        BAD_TOKEN=$(echo "deliberately-wrong-token-value" | base64)
-
-        local token_fail=0
-        for i in 1 2 3 4; do
-            local token_code
-            token_code=$(curl -sk -o /dev/null -w '%{http_code}' \
-                -H "X-Download-Token: $BAD_TOKEN" \
-                "${SERVER_URL}/api/public/shares/${SHARE_B_ID}/chunks/0" 2>/dev/null)
-            if [ "$token_code" = "403" ]; then
-                info "Invalid token attempt $i/4: HTTP $token_code"
-            else
-                warning "Invalid token attempt $i/4: expected HTTP 403, got $token_code"
-                token_fail=1
-            fi
-        done
-
-        if [ "$token_fail" -eq 0 ]; then
-            record_test "Invalid download token attempts 1-4 return 403" "PASS"
-        else
-            record_test "Invalid download token attempts 1-4 return 403" "FAIL"
-        fi
-
-        # 5th attempt should be rate limited (429)
-        sleep 1
-        local token_code_5
-        token_code_5=$(curl -sk -o /dev/null -w '%{http_code}' \
-            -H "X-Download-Token: $BAD_TOKEN" \
-            "${SERVER_URL}/api/public/shares/${SHARE_B_ID}/chunks/0" 2>/dev/null)
-        if [ "$token_code_5" = "429" ]; then
-            record_test "Invalid download token rate limiting (HTTP 429 after failures)" "PASS"
-            info "Per-share rate limiter returned 429 after repeated invalid tokens"
-        else
-            record_test "Invalid download token rate limiting (HTTP 429 after failures)" "FAIL"
-            error "Per-share rate limiter returned HTTP $token_code_5 (expected 429)"
-        fi
-    else
-        warning "Share B ID not available, skipping invalid download token test"
-        record_test "Invalid download token rate limiting" "SKIP"
     fi
     scenario "Re-authenticate to revoke share"
     user_login_with_totp "Re-authentication for revoke"
