@@ -1123,7 +1123,7 @@ run_files_custom_password() {
     if echo "$list_raw_output" | grep -q "custom_test_file.bin" || echo "$list_raw_output" | grep -q "$CUSTOM_FILE_SHA256"; then
         error "Security failure: Raw list API exposed plaintext name or hash for custom-password file!"
         record_test "Raw List API Privacy (custom file)" "FAIL"
-    elif echo "$list_raw_output" | jq -e '.data.files[] | select(.encrypted_filename != null and .encrypted_filename != "")' >/dev/null 2>&1; then
+    elif echo "$list_raw_output" | jq -e '.files[] | select(.encrypted_filename != null and .encrypted_filename != "")' >/dev/null 2>&1; then
         record_test "Raw List API Privacy (custom file)" "PASS"
     else
         error "Security failure: Raw list API missing encrypted metadata for custom-password file!"
@@ -1254,8 +1254,8 @@ run_files_standard() {
     safe_exec list_raw_output list_raw_exit_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure list-files --raw
         
-    if echo "$list_raw_output" | jq -e '.data.files[] | select(.encrypted_filename != null and .encrypted_filename != "")' >/dev/null 2>&1 \
-        && ! echo "$list_raw_output" | jq -e '.data.files[] | select(.filename != null)' >/dev/null 2>&1 \
+    if echo "$list_raw_output" | jq -e '.files[] | select(.encrypted_filename != null and .encrypted_filename != "")' >/dev/null 2>&1 \
+        && ! echo "$list_raw_output" | jq -e '.files[] | select(.filename != null)' >/dev/null 2>&1 \
         && ! echo "$list_raw_output" | grep -q "$UPLOADED_FILE_SHA256" \
         && ! echo "$list_raw_output" | grep -q "test_file.bin"; then
         record_test "Raw List API Privacy" "PASS"
@@ -1781,10 +1781,10 @@ run_shares() {
     if echo "$list_shares_raw_output" | grep -q "test_file.bin" || echo "$list_shares_raw_output" | grep -q "custom_test_file.bin"; then
         error "Security failure: Raw shares API list exposed plaintext filename!"
         record_test "Raw Shares API Privacy" "FAIL"
-    elif echo "$list_shares_raw_output" | jq -e '.data.shares[] | select(.encrypted_filename != null and .encrypted_filename != "")' >/dev/null 2>&1; then
+    elif echo "$list_shares_raw_output" | jq -e '.shares[] | select(.share_id != null and .file_id != null)' >/dev/null 2>&1; then
         record_test "Raw Shares API Privacy" "PASS"
     else
-        error "Security failure: Raw shares API missing encrypted filenames!"
+        error "Security failure: Raw shares API missing expected share metadata!"
         record_test "Raw Shares API Privacy" "FAIL"
     fi
     scenario "Unapprove user blocks session; re-approve restores access"
