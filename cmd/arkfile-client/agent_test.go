@@ -48,6 +48,26 @@ func sendAgentRequest(t *testing.T, socketPath string, req AgentRequest) AgentRe
 	return resp
 }
 
+func storeTestAccountKey(t *testing.T, agent *Agent, accessToken string) string {
+	t.Helper()
+	testKey := make([]byte, 32)
+	rand.Read(testKey)
+	tokenHash := hashToken(accessToken)
+	storeResp := sendAgentRequest(t, agent.socketPath, AgentRequest{
+		Method: "store_account_key",
+		Params: map[string]interface{}{
+			"account_key": base64.StdEncoding.EncodeToString(testKey),
+			"username":    "testuser",
+			"token_hash":  tokenHash,
+			"ttl_hours":   float64(1),
+		},
+	})
+	if !storeResp.Success {
+		t.Fatalf("store failed: %s", storeResp.Error)
+	}
+	return tokenHash
+}
+
 // TestAgent_StoreAndRetrieveAccountKey tests storing and retrieving an account key
 func TestAgent_StoreAndRetrieveAccountKey(t *testing.T) {
 	agent := createTestAgent(t)
@@ -107,6 +127,44 @@ func TestAgent_StoreAndRetrieveAccountKey(t *testing.T) {
 	}
 	if getResp.Result["context"] != "account" {
 		t.Errorf("context mismatch: got %v", getResp.Result["context"])
+	}
+}
+
+// TestAgent_GetAccountKeyRequiresTokenHash verifies empty token_hash is rejected.
+func TestAgent_GetAccountKeyRequiresTokenHash(t *testing.T) {
+	agent := createTestAgent(t)
+	if err := agent.Start(); err != nil {
+		t.Fatalf("agent start failed: %v", err)
+	}
+	defer agent.Stop()
+
+	storeTestAccountKey(t, agent, "bound-token")
+
+	getResp := sendAgentRequest(t, agent.socketPath, AgentRequest{
+		Method: "get_account_key",
+		Params: map[string]interface{}{},
+	})
+	if getResp.Success {
+		t.Fatal("get without token_hash should fail")
+	}
+}
+
+// TestAgent_GetDigestCacheRequiresTokenHash verifies digest RPCs reject missing session binding.
+func TestAgent_GetDigestCacheRequiresTokenHash(t *testing.T) {
+	agent := createTestAgent(t)
+	if err := agent.Start(); err != nil {
+		t.Fatalf("agent start failed: %v", err)
+	}
+	defer agent.Stop()
+
+	storeTestAccountKey(t, agent, "digest-bound-token")
+
+	getResp := sendAgentRequest(t, agent.socketPath, AgentRequest{
+		Method: "get_digest_cache",
+		Params: map[string]interface{}{},
+	})
+	if getResp.Success {
+		t.Fatal("get_digest_cache without token_hash should fail")
 	}
 }
 
@@ -237,8 +295,9 @@ func TestAgent_WipeAllSensitiveData(t *testing.T) {
 	sendAgentRequest(t, agent.socketPath, AgentRequest{
 		Method: "add_digest",
 		Params: map[string]interface{}{
-			"file_id":   "file-1",
-			"sha256hex": "abcdef1234567890",
+			"file_id":    "file-1",
+			"sha256hex":  "abcdef1234567890",
+			"token_hash": tokenHash,
 		},
 	})
 
@@ -264,13 +323,12 @@ func TestAgent_WipeAllSensitiveData(t *testing.T) {
 	// Verify digest cache is gone
 	digestResp := sendAgentRequest(t, agent.socketPath, AgentRequest{
 		Method: "get_digest_cache",
+		Params: map[string]interface{}{
+			"token_hash": tokenHash,
+		},
 	})
-	if !digestResp.Success {
-		t.Fatalf("get_digest_cache failed: %s", digestResp.Error)
-	}
-	digestCache, ok := digestResp.Result["digest_cache"].(map[string]interface{})
-	if ok && len(digestCache) > 0 {
-		t.Error("digest cache should be empty after clear")
+	if digestResp.Success {
+		t.Fatal("get_digest_cache should fail after clear")
 	}
 }
 
@@ -282,10 +340,12 @@ func TestAgent_StoreAndRetrieveDigestCache(t *testing.T) {
 	}
 	defer agent.Stop()
 
-	// Store bulk digest cache
+	tokenHash := storeTestAccountKey(t, agent, "digest-token")
+
 	storeResp := sendAgentRequest(t, agent.socketPath, AgentRequest{
 		Method: "store_digest_cache",
 		Params: map[string]interface{}{
+			"token_hash": tokenHash,
 			"digest_cache": map[string]interface{}{
 				"file-1": "aabbccdd11223344",
 				"file-2": "eeff00112233aabb",
@@ -296,9 +356,11 @@ func TestAgent_StoreAndRetrieveDigestCache(t *testing.T) {
 		t.Fatalf("store_digest_cache failed: %s", storeResp.Error)
 	}
 
-	// Retrieve
 	getResp := sendAgentRequest(t, agent.socketPath, AgentRequest{
 		Method: "get_digest_cache",
+		Params: map[string]interface{}{
+			"token_hash": tokenHash,
+		},
 	})
 	if !getResp.Success {
 		t.Fatalf("get_digest_cache failed: %s", getResp.Error)
@@ -324,21 +386,25 @@ func TestAgent_AddRemoveDigest(t *testing.T) {
 	}
 	defer agent.Stop()
 
-	// Add a digest
+	tokenHash := storeTestAccountKey(t, agent, "digest-token")
+
 	addResp := sendAgentRequest(t, agent.socketPath, AgentRequest{
 		Method: "add_digest",
 		Params: map[string]interface{}{
-			"file_id":   "file-new",
-			"sha256hex": "1122334455667788",
+			"file_id":    "file-new",
+			"sha256hex":  "1122334455667788",
+			"token_hash": tokenHash,
 		},
 	})
 	if !addResp.Success {
 		t.Fatalf("add_digest failed: %s", addResp.Error)
 	}
 
-	// Verify it's there
 	getResp := sendAgentRequest(t, agent.socketPath, AgentRequest{
 		Method: "get_digest_cache",
+		Params: map[string]interface{}{
+			"token_hash": tokenHash,
+		},
 	})
 	cache := getResp.Result["digest_cache"].(map[string]interface{})
 	if cache["file-new"] != "1122334455667788" {
@@ -349,16 +415,19 @@ func TestAgent_AddRemoveDigest(t *testing.T) {
 	removeResp := sendAgentRequest(t, agent.socketPath, AgentRequest{
 		Method: "remove_digest",
 		Params: map[string]interface{}{
-			"file_id": "file-new",
+			"file_id":    "file-new",
+			"token_hash": tokenHash,
 		},
 	})
 	if !removeResp.Success {
 		t.Fatalf("remove_digest failed: %s", removeResp.Error)
 	}
 
-	// Verify it's gone
 	getResp2 := sendAgentRequest(t, agent.socketPath, AgentRequest{
 		Method: "get_digest_cache",
+		Params: map[string]interface{}{
+			"token_hash": tokenHash,
+		},
 	})
 	cache2 := getResp2.Result["digest_cache"].(map[string]interface{})
 	if _, exists := cache2["file-new"]; exists {

@@ -32,12 +32,9 @@ EXAMPLES:
 		return err
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	resp, err := client.makeRequest("GET", "/api/admin/storage/status", nil, session.AccessToken)
@@ -129,12 +126,9 @@ FLAGS:
 		return err
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	resp, err := client.makeRequest("GET", "/api/admin/storage/sync-status", nil, session.AccessToken)
@@ -207,12 +201,9 @@ EXAMPLES:
 		return fmt.Errorf("--from and --to are required")
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	payload := map[string]interface{}{
@@ -264,12 +255,9 @@ FLAGS:
 		return fmt.Errorf("--username, --from, and --to are required")
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	payload := map[string]interface{}{
@@ -320,12 +308,9 @@ FLAGS:
 		return fmt.Errorf("--file-id, --from, and --to are required")
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	payload := map[string]interface{}{
@@ -371,12 +356,9 @@ FLAGS:
 		return fmt.Errorf("--task-id is required")
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	resp, err := client.makeRequest("GET", "/api/admin/storage/task/"+*taskID, nil, session.AccessToken)
@@ -453,12 +435,9 @@ FLAGS:
 		return fmt.Errorf("--task-id is required")
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	_, err = client.makeRequest("POST", "/api/admin/storage/cancel-task/"+*taskID, nil, session.AccessToken)
@@ -493,12 +472,9 @@ FLAGS:
 		return fmt.Errorf("--provider-id is required")
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	payload := map[string]interface{}{"provider_id": *providerID}
@@ -534,12 +510,9 @@ FLAGS:
 		return fmt.Errorf("--provider-id is required")
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	payload := map[string]interface{}{"provider_id": *providerID}
@@ -575,12 +548,9 @@ FLAGS:
 		return fmt.Errorf("--provider-id is required")
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	payload := map[string]interface{}{"provider_id": *providerID}
@@ -595,12 +565,9 @@ FLAGS:
 
 // handleSwapProvidersCommand swaps primary and secondary providers
 func handleSwapProvidersCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	resp, err := client.makeRequest("POST", "/api/admin/storage/swap-providers", nil, session.AccessToken)
@@ -640,12 +607,9 @@ EXAMPLES:
 		return fmt.Errorf("--provider-id is required")
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	// Convert dollars to cents
@@ -680,8 +644,8 @@ func displayLoginAlerts(client *HTTPClient, accessToken string) {
 	message := safeString(resp.Data, "message")
 	if message != "" {
 		fmt.Printf("\n[!] Storage alerts:\n")
-		// Split message parts by comma and display each as a bullet
-		parts := strings.Split(message, ".")
+		// Split comma-separated alert parts from the server summary.
+		parts := strings.Split(message, ",")
 		for _, part := range parts {
 			part = strings.TrimSpace(part)
 			if part != "" {
@@ -725,12 +689,9 @@ EXAMPLES:
 		return err
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	// Submit verify-all task
@@ -847,12 +808,9 @@ FLAGS:
 		return err
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	url := fmt.Sprintf("/api/admin/storage/tasks?limit=%d", *limit)
@@ -946,12 +904,9 @@ FLAGS:
 		return fmt.Errorf("invalid type: %s (must be copy, verify, or all)", *cancelType)
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	payload := map[string]interface{}{"type": *cancelType}

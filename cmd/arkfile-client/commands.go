@@ -205,7 +205,7 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 		return err
 	}
 
-	accountKey, err := requireAccountKey()
+	accountKey, err := requireAccountKey(config)
 	if err != nil {
 		return err
 	}
@@ -448,7 +448,7 @@ func uploadOneFile(client *HTTPClient, session *AuthSession, config *ClientConfi
 			// Store digest in agent cache for fast dedup on future uploads.
 			agentClient, agentErr := NewAgentClient()
 			if agentErr == nil {
-				if err := agentClient.AddDigest(fileID, sha256hex); err != nil {
+				if err := agentClient.AddDigest(fileID, sha256hex, session.AccessToken); err != nil {
 					logVerbose("Warning: failed to store digest in cache: %v", err)
 				}
 			}
@@ -536,13 +536,6 @@ func doChunkedUpload(client *HTTPClient, session *AuthSession, params *ChunkedUp
 
 	uploadID, ok := initResp.Data["session_id"].(string)
 	if !ok || uploadID == "" {
-		// Try upload_id as fallback
-		uploadID, ok = initResp.Data["upload_id"].(string)
-	}
-	if !ok || uploadID == "" {
-		uploadID = initResp.SessionID
-	}
-	if uploadID == "" {
 		return "", fmt.Errorf("server did not return session_id")
 	}
 
@@ -683,7 +676,7 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 		return err
 	}
 
-	accountKey, err := requireAccountKey()
+	accountKey, err := requireAccountKey(config)
 	if err != nil {
 		return err
 	}
@@ -935,8 +928,7 @@ func handleListFilesCommand(client *HTTPClient, config *ClientConfig, args []str
 		var accountKey []byte
 		agentClient, agentErr := NewAgentClient()
 		if agentErr == nil {
-			// Pass empty token for read-only listing (no session binding check)
-			accountKey, _ = agentClient.GetAccountKey("")
+			accountKey, _ = agentClient.GetAccountKey(session.AccessToken)
 		}
 
 		decryptedFiles := make([]DecryptedFile, 0, len(fileList.Files))
@@ -982,8 +974,7 @@ func handleListFilesCommand(client *HTTPClient, config *ClientConfig, args []str
 	var accountKey []byte
 	agentClient, agentErr := NewAgentClient()
 	if agentErr == nil {
-		// Pass empty token for read-only listing (no session binding check)
-		accountKey, _ = agentClient.GetAccountKey("")
+		accountKey, _ = agentClient.GetAccountKey(session.AccessToken)
 	}
 
 	sep := strings.Repeat("-", 80)
@@ -1156,7 +1147,7 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 		return err
 	}
 
-	accountKey, err := requireAccountKey()
+	accountKey, err := requireAccountKey(config)
 	if err != nil {
 		return err
 	}
@@ -1389,8 +1380,7 @@ func handleShareList(client *HTTPClient, config *ClientConfig, args []string) er
 
 	var sharesResp ShareListResponse
 	if err := json.Unmarshal(body, &sharesResp); err != nil {
-		fmt.Println(string(body))
-		return nil
+		return fmt.Errorf("failed to decode share list: %w", err)
 	}
 
 	enrichedShares := make([]EnrichedShareInfo, 0)
@@ -1479,7 +1469,7 @@ func enrichShareList(client *HTTPClient, session *AuthSession, shares []ShareInf
 	var accountKey []byte
 	agentClient, agentErr := NewAgentClient()
 	if agentErr == nil {
-		accountKey, _ = agentClient.GetAccountKey("")
+		accountKey, _ = agentClient.GetAccountKey(session.AccessToken)
 	}
 
 	enriched := make([]EnrichedShareInfo, 0, len(shares))
@@ -1722,9 +1712,7 @@ func (h *shareTicketHolder) refresh() (string, error) {
 	return h.ticket, nil
 }
 
-// setShareAuthHeader sets X-Share-Ticket on the request using the holder,
-// refreshing the ticket if needed. Falls back to the static X-Download-Token
-// only if ticket issuance fails (best-effort compatibility).
+// setShareAuthHeader sets X-Share-Ticket on the request, refreshing the ticket if needed.
 func setShareAuthHeader(req *http.Request, h *shareTicketHolder) error {
 	ticket, err := h.get()
 	if err != nil {
@@ -2340,7 +2328,7 @@ func handleDeleteFileCommand(client *HTTPClient, config *ClientConfig, args []st
 	// Clear digest from agent cache
 	agentClient, agentErr := NewAgentClient()
 	if agentErr == nil {
-		if rmErr := agentClient.RemoveDigest(*fileID); rmErr != nil {
+		if rmErr := agentClient.RemoveDigest(*fileID, session.AccessToken); rmErr != nil {
 			logVerbose("Warning: failed to remove digest from cache: %v", rmErr)
 		}
 	}

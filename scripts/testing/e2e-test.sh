@@ -875,7 +875,7 @@ run_dual_mfa_api_checks() {
 
     if [ "$creds_http" = "200" ] && echo "$creds_out" | grep -q 'totp'; then
         record_test "MFA credentials list includes TOTP" "PASS"
-        info "Credentials: $creds_out"
+        info "MFA credentials list returned TOTP enrollment metadata"
     else
         error "Expected HTTP 200 with TOTP credential; got HTTP $creds_http: $creds_out"
         record_test "MFA credentials list includes TOTP" "FAIL"
@@ -970,13 +970,14 @@ run_user_authentication() {
     group "User authentication"
 
     if [ -f "$MFA_REENROLL_DONE_FILE" ]; then
-        info "MFA re-enrollment already completed; loading saved credentials"
+        info "MFA re-enrollment marker present; rerunning lightweight verification"
         if [ -f "$MFA_SECRET_FILE" ]; then
             export TEST_USER_TOTP_SECRET="$(cat "$MFA_SECRET_FILE")"
         fi
         if [ -f "$BACKUP_CODE_PRIMARY_FILE" ]; then
             export TEST_USER_BACKUP_CODE="$(cat "$BACKUP_CODE_PRIMARY_FILE")"
         fi
+        user_login_with_totp "Login with saved MFA secret after prior re-enrollment"
         record_test "MFA re-enrollment via backup code" "PASS"
     else
         scenario "MFA re-enrollment via backup code"
@@ -1036,13 +1037,13 @@ run_user_authentication() {
             fi
         else
             warning "Could not extract refresh_token from session file; skipping reuse test"
-            record_test "Refresh token rotation (200 on first use)" "PASS"
-            record_test "Refresh token reuse rejected (401 on replay)" "PASS"
+            record_test "Refresh token rotation (200 on first use)" "SKIP"
+            record_test "Refresh token reuse rejected (401 on replay)" "SKIP"
         fi
     else
         warning "Session file not found; skipping reuse test"
-        record_test "Refresh token rotation (200 on first use)" "PASS"
-        record_test "Refresh token reuse rejected (401 on replay)" "PASS"
+        record_test "Refresh token rotation (200 on first use)" "SKIP"
+        record_test "Refresh token reuse rejected (401 on replay)" "SKIP"
     fi
 
     # Re-login after the rotation test consumed the old token (the CLI session

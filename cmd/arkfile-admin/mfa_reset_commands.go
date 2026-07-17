@@ -52,12 +52,9 @@ EXAMPLES:
 		return fmt.Errorf("--confirm is required for this operation")
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	contactResp, err := client.makeRequest("GET", "/api/admin/users/"+*usernameFlag+"/contact-info", nil, session.AccessToken)

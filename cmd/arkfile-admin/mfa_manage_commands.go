@@ -11,12 +11,9 @@ import (
 )
 
 func handleMFACommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if session.AccessToken == "" {
-		return fmt.Errorf("admin session has no access token; login again")
+		return err
 	}
 	return mfa.RunManageCommand(args, adminMFARequester(client), session.AccessToken)
 }
@@ -31,9 +28,9 @@ func handleListUserMFACommand(client *HTTPClient, config *AdminConfig, args []st
 		return fmt.Errorf("--username is required")
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
+		return err
 	}
 
 	creds, err := mfa.ListUserCredentialsAdmin(adminMFARequester(client), session.AccessToken, *usernameFlag)
@@ -48,22 +45,15 @@ func handleRecoverMFACommand(client *HTTPClient, config *AdminConfig, args []str
 	fs := flag.NewFlagSet("recover-mfa", flag.ExitOnError)
 	codeFlag := fs.String("code", "", "Alphanumeric 10-char backup code")
 	methodTypeFlag := fs.String("method-type", "", "Factor to replace: totp or webauthn")
-	showSecret := fs.Bool("show-secret", false, "Emit machine-readable TOTP_SECRET and BACKUP_CODE_* lines")
+	showSecret := fs.Bool("show-secret", false, "Also emit machine-readable TOTP_SECRET and BACKUP_CODE_* lines")
 	nonInteractive := fs.Bool("non-interactive", false, "Don't prompt for input")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, token, err := requireAdminMFASession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in (use 'arkfile-admin login'): %w", err)
-	}
-	token := session.TempToken
-	if token == "" {
-		token = session.AccessToken
-	}
-	if token == "" {
-		return fmt.Errorf("no valid session found. Please login first")
+		return err
 	}
 
 	backupCode := strings.TrimSpace(*codeFlag)

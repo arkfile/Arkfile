@@ -22,7 +22,7 @@ func handleRecoverMFACommand(client *HTTPClient, config *ClientConfig, args []st
 	fs := flag.NewFlagSet("recover-mfa", flag.ExitOnError)
 	codeFlag := fs.String("code", "", "Alphanumeric 10-char backup code")
 	methodTypeFlag := fs.String("method-type", "", "Factor to replace: totp or webauthn")
-	showSecret := fs.Bool("show-secret", false, "Emit machine-readable TOTP_SECRET and BACKUP_CODE_* lines")
+	showSecret := fs.Bool("show-secret", false, "Emit machine-readable TOTP_SECRET and BACKUP_CODE_* lines (TOTP enrollment output is always shown)")
 	nonInteractive := fs.Bool("non-interactive", false, "Don't prompt for input")
 	if err := fs.Parse(args); err != nil {
 		return err

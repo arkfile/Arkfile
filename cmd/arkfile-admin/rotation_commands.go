@@ -70,12 +70,9 @@ func handleRotateUserSecretMasterPrepare(client *HTTPClient, config *AdminConfig
 		}
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	resp, err := client.makeRequest("POST", "/api/admin/system/prepare-user-secret-master-rotation", nil, session.AccessToken)

@@ -1,31 +1,15 @@
-// arkfile-admin - Local system maintenance and monitoring tool
-// This tool provides local administrative functions for system operations without network access
+// arkfile-admin - Hybrid network/local admin tool for arkfile server management.
 
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"crypto/tls"
-	"encoding/base64"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
-	"syscall"
-	"time"
 
-	"golang.org/x/term"
-
-	"github.com/arkfile/Arkfile/auth"
-	"github.com/arkfile/Arkfile/cli/mfa"
 	"github.com/arkfile/Arkfile/config"
-	"github.com/arkfile/Arkfile/crypto"
-	"github.com/pquerna/otp/totp"
 )
 
 const (
@@ -33,6 +17,8 @@ const (
 
 USAGE:
     arkfile-admin [global options] command [command options] [arguments...]
+
+Place boolean flags such as --json before positional arguments.
 
 NETWORK COMMANDS (Admin API - localhost only):
     bootstrap         Bootstrap the first admin user (requires token)
@@ -70,7 +56,9 @@ STORAGE MANAGEMENT COMMANDS (Admin API):
     copy-user-files       Copy all files for a specific user between providers
     copy-file             Copy a single file between providers
     task-status           Check status of a background storage task
+    list-tasks            List running or recent background storage tasks
     cancel-task           Cancel a running background storage task
+    cancel-all-tasks      Cancel all running tasks in a category
     set-primary           Promote a provider to primary (new uploads go here)
     set-secondary         Promote/demote a provider to secondary (auto-replication target)
     set-tertiary          Demote a provider to tertiary (manual-only)
@@ -88,11 +76,28 @@ BILLING COMMANDS (storage credits / usage metering):
 
     See 'arkfile-admin billing --help' for full subcommand documentation.
 
+PAYMENTS COMMANDS:
+    payments list                         List invoice payments
+    payments show ID                      Show one invoice payment
+    payments sync-invoice ID              Sync invoice status from BTCPay
+    payments reconcile                    Reconcile payments ledger
+
+    See 'arkfile-admin payments --help' for full subcommand documentation.
+
+SUBSCRIPTIONS COMMANDS:
+    subscriptions list-plans              List subscription plans
+    subscriptions show USER               Show a user's subscription
+    subscriptions set-plan                Assign or change a user's plan
+    subscriptions sync                    Sync subscription state
+    subscriptions reconcile               Reconcile subscription ledger
+    subscriptions grant-gift-subscription Grant a gift subscription
+    subscriptions cancel-gift-subscription Cancel a gift subscription
+
+    See 'arkfile-admin subscriptions --help' for full subcommand documentation.
+
 SYSTEM COMMANDS:
     system-status     System status overview
     health-check      System health check
-    set-approval-policy   Set instance-wide auto-approval policy (live, no restart)
-    get-approval-policy   Show the current auto-approval policy and its source
     reset-registration-throttle  Clear registration_attempts (dev/test only)
     verify-storage    Verify S3 storage connectivity (upload/download/delete round-trip)
     rotate-user-secret-master  User-secret master rotation (prepare|apply)
@@ -104,80 +109,25 @@ SYSTEM COMMANDS:
 GLOBAL OPTIONS:
     --server-url URL    Server URL for network commands (default: https://localhost:8443)
     --tls-insecure      Skip TLS certificate verification (dev/localhost only)
-    --base-dir DIR      Installation directory for local commands (default: /opt/arkfile)
     --config FILE       Configuration file path
     --username USER     Admin username for authentication
     --verbose, -v       Verbose output
     --help, -h          Show help
 
 EXAMPLES:
-    # Admin authentication:
     arkfile-admin login --username admin
-    
-    # User management:
     arkfile-admin list-users
     arkfile-admin approve-user --username alice12345
     arkfile-admin set-storage --username alice12345 --limit 10GB
-    
-    # System monitoring:
     arkfile-admin system-status
     arkfile-admin health-check --detailed
+    arkfile-admin billing set-price --json 19.99
 `
 )
 
 var verbose bool
 
-// AdminConfig holds configuration for the admin client
-type AdminConfig struct {
-	ServerURL     string `json:"server_url"`
-	Username      string `json:"username"`
-	TLSInsecure   bool   `json:"tls_insecure"`
-	TLSMinVersion uint16 `json:"tls_min_version"`
-	TokenFile     string `json:"token_file"`
-	ConfigFile    string `json:"config_file"`
-}
-
-// AdminSession holds admin authentication session data
-type AdminSession struct {
-	Username       string    `json:"username"`
-	AccessToken    string    `json:"access_token"`
-	RefreshToken   string    `json:"refresh_token"`
-	TempToken      string    `json:"temp_token,omitempty"`
-	ExpiresAt      time.Time `json:"expires_at"`
-	OPAQUEExport   string    `json:"opaque_export"`
-	ServerURL      string    `json:"server_url"`
-	SessionCreated time.Time `json:"session_created"`
-	IsAdmin        bool      `json:"is_admin"`
-}
-
-// HTTPClient wraps http.Client with additional functionality
-type HTTPClient struct {
-	client  *http.Client
-	baseURL string
-	verbose bool
-}
-
-// Response represents a generic API response
-type Response struct {
-	Success bool                   `json:"success"`
-	Message string                 `json:"message"`
-	Data    map[string]interface{} `json:"data"`
-}
-
-// User represents user information
-type User struct {
-	Username          string    `json:"username"`
-	IsAdmin           bool      `json:"is_admin"`
-	IsApproved        bool      `json:"is_approved"`
-	StorageLimitBytes int64     `json:"storage_limit_bytes"`
-	TotalStorageBytes int64     `json:"total_storage_bytes"`
-	RegistrationDate  time.Time `json:"registration_date"`
-	LastLogin         time.Time `json:"last_login"`
-	TOTPEnabled       bool      `json:"totp_enabled"`
-}
-
 func main() {
-	// Global flags
 	var (
 		serverURL   = flag.String("server-url", "https://localhost:8443", "Server URL")
 		configFile  = flag.String("config", "", "Configuration file path")
@@ -204,28 +154,24 @@ func main() {
 		return
 	}
 
-	// Load configuration
-	config := &AdminConfig{
+	adminConfig := &AdminConfig{
 		ServerURL:   *serverURL,
 		Username:    strings.ToLower(strings.TrimSpace(*username)),
 		TLSInsecure: *tlsInsecure,
 		ConfigFile:  *configFile,
 		TokenFile:   getAdminSessionFilePath(),
 	}
-
 	// Force TLS 1.3 only for maximum security
-	config.TLSMinVersion = tls.VersionTLS13
+	adminConfig.TLSMinVersion = tls.VersionTLS13
 
-	// Load config file if specified
 	if *configFile != "" {
-		if err := loadConfigFile(config, *configFile); err != nil {
+		if err := loadConfigFile(adminConfig, *configFile); err != nil {
 			logError("Failed to load config file: %v", err)
 			os.Exit(1)
 		}
 	}
 
-	// Create HTTP client
-	client := newHTTPClient(config.ServerURL, config.TLSInsecure, config.TLSMinVersion, verbose)
+	client := newHTTPClient(adminConfig.ServerURL, adminConfig.TLSInsecure, adminConfig.TLSMinVersion, verbose)
 
 	// Parse command
 	command := flag.Arg(0)
@@ -233,275 +179,270 @@ func main() {
 
 	// Execute command - route to network or local implementation
 	switch command {
-	// Network-based commands (use admin API)
 	case "bootstrap":
-		if err := handleBootstrapCommand(client, config, args); err != nil {
+		if err := handleBootstrapCommand(client, adminConfig, args); err != nil {
 			logError("Bootstrap failed: %v", err)
 			os.Exit(1)
 		}
 	case "login":
-		if err := handleLoginCommand(client, config, args); err != nil {
+		if err := handleLoginCommand(client, adminConfig, args); err != nil {
 			logError("Login failed: %v", err)
 			os.Exit(1)
 		}
 	case "setup-mfa":
-		if err := handleSetupMFACommand(client, config, args); err != nil {
+		if err := handleSetupMFACommand(client, adminConfig, args); err != nil {
 			logError("MFA setup failed: %v", err)
 			os.Exit(1)
 		}
 	case "mfa":
-		if err := handleMFACommand(client, config, args); err != nil {
+		if err := handleMFACommand(client, adminConfig, args); err != nil {
 			logError("MFA command failed: %v", err)
 			os.Exit(1)
 		}
 	case "recover-mfa":
-		if err := handleRecoverMFACommand(client, config, args); err != nil {
+		if err := handleRecoverMFACommand(client, adminConfig, args); err != nil {
 			logError("MFA recovery failed: %v", err)
 			os.Exit(1)
 		}
 	case "logout":
-		if err := handleLogoutCommand(config, args); err != nil {
+		if err := handleLogoutCommand(adminConfig, args); err != nil {
 			logError("Logout failed: %v", err)
 			os.Exit(1)
 		}
 	case "list-users":
-		if err := handleListUsersCommand(client, config, args); err != nil {
+		if err := handleListUsersCommand(client, adminConfig, args); err != nil {
 			logError("List users failed: %v", err)
 			os.Exit(1)
 		}
 	case "approve-user":
-		if err := handleApproveUserCommand(client, config, args); err != nil {
+		if err := handleApproveUserCommand(client, adminConfig, args); err != nil {
 			logError("Approve user failed: %v", err)
 			os.Exit(1)
 		}
 	case "unapprove-user":
-		if err := handleUnapproveUserCommand(client, config, args); err != nil {
+		if err := handleUnapproveUserCommand(client, adminConfig, args); err != nil {
 			logError("Unapprove user failed: %v", err)
 			os.Exit(1)
 		}
 	case "set-storage":
-		if err := handleSetStorageCommand(client, config, args); err != nil {
+		if err := handleSetStorageCommand(client, adminConfig, args); err != nil {
 			logError("Set storage failed: %v", err)
 			os.Exit(1)
 		}
 	case "revoke-user":
-		if err := handleRevokeUserCommand(client, config, args); err != nil {
+		if err := handleRevokeUserCommand(client, adminConfig, args); err != nil {
 			logError("Revoke user failed: %v", err)
 			os.Exit(1)
 		}
 	case "user-status":
-		if err := handleUserStatusCommand(client, config, args); err != nil {
+		if err := handleUserStatusCommand(client, adminConfig, args); err != nil {
 			logError("User status failed: %v", err)
 			os.Exit(1)
 		}
 	case "user-contact-info":
-		if err := handleUserContactInfoCommand(client, config, args); err != nil {
+		if err := handleUserContactInfoCommand(client, adminConfig, args); err != nil {
 			logError("User contact info failed: %v", err)
 			os.Exit(1)
 		}
 	case "export-file":
-		if err := handleExportFileCommand(client, config, args); err != nil {
+		if err := handleExportFileCommand(client, adminConfig, args); err != nil {
 			logError("Export file failed: %v", err)
 			os.Exit(1)
 		}
-
-	// New admin management commands
 	case "update-user":
-		if err := handleUpdateUserCommand(client, config, args); err != nil {
+		if err := handleUpdateUserCommand(client, adminConfig, args); err != nil {
 			logError("Update user failed: %v", err)
 			os.Exit(1)
 		}
 	case "delete-user":
-		if err := handleDeleteUserCommand(client, config, args); err != nil {
+		if err := handleDeleteUserCommand(client, adminConfig, args); err != nil {
 			logError("Delete user failed: %v", err)
 			os.Exit(1)
 		}
 	case "force-logout":
-		if err := handleForceLogoutCommand(client, config, args); err != nil {
+		if err := handleForceLogoutCommand(client, adminConfig, args); err != nil {
 			logError("Force logout failed: %v", err)
 			os.Exit(1)
 		}
 	case "reset-user-mfa":
-		if err := handleResetUserMFACommand(client, config, args); err != nil {
+		if err := handleResetUserMFACommand(client, adminConfig, args); err != nil {
 			logError("Reset user MFA failed: %v", err)
 			os.Exit(1)
 		}
 	case "list-user-mfa":
-		if err := handleListUserMFACommand(client, config, args); err != nil {
+		if err := handleListUserMFACommand(client, adminConfig, args); err != nil {
 			logError("List user MFA failed: %v", err)
 			os.Exit(1)
 		}
 	case "flag-user-reregistration":
-		if err := handleFlagUserReregistrationCommand(client, config, args); err != nil {
+		if err := handleFlagUserReregistrationCommand(client, adminConfig, args); err != nil {
 			logError("Flag user re-registration failed: %v", err)
 			os.Exit(1)
 		}
 	case "list-files":
-		if err := handleListFilesCommand(client, config, args); err != nil {
+		if err := handleListFilesCommand(client, adminConfig, args); err != nil {
 			logError("List files failed: %v", err)
 			os.Exit(1)
 		}
 	case "list-shares":
-		if err := handleListSharesCommand(client, config, args); err != nil {
+		if err := handleListSharesCommand(client, adminConfig, args); err != nil {
 			logError("List shares failed: %v", err)
 			os.Exit(1)
 		}
 	case "delete-file":
-		if err := handleDeleteFileCommand(client, config, args); err != nil {
+		if err := handleDeleteFileCommand(client, adminConfig, args); err != nil {
 			logError("Delete file failed: %v", err)
 			os.Exit(1)
 		}
 	case "revoke-share":
-		if err := handleRevokeShareCommand(client, config, args); err != nil {
+		if err := handleRevokeShareCommand(client, adminConfig, args); err != nil {
 			logError("Revoke share failed: %v", err)
 			os.Exit(1)
 		}
 	case "security-events":
-		if err := handleSecurityEventsCommand(client, config, args); err != nil {
+		if err := handleSecurityEventsCommand(client, adminConfig, args); err != nil {
 			logError("Security events failed: %v", err)
 			os.Exit(1)
 		}
-
-	// System monitoring commands
 	case "system-status":
-		if err := handleSystemStatusCommand(client, config, args); err != nil {
+		if err := handleSystemStatusCommand(client, adminConfig, args); err != nil {
 			logError("System status failed: %v", err)
 			os.Exit(1)
 		}
 	case "health-check":
-		if err := handleHealthCheckCommand(client, config, args); err != nil {
+		if err := handleHealthCheckCommand(client, adminConfig, args); err != nil {
 			logError("Health check failed: %v", err)
 			os.Exit(1)
 		}
 	case "verify-storage":
-		if err := handleVerifyStorageCommand(client, config, args); err != nil {
+		if err := handleVerifyStorageCommand(client, adminConfig, args); err != nil {
 			logError("Storage verification failed: %v", err)
 			os.Exit(1)
 		}
-
-	// Storage management commands
 	case "storage-status":
-		if err := handleStorageStatusCommand(client, config, args); err != nil {
+		if err := handleStorageStatusCommand(client, adminConfig, args); err != nil {
 			logError("Storage status failed: %v", err)
 			os.Exit(1)
 		}
 	case "storage-sync-status":
-		if err := handleStorageSyncStatusCommand(client, config, args); err != nil {
+		if err := handleStorageSyncStatusCommand(client, adminConfig, args); err != nil {
 			logError("Storage sync status failed: %v", err)
 			os.Exit(1)
 		}
 	case "copy-all":
-		if err := handleCopyAllCommand(client, config, args); err != nil {
+		if err := handleCopyAllCommand(client, adminConfig, args); err != nil {
 			logError("Copy all failed: %v", err)
 			os.Exit(1)
 		}
 	case "copy-user-files":
-		if err := handleCopyUserFilesCommand(client, config, args); err != nil {
+		if err := handleCopyUserFilesCommand(client, adminConfig, args); err != nil {
 			logError("Copy user files failed: %v", err)
 			os.Exit(1)
 		}
 	case "copy-file":
-		if err := handleCopyFileCommand(client, config, args); err != nil {
+		if err := handleCopyFileCommand(client, adminConfig, args); err != nil {
 			logError("Copy file failed: %v", err)
 			os.Exit(1)
 		}
 	case "task-status":
-		if err := handleTaskStatusCommand(client, config, args); err != nil {
+		if err := handleTaskStatusCommand(client, adminConfig, args); err != nil {
 			logError("Task status failed: %v", err)
 			os.Exit(1)
 		}
+	case "list-tasks":
+		if err := handleListTasksCommand(client, adminConfig, args); err != nil {
+			logError("List tasks failed: %v", err)
+			os.Exit(1)
+		}
 	case "cancel-task":
-		if err := handleCancelTaskCommand(client, config, args); err != nil {
+		if err := handleCancelTaskCommand(client, adminConfig, args); err != nil {
 			logError("Cancel task failed: %v", err)
 			os.Exit(1)
 		}
+	case "cancel-all-tasks":
+		if err := handleCancelAllTasksCommand(client, adminConfig, args); err != nil {
+			logError("Cancel all tasks failed: %v", err)
+			os.Exit(1)
+		}
 	case "set-primary":
-		if err := handleSetPrimaryCommand(client, config, args); err != nil {
+		if err := handleSetPrimaryCommand(client, adminConfig, args); err != nil {
 			logError("Set primary failed: %v", err)
 			os.Exit(1)
 		}
 	case "set-secondary":
-		if err := handleSetSecondaryCommand(client, config, args); err != nil {
+		if err := handleSetSecondaryCommand(client, adminConfig, args); err != nil {
 			logError("Set secondary failed: %v", err)
 			os.Exit(1)
 		}
 	case "set-tertiary":
-		if err := handleSetTertiaryCommand(client, config, args); err != nil {
+		if err := handleSetTertiaryCommand(client, adminConfig, args); err != nil {
 			logError("Set tertiary failed: %v", err)
 			os.Exit(1)
 		}
 	case "swap-providers":
-		if err := handleSwapProvidersCommand(client, config, args); err != nil {
+		if err := handleSwapProvidersCommand(client, adminConfig, args); err != nil {
 			logError("Swap providers failed: %v", err)
 			os.Exit(1)
 		}
 	case "set-cost":
-		if err := handleSetCostCommand(client, config, args); err != nil {
+		if err := handleSetCostCommand(client, adminConfig, args); err != nil {
 			logError("Set cost failed: %v", err)
 			os.Exit(1)
 		}
 	case "verify-all":
-		if err := handleVerifyAllCommand(client, config, args); err != nil {
+		if err := handleVerifyAllCommand(client, adminConfig, args); err != nil {
 			logError("Verify all failed: %v", err)
 			os.Exit(1)
 		}
-
-	// Billing - storage credits / usage metering subcommand group.
-	// All subcommands live in cmd/arkfile-admin/billing_commands.go.
 	case "billing":
-		if err := handleBillingCommand(client, config, args); err != nil {
+		if err := handleBillingCommand(client, adminConfig, args); err != nil {
 			logError("Billing command failed: %v", err)
 			os.Exit(1)
 		}
-
-	// Payments - BTCPay Server / invoice payments subcommand group.
-	// All subcommands live in cmd/arkfile-admin/payments_commands.go.
 	case "payments":
-		if err := handlePaymentsCommand(client, config, args); err != nil {
+		if err := handlePaymentsCommand(client, adminConfig, args); err != nil {
 			logError("Payments command failed: %v", err)
 			os.Exit(1)
 		}
-
 	case "subscriptions":
-		if err := handleSubscriptionsCommand(client, config, args); err != nil {
+		if err := handleSubscriptionsCommand(client, adminConfig, args); err != nil {
 			logError("Subscriptions command failed: %v", err)
 			os.Exit(1)
 		}
-
 	case "version":
 		printVersion()
 	case "set-approval-policy":
-		if err := handleSetApprovalPolicyCommand(client, config, args); err != nil {
+		if err := handleSetApprovalPolicyCommand(client, adminConfig, args); err != nil {
 			logError("Set approval policy failed: %v", err)
 			os.Exit(1)
 		}
 	case "get-approval-policy":
-		if err := handleGetApprovalPolicyCommand(client, config, args); err != nil {
+		if err := handleGetApprovalPolicyCommand(client, adminConfig, args); err != nil {
 			logError("Get approval policy failed: %v", err)
 			os.Exit(1)
 		}
 	case "reset-registration-throttle":
-		if err := handleResetRegistrationThrottleCommand(client, config, args); err != nil {
+		if err := handleResetRegistrationThrottleCommand(client, adminConfig, args); err != nil {
 			logError("Reset registration throttle failed: %v", err)
 			os.Exit(1)
 		}
 	case "rotate-user-secret-master":
-		if err := handleRotateUserSecretMasterCommand(client, config, args); err != nil {
+		if err := handleRotateUserSecretMasterCommand(client, adminConfig, args); err != nil {
 			logError("User-secret rotation failed: %v", err)
 			os.Exit(1)
 		}
 	case "rotate-envelope-master":
-		if err := handleRotateEnvelopeMasterCommand(client, config, args); err != nil {
+		if err := handleRotateEnvelopeMasterCommand(client, adminConfig, args); err != nil {
 			logError("Envelope master rotation failed: %v", err)
 			os.Exit(1)
 		}
 	case "rotate-jwt-keys":
-		if err := handleRotateJWTKeysCommand(client, config, args); err != nil {
+		if err := handleRotateJWTKeysCommand(client, adminConfig, args); err != nil {
 			logError("JWT key rotation failed: %v", err)
 			os.Exit(1)
 		}
 	case "rotate-opaque-keys":
-		if err := handleRotateOpaqueKeysCommand(client, config, args); err != nil {
+		if err := handleRotateOpaqueKeysCommand(client, adminConfig, args); err != nil {
 			logError("OPAQUE key rotation failed: %v", err)
 			os.Exit(1)
 		}
@@ -511,2260 +452,6 @@ func main() {
 		os.Exit(1)
 	}
 }
-
-// newHTTPClient creates a new HTTP client with appropriate TLS configuration
-func newHTTPClient(baseURL string, tlsInsecure bool, tlsMinVersion uint16, verbose bool) *HTTPClient {
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: tlsInsecure,
-			MinVersion:         tlsMinVersion,
-		},
-	}
-
-	return &HTTPClient{
-		client:  &http.Client{Transport: tr, Timeout: 30 * time.Second},
-		baseURL: strings.TrimSuffix(baseURL, "/"),
-		verbose: verbose,
-	}
-}
-
-// makeRequest makes an HTTP request with proper error handling
-func (c *HTTPClient) makeRequest(method, endpoint string, payload interface{}, token string) (*Response, error) {
-	url := c.baseURL + endpoint
-
-	var body io.Reader
-	if payload != nil {
-		jsonData, err := json.Marshal(payload)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal request: %w", err)
-		}
-		body = bytes.NewBuffer(jsonData)
-	}
-
-	req, err := http.NewRequest(method, url, body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-
-	if c.verbose {
-		logVerbose("Making %s request to %s", method, url)
-	}
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	responseData, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if c.verbose {
-		logVerbose("Response status: %d", resp.StatusCode)
-		logVerbose("Response body: %s", string(responseData))
-	}
-
-	var apiResp Response
-	if err := json.Unmarshal(responseData, &apiResp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	if resp.StatusCode >= 400 {
-		return &apiResp, fmt.Errorf("HTTP %d: %s", resp.StatusCode, apiResp.Message)
-	}
-
-	return &apiResp, nil
-}
-
-// fetchOpaqueServerID retrieves the OPAQUE server identity (idS) from the
-// server's public /api/config/opaque endpoint. All OPAQUE participants must
-// bind the exact same idS into the protocol transcript, so the CLI fetches it
-// from the server rather than hardcoding it.
-func (c *HTTPClient) fetchOpaqueServerID() (string, error) {
-	req, err := http.NewRequest("GET", c.baseURL+"/api/config/opaque", nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
-	}
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("unexpected status %d fetching OPAQUE server identity", resp.StatusCode)
-	}
-
-	var parsed struct {
-		ServerID string `json:"server_id"`
-	}
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read OPAQUE config: %w", err)
-	}
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		return "", fmt.Errorf("failed to parse OPAQUE config: %w", err)
-	}
-	if parsed.ServerID == "" {
-		return "", fmt.Errorf("server returned empty OPAQUE server identity")
-	}
-	return parsed.ServerID, nil
-}
-
-// handleBootstrapCommand processes the bootstrap command
-func handleBootstrapCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("bootstrap", flag.ExitOnError)
-	var (
-		tokenFlag    = fs.String("token", "", "Bootstrap token (argv exposure possible)")
-		tokenStdin   = fs.Bool("token-stdin", false, "Read bootstrap token from standard input (secure)")
-		usernameFlag = fs.String("username", "admin", "Username for admin account")
-	)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin bootstrap [FLAGS]
-
-Bootstrap the first admin user using the token provided by the server logs.
-
-FLAGS:
-    --token TOKEN      Bootstrap token from server logs (argv exposure possible)
-    --token-stdin      Read bootstrap token from standard input (secure)
-    --username USER    Username for admin account (default: admin)
-    --help            Show this help message
-
-EXAMPLES:
-    arkfile-admin bootstrap --token-stdin < /opt/arkfile/etc/keys/bootstrap-token.bin
-    sudo cat /opt/arkfile/etc/keys/bootstrap-token.bin | arkfile-admin bootstrap --token-stdin
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	var finalToken string
-	if *tokenStdin {
-		// Read token from standard input (stdin) to prevent argv exposure.
-		reader := bufio.NewReader(os.Stdin)
-		input, err := reader.ReadString('\n')
-		if err != nil && err != io.EOF {
-			return fmt.Errorf("failed to read token from stdin: %w", err)
-		}
-		finalToken = strings.TrimSpace(input)
-	} else {
-		finalToken = *tokenFlag
-	}
-
-	if finalToken == "" {
-		return fmt.Errorf("bootstrap token is required (provide via --token or --token-stdin)")
-	}
-
-	// Validate username before prompting for password
-	if err := validateAdminUsername(*usernameFlag); err != nil {
-		return err
-	}
-
-	// Get password securely
-	fmt.Printf("Enter password for admin user %s: ", *usernameFlag)
-	password, err := readPassword()
-	if err != nil {
-		return fmt.Errorf("failed to read password: %w", err)
-	}
-
-	// Confirm password
-	fmt.Print("Confirm password: ")
-	passwordConfirm, err := readPassword()
-	if err != nil {
-		return fmt.Errorf("failed to read password confirmation: %w", err)
-	}
-
-	// Verify passwords match
-	if password != passwordConfirm {
-		return fmt.Errorf("passwords do not match")
-	}
-
-	// Validate password meets requirements (min/max length, character classes)
-	validation := crypto.ValidateAccountPassword(password)
-	if !validation.MeetsRequirement {
-		reasons := ""
-		for i, r := range validation.Reasons {
-			if i > 0 {
-				reasons += "; "
-			}
-			reasons += r
-		}
-		return fmt.Errorf("password does not meet requirements: %s", reasons)
-	}
-
-	// Perform OPAQUE multi-step registration
-	logVerbose("Starting OPAQUE bootstrap for user: %s", *usernameFlag)
-
-	// Step 1: Create registration request (client-side)
-	clientSecret, registrationRequest, err := auth.ClientCreateRegistrationRequest([]byte(password))
-	if err != nil {
-		return fmt.Errorf("failed to create registration request: %w", err)
-	}
-
-	// Encode registration request for transmission
-	registrationRequestB64 := base64.StdEncoding.EncodeToString(registrationRequest)
-
-	// Step 2: Send registration request to server
-	regReq := map[string]string{
-		"bootstrap_token":      finalToken,
-		"username":             *usernameFlag,
-		"registration_request": registrationRequestB64,
-	}
-
-	regResp, err := client.makeRequest("POST", "/api/bootstrap/register/response", regReq, "")
-	if err != nil {
-		return fmt.Errorf("bootstrap registration failed: %w", err)
-	}
-
-	// Step 3: Decode server's registration response
-	registrationResponseB64, ok := regResp.Data["registration_response"].(string)
-	if !ok {
-		return fmt.Errorf("invalid server response: missing registration_response")
-	}
-
-	// Extract session_id from Data if present, otherwise fallback to top-level SessionID
-	sessionID, ok := regResp.Data["session_id"].(string)
-	if !ok || sessionID == "" {
-		// Try to get from response data directly if not in Data map (depends on makeRequest impl)
-		// makeRequest puts everything in Data map or top level fields?
-		// makeRequest returns *Response which has Data map.
-		// But wait, makeRequest implementation:
-		// var apiResp Response
-		// if err := json.Unmarshal(responseData, &apiResp); err != nil { ... }
-		// return &apiResp, nil
-		// So session_id should be in Data map if server puts it there.
-		// The server implementation of bootstrap puts it in Data map?
-		// Let's assume it does or check handlers/bootstrap.go later.
-		// For now, I'll assume it's in Data.
-	}
-	if sessionID == "" {
-		return fmt.Errorf("invalid server response: missing session_id")
-	}
-
-	registrationResponse, err := base64.StdEncoding.DecodeString(registrationResponseB64)
-	if err != nil {
-		return fmt.Errorf("failed to decode registration response: %w", err)
-	}
-
-	// Step 4: Finalize registration (client-side). idS is fetched from the
-	// server so all OPAQUE participants bind the same server identity.
-	serverID, err := client.fetchOpaqueServerID()
-	if err != nil {
-		return fmt.Errorf("failed to fetch OPAQUE server identity: %w", err)
-	}
-	registrationRecord, _, err := auth.ClientFinalizeRegistration(clientSecret, registrationResponse, *usernameFlag, serverID)
-	if err != nil {
-		return fmt.Errorf("failed to finalize registration: %w", err)
-	}
-
-	// Encode registration record for transmission
-	registrationRecordB64 := base64.StdEncoding.EncodeToString(registrationRecord)
-
-	// Step 5: Send registration record to server to complete registration
-	finalizeReq := map[string]string{
-		"bootstrap_token":     finalToken,
-		"session_id":          sessionID,
-		"username":            *usernameFlag,
-		"registration_record": registrationRecordB64,
-	}
-
-	regFinalizeResp, err := client.makeRequest("POST", "/api/bootstrap/register/finalize", finalizeReq, "")
-	if err != nil {
-		return fmt.Errorf("bootstrap finalization failed: %w", err)
-	}
-
-	fmt.Printf("Bootstrap successful! Admin user '%s' created.\n", *usernameFlag)
-
-	// Handle TOTP requirement
-	requiresTOTP, _ := regFinalizeResp.Data["requires_mfa"].(bool)
-	tempToken, _ := regFinalizeResp.Data["temp_token"].(string)
-
-	if requiresTOTP && tempToken != "" {
-		// Save session with temp token for TOTP setup
-		session := &AdminSession{
-			Username:       *usernameFlag,
-			TempToken:      tempToken,
-			ServerURL:      config.ServerURL,
-			SessionCreated: time.Now(),
-			ExpiresAt:      time.Now().Add(15 * time.Minute), // Temp token usually short-lived
-			IsAdmin:        true,
-		}
-
-		if err := saveAdminSession(session, config.TokenFile); err != nil {
-			logError("Warning: Failed to save session for TOTP setup: %v", err)
-		} else {
-			fmt.Printf("\nMFA setup required. Session saved.\n")
-			fmt.Printf("Please run 'arkfile-admin setup-mfa' to complete account setup.\n")
-		}
-	}
-
-	return nil
-}
-
-// handleSetupMFACommand processes MFA setup (TOTP or security key).
-func adminMFARequester(client *HTTPClient) mfa.Requester {
-	return func(method, endpoint string, payload interface{}, token string) (*mfa.APIResponse, error) {
-		resp, err := client.makeRequest(method, endpoint, payload, token)
-		if err != nil {
-			return nil, err
-		}
-		api := &mfa.APIResponse{
-			Success: resp.Success,
-			Message: resp.Message,
-			Data:    resp.Data,
-		}
-		if resp.Data == nil {
-			return api, nil
-		}
-		if t, ok := resp.Data["token"].(string); ok {
-			api.Token = t
-		}
-		if t, ok := resp.Data["refresh_token"].(string); ok {
-			api.RefreshToken = t
-		}
-		if t, ok := resp.Data["temp_token"].(string); ok {
-			api.TempToken = t
-		}
-		if s, ok := resp.Data["expires_at"].(string); ok {
-			if parsed, err := time.Parse(time.RFC3339, s); err == nil {
-				api.ExpiresAt = parsed
-			}
-		}
-		return api, nil
-	}
-}
-
-func handleSetupMFACommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("setup-mfa", flag.ExitOnError)
-	var (
-		showSecret = fs.Bool("show-secret", false, "Only show the secret key and exit (for automation)")
-		verifyCode = fs.String("verify", "", "Verify TOTP setup with a code (for automation)")
-		mfaMethod  = fs.String("mfa-method", "", "Enrollment method: totp or webauthn")
-		addSecond  = fs.Bool("add-second", false, "Add a complementary second factor while logged in")
-		label      = fs.String("label", "", "Optional private label for a security key (max 64 printable ASCII)")
-	)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin setup-mfa [FLAGS]
-
-Setup Two-Factor Authentication for the account (TOTP or security key).
-This is usually required immediately after registration.
-
-FLAGS:
-    --mfa-method METHOD  totp or webauthn (interactive picker if omitted)
-    --add-second         Add the complementary second factor (no new backup codes)
-    --label TEXT         Optional private security key label
-    --show-secret        Only show the TOTP secret and exit (for automation)
-    --verify CODE        Verify TOTP setup with a code (for automation)
-    --help               Show this help message
-
-EXAMPLES:
-    arkfile-admin setup-mfa
-    arkfile-admin setup-mfa --mfa-method webauthn --label "Bootstrap key"
-    arkfile-admin setup-mfa --add-second --mfa-method totp
-    arkfile-admin setup-mfa --show-secret
-    arkfile-admin setup-mfa --verify 123456
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	session, err := loadAdminSession(config.TokenFile)
-	if err != nil {
-		return fmt.Errorf("not logged in (use 'arkfile-admin login' or 'bootstrap'): %w", err)
-	}
-
-	token := session.TempToken
-	if token == "" {
-		token = session.AccessToken
-	}
-	if token == "" {
-		return fmt.Errorf("no valid session found. Please register or login first")
-	}
-
-	if *verifyCode != "" {
-		return verifyTOTP(client, config, session, token, *verifyCode)
-	}
-
-	method := mfa.Method(strings.ToLower(strings.TrimSpace(*mfaMethod)))
-	result, err := mfa.RunSetup(adminMFARequester(client), mfa.SetupConfig{
-		ServerURL:  config.ServerURL,
-		Token:      token,
-		Method:     method,
-		Label:      strings.TrimSpace(*label),
-		AddSecond:  *addSecond,
-		ShowSecret: *showSecret,
-		OnComplete: func(resp *mfa.APIResponse) error {
-			if resp.Token != "" {
-				session.AccessToken = resp.Token
-			}
-			if resp.RefreshToken != "" {
-				session.RefreshToken = resp.RefreshToken
-			}
-			if !resp.ExpiresAt.IsZero() {
-				session.ExpiresAt = resp.ExpiresAt
-			}
-			session.TempToken = ""
-			return saveAdminSession(session, config.TokenFile)
-		},
-	})
-	if err != nil {
-		return err
-	}
-	if result == nil || result.Response == nil {
-		return nil
-	}
-
-	mfa.PrintSetupComplete()
-	return nil
-}
-
-// handleSetupTOTPCommand is kept as an alias for compatibility.
-func handleSetupTOTPCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	return handleSetupMFACommand(client, config, args)
-}
-
-func verifyTOTP(client *HTTPClient, config *AdminConfig, session *AdminSession, token, code string) error {
-	verifyReq := map[string]string{
-		"code": code,
-	}
-
-	verifyResp, err := client.makeRequest("POST", "/api/mfa/verify", verifyReq, token)
-	if err != nil {
-		return fmt.Errorf("failed to verify TOTP code: %w", err)
-	}
-
-	// Update session with final tokens
-	if token, ok := verifyResp.Data["token"].(string); ok {
-		session.AccessToken = token
-	}
-	if refreshToken, ok := verifyResp.Data["refresh_token"].(string); ok {
-		session.RefreshToken = refreshToken
-	}
-	if expiresStr, ok := verifyResp.Data["expires_at"].(string); ok {
-		if t, err := time.Parse(time.RFC3339, expiresStr); err == nil {
-			session.ExpiresAt = t
-		}
-	}
-
-	session.TempToken = "" // Clear temp token
-
-	if err := saveAdminSession(session, config.TokenFile); err != nil {
-		logError("Warning: Failed to save updated session: %v", err)
-	}
-
-	mfa.PrintSetupComplete()
-
-	return nil
-}
-
-// generateTOTPCode generates a current TOTP code from a base32 secret.
-// It waits up to one full period to ensure the code is valid for at least 5 seconds.
-func generateTOTPCode(secret string) (string, error) {
-	now := time.Now()
-	remaining := 30 - (now.Unix() % 30)
-	if remaining < 5 {
-		time.Sleep(time.Duration(remaining+1) * time.Second)
-	}
-	code, err := totp.GenerateCode(secret, time.Now())
-	if err != nil {
-		return "", fmt.Errorf("failed to generate TOTP code: %w", err)
-	}
-	return code, nil
-}
-
-// handleLoginCommand processes admin login command
-func handleLoginCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("login", flag.ExitOnError)
-	var (
-		usernameFlag   = fs.String("username", config.Username, "Admin username for login")
-		saveSession    = fs.Bool("save-session", true, "Save session for future use")
-		totpCode       = fs.String("totp-code", "", "TOTP code for non-interactive login")
-		totpSecret     = fs.String("totp-secret", "", "TOTP secret — CLI generates the code internally (for scripted/test use)")
-		backupCode     = fs.String("backup-code", "", "10-character backup code for one-shot emergency login")
-		mfaMethod      = fs.String("mfa-method", "", "Second factor method for login: totp or webauthn")
-		credentialID   = fs.String("credential-id", "", "WebAuthn credential id when multiple security keys are enrolled")
-		nonInteractive = fs.Bool("non-interactive", false, "Don't prompt for input")
-	)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin login [FLAGS]
-
-Authenticate as administrator using OPAQUE protocol.
-
-FLAGS:
-    --username USER     Admin username for authentication (required)
-    --save-session      Save session for future use (default: true)
-    --totp-code CODE    TOTP code for non-interactive login
-    --totp-secret SEC   TOTP secret — CLI generates code internally (for scripted/test use)
-    --backup-code CODE  10-character backup code for emergency login
-    --mfa-method METHOD Second factor for login: totp or webauthn
-    --credential-id ID  WebAuthn credential id when choosing a specific key
-    --non-interactive   Don't prompt for input
-    --help              Show this help message
-
-EXAMPLES:
-    arkfile-admin login --username admin
-    arkfile-admin login --username root --save-session=false
-    arkfile-admin login --username admin --totp-secret YOURSECRETHERE
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *usernameFlag == "" {
-		return fmt.Errorf("admin username is required")
-	}
-
-	// Get password securely
-	fmt.Printf("Enter admin password for %s: ", *usernameFlag)
-	password, err := readPassword()
-	if err != nil {
-		return fmt.Errorf("failed to read password: %w", err)
-	}
-
-	// Perform multi-step OPAQUE login with admin verification
-	logVerbose("Starting multi-step OPAQUE authentication for admin user: %s", *usernameFlag)
-
-	// Step 1: Create credential request
-	clientState, credentialRequest, err := auth.ClientCreateCredentialRequest([]byte(password))
-	if err != nil {
-		return fmt.Errorf("failed to create credential request: %w", err)
-	}
-
-	// Step 2: Send credential request to server
-	authStartReq := map[string]string{
-		"username":           *usernameFlag,
-		"credential_request": base64.StdEncoding.EncodeToString(credentialRequest),
-	}
-
-	authStartResp, err := client.makeRequest("POST", "/api/admin/login/response", authStartReq, "")
-	if err != nil {
-		return fmt.Errorf("admin authentication start failed: %w", err)
-	}
-
-	sessionID, ok := authStartResp.Data["session_id"].(string)
-	if !ok {
-		return fmt.Errorf("invalid session ID in response")
-	}
-
-	credentialResponseStr, ok := authStartResp.Data["credential_response"].(string)
-	if !ok {
-		return fmt.Errorf("invalid credential response")
-	}
-
-	// Decode base64 credential response
-	credentialResponse, err := base64.StdEncoding.DecodeString(credentialResponseStr)
-	if err != nil {
-		return fmt.Errorf("failed to decode credential response: %w", err)
-	}
-
-	// Step 3: Recover credentials and create auth token. idS is fetched from
-	// the server so all OPAQUE participants bind the same server identity.
-	serverID, err := client.fetchOpaqueServerID()
-	if err != nil {
-		return fmt.Errorf("failed to fetch OPAQUE server identity: %w", err)
-	}
-	_, authU, exportKey, err := auth.ClientRecoverCredentials(clientState, credentialResponse, *usernameFlag, serverID)
-	if err != nil {
-		return fmt.Errorf("incorrect password or account not found")
-	}
-
-	// Step 4: Finalize authentication
-	authFinishReq := map[string]string{
-		"session_id": sessionID,
-		"username":   *usernameFlag,
-		"auth_u":     base64.StdEncoding.EncodeToString(authU),
-	}
-
-	loginResp, err := client.makeRequest("POST", "/api/admin/login/finalize", authFinishReq, "")
-	if err != nil {
-		return fmt.Errorf("admin authentication finalization failed: %w", err)
-	}
-
-	// Extract data from login response
-	var accessToken, refreshToken, opaqueExport string
-	var expiresAt time.Time
-
-	// Check if TOTP is required
-	requiresTOTP, _ := loginResp.Data["requires_mfa"].(bool)
-	requiresTOTPSetup, _ := loginResp.Data["requires_mfa_setup"].(bool)
-
-	if requiresTOTPSetup {
-		tempToken, _ := loginResp.Data["temp_token"].(string)
-		if tempToken == "" {
-			return fmt.Errorf("missing temporary TOTP token in response")
-		}
-		// Save session for setup-mfa
-		session := &AdminSession{
-			Username:       *usernameFlag,
-			TempToken:      tempToken,
-			ServerURL:      config.ServerURL,
-			SessionCreated: time.Now(),
-			ExpiresAt:      time.Now().Add(15 * time.Minute),
-			IsAdmin:        true,
-		}
-		if err := saveAdminSession(session, config.TokenFile); err != nil {
-			return fmt.Errorf("failed to save admin session for TOTP setup: %w", err)
-		}
-		fmt.Printf("\nMFA setup required. Session saved.\n")
-		fmt.Printf("Please run 'arkfile-admin setup-mfa' to complete account setup.\n")
-		return nil
-	}
-
-	if requiresTOTP {
-		tempToken, _ := loginResp.Data["temp_token"].(string)
-		if tempToken == "" {
-			return fmt.Errorf("missing temporary MFA token in response")
-		}
-
-		methods := mfa.ParseMFAMethods(loginResp.Data)
-		chosenMethod, chosenCredentialID, pickErr := mfa.PickLoginMethod(
-			*nonInteractive,
-			methods,
-			mfa.Method(strings.ToLower(strings.TrimSpace(*mfaMethod))),
-			strings.TrimSpace(*credentialID),
-		)
-		if pickErr != nil {
-			return pickErr
-		}
-
-		mfaResp, err := mfa.CompleteLogin(adminMFARequester(client), mfa.LoginMFAConfig{
-			ServerURL:      config.ServerURL,
-			MFAMethod:      chosenMethod,
-			CredentialID:   chosenCredentialID,
-			TempToken:      tempToken,
-			TOTPCode:       *totpCode,
-			TOTPSecret:     *totpSecret,
-			BackupCode:     *backupCode,
-			NonInteractive: *nonInteractive,
-		})
-		if err != nil {
-			return err
-		}
-
-		accessToken = mfaResp.Token
-		refreshToken = mfaResp.RefreshToken
-		if !mfaResp.ExpiresAt.IsZero() {
-			expiresAt = mfaResp.ExpiresAt
-		} else if expiresStr, ok := mfaResp.Data["expires_at"].(string); ok {
-			expiresAt, _ = time.Parse(time.RFC3339, expiresStr)
-		}
-		opaqueExport, _ = mfaResp.Data["opaque_export"].(string)
-	} else {
-		// Get tokens directly from login response
-		accessToken, _ = loginResp.Data["token"].(string)
-		refreshToken, _ = loginResp.Data["refresh_token"].(string)
-		// Use the export key we derived locally if not provided by server
-		if export, ok := loginResp.Data["opaque_export"].(string); ok {
-			opaqueExport = export
-		} else {
-			opaqueExport = base64.StdEncoding.EncodeToString(exportKey)
-		}
-
-		if expiresStr, ok := loginResp.Data["expires_at"].(string); ok {
-			expiresAt, _ = time.Parse(time.RFC3339, expiresStr)
-		}
-	}
-
-	// Create admin session
-	session := &AdminSession{
-		Username:       *usernameFlag,
-		AccessToken:    accessToken,
-		RefreshToken:   refreshToken,
-		ExpiresAt:      expiresAt,
-		OPAQUEExport:   opaqueExport,
-		ServerURL:      config.ServerURL,
-		SessionCreated: time.Now(),
-		IsAdmin:        true,
-	}
-
-	// Save session if requested
-	if *saveSession {
-		if err := saveAdminSession(session, config.TokenFile); err != nil {
-			logError("Warning: Failed to save admin session: %v", err)
-		} else {
-			logVerbose("Admin session saved to: %s", config.TokenFile)
-		}
-	}
-
-	fmt.Printf("Admin login successful for user: %s\n", *usernameFlag)
-	fmt.Printf("Session expires: %s\n", session.ExpiresAt.Format("2006-01-02 15:04:05"))
-
-	// Check for storage alerts and display after login
-	displayLoginAlerts(client, session.AccessToken)
-	fmt.Printf("Administrative privileges active\n")
-
-	return nil
-}
-
-// handleListUsersCommand lists all users with detailed information
-func handleListUsersCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("list-users", flag.ExitOnError)
-	var (
-		detailed     = fs.Bool("detailed", false, "Show detailed user information")
-		includeAdmin = fs.Bool("include-admin", false, "Include admin users in listing")
-		pendingOnly  = fs.Bool("pending", false, "Show only pending approval users")
-		limit        = fs.Int("limit", 50, "Maximum number of users to list")
-		offset       = fs.Int("offset", 0, "Offset for pagination")
-	)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin list-users [FLAGS]
-
-List all users with administrative information.
-
-FLAGS:
-    --detailed          Show detailed user information
-    --include-admin     Include admin users in listing
-    --pending           Show only users pending approval
-    --limit INT         Maximum number of users to list (default: 50)
-    --offset INT        Offset for pagination (default: 0)
-    --help             Show this help message
-
-EXAMPLES:
-    arkfile-admin list-users
-    arkfile-admin list-users --detailed
-    arkfile-admin list-users --pending
-    arkfile-admin list-users --limit 10 --offset 20
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	// Load admin session
-	session, err := loadAdminSession(config.TokenFile)
-	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-
-	// Check if session is expired
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
-	}
-
-	// Build query parameters
-	params := fmt.Sprintf("?limit=%d&offset=%d", *limit, *offset)
-	if *includeAdmin {
-		params += "&include_admin=true"
-	}
-	if *pendingOnly {
-		params += "&pending_only=true"
-	}
-
-	// Request user list
-	resp, err := client.makeRequest("GET", "/api/admin/users"+params, nil, session.AccessToken)
-	if err != nil {
-		return fmt.Errorf("failed to list users: %w", err)
-	}
-
-	// Parse user list
-	usersData, ok := resp.Data["users"].([]interface{})
-	if !ok {
-		return fmt.Errorf("invalid user list response")
-	}
-
-	if len(usersData) == 0 {
-		if *pendingOnly {
-			fmt.Println("No users pending approval")
-		} else {
-			fmt.Println("No users found")
-		}
-		return nil
-	}
-
-	fmt.Printf("Users (%d total):\n\n", len(usersData))
-
-	if *detailed {
-		for i, userData := range usersData {
-			userMap := userData.(map[string]interface{})
-			fmt.Printf("%d. %s\n", i+1, userMap["username"])
-			fmt.Printf("   Status: %s\n", statusStr(userMap))
-			fmt.Printf("   Admin: %v\n", safeBool(userMap, "is_admin"))
-			fmt.Printf("   TOTP: %v\n", safeBool(userMap, "totp_enabled"))
-			fmt.Printf("   Files: %d\n", safeInt64(userMap, "file_count"))
-			fmt.Printf("   Storage: %s / %s (%.1f%%)\n",
-				formatFileSize(safeInt64(userMap, "total_storage_bytes")),
-				formatFileSize(safeInt64(userMap, "storage_limit_bytes")),
-				safeFloat64(userMap, "usage_percent"))
-			fmt.Printf("   Registered: %s\n", safeString(userMap, "registration_date"))
-			if login := safeString(userMap, "last_login"); login != "" {
-				fmt.Printf("   Last Login: %s\n", login)
-			}
-			fmt.Println()
-		}
-	} else {
-		for i, userData := range usersData {
-			userMap := userData.(map[string]interface{})
-			if i > 0 {
-				fmt.Println()
-			}
-			fmt.Printf("USERNAME: %s\n", userMap["username"])
-			fmt.Printf("  %-10s %-6s %-5s %-6s %-12s %-7s %s\n",
-				"STATUS", "ADMIN", "TOTP", "FILES", "STORAGE", "USAGE", "REGISTERED")
-
-			status := statusStr(userMap)
-			adminStr := boolYesNo(safeBool(userMap, "is_admin"))
-			totpStr := boolYesNo(safeBool(userMap, "totp_enabled"))
-			fileCount := safeInt64(userMap, "file_count")
-			storageReadable := safeString(userMap, "total_storage_readable")
-			if storageReadable == "" {
-				storageReadable = formatFileSize(safeInt64(userMap, "total_storage_bytes"))
-			}
-			usagePercent := safeFloat64(userMap, "usage_percent")
-			regDate := safeString(userMap, "registration_date")
-
-			fmt.Printf("  %-10s %-6s %-5s %-6d %-12s %-7s %s\n",
-				status, adminStr, totpStr,
-				fileCount, storageReadable, fmt.Sprintf("%.1f%%", usagePercent), regDate)
-		}
-	}
-
-	fmt.Printf("\nShowing %d users (offset: %d)\n", len(usersData), *offset)
-
-	return nil
-}
-
-// handleApproveUserCommand approves a pending user account
-func handleApproveUserCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("approve-user", flag.ExitOnError)
-	var (
-		usernameFlag = fs.String("username", "", "Username to approve (required)")
-		storageLimit = fs.String("storage", "", "Storage limit override (default: keep current, examples: 1GB, 500MB, 10GB)")
-	)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin approve-user [FLAGS]
-
-Approve a pending user account. Optionally set a custom storage limit.
-
-FLAGS:
-    --username USER     Username to approve (required)
-    --storage LIMIT     Storage limit override (optional, default: keep current limit)
-    --help             Show this help message
-
-EXAMPLES:
-    arkfile-admin approve-user --username alice12345
-    arkfile-admin approve-user --username bob.123.ABC --storage 10GB
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *usernameFlag == "" {
-		return fmt.Errorf("username is required")
-	}
-
-	// Load admin session
-	session, err := loadAdminSession(config.TokenFile)
-	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-
-	// Check if session is expired
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
-	}
-
-	// Build approve request
-	approveReq := map[string]interface{}{
-		"approved_by": session.Username,
-	}
-
-	// Only include storage_limit_bytes if explicitly specified
-	if *storageLimit != "" {
-		limitBytes, err := parseStorageLimit(*storageLimit)
-		if err != nil {
-			return fmt.Errorf("invalid storage limit: %w", err)
-		}
-		approveReq["storage_limit_bytes"] = limitBytes
-	}
-
-	_, err = client.makeRequest("POST", "/api/admin/users/"+*usernameFlag+"/approve", approveReq, session.AccessToken)
-	if err != nil {
-		return fmt.Errorf("user approval failed: %w", err)
-	}
-
-	fmt.Printf("User %s approved successfully\n", *usernameFlag)
-	if *storageLimit != "" {
-		limitBytes, _ := parseStorageLimit(*storageLimit)
-		fmt.Printf("Storage limit set to: %s\n", formatFileSize(limitBytes))
-	} else {
-		fmt.Printf("Storage limit: default (1.1 GB)\n")
-	}
-
-	return nil
-}
-
-// handleUnapproveUserCommand revokes a user's approval and immediately terminates all active sessions.
-// This is the correct way to prevent a previously-approved user from continuing to use the site:
-// setting is_approved=false alone does not invalidate JWTs that are already in flight.
-func handleUnapproveUserCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("unapprove-user", flag.ExitOnError)
-	usernameFlag := fs.String("username", "", "Username to unapprove (required)")
-	confirm := fs.Bool("confirm", false, "Confirm without interactive prompt")
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin unapprove-user --username USER [--confirm]
-
-Revoke a user's approval status and force-logout all active sessions.
-The user will be unable to perform any authenticated actions immediately.
-Use 'approve-user' to re-approve the account later if needed.
-
-FLAGS:
-    --username USER     Username to unapprove (required)
-    --confirm           Confirm without interactive prompt
-    --help              Show this help message
-
-EXAMPLES:
-    arkfile-admin unapprove-user --username alice12345
-    arkfile-admin unapprove-user --username alice12345 --confirm
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *usernameFlag == "" {
-		return fmt.Errorf("--username is required")
-	}
-
-	session, err := loadAdminSession(config.TokenFile)
-	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
-	}
-
-	if !*confirm {
-		fmt.Printf("Unapprove user '%s' and terminate all active sessions? (yes/no): ", *usernameFlag)
-		reader := bufio.NewReader(os.Stdin)
-		response, err := reader.ReadString('\n')
-		if err != nil {
-			return fmt.Errorf("failed to read confirmation: %w", err)
-		}
-		if r := strings.TrimSpace(strings.ToLower(response)); r != "yes" && r != "y" {
-			fmt.Println("Unapprove cancelled")
-			return nil
-		}
-	}
-
-	// Step 1: Revoke approval and terminate sessions in one server call.
-	_, err = client.makeRequest("POST", "/api/admin/users/"+*usernameFlag+"/revoke", nil, session.AccessToken)
-	if err != nil {
-		return fmt.Errorf("failed to unapprove user: %w", err)
-	}
-	fmt.Printf("User %s approval revoked\n", *usernameFlag)
-	fmt.Printf("User %s sessions terminated (all tokens revoked)\n", *usernameFlag)
-	return nil
-}
-
-// handleRevokeUserCommand revokes user access and terminates all active sessions.
-func handleRevokeUserCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("revoke-user", flag.ExitOnError)
-	var (
-		usernameFlag = fs.String("username", "", "Username to revoke (required)")
-		confirm      = fs.Bool("confirm", false, "Confirm revocation without prompt")
-	)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin revoke-user [FLAGS]
-
-Revoke user access and disable account. All active sessions are terminated immediately.
-
-FLAGS:
-    --username USER     Username to revoke (required)
-    --confirm           Confirm revocation without interactive prompt
-    --help             Show this help message
-
-EXAMPLES:
-    arkfile-admin revoke-user --username alice12345
-    arkfile-admin revoke-user --username bob.123.ABC --confirm
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *usernameFlag == "" {
-		return fmt.Errorf("username is required")
-	}
-
-	// Load admin session
-	session, err := loadAdminSession(config.TokenFile)
-	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-
-	// Check if session is expired
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
-	}
-
-	// Confirm revocation if not already confirmed
-	if !*confirm {
-		fmt.Printf("Are you sure you want to revoke access for user '%s'? (yes/no): ", *usernameFlag)
-		reader := bufio.NewReader(os.Stdin)
-		response, err := reader.ReadString('\n')
-		if err != nil {
-			return fmt.Errorf("failed to read confirmation: %w", err)
-		}
-		response = strings.TrimSpace(strings.ToLower(response))
-
-		if response != "yes" && response != "y" {
-			fmt.Println("User revocation cancelled")
-			return nil
-		}
-	}
-
-	// Revoke user (unapprove and terminate sessions via canonical endpoint).
-	_, err = client.makeRequest("POST", "/api/admin/users/"+*usernameFlag+"/revoke", nil, session.AccessToken)
-	if err != nil {
-		return fmt.Errorf("user revocation failed: %w", err)
-	}
-	fmt.Printf("User %s access revoked successfully\n", *usernameFlag)
-	fmt.Printf("User %s sessions terminated (all tokens revoked)\n", *usernameFlag)
-	return nil
-}
-
-// handleUserStatusCommand gets the status of a specific user
-func handleUserStatusCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("user-status", flag.ExitOnError)
-	var (
-		usernameFlag = fs.String("username", "", "Username to check status for (required)")
-	)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin user-status [FLAGS]
-
-Get the status and details of a specific user account.
-
-FLAGS:
-    --username USER     Username to check (required)
-    --help             Show this help message
-
-EXAMPLES:
-    arkfile-admin user-status --username alice12345
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *usernameFlag == "" {
-		return fmt.Errorf("username is required")
-	}
-
-	// Load admin session
-	session, err := loadAdminSession(config.TokenFile)
-	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-
-	// Check if session is expired
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
-	}
-
-	// Get user status
-	resp, err := client.makeRequest("GET", "/api/admin/users/"+*usernameFlag+"/status", nil, session.AccessToken)
-	if err != nil {
-		return fmt.Errorf("failed to get user status: %w", err)
-	}
-
-	// Display user status from nested response structure
-	data := resp.Data
-
-	// Top-level fields
-	exists := false
-	if v, ok := data["exists"].(bool); ok {
-		exists = v
-	}
-
-	fmt.Printf("User Status: %s\n", *usernameFlag)
-	fmt.Println("--------------------------")
-
-	if !exists {
-		fmt.Printf("Exists:          No\n")
-		return nil
-	}
-
-	// Parse nested "user" object
-	username := *usernameFlag
-	isAdmin := false
-	isApproved := false
-	createdAt := ""
-	if userObj, ok := data["user"].(map[string]interface{}); ok {
-		if v, ok := userObj["username"].(string); ok {
-			username = v
-		}
-		if v, ok := userObj["is_admin"].(bool); ok {
-			isAdmin = v
-		}
-		if v, ok := userObj["is_approved"].(bool); ok {
-			isApproved = v
-		}
-		if v, ok := userObj["created_at"].(string); ok {
-			createdAt = v
-		}
-	}
-
-	// Format created_at for display
-	createdFormatted := createdAt
-	if createdAt != "" {
-		if t, err := time.Parse(time.RFC3339, createdAt); err == nil {
-			createdFormatted = t.Format("2006-01-02 15:04:05")
-		} else if t, err := time.Parse("2006-01-02T15:04:05Z", createdAt); err == nil {
-			createdFormatted = t.Format("2006-01-02 15:04:05")
-		}
-	}
-
-	fmt.Printf("Username:        %s\n", username)
-	fmt.Printf("Exists:          Yes\n")
-	fmt.Printf("Admin:           %s\n", boolYesNo(isAdmin))
-	fmt.Printf("Approved:        %s\n", boolYesNo(isApproved))
-	if createdFormatted != "" {
-		fmt.Printf("Created:         %s\n", createdFormatted)
-	}
-
-	// Parse nested "totp" object
-	if totpObj, ok := data["totp"].(map[string]interface{}); ok {
-		fmt.Printf("\nTOTP Status\n")
-		fmt.Println("--------------------------")
-		present, _ := totpObj["present"].(bool)
-		decryptable, _ := totpObj["decryptable"].(bool)
-		enabled, _ := totpObj["enabled"].(bool)
-		setupCompleted, _ := totpObj["setup_completed"].(bool)
-		fmt.Printf("Present:         %s\n", boolYesNo(present))
-		fmt.Printf("Decryptable:     %s\n", boolYesNo(decryptable))
-		fmt.Printf("Enabled:         %s\n", boolYesNo(enabled))
-		fmt.Printf("Setup Completed: %s\n", boolYesNo(setupCompleted))
-	}
-
-	// Parse nested "opaque" object
-	if opaqueObj, ok := data["opaque"].(map[string]interface{}); ok {
-		fmt.Printf("\nOPAQUE Status\n")
-		fmt.Println("--------------------------")
-		hasAccount, _ := opaqueObj["has_account"].(bool)
-		fmt.Printf("Has Account:     %s\n", boolYesNo(hasAccount))
-	}
-
-	// Parse nested "tokens" object
-	if tokensObj, ok := data["tokens"].(map[string]interface{}); ok {
-		fmt.Printf("\nTokens\n")
-		fmt.Println("--------------------------")
-		activeRefresh := int(0)
-		if v, ok := tokensObj["active_refresh_tokens"].(float64); ok {
-			activeRefresh = int(v)
-		}
-		revoked := int(0)
-		if v, ok := tokensObj["revoked_tokens"].(float64); ok {
-			revoked = int(v)
-		}
-		fmt.Printf("Active Refresh:  %d\n", activeRefresh)
-		fmt.Printf("Revoked:         %d\n", revoked)
-	}
-
-	return nil
-}
-
-// handleUserContactInfoCommand views a user's contact information
-func handleUserContactInfoCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("user-contact-info", flag.ExitOnError)
-	usernameFlag := fs.String("username", "", "Username to view contact info for (required)")
-	jsonOutput := fs.Bool("json", false, "Output as JSON")
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin user-contact-info --username USER [--json]
-
-View a user's contact information (decrypted server-side).
-
-FLAGS:
-    --username USER     Username to view contact info for (required)
-    --json              Output as JSON
-    --help             Show this help message
-
-EXAMPLES:
-    arkfile-admin user-contact-info --username alice12345
-    arkfile-admin user-contact-info --username alice12345 --json
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *usernameFlag == "" {
-		return fmt.Errorf("--username is required")
-	}
-
-	session, err := loadAdminSession(config.TokenFile)
-	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
-	}
-
-	resp, err := client.makeRequest("GET", "/api/admin/users/"+*usernameFlag+"/contact-info", nil, session.AccessToken)
-	if err != nil {
-		return fmt.Errorf("failed to get contact info: %w", err)
-	}
-
-	hasInfo, _ := resp.Data["has_contact_info"].(bool)
-	if !hasInfo {
-		fmt.Printf("No contact information set for %s\n", *usernameFlag)
-		return nil
-	}
-
-	contactInfoRaw, ok := resp.Data["contact_info"]
-	if !ok {
-		return fmt.Errorf("invalid response: missing contact_info")
-	}
-
-	if *jsonOutput {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(contactInfoRaw)
-	}
-
-	// Re-marshal and unmarshal for typed access
-	infoJSON, err := json.Marshal(contactInfoRaw)
-	if err != nil {
-		return fmt.Errorf("failed to parse contact info: %w", err)
-	}
-
-	var info struct {
-		DisplayName string `json:"display_name"`
-		Contacts    []struct {
-			Type  string `json:"type"`
-			Value string `json:"value"`
-			Label string `json:"label,omitempty"`
-		} `json:"contacts"`
-		Notes string `json:"notes"`
-	}
-	if err := json.Unmarshal(infoJSON, &info); err != nil {
-		return fmt.Errorf("failed to parse contact info: %w", err)
-	}
-
-	fmt.Printf("Contact Information for %s\n", *usernameFlag)
-	fmt.Println("--------------------------")
-	fmt.Printf("  Display Name: %s\n", info.DisplayName)
-
-	if len(info.Contacts) > 0 {
-		fmt.Println("  Contacts:")
-		for i, c := range info.Contacts {
-			label := c.Type
-			if c.Type == "other" && c.Label != "" {
-				label = c.Label
-			}
-			fmt.Printf("    [%d] %s: %s\n", i+1, label, c.Value)
-		}
-	} else {
-		fmt.Println("  Contacts: (none)")
-	}
-
-	if info.Notes != "" {
-		fmt.Printf("  Notes: %s\n", info.Notes)
-	}
-
-	return nil
-}
-
-// handleSetStorageCommand sets user storage limits
-func handleSetStorageCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("set-storage", flag.ExitOnError)
-	var (
-		usernameFlag = fs.String("username", "", "Username to modify (required)")
-		storageLimit = fs.String("limit", "", "New storage limit (required, examples: 1GB, 500MB, 10GB)")
-	)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin set-storage [FLAGS]
-
-Set or modify user storage limits.
-
-FLAGS:
-    --username USER     Username to modify (required)
-    --limit LIMIT       New storage limit (required, examples: 1GB, 500MB, 10GB)
-    --help             Show this help message
-
-EXAMPLES:
-    arkfile-admin set-storage --username alice12345 --limit 10GB
-    arkfile-admin set-storage --username bob.123.ABC --limit 500MB
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *usernameFlag == "" {
-		return fmt.Errorf("username is required")
-	}
-	if *storageLimit == "" {
-		return fmt.Errorf("storage limit is required")
-	}
-
-	// Load admin session
-	session, err := loadAdminSession(config.TokenFile)
-	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-
-	// Check if session is expired
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
-	}
-
-	// Parse storage limit
-	limitBytes, err := parseStorageLimit(*storageLimit)
-	if err != nil {
-		return fmt.Errorf("invalid storage limit: %w", err)
-	}
-
-	// Set storage limit
-	storageReq := map[string]interface{}{
-		"storage_limit_bytes": limitBytes,
-	}
-
-	_, err = client.makeRequest("PUT", "/api/admin/users/"+*usernameFlag+"/storage", storageReq, session.AccessToken)
-	if err != nil {
-		return fmt.Errorf("storage limit update failed: %w", err)
-	}
-
-	fmt.Printf("Storage limit updated for user %s\n", *usernameFlag)
-	fmt.Printf("New limit: %s\n", formatFileSize(limitBytes))
-
-	return nil
-}
-
-// handleExportFileCommand exports a user's encrypted file as a .arkbackup bundle.
-// Uses the admin export endpoint which can export any user's file.
-// The admin CANNOT decrypt the bundle (they don't know the user's password).
-func handleExportFileCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("export-file", flag.ExitOnError)
-	fileID := fs.String("file-id", "", "File ID to export (required)")
-	outputPath := fs.String("output", "", "Output file path (default: <file-id>.arkbackup)")
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin export-file --file-id FILE_ID [--output PATH]
-
-Export a user's encrypted file as a .arkbackup bundle for disaster recovery.
-The admin can export any user's file, but cannot decrypt it without the user's password.
-
-FLAGS:
-    --file-id ID        File ID to export (required)
-    --output PATH       Output file path (default: <file-id>.arkbackup)
-    --help             Show this help message
-
-EXAMPLES:
-    arkfile-admin export-file --file-id abc-123-def
-    arkfile-admin export-file --file-id abc-123-def --output backup.arkbackup
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *fileID == "" {
-		return fmt.Errorf("--file-id is required")
-	}
-
-	if *outputPath == "" {
-		*outputPath = *fileID + ".arkbackup"
-	}
-
-	// Load admin session
-	session, err := loadAdminSession(config.TokenFile)
-	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
-	}
-
-	logVerbose("Exporting file %s as .arkbackup bundle (admin export)...", *fileID)
-
-	// Make raw HTTP request (binary response, not JSON)
-	url := fmt.Sprintf("%s/api/admin/files/%s/export", client.baseURL, *fileID)
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create export request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
-
-	resp, err := client.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("export request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("export failed (HTTP %d): %s", resp.StatusCode, string(body))
-	}
-
-	// Stream response to output file
-	outFile, err := os.OpenFile(*outputPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
-	}
-
-	written, err := io.Copy(outFile, resp.Body)
-	outFile.Close()
-	if err != nil {
-		os.Remove(*outputPath)
-		return fmt.Errorf("failed to write export bundle: %w", err)
-	}
-
-	fmt.Printf("Exported %s to %s (%d bytes)\n", *fileID, *outputPath, written)
-	fmt.Printf("Note: This bundle is encrypted and can only be decrypted by the file owner.\n")
-	return nil
-}
-
-// handleSystemStatusCommand shows system status and metrics
-func handleSystemStatusCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("system-status", flag.ExitOnError)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin system-status
-
-Show system status, metrics, and health information.
-
-EXAMPLES:
-    arkfile-admin system-status
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	// Load admin session
-	session, err := loadAdminSession(config.TokenFile)
-	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-
-	// Check if session is expired
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
-	}
-
-	// Get system status
-	resp, err := client.makeRequest("GET", "/api/admin/system/status", nil, session.AccessToken)
-	if err != nil {
-		return fmt.Errorf("failed to get system status: %w", err)
-	}
-
-	// Display system status
-	status := resp.Data
-	fmt.Printf("System Status\n")
-	fmt.Printf("================\n\n")
-
-	if uptime, ok := status["uptime"].(string); ok {
-		fmt.Printf("Uptime: %s\n", uptime)
-	}
-	if version, ok := status["version"].(string); ok {
-		fmt.Printf("Version: %s\n", version)
-	}
-	if goVersion, ok := status["go_version"].(string); ok {
-		fmt.Printf("Go Version: %s\n", goVersion)
-	}
-
-	fmt.Printf("\nStorage Statistics\n")
-	fmt.Printf("====================\n")
-	if storage, ok := status["storage"].(map[string]interface{}); ok {
-		if totalFiles, ok := storage["total_files"].(float64); ok {
-			fmt.Printf("Total Files: %.0f\n", totalFiles)
-		}
-		if totalSize, ok := storage["total_size_bytes"].(float64); ok {
-			fmt.Printf("Total Size: %s\n", formatFileSize(int64(totalSize)))
-		}
-		if avgFileSize, ok := storage["average_file_size_bytes"].(float64); ok {
-			fmt.Printf("Average File Size: %s\n", formatFileSize(int64(avgFileSize)))
-		}
-	}
-
-	fmt.Printf("\nUser Statistics\n")
-	fmt.Printf("=================\n")
-	if users, ok := status["users"].(map[string]interface{}); ok {
-		if totalUsers, ok := users["total_users"].(float64); ok {
-			fmt.Printf("Total Users: %.0f\n", totalUsers)
-		}
-		if activeUsers, ok := users["active_users"].(float64); ok {
-			fmt.Printf("Active Users: %.0f\n", activeUsers)
-		}
-		if adminUsers, ok := users["admin_users"].(float64); ok {
-			fmt.Printf("Admin Users: %.0f\n", adminUsers)
-		}
-		if pendingUsers, ok := users["pending_approval"].(float64); ok {
-			fmt.Printf("Pending Approval: %.0f\n", pendingUsers)
-		}
-	}
-
-	fmt.Printf("\nSecurity Status\n")
-	fmt.Printf("=================\n")
-	if security, ok := status["security"].(map[string]interface{}); ok {
-		if mfaUsers, ok := security["mfa_enabled_users"].(float64); ok {
-			fmt.Printf("MFA Enabled Users: %.0f\n", mfaUsers)
-		}
-	}
-
-	return nil
-}
-
-// handleHealthCheckCommand performs comprehensive system health check
-func handleHealthCheckCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("health-check", flag.ExitOnError)
-	var (
-		detailed = fs.Bool("detailed", false, "Show detailed health information")
-	)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin health-check [FLAGS]
-
-Perform comprehensive system health check.
-
-FLAGS:
-    --detailed          Show detailed health information
-    --help             Show this help message
-
-EXAMPLES:
-    arkfile-admin health-check
-    arkfile-admin health-check --detailed
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	// Load admin session
-	session, err := loadAdminSession(config.TokenFile)
-	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-
-	// Check if session is expired
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
-	}
-
-	// Perform health check
-	params := ""
-	if *detailed {
-		params = "?detailed=true"
-	}
-
-	resp, err := client.makeRequest("GET", "/api/admin/system/health"+params, nil, session.AccessToken)
-	if err != nil {
-		return fmt.Errorf("health check failed: %w", err)
-	}
-
-	// Display health results
-	health := resp.Data
-	fmt.Printf("System Health Check\n")
-	fmt.Printf("=====================\n\n")
-
-	if overall, ok := health["status"].(string); ok {
-		statusIcon := "OK"
-		if overall != "healthy" {
-			statusIcon = "[X]"
-		}
-		fmt.Printf("Overall Status: %s %s\n\n", statusIcon, strings.ToUpper(overall))
-	}
-
-	// Display component health
-	if checks, ok := health["checks"].(map[string]interface{}); ok {
-		fmt.Printf("Component Health:\n")
-		fmt.Printf("-----------------\n")
-
-		for component, status := range checks {
-			statusMap := status.(map[string]interface{})
-			statusStr := statusMap["status"].(string)
-			statusIcon := "OK"
-			if statusStr != "healthy" {
-				statusIcon = "[X]"
-			}
-
-			fmt.Printf("%-15s %s %s", component+":", statusIcon, statusStr)
-
-			if *detailed {
-				if message, ok := statusMap["message"].(string); ok && message != "" {
-					fmt.Printf(" - %s", message)
-				}
-			}
-			fmt.Println()
-		}
-	}
-
-	return nil
-}
-
-// handleUpdateUserCommand updates user properties (admin, approved, storage)
-func handleUpdateUserCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("update-user", flag.ExitOnError)
-	usernameFlag := fs.String("username", "", "Username to update (required)")
-	isApproved := fs.String("is-approved", "", "Set approved status (true/false)")
-	isAdmin := fs.String("is-admin", "", "Set admin status (true/false)")
-	storageLimit := fs.String("storage-limit", "", "Set storage limit (e.g. 5GB, 500MB)")
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin update-user --username USER [FLAGS]
-
-Update user properties. At least one property flag must be provided.
-
-FLAGS:
-    --username USER         Username to update (required)
-    --is-approved BOOL      Set approved status (true/false)
-    --is-admin BOOL         Set admin status (true/false)
-    --storage-limit LIMIT   Set storage limit (e.g. 5GB, 500MB)
-    --help                  Show this help message
-
-EXAMPLES:
-    arkfile-admin update-user --username alice12345 --is-admin true
-    arkfile-admin update-user --username alice12345 --is-approved false
-    arkfile-admin update-user --username alice12345 --storage-limit 10GB
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *usernameFlag == "" {
-		return fmt.Errorf("--username is required")
-	}
-
-	if *isApproved == "" && *isAdmin == "" && *storageLimit == "" {
-		return fmt.Errorf("at least one of --is-approved, --is-admin, or --storage-limit is required")
-	}
-
-	session, err := loadAdminSession(config.TokenFile)
-	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
-	}
-
-	payload := make(map[string]interface{})
-	if *isApproved != "" {
-		b := strings.ToLower(*isApproved) == "true"
-		payload["is_approved"] = b
-	}
-	if *isAdmin != "" {
-		b := strings.ToLower(*isAdmin) == "true"
-		payload["is_admin"] = b
-	}
-	if *storageLimit != "" {
-		limitBytes, err := parseStorageLimit(*storageLimit)
-		if err != nil {
-			return fmt.Errorf("invalid storage limit: %w", err)
-		}
-		payload["storage_limit_bytes"] = limitBytes
-	}
-
-	_, err = client.makeRequest("PUT", "/api/admin/users/"+*usernameFlag, payload, session.AccessToken)
-	if err != nil {
-		return fmt.Errorf("update user failed: %w", err)
-	}
-
-	fmt.Printf("User %s updated successfully\n", *usernameFlag)
-	return nil
-}
-
-// handleDeleteUserCommand deletes a user and all associated data
-func handleDeleteUserCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("delete-user", flag.ExitOnError)
-	usernameFlag := fs.String("username", "", "Username to delete (required)")
-	confirm := fs.Bool("confirm", false, "Confirm deletion without interactive prompt (required)")
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin delete-user --username USER --confirm
-
-Permanently delete a user and all associated data (files, shares, metadata).
-This operation is IRREVERSIBLE.
-
-FLAGS:
-    --username USER     Username to delete (required)
-    --confirm           Required flag to confirm this destructive operation
-    --help              Show this help message
-
-EXAMPLES:
-    arkfile-admin delete-user --username alice12345 --confirm
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *usernameFlag == "" {
-		return fmt.Errorf("--username is required")
-	}
-	if !*confirm {
-		return fmt.Errorf("--confirm flag is required for this destructive operation")
-	}
-
-	session, err := loadAdminSession(config.TokenFile)
-	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
-	}
-
-	_, err = client.makeRequest("DELETE", "/api/admin/users/"+*usernameFlag, nil, session.AccessToken)
-	if err != nil {
-		return fmt.Errorf("delete user failed: %w", err)
-	}
-
-	fmt.Printf("User %s deleted successfully (all files, shares, and metadata removed)\n", *usernameFlag)
-	return nil
-}
-
-// handleForceLogoutCommand forces a user logout by revoking all their tokens
-func handleForceLogoutCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("force-logout", flag.ExitOnError)
-	usernameFlag := fs.String("username", "", "Username to force-logout (required)")
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin force-logout --username USER
-
-Force-logout a user by revoking all their JWT and refresh tokens.
-Use for incident response when a session may be compromised.
-
-FLAGS:
-    --username USER     Username to force-logout (required)
-    --help              Show this help message
-
-EXAMPLES:
-    arkfile-admin force-logout --username alice12345
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *usernameFlag == "" {
-		return fmt.Errorf("--username is required")
-	}
-
-	session, err := loadAdminSession(config.TokenFile)
-	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
-	}
-
-	_, err = client.makeRequest("POST", "/api/admin/users/"+*usernameFlag+"/force-logout", nil, session.AccessToken)
-	if err != nil {
-		return fmt.Errorf("force logout failed: %w", err)
-	}
-
-	fmt.Printf("User %s has been force-logged out (all tokens revoked)\n", *usernameFlag)
-	return nil
-}
-
-// handleListFilesCommand lists files owned by a specific user
-func handleListFilesCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("list-files", flag.ExitOnError)
-	usernameFlag := fs.String("username", "", "Username to list files for (required)")
-	jsonOutput := fs.Bool("json", false, "Output as JSON")
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin list-files --username USER [--json]
-
-List all files owned by a specific user.
-
-FLAGS:
-    --username USER     Username to list files for (required)
-    --json              Output as JSON
-    --help              Show this help message
-
-EXAMPLES:
-    arkfile-admin list-files --username alice12345
-    arkfile-admin list-files --username alice12345 --json
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *usernameFlag == "" {
-		return fmt.Errorf("--username is required")
-	}
-
-	session, err := loadAdminSession(config.TokenFile)
-	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
-	}
-
-	resp, err := client.makeRequest("GET", "/api/admin/users/"+*usernameFlag+"/files", nil, session.AccessToken)
-	if err != nil {
-		return fmt.Errorf("failed to list files: %w", err)
-	}
-
-	if *jsonOutput {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp.Data)
-	}
-
-	count := safeFloat64(resp.Data, "count")
-	fmt.Printf("Files for user %s (%d total):\n\n", *usernameFlag, int(count))
-
-	filesRaw, ok := resp.Data["files"].([]interface{})
-	if !ok || len(filesRaw) == 0 {
-		fmt.Println("  (no files)")
-		return nil
-	}
-
-	sep := strings.Repeat("-", 80)
-	for i, f := range filesRaw {
-		fm := f.(map[string]interface{})
-		fileID := safeString(fm, "file_id")
-		storageID := safeString(fm, "storage_id")
-		sizeBytes := safeInt64(fm, "size_bytes")
-		chunkCount := safeInt64(fm, "chunk_count")
-		uploadDate := safeString(fm, "upload_date")
-		passwordType := safeString(fm, "password_type")
-
-		// Parse storage locations from API response
-		var locationStrs []string
-		if locsRaw, ok := fm["locations"].([]interface{}); ok {
-			for _, loc := range locsRaw {
-				if s, ok := loc.(string); ok && s != "" {
-					locationStrs = append(locationStrs, s)
-				}
-			}
-		}
-		locationsDisplay := "(none)"
-		if len(locationStrs) > 0 {
-			locationsDisplay = strings.Join(locationStrs, ", ")
-		}
-
-		fmt.Println(sep)
-		fmt.Printf("File %d of %d\n", i+1, len(filesRaw))
-		fmt.Printf("  File ID:      %s\n", fileID)
-		fmt.Printf("  Storage ID:   %s\n", storageID)
-		fmt.Printf("  Size:         %s\n", formatFileSize(sizeBytes))
-		fmt.Printf("  Chunks:       %d\n", chunkCount)
-		fmt.Printf("  Type:         %s\n", passwordType)
-		fmt.Printf("  Uploaded:     %s\n", uploadDate)
-		fmt.Printf("  Locations:    %s\n", locationsDisplay)
-	}
-
-	return nil
-}
-
-// handleListSharesCommand lists shares owned by a specific user
-func handleListSharesCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("list-shares", flag.ExitOnError)
-	usernameFlag := fs.String("username", "", "Username to list shares for (required)")
-	jsonOutput := fs.Bool("json", false, "Output as JSON")
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin list-shares --username USER [--json]
-
-List all shares owned by a specific user.
-
-FLAGS:
-    --username USER     Username to list shares for (required)
-    --json              Output as JSON
-    --help              Show this help message
-
-EXAMPLES:
-    arkfile-admin list-shares --username alice12345
-    arkfile-admin list-shares --username alice12345 --json
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *usernameFlag == "" {
-		return fmt.Errorf("--username is required")
-	}
-
-	session, err := loadAdminSession(config.TokenFile)
-	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
-	}
-
-	resp, err := client.makeRequest("GET", "/api/admin/users/"+*usernameFlag+"/shares", nil, session.AccessToken)
-	if err != nil {
-		return fmt.Errorf("failed to list shares: %w", err)
-	}
-
-	if *jsonOutput {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp.Data)
-	}
-
-	count := safeFloat64(resp.Data, "count")
-	fmt.Printf("Shares for user %s (%d total):\n\n", *usernameFlag, int(count))
-
-	sharesRaw, ok := resp.Data["shares"].([]interface{})
-	if !ok || len(sharesRaw) == 0 {
-		fmt.Println("  (no shares)")
-		return nil
-	}
-
-	sep := strings.Repeat("-", 80)
-	for i, s := range sharesRaw {
-		sm := s.(map[string]interface{})
-		shareID := safeString(sm, "share_id")
-		fileID := safeString(sm, "file_id")
-		accessCount := safeInt64(sm, "access_count")
-		isRevoked := safeBool(sm, "is_revoked")
-		createdAt := safeString(sm, "created_at")
-
-		revokedStr := "No"
-		if isRevoked {
-			revokedStr = "Yes"
-		}
-
-		fmt.Println(sep)
-		fmt.Printf("Share %d of %d\n", i+1, len(sharesRaw))
-		fmt.Printf("  Share ID:   %s\n", shareID)
-		fmt.Printf("  File ID:    %s\n", fileID)
-		fmt.Printf("  Accesses:   %d\n", accessCount)
-		fmt.Printf("  Revoked:    %s\n", revokedStr)
-		fmt.Printf("  Created:    %s\n", createdAt)
-	}
-
-	return nil
-}
-
-// handleDeleteFileCommand deletes a specific file by ID
-func handleDeleteFileCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("delete-file", flag.ExitOnError)
-	fileID := fs.String("file-id", "", "File ID to delete (required)")
-	confirm := fs.Bool("confirm", false, "Confirm deletion without interactive prompt (required)")
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin delete-file --file-id ID --confirm
-
-Delete a specific file from storage and database. This also removes associated shares.
-This operation is IRREVERSIBLE.
-
-FLAGS:
-    --file-id ID        File ID to delete (required)
-    --confirm           Required flag to confirm this destructive operation
-    --help              Show this help message
-
-EXAMPLES:
-    arkfile-admin delete-file --file-id abc-123-def --confirm
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *fileID == "" {
-		return fmt.Errorf("--file-id is required")
-	}
-	if !*confirm {
-		return fmt.Errorf("--confirm flag is required for this destructive operation")
-	}
-
-	session, err := loadAdminSession(config.TokenFile)
-	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
-	}
-
-	resp, err := client.makeRequest("DELETE", "/api/admin/files/"+*fileID, nil, session.AccessToken)
-	if err != nil {
-		return fmt.Errorf("delete file failed: %w", err)
-	}
-
-	owner := safeString(resp.Data, "owner")
-	fmt.Printf("File %s deleted successfully (owner: %s)\n", *fileID, owner)
-	return nil
-}
-
-// handleRevokeShareCommand revokes a specific share by ID
-func handleRevokeShareCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("revoke-share", flag.ExitOnError)
-	shareID := fs.String("share-id", "", "Share ID to revoke (required)")
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin revoke-share --share-id ID
-
-Revoke a specific share, making it inaccessible to anonymous recipients.
-
-FLAGS:
-    --share-id ID       Share ID to revoke (required)
-    --help              Show this help message
-
-EXAMPLES:
-    arkfile-admin revoke-share --share-id abc123def456
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *shareID == "" {
-		return fmt.Errorf("--share-id is required")
-	}
-
-	session, err := loadAdminSession(config.TokenFile)
-	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
-	}
-
-	resp, err := client.makeRequest("POST", "/api/admin/shares/"+*shareID+"/revoke", nil, session.AccessToken)
-	if err != nil {
-		return fmt.Errorf("revoke share failed: %w", err)
-	}
-
-	owner := safeString(resp.Data, "owner")
-	fmt.Printf("Share %s revoked successfully (owner: %s)\n", *shareID, owner)
-	return nil
-}
-
-// handleSecurityEventsCommand views recent security events
-func handleSecurityEventsCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("security-events", flag.ExitOnError)
-	jsonOutput := fs.Bool("json", false, "Output as JSON")
-	limit := fs.Int("limit", 50, "Number of events to display (max 500)")
-	filterType := fs.String("type", "", "Filter by event type (e.g. share_not_found, opaque_login_failure)")
-	filterSeverity := fs.String("severity", "", "Filter by severity (INFO, WARNING, CRITICAL)")
-	filterEntityID := fs.String("entity-id", "", "Filter by entity ID (16-char hex)")
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin security-events [FLAGS]
-
-View recent security events (login attempts, rate limits, share enumeration, admin actions, etc.)
-
-FLAGS:
-    --json              Output as JSON
-    --limit N           Number of events to display (default: 50, max: 500)
-    --type TYPE         Filter by event type
-    --severity LEVEL    Filter by severity (INFO, WARNING, CRITICAL)
-    --entity-id ID      Filter by entity ID (16-char hex, from HMAC)
-    --help              Show this help message
-
-EVENT TYPES:
-    opaque_login_success    Successful OPAQUE+TOTP login
-    opaque_login_failure    Failed OPAQUE authentication
-    share_not_found         Share ID 404 (potential enumeration)
-    share_enumeration       Share ID enumeration detected (progressive penalty applied)
-    invalid_download_token  Invalid download token on share chunk
-    rate_limit_violation    Rate limit triggered
-    suspicious_pattern      Unauthorized flood detected (10-19 bad requests in 10min window)
-    endpoint_abuse          Severe abuse: share enumeration (32+ unique 404s) or
-                            unauthorized flood (40+ bad requests in 10min window)
-    unauthorized_access     TOTP bypass attempt
-    admin_access            Admin API action
-    key_health_check        Key health monitoring event
-
-    Flood guard events (suspicious_pattern, endpoint_abuse) include
-    detection_type:"unauthorized_flood" in the details JSON field.
-
-EXAMPLES:
-    arkfile-admin security-events
-    arkfile-admin security-events --severity WARNING
-    arkfile-admin security-events --type share_not_found --limit 100
-    arkfile-admin security-events --entity-id a1b2c3d4e5f67890
-    arkfile-admin security-events --json --type opaque_login_failure
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	session, err := loadAdminSession(config.TokenFile)
-	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
-	}
-
-	// Build query parameters for filtering
-	endpoint := fmt.Sprintf("/api/admin/security/events?limit=%d", *limit)
-	if *filterType != "" {
-		endpoint += "&type=" + *filterType
-	}
-	if *filterSeverity != "" {
-		endpoint += "&severity=" + *filterSeverity
-	}
-	if *filterEntityID != "" {
-		endpoint += "&entity_id=" + *filterEntityID
-	}
-
-	resp, err := client.makeRequest("GET", endpoint, nil, session.AccessToken)
-	if err != nil {
-		return fmt.Errorf("failed to get security events: %w", err)
-	}
-
-	if *jsonOutput {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp.Data)
-	}
-
-	eventsRaw, ok := resp.Data["events"].([]interface{})
-	if !ok || len(eventsRaw) == 0 {
-		fmt.Println("No security events found")
-		return nil
-	}
-
-	count := len(eventsRaw)
-
-	// Show active filters
-	filters := []string{}
-	if *filterType != "" {
-		filters = append(filters, "type="+*filterType)
-	}
-	if *filterSeverity != "" {
-		filters = append(filters, "severity="+*filterSeverity)
-	}
-	if *filterEntityID != "" {
-		filters = append(filters, "entity="+*filterEntityID)
-	}
-
-	if len(filters) > 0 {
-		fmt.Printf("Security Events (%d results, filters: %s):\n\n", count, strings.Join(filters, ", "))
-	} else {
-		fmt.Printf("Security Events (%d results):\n\n", count)
-	}
-
-	for i := 0; i < count; i++ {
-		event, ok := eventsRaw[i].(map[string]interface{})
-		if !ok {
-			continue
-		}
-		eventType := safeString(event, "event_type")
-		severity := safeString(event, "severity")
-		timestamp := safeString(event, "timestamp")
-		entityID := safeString(event, "entity_id")
-		username := safeString(event, "username")
-
-		// Format timestamp (truncate to seconds)
-		if len(timestamp) > 19 {
-			timestamp = timestamp[:19]
-		}
-
-		// Severity indicator
-		severityTag := ""
-		switch severity {
-		case "CRITICAL":
-			severityTag = "[!!]"
-		case "WARNING":
-			severityTag = "[!] "
-		default:
-			severityTag = "    "
-		}
-
-		// Build event line
-		fmt.Printf("  %s [%s] %-28s", severityTag, timestamp, eventType)
-
-		if entityID != "" {
-			fmt.Printf("  entity:%s", entityID)
-		}
-		if username != "" {
-			fmt.Printf("  user:%s", username)
-		}
-
-		// Show details inline (compact)
-		if details, ok := event["details"].(map[string]interface{}); ok && len(details) > 0 {
-			detailParts := []string{}
-			for k, v := range details {
-				detailParts = append(detailParts, fmt.Sprintf("%s=%v", k, v))
-			}
-			if len(detailParts) > 0 {
-				fmt.Printf("  {%s}", strings.Join(detailParts, ", "))
-			}
-		}
-
-		fmt.Println()
-	}
-
-	return nil
-}
-
-// handleLogoutCommand processes admin logout command
-func handleLogoutCommand(config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("logout", flag.ExitOnError)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin logout
-
-Clear the saved admin session and logout.
-
-EXAMPLES:
-    arkfile-admin logout
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	// Remove admin session file
-	if err := os.Remove(config.TokenFile); err != nil {
-		if !os.IsNotExist(err) {
-			return fmt.Errorf("failed to remove admin session file: %w", err)
-		}
-	}
-
-	fmt.Printf("Admin logout successful\n")
-	return nil
-}
-
-// Helper functions
 
 func printVersion() {
 	fmt.Printf("arkfile-admin %s\n", config.Version)
@@ -2782,251 +469,4 @@ func logVerbose(format string, args ...interface{}) {
 
 func logError(format string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, "[ERROR] "+format+"\n", args...)
-}
-
-func getAdminSessionFilePath() string {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return ".arkfile-admin-session.json"
-	}
-	return filepath.Join(homeDir, ".arkfile-admin-session.json")
-}
-
-func saveAdminSession(session *AdminSession, filePath string) error {
-	data, err := json.MarshalIndent(session, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filePath, data, 0600)
-}
-
-func loadAdminSession(filePath string) (*AdminSession, error) {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, err
-	}
-
-	var session AdminSession
-	if err := json.Unmarshal(data, &session); err != nil {
-		return nil, err
-	}
-
-	return &session, nil
-}
-
-func loadConfigFile(config *AdminConfig, filePath string) error {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return err
-	}
-
-	return json.Unmarshal(data, config)
-}
-
-func formatFileSize(bytes int64) string {
-	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%d B", bytes)
-	}
-
-	div, exp := int64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-
-	units := []string{"KB", "MB", "GB", "TB"}
-	if exp >= len(units) {
-		return fmt.Sprintf("%d B", bytes)
-	}
-
-	return fmt.Sprintf("%.1f %s", float64(bytes)/float64(div), units[exp])
-}
-
-// boolYesNo returns "Yes" or "No" for a boolean value
-func boolYesNo(v bool) string {
-	if v {
-		return "Yes"
-	}
-	return "No"
-}
-
-func parseStorageLimit(limit string) (int64, error) {
-	limit = strings.ToUpper(strings.TrimSpace(limit))
-
-	// Extract numeric part and unit
-	var value float64
-	var unit string
-
-	if strings.HasSuffix(limit, "GB") {
-		unit = "GB"
-		if _, err := fmt.Sscanf(limit, "%fGB", &value); err != nil {
-			return 0, fmt.Errorf("invalid GB format: %s", limit)
-		}
-	} else if strings.HasSuffix(limit, "MB") {
-		unit = "MB"
-		if _, err := fmt.Sscanf(limit, "%fMB", &value); err != nil {
-			return 0, fmt.Errorf("invalid MB format: %s", limit)
-		}
-	} else if strings.HasSuffix(limit, "KB") {
-		unit = "KB"
-		if _, err := fmt.Sscanf(limit, "%fKB", &value); err != nil {
-			return 0, fmt.Errorf("invalid KB format: %s", limit)
-		}
-	} else if strings.HasSuffix(limit, "B") {
-		unit = "B"
-		if _, err := fmt.Sscanf(limit, "%fB", &value); err != nil {
-			return 0, fmt.Errorf("invalid B format: %s", limit)
-		}
-	} else {
-		return 0, fmt.Errorf("invalid storage limit format: %s (use GB, MB, KB, or B)", limit)
-	}
-
-	if value < 0 {
-		return 0, fmt.Errorf("storage limit cannot be negative")
-	}
-
-	// Convert to bytes
-	var bytes int64
-	switch unit {
-	case "GB":
-		bytes = int64(value * 1024 * 1024 * 1024)
-	case "MB":
-		bytes = int64(value * 1024 * 1024)
-	case "KB":
-		bytes = int64(value * 1024)
-	case "B":
-		bytes = int64(value)
-	}
-
-	return bytes, nil
-}
-
-// Safe accessor helpers for JSON map[string]interface{} values from API responses
-
-func safeBool(m map[string]interface{}, key string) bool {
-	v, ok := m[key]
-	if !ok || v == nil {
-		return false
-	}
-	if b, ok := v.(bool); ok {
-		return b
-	}
-	return false
-}
-
-func safeInt64(m map[string]interface{}, key string) int64 {
-	v, ok := m[key]
-	if !ok || v == nil {
-		return 0
-	}
-	if f, ok := v.(float64); ok {
-		return int64(f)
-	}
-	if i, ok := v.(int64); ok {
-		return i
-	}
-	return 0
-}
-
-func safeFloat64(m map[string]interface{}, key string) float64 {
-	v, ok := m[key]
-	if !ok || v == nil {
-		return 0
-	}
-	if f, ok := v.(float64); ok {
-		return f
-	}
-	return 0
-}
-
-func safeString(m map[string]interface{}, key string) string {
-	v, ok := m[key]
-	if !ok || v == nil {
-		return ""
-	}
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return fmt.Sprintf("%v", v)
-}
-
-func statusStr(m map[string]interface{}) string {
-	if safeBool(m, "is_approved") {
-		return "approved"
-	}
-	return "pending"
-}
-
-// validateAdminUsername validates username requirements locally before prompting for password.
-// Mirrors utils.ValidateUsername() logic without requiring the utils import (which the
-// auto-formatter strips due to naming conflicts with local variables).
-func validateAdminUsername(username string) error {
-	if username == "" {
-		return fmt.Errorf("username is required")
-	}
-	if len(username) < 10 {
-		return fmt.Errorf("invalid username: must be at least 10 characters (currently %d)\n\nUsername requirements: 10-50 characters, allowed: a-z 0-9 _ - . ,", len(username))
-	}
-	if len(username) > 50 {
-		return fmt.Errorf("invalid username: must be at most 50 characters\n\nUsername requirements: 10-50 characters, allowed: a-z 0-9 _ - . ,")
-	}
-	for _, r := range username {
-		if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.' || r == ',') {
-			return fmt.Errorf("invalid username: can only contain lowercase letters (a-z), digits (0-9), underscore (_), hyphen (-), period (.), comma (,)")
-		}
-	}
-	// Check for any consecutive special characters from the set [._-,]
-	symbols := "._-,"
-	for i := 0; i < len(username)-1; i++ {
-		charCurrent := username[i]
-		charNext := username[i+1]
-		if strings.ContainsRune(symbols, rune(charCurrent)) && strings.ContainsRune(symbols, rune(charNext)) {
-			return fmt.Errorf("username cannot contain consecutive special characters")
-		}
-	}
-	return nil
-}
-
-// readPassword reads a password from stdin. If stdin is a terminal, it will
-// read without echoing. If stdin is a pipe, it will read directly.
-func readPassword() (string, error) {
-	fi, err := os.Stdin.Stat()
-	if err != nil {
-		return "", fmt.Errorf("failed to stat stdin: %w", err)
-	}
-
-	// Check if stdin is a Character Device, which indicates a terminal
-	if (fi.Mode() & os.ModeCharDevice) != 0 {
-		// Terminal mode: read password without echoing
-		bytePassword, err := term.ReadPassword(int(syscall.Stdin))
-		if err != nil {
-			return "", err
-		}
-		// Add a newline because terminal reads don't echo the Enter key
-		fmt.Println()
-		return string(bytePassword), nil
-	}
-
-	// Not a terminal, so read from stdin (likely a pipe)
-	// Read byte-by-byte to avoid buffering more than the line (which would consume subsequent inputs like TOTP)
-	var passwordBytes []byte
-	buf := make([]byte, 1)
-	for {
-		n, err := os.Stdin.Read(buf)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return "", fmt.Errorf("failed to read password from stdin: %w", err)
-		}
-		if n > 0 {
-			if buf[0] == '\n' {
-				break
-			}
-			passwordBytes = append(passwordBytes, buf[0])
-		}
-	}
-	// Trim trailing carriage return if present
-	return strings.TrimRight(string(passwordBytes), "\r"), nil
 }

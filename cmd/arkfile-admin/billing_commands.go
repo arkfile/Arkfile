@@ -22,6 +22,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/arkfile/Arkfile/cli/flags"
 )
 
 // handleBillingCommand is the top-level dispatcher for `arkfile-admin billing ...`.
@@ -159,8 +161,9 @@ func showOneUser(client *HTTPClient, token, username string, jsonOut bool) error
 
 // handleBillingSetPriceCommand updates the customer price.
 func handleBillingSetPriceCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+	args, jsonFromTail := flags.PopBool(args, "--json")
 	fs := flag.NewFlagSet("billing set-price", flag.ExitOnError)
-	jsonOut := fs.Bool("json", false, "Emit JSON instead of formatted text")
+	jsonOut := fs.Bool("json", jsonFromTail, "Emit JSON instead of formatted text")
 	fs.Usage = func() {
 		fmt.Print(`Usage: arkfile-admin billing set-price USD-per-TB-per-month [--json]
 
@@ -413,19 +416,6 @@ FLAGS:
 		fmt.Printf("Sweep also completed.\n")
 	}
 	return nil
-}
-
-// requireBillingSession loads the admin session and verifies it's not expired.
-// Returns a friendly error otherwise. Used by every billing subcommand.
-func requireBillingSession(config *AdminConfig) (*AdminSession, error) {
-	session, err := loadAdminSession(config.TokenFile)
-	if err != nil {
-		return nil, fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return nil, fmt.Errorf("admin session expired, please login again")
-	}
-	return session, nil
 }
 
 // looksLikeDollarsAndCents is a friendly local pre-check. The server still

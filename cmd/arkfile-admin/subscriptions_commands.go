@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"strconv"
 )
 
 func handleSubscriptionsCommand(client *HTTPClient, config *AdminConfig, args []string) error {
@@ -257,7 +256,12 @@ func handleSubscriptionsReconcileCommand(client *HTTPClient, config *AdminConfig
 	if *jsonOut {
 		return printJSON(resp.Data)
 	}
-	fmt.Printf("Reconcile complete: %+v\n", resp.Data)
+	repaired := int(safeFloat64(resp.Data, "repaired_count"))
+	if repaired > 0 {
+		fmt.Printf("Reconcile complete: %d subscription record(s) repaired.\n", repaired)
+	} else {
+		fmt.Println("Reconcile complete: no repairs needed.")
+	}
 	return nil
 }
 
@@ -272,20 +276,4 @@ func formatBytes(n int64) string {
 		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
 	}
 	return fmt.Sprintf("%d B", n)
-}
-
-func safeInt64FromAny(v interface{}) int64 {
-	switch t := v.(type) {
-	case float64:
-		return int64(t)
-	case int64:
-		return t
-	case int:
-		return int64(t)
-	case string:
-		n, _ := strconv.ParseInt(t, 10, 64)
-		return n
-	default:
-		return 0
-	}
 }

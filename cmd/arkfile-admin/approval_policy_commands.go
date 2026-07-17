@@ -53,12 +53,9 @@ EXAMPLES:
 		return fmt.Errorf("--require-approval must be 'true' or 'false'")
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	payload := map[string]interface{}{"require_approval": enabled}
@@ -96,12 +93,9 @@ FLAGS:
 		return err
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	resp, err := client.makeRequest("GET", "/api/admin/system/approval-policy", nil, session.AccessToken)
@@ -165,12 +159,9 @@ FLAGS:
 		fmt.Fprintln(os.Stderr, "")
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	resp, err := client.makeRequest("POST", "/api/admin/dev-test/registration-throttle/reset", nil, session.AccessToken)

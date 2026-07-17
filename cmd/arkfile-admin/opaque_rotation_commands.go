@@ -66,12 +66,9 @@ func handleRotateOpaqueKeysRotate(client *HTTPClient, config *AdminConfig, args 
 		return fmt.Errorf("--confirm is required for this operation")
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	resp, err := client.makeRequest("POST", "/api/admin/system/rotate-opaque-keys", map[string]interface{}{"confirm": true}, session.AccessToken)
@@ -106,12 +103,9 @@ func handleRotateOpaqueKeysReplaceKeys(client *HTTPClient, config *AdminConfig, 
 		return fmt.Errorf("--confirm is required for this operation")
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	resp, err := client.makeRequest("POST", "/api/admin/system/replace-opaque-keys", map[string]interface{}{"confirm": true}, session.AccessToken)

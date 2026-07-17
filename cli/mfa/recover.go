@@ -1,7 +1,9 @@
 package mfa
 
 import (
+	"bufio"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -36,11 +38,19 @@ func PickResetMethod(nonInteractive bool, methodFlag Method) (Method, error) {
 	fmt.Println("  1) Authenticator app (TOTP)")
 	fmt.Println("  2) Security key (WebAuthn)")
 	fmt.Print("Enter 1 or 2: ")
-	method, err := PickMethod(false, "")
+	reader := bufio.NewReader(os.Stdin)
+	line, err := reader.ReadString('\n')
 	if err != nil {
 		return "", err
 	}
-	return method, nil
+	switch strings.TrimSpace(line) {
+	case "1":
+		return MethodTOTP, nil
+	case "2":
+		return MethodWebAuthn, nil
+	default:
+		return "", fmt.Errorf("invalid method selection")
+	}
 }
 
 // RunRecover performs path-B recovery: backup code → reset token → factor reset.
@@ -103,7 +113,8 @@ func RunRecover(cfg RecoverConfig) (*RecoverResult, error) {
 	return result, nil
 }
 
-// PrintRecoverResult emits human-readable recovery output.
+// PrintRecoverResult emits human-readable recovery output. TOTP enrollment
+// instructions always include the secret; showSecret adds machine-readable lines.
 func PrintRecoverResult(result *RecoverResult, showSecret bool) {
 	if result == nil {
 		return

@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"strings"
+
+	"github.com/arkfile/Arkfile/cli/flags"
 )
 
 // handlePaymentsCommand is the top-level dispatcher for `arkfile-admin payments ...`.
@@ -56,8 +58,9 @@ EXAMPLES:
 }
 
 func handlePaymentsShowCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+	args, jsonFromTail := flags.PopBool(args, "--json")
 	fs := flag.NewFlagSet("payments show", flag.ExitOnError)
-	jsonOut := fs.Bool("json", false, "Emit JSON instead of formatted text")
+	jsonOut := fs.Bool("json", jsonFromTail, "Emit JSON instead of formatted text")
 	fs.Usage = func() {
 		fmt.Print(`Usage: arkfile-admin payments show <invoice_id> [--json]
 
@@ -169,8 +172,9 @@ List payment invoices recorded in the system.
 }
 
 func handlePaymentsSyncInvoiceCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+	args, jsonFromTail := flags.PopBool(args, "--json")
 	fs := flag.NewFlagSet("payments sync-invoice", flag.ExitOnError)
-	jsonOut := fs.Bool("json", false, "Emit JSON instead of formatted text")
+	jsonOut := fs.Bool("json", jsonFromTail, "Emit JSON instead of formatted text")
 	fs.Usage = func() {
 		fmt.Print(`Usage: arkfile-admin payments sync-invoice <invoice_id> [--json]
 
@@ -207,15 +211,10 @@ Query BTCPay Server to synchronize the state of a pending invoice.
 		msg = "Synchronized successfully"
 	}
 
-	invoice, _ := resp.Data["data"].(map[string]interface{})
-	if invoice == nil {
-		invoice = resp.Data
-	}
-
 	fmt.Printf("%s\n", msg)
 	fmt.Printf("Current Local Invoice State:\n")
-	fmt.Printf("  Invoice ID: %s\n", safeString(invoice, "invoice_id"))
-	fmt.Printf("  Status:     %s\n", safeString(invoice, "status"))
+	fmt.Printf("  Invoice ID: %s\n", safeString(resp.Data, "invoice_id"))
+	fmt.Printf("  Status:     %s\n", safeString(resp.Data, "status"))
 	return nil
 }
 

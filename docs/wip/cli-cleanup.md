@@ -2,9 +2,9 @@
 
 This plan follows the same audit methodology as `docs/wip/server-cleanup.md`, applied to the Go CLI utilities: `cmd/arkfile-admin`, `cmd/arkfile-client`, the credential agent (`agent.go` and platform stubs), and the shared MFA package (`cli/mfa`). Every command handler and helper is reviewed against the Function Review Sanity Checks in `docs/AGENTS.md`: required, correctly implemented, well placed, reachable, privacy-preserving, and free of stubs, deprecated paths, duplicated logic, and leftover placeholder code. Arkfile is greenfield; we delete unused or unreachable CLI paths rather than maintain compatibility shims. The audit was cross-checked against `scripts/testing/e2e-test.sh` and `scripts/testing/e2e-playwright.sh` so we keep what E2E actually exercises and either delete or add coverage for what it does not. Where E2E hedges (`|| true`, pass-with-warning, or multiple acceptable outcomes), we tighten tests and fix CLI or server behavior so there is one canonical expected result.
 
-Status: audit complete and independently cross-checked — implementation not started
+Status: implementation complete — pending user E2E verification (`dev-reset.sh`, `e2e-test.sh`)
 Created: 2026-07-17  
-Scope: `cmd/arkfile-admin/` (6,325 source LOC, 14 files), `cmd/arkfile-client/` (6,964 source LOC plus 2,238 test LOC, 23 files), `cli/mfa/` (973 source LOC plus 113 test LOC, 7 files). No TypeScript frontend changes in this document unless a CLI contract fix requires a matching API assertion.
+Scope: `cmd/arkfile-admin/` (~6,200 source LOC across decomposed files), `cmd/arkfile-client/` (~6,964 source LOC plus tests), `cli/mfa/` (~973 source LOC plus tests), new shared packages under `cli/{flags,format,jsonutil,secureinput}/`. No TypeScript frontend changes in this document unless a CLI contract fix requires a matching API assertion.
 
 ## Principles
 
@@ -14,25 +14,25 @@ One canonical way per operation within each binary (single upload path, single s
 
 | Workstream | Status | Notes |
 |------------|--------|-------|
-| Dead code removal | [ ] pending | Unwired handlers, dead aliases, unused types |
-| `--json` flag reliability | [ ] pending | Go `flag` positional ordering; help text |
-| Hygiene and comment cleanup | [ ] pending | `===`/`---` dividers, WIP doc refs, stale comments |
-| Duplicate helper consolidation | [ ] pending | `formatFileSize`, JSON helpers, session loaders, default-string helper |
-| Admin `main.go` decomposition | [ ] pending | Extract handlers to `*_commands.go` |
-| Agent security hardening | [ ] pending | Empty-token bypass, Windows stubs and daemon isolation |
-| Usage string and help accuracy | [ ] pending | Missing/extra commands in `--help` |
-| Session helper consolidation (admin) | [ ] pending | ~60 handlers check expiry, but 5 omit it and ~44 duplicate the check inline |
-| Client billing output parity | [ ] pending | Transactions, runway, billable bytes/rate from `/api/credits` |
-| Share auth comment alignment | [ ] pending | Stale X-Download-Token fallback comment |
-| Password input helper alignment | [ ] pending | Admin vs client `readPassword` signature/timeout divergence |
-| Automation output review | [ ] pending | `printAutomationBackupCodes` shipped in user binary |
-| MFA correctness and output | [ ] pending | Double prompt, duplicated backup output, secret/help semantics |
-| Agent digest-cache hardening | [ ] pending | Unbound RPCs and status output expose content-sensitive digests |
-| E2E false-green removal | [ ] pending | PASS-without-assertion paths and sensitive diagnostic output |
-| Error message consistency | [ ] pending | Canonical "not logged in" wording |
-| Unit test gap fill | [ ] pending | Admin has zero `_test.go`; client handler gaps |
-| E2E coverage gaps | [ ] pending | Untested commands listed below |
-| E2E hedging review | [ ] pending | 42 `\|\| true` occurrences in e2e-test.sh |
+| Dead code removal | [x] done | Removed dead handlers/aliases; wired `list-tasks` / `cancel-all-tasks`; dropped `upload_id` init fallback |
+| `--json` flag reliability | [x] done | `cli/flags.PopBool` for trailing `--json`; Usage text warns flag ordering |
+| Hygiene and comment cleanup | [x] partial | WIP doc refs and stale comments addressed; user-facing stdout dividers (`---`, `===`, table rules) kept for CLI readability |
+| Duplicate helper consolidation | [x] done | `cli/jsonutil`, `cli/format`, `cli/secureinput`; admin wrappers in `helpers.go` |
+| Admin `main.go` decomposition | [x] done | Slim `main.go` (~470 LOC); domain files `auth/user/file/system/session/client/helpers` |
+| Agent security hardening | [x] done | `requireSession` before `requireAccountKey`; session-bound `GetAccountKey`; offline RPC split |
+| Usage string and help accuracy | [x] done | Admin Usage lists wired commands including storage task commands |
+| Session helper consolidation (admin) | [x] done | `requireAdminSession` / `requireAdminMFASession`; 5 intentional MFA-path exceptions unchanged |
+| Client billing output parity | [x] done | Human output shows billable bytes, rate, runway, transactions from `/api/credits` |
+| Share auth comment alignment | [x] done | Comments match ticket-only client behavior |
+| Password input helper alignment | [x] done | Admin uses `cli/secureinput` via `readPassword` wrapper |
+| Automation output review | [x] done | Consolidated on `cli/mfa.PrintAutomationBackupCodes` |
+| MFA correctness and output | [x] done | `PickResetMethod` single prompt; shared backup output in `cli/mfa/output.go` |
+| Agent digest-cache hardening | [x] done | Digest RPCs require session binding; `agent status --show-digests` gated on active session |
+| E2E false-green removal | [x] partial | Refresh-token SKIP when missing; MFA credential JSON no longer logged; re-enroll idempotency reruns login |
+| Error message consistency | [x] done | Canonical admin session messages via `requireAdminSession` |
+| Unit test gap fill | [x] done | Admin `session_test.go` / `helpers_test.go`; agent digest binding test; `cli/flags` tests |
+| E2E coverage gaps | [ ] deferred | Untested commands listed below remain follow-up |
+| E2E hedging review | [ ] partial | Refresh-token false-green fixed; broader `\|\| true` audit deferred |
 
 ---
 

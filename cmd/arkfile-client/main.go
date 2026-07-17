@@ -18,15 +18,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/arkfile/Arkfile/auth"
 	"github.com/arkfile/Arkfile/cli/mfa"
+	"github.com/arkfile/Arkfile/cli/secureinput"
 	"github.com/arkfile/Arkfile/config"
 	"github.com/arkfile/Arkfile/crypto"
 	"github.com/arkfile/Arkfile/utils"
-	"golang.org/x/term"
 )
 
 // Password entry timeouts and limits
@@ -52,7 +51,8 @@ COMMANDS:
     download          Download and decrypt a file (streaming, per-chunk AES-GCM)
     list-files        List files with auto-decrypted filenames
     delete-file       Permanently delete a file from the server
-    share             Manage file shares (create, list, delete, revoke)
+    share             Manage file shares (create, list, revoke, download)
+    revoke-all        Revoke all sessions and refresh tokens
     share download    Download a shared file (no auth required)
     export            Export an encrypted file as a .arkbackup bundle
     decrypt-blob      Decrypt a .arkbackup bundle offline (no network required)
@@ -565,16 +565,15 @@ func requireSession(config *ClientConfig) (*AuthSession, error) {
 
 // requireAccountKey gets the account key from the agent with session binding validation.
 // Returns a clear error if agent is not running, key is not set, or session has expired/mismatched.
-func requireAccountKey() ([]byte, error) {
+func requireAccountKey(config *ClientConfig) ([]byte, error) {
+	session, err := requireSession(config)
+	if err != nil {
+		return nil, err
+	}
+
 	agentClient, err := NewAgentClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to agent: %w", err)
-	}
-
-	// Load current session to get access token for session binding
-	session, err := loadAuthSession(getSessionFilePath())
-	if err != nil {
-		return nil, fmt.Errorf("not logged in. Please run: arkfile-client login --username <user>")
 	}
 
 	accountKey, err := agentClient.GetAccountKey(session.AccessToken)
@@ -783,26 +782,6 @@ func handleSetupMFACommand(client *HTTPClient, config *ClientConfig, args []stri
 	return nil
 }
 
-func handleSetupTOTPCommand(client *HTTPClient, config *ClientConfig, args []string) error {
-	return handleSetupMFACommand(client, config, args)
-}
-
-// printAutomationBackupCodes emits machine-readable backup code lines for e2e/scripts.
-func printAutomationBackupCodes(backupCodes []interface{}) {
-	for i, c := range backupCodes {
-		codeStr, ok := c.(string)
-		if !ok {
-			continue
-		}
-		switch i {
-		case 0:
-			fmt.Printf("BACKUP_CODE_0:%s\n", codeStr)
-		case 1:
-			fmt.Printf("BACKUP_CODE_1:%s\n", codeStr)
-		}
-	}
-}
-
 func verifyTOTP(client *HTTPClient, config *ClientConfig, session *AuthSession, token, code string) error {
 	verifyResp, err := client.makeRequest("POST", "/api/mfa/verify", map[string]string{"code": code}, token)
 	if err != nil {
@@ -822,7 +801,13 @@ func verifyTOTP(client *HTTPClient, config *ClientConfig, session *AuthSession, 
 
 	mfa.PrintSetupComplete()
 	if backupCodes, ok := verifyResp.Data["backup_codes"].([]interface{}); ok {
-		printAutomationBackupCodes(backupCodes)
+		codes := make([]string, 0, len(backupCodes))
+		for _, c := range backupCodes {
+			if codeStr, ok := c.(string); ok {
+				codes = append(codes, codeStr)
+			}
+		}
+		mfa.PrintAutomationBackupCodes(codes)
 	}
 
 	return nil
@@ -1115,7 +1100,7 @@ func populateDigestCache(client *HTTPClient, session *AuthSession, accountKey []
 		cache[f.FileID] = sha256hex
 	}
 
-	if err := agentClient.StoreDigestCache(cache); err != nil {
+	if err := agentClient.StoreDigestCache(cache, session.AccessToken); err != nil {
 		return fmt.Errorf("failed to store digest cache: %w", err)
 	}
 
@@ -1158,7 +1143,7 @@ func handleAgentCommand(args []string) error {
 	case "stop":
 		return handleAgentStop()
 	case "status":
-		return handleAgentStatus()
+		return handleAgentStatus(args[1:])
 	default:
 		return fmt.Errorf("unknown subcommand: %s", args[0])
 	}
@@ -1215,7 +1200,13 @@ func handleAgentStop() error {
 	return nil
 }
 
-func handleAgentStatus() error {
+func handleAgentStatus(args []string) error {
+	fs := flag.NewFlagSet("agent status", flag.ExitOnError)
+	showDigests := fs.Bool("show-digests", false, "Show digest cache file IDs and SHA-256 digests (diagnostic)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
 	client, err := NewAgentClient()
 	if err != nil {
 		return fmt.Errorf("failed to create agent client: %w", err)
@@ -1308,15 +1299,22 @@ func handleAgentStatus() error {
 		fmt.Printf("  Access Count:   %.0f\n", v)
 	}
 
-	// Fetch and display digest cache
-	digestCache, err := client.GetDigestCache()
-	if err != nil {
-		fmt.Printf("\nDigest Cache: (error: %v)\n", err)
-	} else {
-		fmt.Printf("\nDigest Cache (%d entries)\n", len(digestCache))
-		for fileID, sha256hex := range digestCache {
-			fmt.Printf("  %s -> %s\n", fileID, sha256hex)
+	if *showDigests {
+		session, err := requireSession(&ClientConfig{TokenFile: getSessionFilePath()})
+		if err != nil {
+			return fmt.Errorf("--show-digests requires an active session: %w", err)
 		}
+		digestCache, err := client.GetDigestCache(session.AccessToken)
+		if err != nil {
+			fmt.Printf("\nDigest Cache: (error: %v)\n", err)
+		} else {
+			fmt.Printf("\nDigest Cache (%d entries)\n", len(digestCache))
+			for fileID, sha256hex := range digestCache {
+				fmt.Printf("  %s -> %s\n", fileID, sha256hex)
+			}
+		}
+	} else if count, ok := status["digest_cache_entries"].(float64); ok {
+		fmt.Printf("\nDigest Cache (%d entries)\n", int(count))
 	}
 
 	return nil
@@ -1417,10 +1415,7 @@ var errAccountDisabled = errors.New("account is not approved or has been disable
 var errFileIDConflictExhausted = errors.New("file_id conflict retry budget exhausted (3 attempts)")
 
 // isFatalUploadError returns true for errors that should abort an entire
-// batch rather than be recorded against a single file. Mirrors the TS
-// classifier in client/static/js/src/files/upload.ts. This is the seed
-// of the standing pattern described in docs/wip/general-enhancements.md
-// item 11.
+// batch rather than be recorded against a single file.
 func isFatalUploadError(err error) bool {
 	if err == nil {
 		return false
@@ -1655,76 +1650,8 @@ func decodeBase64(s string) ([]byte, error) {
 }
 
 // readPassword reads a password securely from terminal (no echo) or stdin.
-// Includes a timeout to prevent indefinite hangs when stdin is a pipe that
-// gets exhausted, or when a user walks away from an interactive prompt.
 func readPassword(prompt string) ([]byte, error) {
-	fi, err := os.Stdin.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("failed to stat stdin: %w", err)
-	}
-
-	if (fi.Mode() & os.ModeCharDevice) != 0 {
-		// Interactive terminal mode with timeout
-		if prompt != "" {
-			fmt.Print(prompt)
-		}
-		type readResult struct {
-			data []byte
-			err  error
-		}
-		ch := make(chan readResult, 1)
-		go func() {
-			bytePassword, err := term.ReadPassword(int(syscall.Stdin))
-			ch <- readResult{bytePassword, err}
-		}()
-		select {
-		case result := <-ch:
-			if result.err != nil {
-				fmt.Println()
-				return nil, result.err
-			}
-			fmt.Println()
-			return result.data, nil
-		case <-time.After(PasswordTimeoutInteractive):
-			fmt.Println("\nPassword entry timed out")
-			return nil, fmt.Errorf("password entry timed out after %v", PasswordTimeoutInteractive)
-		}
-	}
-
-	// Not a terminal (pipe mode) with timeout
-	type readResult struct {
-		data []byte
-		err  error
-	}
-	ch := make(chan readResult, 1)
-	go func() {
-		var passwordBytes []byte
-		buf := make([]byte, 1)
-		for {
-			n, err := os.Stdin.Read(buf)
-			if err != nil {
-				if err == io.EOF {
-					ch <- readResult{bytes.TrimRight(passwordBytes, "\r"), nil}
-					return
-				}
-				ch <- readResult{nil, fmt.Errorf("failed to read password: %w", err)}
-				return
-			}
-			if n > 0 {
-				if buf[0] == '\n' {
-					break
-				}
-				passwordBytes = append(passwordBytes, buf[0])
-			}
-		}
-		ch <- readResult{bytes.TrimRight(passwordBytes, "\r"), nil}
-	}()
-	select {
-	case result := <-ch:
-		return result.data, result.err
-	case <-time.After(PasswordTimeoutPipe):
-		return nil, fmt.Errorf("password entry timed out after %v (pipe mode)", PasswordTimeoutPipe)
-	}
+	return secureinput.ReadPassword(prompt, PasswordTimeoutInteractive, PasswordTimeoutPipe)
 }
 
 // readPasswordWithStrengthCheck prompts for password, validates strength, loops until valid.

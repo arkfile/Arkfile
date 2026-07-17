@@ -206,6 +206,32 @@ func (a *Agent) wipeAllSensitiveDataLocked() {
 	a.digestCache = nil
 }
 
+// validateBoundSession verifies token_hash against the cached account key entry.
+// Caller must hold a.mu. Sends an error response and returns false on failure.
+func (a *Agent) validateBoundSession(conn net.Conn, params map[string]interface{}) bool {
+	if a.keyEntry == nil {
+		a.sendError(conn, "account key not set")
+		return false
+	}
+	if time.Now().After(a.keyEntry.expiresAt) {
+		ttl := a.keyEntry.ttlHours
+		a.wipeAllSensitiveDataLocked()
+		a.sendError(conn, fmt.Sprintf("account key expired (after %d hours). Please login again", ttl))
+		return false
+	}
+	tokenHash, _ := params["token_hash"].(string)
+	if tokenHash == "" {
+		a.sendError(conn, "token_hash parameter required")
+		return false
+	}
+	if tokenHash != a.keyEntry.tokenHash {
+		a.wipeAllSensitiveDataLocked()
+		a.sendError(conn, "session mismatch: all sensitive data wiped for security. Please login again")
+		return false
+	}
+	return true
+}
+
 // Stop stops the agent daemon
 func (a *Agent) Stop() error {
 	a.running = false
@@ -277,10 +303,12 @@ func (a *Agent) handleConnection(conn net.Conn) {
 		a.handleStoreAccountKey(conn, req.Params)
 	case "get_account_key":
 		a.handleGetAccountKey(conn, req.Params)
+	case "get_offline_account_key":
+		a.handleGetOfflineAccountKey(conn)
 	case "store_digest_cache":
 		a.handleStoreDigestCache(conn, req.Params)
 	case "get_digest_cache":
-		a.handleGetDigestCache(conn)
+		a.handleGetDigestCache(conn, req.Params)
 	case "add_digest":
 		a.handleAddDigest(conn, req.Params)
 	case "remove_digest":
@@ -428,28 +456,47 @@ func (a *Agent) handleGetAccountKey(conn net.Conn, params map[string]interface{}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	if !a.validateBoundSession(conn, params) {
+		return
+	}
+
+	result := map[string]interface{}{
+		"account_key": base64.StdEncoding.EncodeToString(a.keyEntry.key),
+		"username":    a.keyEntry.username,
+		"context":     a.keyEntry.context,
+		"stored_at":   a.keyEntry.storedAt.Format(time.RFC3339),
+		"expires_at":  a.keyEntry.expiresAt.Format(time.RFC3339),
+		"ttl_hours":   a.keyEntry.ttlHours,
+	}
+
+	a.sendSuccess(conn, result)
+}
+
+// handleGetOfflineAccountKey returns the account key without session binding.
+// Intended for offline decrypt-blob when no active login session exists.
+func (a *Agent) handleGetOfflineAccountKey(conn net.Conn) {
+	count := a.accessCount.Add(1)
+	resetTime := time.Unix(a.accessCountReset.Load(), 0)
+	elapsed := time.Since(resetTime)
+	if elapsed >= time.Minute {
+		a.accessCount.Store(1)
+		a.accessCountReset.Store(time.Now().Unix())
+	} else if count > accessRateWarnThreshold {
+		logVerbose("Warning: unusual account key access rate (%d accesses in %v)", count, elapsed.Round(time.Second))
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	if a.keyEntry == nil {
 		a.sendError(conn, "account key not set")
 		return
 	}
-
-	// Check expiration
 	if time.Now().After(a.keyEntry.expiresAt) {
 		ttl := a.keyEntry.ttlHours
 		a.wipeAllSensitiveDataLocked()
 		a.sendError(conn, fmt.Sprintf("account key expired (after %d hours). Please login again", ttl))
 		return
-	}
-
-	// Session binding: validate token hash matches
-	if params != nil {
-		if tokenHash, ok := params["token_hash"].(string); ok && tokenHash != "" {
-			if tokenHash != a.keyEntry.tokenHash {
-				a.wipeAllSensitiveDataLocked()
-				a.sendError(conn, "session mismatch: all sensitive data wiped for security. Please login again")
-				return
-			}
-		}
 	}
 
 	result := map[string]interface{}{
@@ -504,6 +551,13 @@ func (a *Agent) handleStatus(conn net.Conn) {
 
 // handleStoreDigestCache bulk-stores the digest cache (used after login)
 func (a *Agent) handleStoreDigestCache(conn net.Conn, params map[string]interface{}) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if !a.validateBoundSession(conn, params) {
+		return
+	}
+
 	cacheRaw, ok := params["digest_cache"].(map[string]interface{})
 	if !ok {
 		a.sendError(conn, "digest_cache parameter required (map of fileID -> sha256hex)")
@@ -523,11 +577,14 @@ func (a *Agent) handleStoreDigestCache(conn net.Conn, params map[string]interfac
 }
 
 // handleGetDigestCache retrieves the full digest cache
-func (a *Agent) handleGetDigestCache(conn net.Conn) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
+func (a *Agent) handleGetDigestCache(conn net.Conn, params map[string]interface{}) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 
-	// Convert to interface map for JSON serialization
+	if !a.validateBoundSession(conn, params) {
+		return
+	}
+
 	cacheResult := make(map[string]interface{}, len(a.digestCache))
 	for k, v := range a.digestCache {
 		cacheResult[k] = v
@@ -540,6 +597,13 @@ func (a *Agent) handleGetDigestCache(conn net.Conn) {
 
 // handleAddDigest adds a single digest entry (used after successful upload)
 func (a *Agent) handleAddDigest(conn net.Conn, params map[string]interface{}) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if !a.validateBoundSession(conn, params) {
+		return
+	}
+
 	fileID, ok := params["file_id"].(string)
 	if !ok || fileID == "" {
 		a.sendError(conn, "file_id parameter required")
@@ -564,6 +628,13 @@ func (a *Agent) handleAddDigest(conn net.Conn, params map[string]interface{}) {
 
 // handleRemoveDigest removes a single digest entry (used after file deletion)
 func (a *Agent) handleRemoveDigest(conn net.Conn, params map[string]interface{}) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if !a.validateBoundSession(conn, params) {
+		return
+	}
+
 	fileID, ok := params["file_id"].(string)
 	if !ok || fileID == "" {
 		a.sendError(conn, "file_id parameter required")
@@ -721,12 +792,31 @@ func (c *AgentClient) StoreAccountKey(accountKey []byte, username string, access
 
 // GetAccountKey retrieves the account key from the agent with session binding validation.
 func (c *AgentClient) GetAccountKey(accessToken string) ([]byte, error) {
-	params := map[string]interface{}{}
-	if accessToken != "" {
-		params["token_hash"] = hashToken(accessToken)
+	if accessToken == "" {
+		return nil, fmt.Errorf("access token required for session-bound key retrieval")
+	}
+	resp, err := c.sendRequest("get_account_key", map[string]interface{}{
+		"token_hash": hashToken(accessToken),
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	resp, err := c.sendRequest("get_account_key", params)
+	if !resp.Success {
+		return nil, fmt.Errorf("get failed: %s", resp.Error)
+	}
+
+	accountKeyB64, ok := resp.Result["account_key"].(string)
+	if !ok {
+		return nil, fmt.Errorf("invalid response: missing account_key")
+	}
+
+	return base64.StdEncoding.DecodeString(accountKeyB64)
+}
+
+// GetOfflineAccountKey retrieves the account key without session binding (offline decrypt-blob).
+func (c *AgentClient) GetOfflineAccountKey() ([]byte, error) {
+	resp, err := c.sendRequest("get_offline_account_key", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -758,8 +848,7 @@ func (c *AgentClient) Status() (map[string]interface{}, error) {
 }
 
 // StoreDigestCache bulk-stores the digest cache in the agent (used after login)
-func (c *AgentClient) StoreDigestCache(cache map[string]string) error {
-	// Convert to interface map for JSON serialization
+func (c *AgentClient) StoreDigestCache(cache map[string]string, accessToken string) error {
 	cacheParam := make(map[string]interface{}, len(cache))
 	for k, v := range cache {
 		cacheParam[k] = v
@@ -767,6 +856,7 @@ func (c *AgentClient) StoreDigestCache(cache map[string]string) error {
 
 	resp, err := c.sendRequest("store_digest_cache", map[string]interface{}{
 		"digest_cache": cacheParam,
+		"token_hash":   hashToken(accessToken),
 	})
 	if err != nil {
 		return err
@@ -780,8 +870,10 @@ func (c *AgentClient) StoreDigestCache(cache map[string]string) error {
 }
 
 // GetDigestCache retrieves the full digest cache from the agent
-func (c *AgentClient) GetDigestCache() (map[string]string, error) {
-	resp, err := c.sendRequest("get_digest_cache", nil)
+func (c *AgentClient) GetDigestCache(accessToken string) (map[string]string, error) {
+	resp, err := c.sendRequest("get_digest_cache", map[string]interface{}{
+		"token_hash": hashToken(accessToken),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -806,10 +898,11 @@ func (c *AgentClient) GetDigestCache() (map[string]string, error) {
 }
 
 // AddDigest adds a single digest entry to the agent cache (used after successful upload)
-func (c *AgentClient) AddDigest(fileID, sha256hex string) error {
+func (c *AgentClient) AddDigest(fileID, sha256hex, accessToken string) error {
 	resp, err := c.sendRequest("add_digest", map[string]interface{}{
-		"file_id":   fileID,
-		"sha256hex": sha256hex,
+		"file_id":    fileID,
+		"sha256hex":  sha256hex,
+		"token_hash": hashToken(accessToken),
 	})
 	if err != nil {
 		return err
@@ -823,9 +916,10 @@ func (c *AgentClient) AddDigest(fileID, sha256hex string) error {
 }
 
 // RemoveDigest removes a single digest entry from the agent cache (used after file deletion)
-func (c *AgentClient) RemoveDigest(fileID string) error {
+func (c *AgentClient) RemoveDigest(fileID, accessToken string) error {
 	resp, err := c.sendRequest("remove_digest", map[string]interface{}{
-		"file_id": fileID,
+		"file_id":    fileID,
+		"token_hash": hashToken(accessToken),
 	})
 	if err != nil {
 		return err

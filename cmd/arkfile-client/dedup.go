@@ -21,8 +21,8 @@ type DedupResult struct {
 
 // checkDedup checks the plaintext SHA-256 against the agent's digest cache.
 // Returns a DedupResult indicating whether the file is a duplicate.
-func checkDedup(agentClient *AgentClient, plaintextHash string) (*DedupResult, error) {
-	cache, err := agentClient.GetDigestCache()
+func checkDedup(agentClient *AgentClient, accessToken, plaintextHash string) (*DedupResult, error) {
+	cache, err := agentClient.GetDigestCache(accessToken)
 	if err != nil {
 		// If we can't get the cache, proceed with upload (non-fatal)
 		logVerbose("Warning: failed to get digest cache: %v", err)
@@ -80,7 +80,7 @@ func verifyFileExistsOnServer(client *HTTPClient, session *AuthSession, fileID s
 // 4. If file exists, try to decrypt filename for display
 func performDedupCheck(agentClient *AgentClient, httpClient *HTTPClient, session *AuthSession, accountKey []byte, plaintextHash string) (*DedupResult, error) {
 	// Step 1: Check cache
-	result, err := checkDedup(agentClient, plaintextHash)
+	result, err := checkDedup(agentClient, session.AccessToken, plaintextHash)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +102,7 @@ func performDedupCheck(agentClient *AgentClient, httpClient *HTTPClient, session
 	if !exists {
 		// Step 3: Stale cache entry - remove and proceed with upload
 		logVerbose("File %s no longer exists on server, removing stale digest cache entry", result.FileID)
-		if err := agentClient.RemoveDigest(result.FileID); err != nil {
+		if err := agentClient.RemoveDigest(result.FileID, session.AccessToken); err != nil {
 			logVerbose("Warning: failed to remove stale digest: %v", err)
 		}
 		return &DedupResult{IsDuplicate: false, SHA256Hex: plaintextHash}, nil

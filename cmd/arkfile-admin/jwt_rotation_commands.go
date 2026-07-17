@@ -62,12 +62,9 @@ func handleRotateJWTKeysRotate(client *HTTPClient, config *AdminConfig, args []s
 		return fmt.Errorf("--confirm is required for this operation")
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	resp, err := client.makeRequest("POST", "/api/admin/system/rotate-jwt-keys", map[string]interface{}{}, session.AccessToken)
@@ -99,12 +96,9 @@ func handleRotateJWTKeysRetire(client *HTTPClient, config *AdminConfig, args []s
 		return fmt.Errorf("--confirm is required for this operation")
 	}
 
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
+		return err
 	}
 
 	payload := map[string]interface{}{"version": *version}

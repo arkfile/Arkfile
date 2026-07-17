@@ -1,6 +1,5 @@
 // offline_decrypt.go - Offline decryption of .arkbackup bundles
 // Decrypts a .arkbackup bundle using only local computation. No network required.
-// See docs/wip/arkbackup-export.md for the bundle format specification.
 
 package main
 
@@ -250,8 +249,7 @@ func obtainAccountKey(username, accountKeyFile string, useAgent, passwordStdin b
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to agent: %w", err)
 		}
-		// Pass empty token since decrypt-blob is offline and does not require session binding
-		key, err := agentClient.GetAccountKey("")
+		key, err := agentClient.GetOfflineAccountKey()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get account key from agent: %w", err)
 		}

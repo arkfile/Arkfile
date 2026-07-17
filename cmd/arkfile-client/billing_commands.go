@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"runtime"
 	"time"
+
+	"github.com/arkfile/Arkfile/cli/format"
 )
 
 func handleBillingCommand(client *HTTPClient, config *ClientConfig, args []string) error {
@@ -64,15 +66,77 @@ func handleBillingShowCommand(client *HTTPClient, config *ClientConfig, args []s
 		enc.SetIndent("", "  ")
 		return enc.Encode(resp.Data)
 	}
-	data := resp.Data
+	printClientBillingShow(resp.Data)
+	return nil
+}
+
+func printClientBillingShow(data map[string]interface{}) {
 	fmt.Printf("Balance: %s\n", stringField(data, "formatted_balance"))
 	fmt.Printf("Billing mode: %s\n", stringField(data, "billing_mode"))
+
 	if usage, ok := data["current_usage"].(map[string]interface{}); ok {
-		fmt.Printf("Storage: %s / %s effective cap\n",
-			formatClientBytes(numberField(usage, "total_storage_bytes")),
-			formatClientBytes(numberField(usage, "effective_storage_limit_bytes")))
+		fmt.Printf("\nCurrent storage and cost:\n")
+		fmt.Printf("  Storage used:  %s\n", format.ClientBillingBytes(numberField(usage, "total_storage_bytes")))
+		fmt.Printf("  Free baseline: %s\n", format.ClientBillingBytes(numberField(usage, "free_baseline_bytes")))
+		fmt.Printf("  Billable:      %s\n", format.ClientBillingBytes(numberField(usage, "billable_bytes")))
+		if limit := numberField(usage, "effective_storage_limit_bytes"); limit > 0 {
+			fmt.Printf("  Upload cap:    %s\n", format.ClientBillingBytes(limit))
+		}
+		if rh := stringField(usage, "rate_human"); rh != "" {
+			fmt.Printf("  Rate:          %s\n", rh)
+		}
+		if cost := stringField(usage, "current_cost_per_month_usd_approx"); cost != "" {
+			fmt.Printf("  Projected cost: %s/month\n", cost)
+		}
 	}
-	return nil
+
+	if cr, ok := data["credits_runway"].(map[string]interface{}); ok && cr != nil {
+		billable := int64(0)
+		if usage, ok := data["current_usage"].(map[string]interface{}); ok {
+			billable = numberField(usage, "billable_bytes")
+		}
+		if note := stringField(cr, "note"); note != "" && billable == 0 {
+			fmt.Printf("\n%s\n", note)
+		} else if hours := numberField(cr, "estimated_hours_remaining"); hours > 0 && billable > 0 {
+			fmt.Printf("\nEstimated runway: %d hours\n", hours)
+			if endsAt := stringField(cr, "estimated_runs_out_at_approx"); endsAt != "" {
+				fmt.Printf("  Estimated run-out: %s\n", endsAt)
+			}
+		} else if note := stringField(cr, "note"); note != "" {
+			fmt.Printf("\nEstimated runway: %s\n", note)
+		}
+	}
+
+	if txs, ok := data["transactions"].([]interface{}); ok && len(txs) > 0 {
+		limit := len(txs)
+		if limit > 10 {
+			limit = 10
+		}
+		fmt.Printf("\nRecent transactions (latest %d):\n", limit)
+		for i, t := range txs {
+			if i >= 10 {
+				break
+			}
+			tm, ok := t.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			amount := stringField(tm, "formatted_amount")
+			if amount == "" {
+				amount = fmt.Sprintf("%d microcents", numberField(tm, "amount_usd_microcents"))
+			}
+			balAfter := stringField(tm, "formatted_balance_after")
+			if balAfter == "" {
+				balAfter = fmt.Sprintf("%d", numberField(tm, "balance_after_usd_microcents"))
+			}
+			fmt.Printf("  %s  %-10s  %12s  -> %12s  %s\n",
+				stringField(tm, "created_at"),
+				stringField(tm, "transaction_type"),
+				amount,
+				balAfter,
+				stringField(tm, "reason"))
+		}
+	}
 }
 
 func handleBillingTopUpCommand(client *HTTPClient, config *ClientConfig, args []string) error {
@@ -184,10 +248,7 @@ func numberField(m map[string]interface{}, key string) int64 {
 }
 
 func formatClientBytes(n int64) string {
-	if n >= 1<<30 {
-		return fmt.Sprintf("%.1f GB", float64(n)/(1<<30))
-	}
-	return fmt.Sprintf("%d B", n)
+	return format.ClientBillingBytes(n)
 }
 
 func openBrowserURL(url string) {

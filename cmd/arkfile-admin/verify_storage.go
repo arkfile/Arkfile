@@ -45,9 +45,9 @@ EXAMPLES:
 	}
 
 	// Load admin session
-	session, err := loadAdminSession(config.TokenFile)
+	session, err := requireAdminSession(config)
 	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login' first): %w", err)
+		return err
 	}
 
 	if *providerID != "" {
