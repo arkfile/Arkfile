@@ -564,14 +564,12 @@ func (a *Agent) handleStoreDigestCache(conn net.Conn, params map[string]interfac
 		return
 	}
 
-	a.mu.Lock()
 	a.digestCache = make(map[string]string, len(cacheRaw))
 	for fileID, hashVal := range cacheRaw {
 		if hashStr, ok := hashVal.(string); ok {
 			a.digestCache[fileID] = hashStr
 		}
 	}
-	a.mu.Unlock()
 
 	a.sendSuccess(conn, nil)
 }
@@ -616,12 +614,10 @@ func (a *Agent) handleAddDigest(conn net.Conn, params map[string]interface{}) {
 		return
 	}
 
-	a.mu.Lock()
 	if a.digestCache == nil {
 		a.digestCache = make(map[string]string)
 	}
 	a.digestCache[fileID] = sha256hex
-	a.mu.Unlock()
 
 	a.sendSuccess(conn, nil)
 }
@@ -641,9 +637,7 @@ func (a *Agent) handleRemoveDigest(conn net.Conn, params map[string]interface{})
 		return
 	}
 
-	a.mu.Lock()
 	delete(a.digestCache, fileID)
-	a.mu.Unlock()
 
 	a.sendSuccess(conn, nil)
 }
