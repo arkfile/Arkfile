@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 )
 
 func handleResetUserMFACommand(client *HTTPClient, config *AdminConfig, args []string) error {

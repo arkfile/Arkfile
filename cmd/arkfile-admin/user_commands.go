@@ -1,17 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"strings"
 	"time"
-
-	"github.com/arkfile/Arkfile/cli/format"
-	"github.com/arkfile/Arkfile/cli/jsonutil"
 )
 
 // handleListUsersCommand lists all users with detailed information

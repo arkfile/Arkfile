@@ -15,13 +15,11 @@ package main
 // default; pass --json for machine-readable JSON.
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/arkfile/Arkfile/cli/flags"
 )
@@ -447,22 +445,6 @@ func looksLikeDollarsAndCents(s string) bool {
 		}
 	}
 	return true
-}
-
-// emptyOrValue returns fallback when v is empty, otherwise v. Used by the
-// formatted output paths to render gracefully when the server omits a field.
-func emptyOrValue(v, fallback string) string {
-	if v == "" {
-		return fallback
-	}
-	return v
-}
-
-// printJSON pretty-prints v to stdout.
-func printJSON(v interface{}) error {
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	return enc.Encode(v)
 }
 
 // printPriceSummary renders a `billing show` price block.

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 )
 
 // handleSetApprovalPolicyCommand calls POST /api/admin/system/approval-policy to

@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/arkfile/Arkfile/auth"
 	"github.com/arkfile/Arkfile/crypto"

@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"time"
 )
 
 // handleFlagUserReregistrationCommand flags one account, or all accounts, for a

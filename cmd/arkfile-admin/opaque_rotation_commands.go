@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"time"
 )
 
 func handleRotateOpaqueKeysCommand(client *HTTPClient, config *AdminConfig, args []string) error {
