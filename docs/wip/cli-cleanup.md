@@ -17,13 +17,16 @@ One canonical way per operation within each binary (single upload path, single s
 | Dead code removal | [ ] pending | Unwired handlers, dead aliases, unused types |
 | `--json` flag reliability | [ ] pending | Go `flag` positional ordering; help text |
 | Hygiene and comment cleanup | [ ] pending | `===`/`---` dividers, WIP doc refs, stale comments |
-| Duplicate helper consolidation | [ ] pending | `formatFileSize`, JSON helpers, session loaders |
+| Duplicate helper consolidation | [ ] pending | `formatFileSize`, JSON helpers, session loaders, default-string helper |
 | Admin `main.go` decomposition | [ ] pending | Extract handlers to `*_commands.go` |
-| Agent security hardening | [ ] pending | Empty-token bypass, Windows stubs |
+| Agent security hardening | [ ] pending | Empty-token bypass, Windows stubs and daemon isolation |
 | Usage string and help accuracy | [ ] pending | Missing/extra commands in `--help` |
-| Session auth unification (admin) | [ ] pending | `requireAdminSession()` vs copy-paste |
-| Client billing output parity | [ ] pending | Transactions, runway from `/api/credits` |
+| Session expiry enforcement (admin) | [ ] pending | 49 handlers skip expiry; only 16 billing-family handlers check |
+| Client billing output parity | [ ] pending | Transactions, runway, billable bytes/rate from `/api/credits` |
 | Share auth comment alignment | [ ] pending | Stale X-Download-Token fallback comment |
+| Password input helper alignment | [ ] pending | Admin vs client `readPassword` signature/timeout divergence |
+| Automation output review | [ ] pending | `printAutomationBackupCodes` shipped in user binary |
+| Error message consistency | [ ] pending | Canonical "not logged in" wording |
 | Unit test gap fill | [ ] pending | Admin has zero `_test.go`; client handler gaps |
 | E2E coverage gaps | [ ] pending | Untested commands listed below |
 | E2E hedging review | [ ] pending | 42 `\|\| true` occurrences in e2e-test.sh |
@@ -45,12 +48,13 @@ One canonical way per operation within each binary (single upload path, single s
 **Highest-impact findings**
 
 1. **`arkfile-admin/main.go` is 48% of the admin package** — HTTP client, session I/O, auth, and 25 command handlers still live inline while newer domains already have dedicated `*_commands.go` files.
-2. **Admin has no unit tests** — all correctness rides on e2e; client has tests for agent, crypto, offline decrypt, reregistration verifier, and upload batch helpers only.
-3. **Go `flag.Parse` silently ignores `--json` after positional args** — class of bug that caused the `billing set-price` e2e failure (fixed in e2e with `--json` before price; CLI help still documents fragile order).
-4. **Three dead admin handlers** — `list-tasks`, `cancel-all-tasks` implemented but not wired; `handleSetupTOTPCommand` alias never registered.
-5. **Agent session binding skipped when `token_hash` is empty** — `GetAccountKey("")` used from list/share filename decryption; weakens binding on platforms where peer-cred check is no-op (Windows).
-6. **AGENTS.md hygiene violations throughout** — decorative `===`/`---` dividers in source and stdout; `docs/wip/` references embedded in code comments.
-7. **Help text drift** — client Usage lists `share delete` (not implemented) but omits `revoke-all`; admin Usage omits `billing`, `payments`, `subscriptions` groups and duplicates approval-policy entries.
+2. **49 admin handlers skip session-expiry checks** — `loadAdminSession` (`main.go:2803`) loads and unmarshals the session file but never checks `ExpiresAt`. Only `requireBillingSession` (`billing_commands.go:420`), used by the 16 billing/payments/subscriptions handlers, checks expiry. The other ~49 network handlers call `loadAdminSession` directly and will attempt API calls with an expired token, surfacing a raw server error instead of a friendly "session expired, login again" message.
+3. **Admin has no unit tests** — all correctness rides on e2e; client has tests for agent, crypto, offline decrypt, reregistration verifier, and upload batch helpers only.
+4. **Go `flag.Parse` silently ignores `--json` after positional args** — class of bug that caused the `billing set-price` e2e failure (fixed in e2e with `--json` before price; CLI help still documents fragile order).
+5. **Three dead admin handlers** — `list-tasks`, `cancel-all-tasks` implemented but not wired; `handleSetupTOTPCommand` alias never registered.
+6. **Agent session binding skipped when `token_hash` is empty** — `GetAccountKey("")` used from list/share filename decryption; weakens binding on platforms where peer-cred check is no-op (Windows).
+7. **AGENTS.md hygiene violations throughout** — decorative `===`/`---` dividers in source and stdout; `docs/wip/` references embedded in code comments.
+8. **Help text drift** — client Usage lists `share delete` (not implemented) but omits `revoke-all`; admin Usage omits `payments` and `subscriptions` groups (billing is listed) and duplicates approval-policy entries.
 
 ---
 
@@ -177,7 +181,8 @@ Move normative spec pointers to `docs/scripts-guide.md` or inline a one-line for
 | `printJSON` | `billing_commands.go:472`; inline elsewhere | various | one `cli/jsonutil/print.go` |
 | `HTTPClient`, `makeRequest`, JWT/session refresh | `main.go` | `main.go` | Consider `cli/apiclient/` shared package (larger lift) |
 | `requireBillingSession` | `billing_commands.go:420` | N/A | Generalize to `requireAdminSession` for all admin commands |
-| Session load + expiry check | ~45 copy-paste blocks in admin handlers | `requireSession` pattern in client | Single function per binary minimum |
+| Session load (no expiry) | 49 direct `loadAdminSession` calls | `requireSession` pattern in client | Replace with `requireAdminSession` that checks expiry |
+| `defaultString` / `emptyOrValue` | `billing_commands.go:464` | `commands.go:1610` | Same-purpose default-string helper under different names |
 | `clientMFARequester` / `adminMFARequester` | thin wrappers | thin wrappers | Already share `cli/mfa` — keep |
 | `looksLikeDollarsAndCents` | `billing_commands.go:437` | client billing | Share if client validates amounts locally |
 
@@ -210,7 +215,7 @@ At 3,032 lines, `main.go` mixes dispatch, infrastructure, and 25 command handler
 
 ### Inconsistency to fix
 
-`verify_storage.go` loads session but **does not check expiry** unlike every other handler. Align with `requireAdminSession()` behavior.
+`verify_storage.go` calls `loadAdminSession` directly and therefore does not check expiry — but this matches the majority of admin handlers, not differs from them. The real inconsistency is that only the 16 billing-family handlers check expiry. Aligning all handlers on `requireAdminSession()` (which checks expiry) fixes `verify_storage.go` and the other ~48 handlers together.
 
 ---
 
@@ -232,6 +237,7 @@ Unix domain socket at `~/.arkfile/agent-{uid}.sock`, mode 0600; peer credential 
 | `GetAccountKey("")` call sites | `commands.go` (list/share filename decrypt) | Medium | Pass session token hash from active session; fail if unavailable |
 | Windows peer auth always true | `agent_windows.go` | Medium | Document as unsupported for agent; or implement equivalent pipe ACL check |
 | Windows mlock unsupported | `agent_windows.go` | Low | Document limitation in `agent status` output |
+| Windows daemon isolation weaker | `daemon_windows.go` | Low | `daemon_unix.go` uses `Setsid: true`; Windows uses empty `SysProcAttr`. Combined with always-true peer auth, the Windows agent path is materially weaker — document as unsupported or harden |
 | Digest cache stores plaintext SHA-256 | `agent.go` digest map | Low | Accept for dedup; document in agent help that cache is content-sensitive |
 | Auto-start on most client commands | `main.go:231-236` | Low | Keep; ensure failures are visible in non-verbose mode when agent is required |
 | Zombie scan uses Linux `/proc` | `main.go:1242-1267` | Low | Gate message by GOOS or extend |
@@ -248,7 +254,7 @@ Agent session mismatch wipes key (unit test exists in `agent_test.go`); e2e coul
 
 | Gap | Detail |
 |-----|--------|
-| Missing groups | `billing`, `payments`, `subscriptions` not listed in top-level Usage (lines 81-102) |
+| Missing groups | `payments`, `subscriptions` not listed in top-level Usage (billing is listed at lines 80-89) |
 | Duplicate entries | `set-approval-policy` / `get-approval-policy` appear under both NETWORK and SYSTEM |
 | Dead command docs | No `setup-totp` in switch (alias dead) |
 
@@ -266,11 +272,11 @@ Generate Usage from a single command registry table, or audit manually so every 
 
 ---
 
-## Session auth unification (admin)
+## Session expiry enforcement (admin)
 
 ### Problem
 
-Billing, payments, and subscriptions use `requireBillingSession()` in `billing_commands.go`. Roughly 20 other handlers inline the same four lines: load session, check expiry, return error. Drift already occurred (`verify_storage.go` skips expiry).
+`loadAdminSession` (`admin/main.go:2803`) loads and unmarshals the session file but never checks `ExpiresAt`. Only `requireBillingSession` (`billing_commands.go:420`), used by the 16 billing/payments/subscriptions handlers, checks `time.Now().After(session.ExpiresAt)`. The other ~49 network handlers call `loadAdminSession` directly and will attempt API calls with an expired token, surfacing a raw server error instead of a friendly "session expired, login again" message. `verify_storage.go` is not a special case — it follows the majority pattern (no expiry check); the billing family is the exception that does it right.
 
 ### Target design
 
@@ -278,7 +284,7 @@ Billing, payments, and subscriptions use `requireBillingSession()` in `billing_c
 func requireAdminSession(config *AdminConfig) (*AdminSession, error)
 ```
 
-Single implementation in `session.go` (after decomposition). All network commands call it at the top. Dev/test-only local commands (rotation prepare/apply reading mandate files) may intentionally skip — document those exceptions in the function comment.
+Single implementation in `session.go` (after decomposition) that loads the session and checks expiry. All network commands call it at the top. Dev/test-only local commands (rotation prepare/apply reading mandate files) may intentionally skip — document those exceptions in the function comment. `requireBillingSession` becomes a thin alias or is removed once all callers use `requireAdminSession`.
 
 ---
 
@@ -293,7 +299,7 @@ Single implementation in `session.go` (after decomposition). All network command
 | Field | Web (`billing.ts`) | CLI today |
 |-------|-------------------|-----------|
 | Balance / billing_mode | Yes | Yes |
-| Billable bytes / rate / projected cost | Yes | Partial |
+| Billable bytes / rate / projected cost | Yes | **Missing** (CLI shows `total_storage_bytes` and `effective_storage_limit_bytes` instead) |
 | Credits runway (hours) | Yes | **Missing** |
 | Transaction history | Yes | **Missing** |
 | Top-up / subscribe / portal | Yes | Separate subcommands (subscribe/portal not e2e-tested) |
@@ -317,6 +323,76 @@ Server-cleanup deferred full ticket-only share auth (static `X-Download-Token` f
 ### Target
 
 Delete the stale fallback comment. If ticket-only is the canonical path, ensure share download error messages tell the recipient to retry (ticket refresh on 403 already exists in `fetchShareChunkWithTicketRefresh`). Coordinate with server if static token path is removed later.
+
+---
+
+## Password input helper alignment
+
+### Problem
+
+The two binaries implement password reading with divergent signatures and behavior:
+
+- Admin: `readPassword() (string, error)` — no prompt argument, no stdin-pipe timeout (`admin/main.go:2993`)
+- Client: `readPassword(prompt string) ([]byte, error)` — takes a prompt, includes a timeout to prevent indefinite hangs when stdin is a pipe (`client/main.go:1660`)
+
+The client's timeout-on-pipe behavior is a real robustness feature the admin version lacks. Different return types (string vs []byte) also force callers to handle memory differently.
+
+### Target
+
+Either consolidate into a shared `cli/secureinput` package with a single signature (prompt + timeout, returning a zeroed []byte), or document the intentional divergence. If consolidated, the admin callers should gain the timeout protection. Ensure returned buffers are zeroed after use in both binaries.
+
+---
+
+## Automation output review
+
+### Problem
+
+`printAutomationBackupCodes` (`client/main.go:790`, called at `:825`) emits machine-readable backup-code lines for e2e and scripts. It ships in the production user binary with no build gate.
+
+### Target
+
+Flag for developer review: is automation-readable backup-code output appropriate in the shipped user binary, or should it be gated behind a build tag, a dev flag, or a dedicated e2e helper? Per the Greenfield App and Function Review Sanity Checks, testing-only code paths in the shipped binary should be surfaced and either justified or removed.
+
+---
+
+## Error message consistency
+
+### Problem
+
+The "not logged in" error wording differs between handlers:
+
+- `verify_storage.go:50`: `"not logged in as admin (use 'arkfile-admin login' first): %w"`
+- `billing_commands.go:423`: `"not logged in as admin (use 'arkfile-admin login'): %w"`
+
+One says "first", the other does not. Similar drift likely exists across other handlers.
+
+### Target
+
+Adopt one canonical "not logged in" message emitted by `requireAdminSession()`. Once all handlers route through it, the wording is uniform by construction. Audit other user-facing error strings for similar drift during the hygiene pass.
+
+---
+
+## `commands.go:539` fallback liveness
+
+### Problem
+
+`commands.go:539` reads `// Try upload_id as fallback` when parsing an upload response field. This response-field aliasing should be verified against the current server response shape.
+
+### Target
+
+If the server now sends a single canonical field, remove the fallback as dead path. If both fields are still sent, document why two shapes exist. Same treatment as the share-auth fallback comment — do not keep silent fallbacks that hide server contract drift.
+
+---
+
+## Global `--json` decision
+
+### Problem
+
+Neither binary defines a global `--json` flag; every subcommand defines its own. This per-subcommand design is exactly why the positional-ordering bug exists (a global flag parsed before dispatch would not have the problem).
+
+### Target
+
+Make an explicit decision and document it in this plan: keep per-subcommand `--json` (more explicit, current) and enforce flags-before-positionals via help text and parser hardening, or add a global `--json` consumed before subcommand dispatch. Either way, record the rationale so future subcommands follow one convention.
 
 ---
 
@@ -417,15 +493,18 @@ Work in an order that fixes silent correctness bugs before cosmetic cleanup:
 1. **`--json` reliability** — prevents false negatives in automation and e2e.
 2. **Dead code removal** — unwired handlers, dead aliases, unused `User` struct.
 3. **Stale comments and misleading help** — honesty before large refactors.
-4. **`requireAdminSession()` + verify_storage expiry fix** — security consistency.
+4. **Session expiry enforcement** — `requireAdminSession()` with expiry for all ~49 admin handlers, not just verify_storage.
 5. **Agent empty-token binding** — require token hash for key retrieval.
-6. **Shared pure helpers** — format + JSON util extraction.
+6. **Shared pure helpers** — format + JSON util extraction; unify `defaultString`/`emptyOrValue`.
 7. **Admin `main.go` decomposition** — mechanical moves, no behavior change.
 8. **Hygiene stdout formatting** — replace `===`/`---` in operator output.
-9. **Client billing show parity** — transactions + runway.
-10. **Unit tests** for new shared helpers and flag parsing.
-11. **E2E gap fill** — prioritize `get-approval-policy`, `revoke-user`, client `mfa list`, `--json` regression.
-12. **E2E hedging pass** — subscriptions `|| true` cleanup.
+9. **Client billing show parity** — transactions, runway, billable bytes/rate.
+10. **Password input helper alignment** — consolidate or document divergence.
+11. **Automation output review** — gate or justify `printAutomationBackupCodes`.
+12. **Error message consistency** — canonical "not logged in" via `requireAdminSession`.
+13. **Unit tests** for new shared helpers and flag parsing.
+14. **E2E gap fill** — prioritize `get-approval-policy`, `revoke-user`, client `mfa list`, `--json` regression, `version` smoke.
+15. **E2E hedging pass** — subscriptions `|| true` cleanup.
 
 ---
 
@@ -436,7 +515,8 @@ Work in an order that fixes silent correctness bugs before cosmetic cleanup:
 - [ ] `sudo bash scripts/testing/e2e-playwright.sh` — all PASS
 - [ ] `go test ./cmd/arkfile-client/... ./cli/mfa/... ./cmd/arkfile-admin/...` — pass (after admin tests added)
 - [ ] Manual: `arkfile-admin billing set-price 19.99 --json` and `arkfile-admin billing set-price --json 19.99` both emit JSON
-- [ ] Manual: `arkfile-client billing show --json` includes transactions and runway when present
+- [ ] Manual: `arkfile-client billing show --json` includes transactions, runway, and billable bytes/rate when present
+- [ ] Manual: expired admin session produces a friendly "session expired, login again" message across all network commands (not just billing)
 - [ ] Grep `cmd/arkfile-admin`, `cmd/arkfile-client`, `cli/mfa` for `docs/wip/`, `===`, `---`, `for now`, `backward compatibility` — zero inappropriate hits in source (tests may use dividers until cleaned)
 - [ ] `arkfile-admin --help` and `arkfile-client --help` match wired commands
 
