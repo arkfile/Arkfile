@@ -54,6 +54,12 @@ In order to slowly build up the core functionality of the system and prove its c
 
 - `sudo bash scripts/testing/e2e-playwright.sh` - This is a secondary Playwright-based automated browser test script meant to be run after `e2e-test.sh` in order to further validate that the TypeScript frontend code is functioning properly. It performs many of the same kinds of functional tests such as encrypt/upload, download/decrypt, share/receive shared file, export encrypted backup, etc. But it does not parallel exactly all the tests in `e2e-test.sh`. By design it leverages some of the existing users and files set up by `e2e-test.sh`, for example. Use this script in combination with manual testing in the browser to verify the app is functioning as intended.
 
+- `go test ./...` - Go unit tests for the whole module (`auth`, `crypto`, `handlers`, `storage`, `cmd/arkfile-admin`, `cmd/arkfile-client`, `cli/*`, `clictap`, and the rest). These complement `e2e-test.sh` but do not replace it. Most packages link libopaque via CGO; CLI and `clictap` packages also need vendored libfido2. A bare `go test ./...` without the same CGO environment as `scripts/setup/build.sh` will fail (for example with a missing `fido.h`). Vendored C libraries must exist under `/var/tmp/arkfile-build` (or `$ARKFILE_BUILD_DIR`); run `dev-reset.sh` or `scripts/setup/build.sh` at least once on the machine before the first unit test run. From the repo root, with no `sudo`:
+
+  `source scripts/setup/build-config.sh && export CGO_ENABLED=1 CGO_CFLAGS="$(cli_fido_cgo_cflags)" CGO_LDFLAGS="$(cli_fido_cgo_ldflags "$PWD")" && go test ./...`
+
+  Use the CLI FIDO CGO flags for the full tree: they include the OPAQUE include/library paths used by server-side packages. The run takes several minutes. Packages with no `_test.go` files report `[no test files]` and are expected. Optional flags: `-count=1` to disable the test cache, `-timeout=120s` if a slow package hits the default deadline. AI agents may run this command directly when validating Go changes; unlike `dev-reset.sh`, it does not rebuild or redeploy the app.
+
 - `sudo fdre2e.sh` is strictly for developers to run manually on local dev test machines. Never invoke or attempt to request to run this command yourself as an AI coding agent! This script runs, in sequence, `dev-reset.sh` + `e2e-test.sh` + `e2e-playwright.sh`.
 
 ## Key Configurations & Constants
