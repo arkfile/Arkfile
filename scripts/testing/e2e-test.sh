@@ -3003,7 +3003,7 @@ run_billing() {
     local setprice_out setprice_code
     safe_exec setprice_out setprice_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        billing set-price 19.99 --json
+        billing set-price --json 19.99
 
     local setprice_rate
     setprice_rate=$(echo "$setprice_out" | jq -r '.microcents_per_gib_per_hour // empty' 2>/dev/null)
