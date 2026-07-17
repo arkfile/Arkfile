@@ -28,11 +28,11 @@ One canonical way per operation within each binary (single upload path, single s
 | Automation output review | [x] done | Consolidated on `cli/mfa.PrintAutomationBackupCodes` |
 | MFA correctness and output | [x] done | `PickResetMethod` single prompt; shared backup output in `cli/mfa/output.go` |
 | Agent digest-cache hardening | [x] done | Digest RPCs require session binding; `agent status --show-digests` gated on active session |
-| E2E false-green removal | [x] partial | Refresh-token SKIP when missing; MFA credential JSON no longer logged; re-enroll idempotency reruns login |
+| E2E false-green removal | [x] scoped pass done | Auth/session/agent prerequisites fail closed; MFA rerun shortcuts removed; remaining billing/subscription/storage review deferred |
 | Error message consistency | [x] done | Canonical admin session messages via `requireAdminSession` |
 | Unit test gap fill | [x] done | Admin `session_test.go` / `helpers_test.go`; agent digest binding test; `cli/flags` tests |
 | E2E coverage gaps | [ ] deferred | Untested commands listed below remain follow-up |
-| E2E hedging review | [ ] partial | Refresh-token false-green fixed; broader `\|\| true` audit deferred |
+| E2E hedging review | [x] auth/session/agent | Token-family and JWT revocation, agent digest privacy, session expiry, and credential-log redaction covered; broader `\|\| true` audit deferred |
 
 ---
 
@@ -528,13 +528,21 @@ Register, login (TOTP, backup, defer-MFA, re-registration), logout, MFA setup, `
 
 ### Problem
 
-`e2e-test.sh` contains 42 `|| true` occurrences. Some are intentional teardown (ignore errors when service already stopped); others may hide real failures in billing/subscriptions setup. Additional false-green paths do not use `|| true`: idempotency markers can record PASS without rerunning assertions, refresh-token and JWT-revocation checks pass when prerequisites are missing, copy-all accepts an incorrect skip count with a warning, and a negative-balance upload test accepts failures unrelated to billing.
+`e2e-test.sh` contains 40 `|| true` occurrences after the auth/session/agent pass. Some are intentional teardown (ignore errors when service already stopped); others may hide real failures in billing/subscriptions setup. Outside the completed scoped pass, copy-all accepts an incorrect skip count with a warning, and a negative-balance upload test accepts failures unrelated to billing.
 
 ### Target
 
 Classify each `|| true` into: **teardown** (keep), **best-effort setup** (replace with explicit precondition checks), or **assertion hedge** (remove; require PASS/FAIL). Subscriptions group uses several `|| true` on gift grant and CLI show commands — tighten to exact exit codes where the test intends to assert success. Audit the four `SKIP` paths against the final checklist instead of claiming zero undocumented skips.
 
 Document allowed dual outcomes only where the product genuinely has two valid states, with a comment in e2e explaining why. Do not log full MFA credential payloads, TOTP secrets, or backup codes; retain only the minimum values required internally by the test.
+
+### Auth/session/agent scoped pass
+
+The auth/session/agent pass removes cached MFA enrollment and re-enrollment shortcuts so the documented `dev-reset.sh` workflow always executes the full flow. Test files are created under a restrictive umask; `safe_exec` no longer logs command arguments, and captured output is redacted before it reaches the log. Missing refresh/session prerequisites and missing expected share/file IDs now fail rather than SKIP.
+
+Refresh rotation now requires a newly issued JWT and distinct refresh token, then verifies superseded-token rejection, family revocation, and user-wide JWT revocation. Admin MFA reset establishes that a fresh JWT returns HTTP 200 immediately before reset and HTTP 401 immediately afterward, exercising immediate revocation-cache invalidation without an artificial sleep. Agent checks use a known uploaded file to prove default status hides file IDs and plaintext digests, diagnostic status exposes them only with a valid bound session, and both digest diagnostics and authenticated client commands reject an expired session.
+
+The remaining `|| true` sites in billing, subscriptions, registration-throttle setup, polling, and teardown remain a separate follow-up. This scoped pass requires E2E re-verification before its final checklist can be marked complete.
 
 ---
 

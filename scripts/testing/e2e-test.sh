@@ -73,12 +73,13 @@ ADMIN="$BUILD_DIR/arkfile-admin"
 
 # Test Data Directory
 # MUST be in /tmp
+umask 077
 TEST_DATA_DIR="/tmp/arkfile-e2e-test-data"
 mkdir -p "$TEST_DATA_DIR"
+chmod 700 "$TEST_DATA_DIR"
 MFA_SECRET_FILE="$TEST_DATA_DIR/mfa-secret"
 BACKUP_CODE_PRIMARY_FILE="$TEST_DATA_DIR/backup-code-primary"
 BACKUP_CODE_REENROLL_FILE="$TEST_DATA_DIR/backup-code-reenroll"
-MFA_REENROLL_DONE_FILE="$TEST_DATA_DIR/mfa-reenroll-done"
 MFA_ADMIN_RESET_DONE_FILE="$TEST_DATA_DIR/mfa-admin-reset-done"
 LOG_FILE="$TEST_DATA_DIR/e2e-test.log"
 # Legacy aliases (same files)
@@ -86,6 +87,8 @@ TOTP_SECRET_FILE="$MFA_SECRET_FILE"
 BACKUP_CODE_FILE="$BACKUP_CODE_PRIMARY_FILE"
 
 # Initialize log file
+: > "$LOG_FILE"
+chmod 600 "$LOG_FILE"
 echo "=== ARKFILE E2E TEST LOG - $(date) ===" > "$LOG_FILE"
 
 # COLOR OUTPUT
@@ -103,6 +106,25 @@ warning() { echo -e "${YELLOW}[!] $1${NC}"; echo "[WARN] $1" >> "$LOG_FILE"; }
 info()    { echo -e "${CYAN}[i] $1${NC}"; echo "[INFO] $1" >> "$LOG_FILE"; }
 scenario() { echo -e "\n${BLUE}$1${NC}"; echo -e "\n=== $1 ===" >> "$LOG_FILE"; }
 group()    { echo -e "\n${CYAN}# $1${NC}\n"; echo -e "\n# $1" >> "$LOG_FILE"; }
+
+redact_sensitive_output() {
+    sed -E \
+        -e 's/(TOTP_SECRET:)[[:space:]]*[^[:space:]]+/\1 [REDACTED]/g' \
+        -e 's/(BACKUP_CODE_[0-9]+:)[[:space:]]*[^[:space:]]+/\1 [REDACTED]/g' \
+        -e 's/("(access_token|refresh_token|temp_token|totp_secret|secret)"[[:space:]]*:[[:space:]]*")[^"]*"/\1[REDACTED]"/g' \
+        -e 's/(Authorization:[[:space:]]*Bearer[[:space:]]+)[^[:space:]]+/\1[REDACTED]/g'
+}
+
+print_sanitized() {
+    printf '%s\n' "$1" | redact_sensitive_output
+}
+
+write_secret_file() {
+    local file_path="$1"
+    local value="$2"
+    printf '%s\n' "$value" > "$file_path"
+    chmod 600 "$file_path"
+}
 
 # TEST RESULT TRACKING
 
@@ -148,10 +170,10 @@ admin_login_with_totp() {
         
     if [ $code -eq 0 ] && echo "$out" | grep -q "Admin login successful"; then
         record_test "$test_name" "PASS"
-        echo "$out"
+        print_sanitized "$out"
     else
         error "$test_name failed with output:"
-        echo "$out"
+        print_sanitized "$out"
         record_test "$test_name" "FAIL"
     fi
 }
@@ -178,10 +200,10 @@ user_login_with_totp() {
 
     if [ $code -eq 0 ] && echo "$out" | grep -q "Login successful"; then
         record_test "$test_name" "PASS"
-        echo "$out"
+        print_sanitized "$out"
     else
         error "$test_name failed with output:"
-        echo "$out"
+        print_sanitized "$out"
         record_test "$test_name" "FAIL"
     fi
 }
@@ -207,10 +229,10 @@ user_login_with_backup_code() {
 
     if [ $code -eq 0 ] && echo "$out" | grep -q "Login successful"; then
         record_test "$test_name" "PASS"
-        echo "$out"
+        print_sanitized "$out"
     else
         error "$test_name failed with output:"
-        echo "$out"
+        print_sanitized "$out"
         record_test "$test_name" "FAIL"
     fi
 }
@@ -229,10 +251,10 @@ user_login_defer_mfa() {
 
     if [ $code -eq 0 ] && echo "$out" | grep -q "MFA challenge pending"; then
         record_test "$test_name" "PASS"
-        echo "$out"
+        print_sanitized "$out"
     else
         error "$test_name failed with output:"
-        echo "$out"
+        print_sanitized "$out"
         record_test "$test_name" "FAIL"
     fi
 }
@@ -255,7 +277,7 @@ user_mfa_reenroll_via_backup() {
 
     if [ $code -ne 0 ] || ! echo "$out" | grep -q "MFA Reset Complete"; then
         error "$test_name failed with output:"
-        echo "$out"
+        print_sanitized "$out"
         record_test "$test_name" "FAIL"
         return 1
     fi
@@ -276,7 +298,7 @@ user_mfa_reenroll_via_backup() {
     record_test "MFA re-enrollment issues new secret" "PASS"
 
     export TEST_USER_TOTP_SECRET="$new_secret"
-    echo "$new_secret" > "$MFA_SECRET_FILE"
+    write_secret_file "$MFA_SECRET_FILE" "$new_secret"
 
     local new_backup_code
     new_backup_code=$(echo "$out" | grep '^BACKUP_CODE_0:' | head -1 | cut -d':' -f2 | tr -d ' ')
@@ -285,12 +307,12 @@ user_mfa_reenroll_via_backup() {
         record_test "Backup code capture after re-enrollment" "FAIL"
         return 1
     fi
-    echo "$new_backup_code" > "$BACKUP_CODE_PRIMARY_FILE"
+    write_secret_file "$BACKUP_CODE_PRIMARY_FILE" "$new_backup_code"
     export TEST_USER_BACKUP_CODE="$new_backup_code"
     record_test "Backup code capture after re-enrollment" "PASS"
 
     record_test "$test_name" "PASS"
-    echo "$out"
+    print_sanitized "$out"
 }
 
 user_mfa_verify_after_reset() {
@@ -317,13 +339,13 @@ user_mfa_verify_after_reset() {
 
     if [ $code_rc -ne 0 ] || ! echo "$out" | grep -q "MFA setup complete"; then
         error "$test_name failed with output:"
-        echo "$out"
+        print_sanitized "$out"
         record_test "$test_name" "FAIL"
         return 1
     fi
 
     record_test "$test_name" "PASS"
-    echo "$out"
+    print_sanitized "$out"
 }
 
 user_mfa_enroll_after_deferred_login() {
@@ -336,7 +358,7 @@ user_mfa_enroll_after_deferred_login() {
 
     if [ $setup_exit_code -ne 0 ]; then
         error "Failed to initiate MFA setup after admin reset:"
-        echo "$setup_output"
+        print_sanitized "$setup_output"
         record_test "$test_name (setup initiation)" "FAIL"
         return 1
     fi
@@ -345,19 +367,19 @@ user_mfa_enroll_after_deferred_login() {
     secret=$(echo "$setup_output" | grep "TOTP_SECRET:" | cut -d':' -f2 | tr -d ' ')
     if [ -z "$secret" ]; then
         error "Failed to extract TOTP secret after admin reset:"
-        echo "$setup_output"
+        print_sanitized "$setup_output"
         record_test "$test_name (setup initiation)" "FAIL"
         return 1
     fi
 
-    echo "$secret" > "$MFA_SECRET_FILE"
+    write_secret_file "$MFA_SECRET_FILE" "$secret"
     export TEST_USER_TOTP_SECRET="$secret"
     record_test "$test_name (setup initiation)" "PASS"
 
     local backup_code
     backup_code=$(echo "$setup_output" | grep '^BACKUP_CODE_0:' | head -1 | cut -d':' -f2 | tr -d ' ')
     if [ -n "$backup_code" ]; then
-        echo "$backup_code" > "$BACKUP_CODE_PRIMARY_FILE"
+        write_secret_file "$BACKUP_CODE_PRIMARY_FILE" "$backup_code"
         export TEST_USER_BACKUP_CODE="$backup_code"
     fi
 
@@ -376,13 +398,13 @@ user_mfa_enroll_after_deferred_login() {
 
     if [ $verify_exit_code -ne 0 ] || ! echo "$verify_output" | grep -q "MFA setup complete"; then
         error "MFA verification after admin reset failed:"
-        echo "$verify_output"
+        print_sanitized "$verify_output"
         record_test "$test_name (verify)" "FAIL"
         return 1
     fi
 
     record_test "$test_name (verify)" "PASS"
-    echo "$verify_output"
+    print_sanitized "$verify_output"
 }
 
 logout_user_session() {
@@ -413,26 +435,22 @@ logout_admin_session() {
 
 assert_agent_running() {
     local test_name="$1"
-    local status_out
-    status_out=$("$CLIENT" agent status 2>&1) || true
-    echo "[AGENT STATUS] $status_out" >> "$LOG_FILE"
-    if echo "$status_out" | grep -q "NOT RUNNING"; then
+    local status_out status_code
+    safe_exec status_out status_code "$CLIENT" agent status
+    if [ $status_code -ne 0 ]; then
         record_test "$test_name" "FAIL"
+    elif echo "$status_out" | grep -q "Agent Status: RUNNING"; then
+        record_test "$test_name" "PASS"
     else
-        if echo "$status_out" | grep -q "RUNNING"; then
-            record_test "$test_name" "PASS"
-        else
-            record_test "$test_name" "FAIL"
-        fi
+        record_test "$test_name" "FAIL"
     fi
 }
 
 assert_agent_not_running() {
     local test_name="$1"
-    local status_out
-    status_out=$("$CLIENT" agent status 2>&1) || true
-    echo "[AGENT STATUS] $status_out" >> "$LOG_FILE"
-    if echo "$status_out" | grep -q "NOT RUNNING"; then
+    local status_out status_code
+    safe_exec status_out status_code "$CLIENT" agent status
+    if [ $status_code -eq 0 ] && echo "$status_out" | grep -q "Agent Status: NOT RUNNING"; then
         record_test "$test_name" "PASS"
     else
         record_test "$test_name" "FAIL"
@@ -511,14 +529,15 @@ safe_exec() {
     local temp_output
     local temp_exit_code
 
-    echo "[EXEC] $*" >> "$LOG_FILE"
+    local command_name="${1##*/}"
+    echo "[EXEC] $command_name (arguments omitted)" >> "$LOG_FILE"
 
     set +e
     temp_output=$("$@" 2>&1)
     temp_exit_code=$?
     set -e
 
-    echo "$temp_output" >> "$LOG_FILE"
+    print_sanitized "$temp_output" >> "$LOG_FILE"
     echo "[EXIT] Code: $temp_exit_code" >> "$LOG_FILE"
     echo "----------------------------------------" >> "$LOG_FILE"
 
@@ -748,25 +767,6 @@ run_user_onboarding_mfa_enrollment() {
 
     scenario "Setting up TOTP for user: $TEST_USERNAME"
 
-    # Idempotency: check for existing saved secret and backup codes
-    if [ -f "$MFA_SECRET_FILE" ] && [ -f "$BACKUP_CODE_PRIMARY_FILE" ] && [ -f "$BACKUP_CODE_REENROLL_FILE" ]; then
-        local secret backup_code reenroll_code
-        secret=$(cat "$MFA_SECRET_FILE")
-        backup_code=$(cat "$BACKUP_CODE_PRIMARY_FILE")
-        reenroll_code=$(cat "$BACKUP_CODE_REENROLL_FILE")
-        if [ -n "$secret" ] && [ -n "$backup_code" ] && [ -n "$reenroll_code" ]; then
-            export TEST_USER_TOTP_SECRET="$secret"
-            export TEST_USER_BACKUP_CODE="$backup_code"
-            export TEST_USER_BACKUP_CODE_REENROLL="$reenroll_code"
-            record_test "TOTP setup initiation" "PASS"
-            info "Using existing MFA secret and backup codes"
-            success "MFA enrollment complete (skipped - using existing secret)"
-            return 0
-        fi
-    fi
-
-    rm -f "$MFA_REENROLL_DONE_FILE"
-
     info "Initiating MFA setup..."
     local setup_output
     local setup_exit_code
@@ -776,7 +776,7 @@ run_user_onboarding_mfa_enrollment() {
 
     if [ $setup_exit_code -ne 0 ]; then
         error "Failed to initiate TOTP setup (exit code: $setup_exit_code):"
-        echo "$setup_output"
+        print_sanitized "$setup_output"
         record_test "TOTP setup initiation" "FAIL"
     fi
 
@@ -786,14 +786,14 @@ run_user_onboarding_mfa_enrollment() {
 
     if [ -z "$secret" ]; then
         error "Failed to extract TOTP secret from output:"
-        echo "$setup_output"
+        print_sanitized "$setup_output"
         record_test "TOTP setup initiation" "FAIL"
     fi
 
-    echo "$secret" > "$MFA_SECRET_FILE"
+    write_secret_file "$MFA_SECRET_FILE" "$secret"
     export TEST_USER_TOTP_SECRET="$secret"
     record_test "TOTP setup initiation" "PASS"
-    info "Got TOTP secret: $secret"
+    info "Captured TOTP secret for automated verification"
 
     # Backup codes are returned on setup (verify only stores hashes server-side).
     local backup_code reenroll_code
@@ -803,7 +803,7 @@ run_user_onboarding_mfa_enrollment() {
         error "Failed to extract primary backup code from setup output"
         record_test "Backup code capture" "FAIL"
     else
-        echo "$backup_code" > "$BACKUP_CODE_PRIMARY_FILE"
+        write_secret_file "$BACKUP_CODE_PRIMARY_FILE" "$backup_code"
         export TEST_USER_BACKUP_CODE="$backup_code"
         record_test "Backup code capture" "PASS"
         info "Saved primary backup code for one-shot login test"
@@ -812,7 +812,7 @@ run_user_onboarding_mfa_enrollment() {
         error "Failed to extract re-enrollment backup code from setup output"
         record_test "Re-enrollment backup code capture" "FAIL"
     else
-        echo "$reenroll_code" > "$BACKUP_CODE_REENROLL_FILE"
+        write_secret_file "$BACKUP_CODE_REENROLL_FILE" "$reenroll_code"
         export TEST_USER_BACKUP_CODE_REENROLL="$reenroll_code"
         record_test "Re-enrollment backup code capture" "PASS"
     fi
@@ -831,17 +831,15 @@ run_user_onboarding_mfa_enrollment() {
         return
     fi
 
-    info "Generated verification code: $code"
-
     safe_exec verify_output verify_exit_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure setup-mfa --mfa-method totp --verify "$code"
 
     if [ $verify_exit_code -eq 0 ] && echo "$verify_output" | grep -q "MFA setup complete"; then
         record_test "TOTP verification" "PASS"
-        echo "$verify_output"
+        print_sanitized "$verify_output"
     else
         error "TOTP verification failed:"
-        echo "$verify_output"
+        print_sanitized "$verify_output"
         record_test "TOTP verification" "FAIL"
     fi
 
@@ -877,7 +875,7 @@ run_dual_mfa_api_checks() {
         record_test "MFA credentials list includes TOTP" "PASS"
         info "MFA credentials list returned TOTP enrollment metadata"
     else
-        error "Expected HTTP 200 with TOTP credential; got HTTP $creds_http: $creds_out"
+        error "Expected HTTP 200 with TOTP credential; got HTTP $creds_http"
         record_test "MFA credentials list includes TOTP" "FAIL"
     fi
 
@@ -969,87 +967,107 @@ run_user_onboarding_admin_approval() {
 run_user_authentication() {
     group "User authentication"
 
-    if [ -f "$MFA_REENROLL_DONE_FILE" ]; then
-        info "MFA re-enrollment marker present; rerunning lightweight verification"
-        if [ -f "$MFA_SECRET_FILE" ]; then
-            export TEST_USER_TOTP_SECRET="$(cat "$MFA_SECRET_FILE")"
-        fi
-        if [ -f "$BACKUP_CODE_PRIMARY_FILE" ]; then
-            export TEST_USER_BACKUP_CODE="$(cat "$BACKUP_CODE_PRIMARY_FILE")"
-        fi
-        user_login_with_totp "Login with saved MFA secret after prior re-enrollment"
-        record_test "MFA re-enrollment via backup code" "PASS"
-    else
-        scenario "MFA re-enrollment via backup code"
-        local old_secret="${TEST_USER_TOTP_SECRET:-}"
-        local reenroll_code="${TEST_USER_BACKUP_CODE_REENROLL:-}"
-        if [ -z "$reenroll_code" ] && [ -f "$BACKUP_CODE_REENROLL_FILE" ]; then
-            reenroll_code=$(cat "$BACKUP_CODE_REENROLL_FILE")
-        fi
-
-        logout_user_session "Logout before MFA re-enrollment"
-        user_login_defer_mfa "OPAQUE login with MFA challenge pending"
-        user_mfa_reenroll_via_backup "MFA re-enrollment via backup code" "$reenroll_code" "$old_secret"
-        user_mfa_verify_after_reset "MFA verify after re-enrollment"
-        touch "$MFA_REENROLL_DONE_FILE"
-        user_login_with_totp "Login with new MFA secret after re-enrollment"
+    scenario "MFA re-enrollment via backup code"
+    local old_secret="${TEST_USER_TOTP_SECRET:-}"
+    local reenroll_code="${TEST_USER_BACKUP_CODE_REENROLL:-}"
+    if [ -z "$reenroll_code" ] && [ -f "$BACKUP_CODE_REENROLL_FILE" ]; then
+        reenroll_code=$(cat "$BACKUP_CODE_REENROLL_FILE")
     fi
+
+    logout_user_session "Logout before MFA re-enrollment"
+    user_login_defer_mfa "OPAQUE login with MFA challenge pending"
+    user_mfa_reenroll_via_backup "MFA re-enrollment via backup code" "$reenroll_code" "$old_secret"
+    user_mfa_verify_after_reset "MFA verify after re-enrollment"
+    user_login_with_totp "Login with new MFA secret after re-enrollment"
 
     scenario "One-shot backup code login as $TEST_USERNAME"
     user_login_with_backup_code "One-shot backup code login"
 
     assert_agent_running "Agent auto-start verification"
-    # Extracts the current refresh token from the session file, calls /api/refresh
-    # to verify rotation works (new JWT returned), then replays the now-superseded
-    # refresh token and verifies the server rejects it with 401.
+
     scenario "Refresh token rotation and reuse detection"
     local session_file="$HOME/.arkfile-session.json"
-    if [ -f "$session_file" ]; then
-        local old_refresh_token
-        old_refresh_token=$(jq -r '.refresh_token // empty' "$session_file" 2>/dev/null)
-        if [ -n "$old_refresh_token" ]; then
-            # Step 1: Rotate the token -- server issues a new JWT + new refresh token
-            local rotate_resp rotate_code
-            rotate_resp=$(curl -sk -o /dev/null -w '%{http_code}' \
-                -X POST "${SERVER_URL}/api/refresh" \
-                -H "Content-Type: application/json" \
-                -d "{\"refresh_token\":\"${old_refresh_token}\"}" 2>/dev/null)
-            if [ "$rotate_resp" = "200" ]; then
-                record_test "Refresh token rotation (200 on first use)" "PASS"
-                info "Refresh token rotation succeeded"
-            else
-                error "Expected 200 from /api/refresh on first use, got HTTP $rotate_resp"
-                record_test "Refresh token rotation (200 on first use)" "FAIL"
-            fi
-
-            # Step 2: Replay the same (now superseded) refresh token -- server must reject it
-            local reuse_resp
-            reuse_resp=$(curl -sk -o /dev/null -w '%{http_code}' \
-                -X POST "${SERVER_URL}/api/refresh" \
-                -H "Content-Type: application/json" \
-                -d "{\"refresh_token\":\"${old_refresh_token}\"}" 2>/dev/null)
-            if [ "$reuse_resp" = "401" ]; then
-                record_test "Refresh token reuse rejected (401 on replay)" "PASS"
-                info "Replayed superseded refresh token correctly rejected with 401"
-            else
-                error "Expected 401 on refresh token replay, got HTTP $reuse_resp"
-                record_test "Refresh token reuse rejected (401 on replay)" "FAIL"
-            fi
-        else
-            warning "Could not extract refresh_token from session file; skipping reuse test"
-            record_test "Refresh token rotation (200 on first use)" "SKIP"
-            record_test "Refresh token reuse rejected (401 on replay)" "SKIP"
-        fi
-    else
-        warning "Session file not found; skipping reuse test"
-        record_test "Refresh token rotation (200 on first use)" "SKIP"
-        record_test "Refresh token reuse rejected (401 on replay)" "SKIP"
+    if [ ! -f "$session_file" ]; then
+        error "Session file missing immediately after successful backup-code login"
+        record_test "Refresh token prerequisites" "FAIL"
     fi
 
-    # Re-login after the rotation test consumed the old token (the CLI session
-    # may now hold a stale JWT if curl-based rotation advanced the server state
-    # past the CLI's in-memory token).  A fresh login ensures the remainder of
-    # the test suite starts from a known-good authenticated state.
+    local old_refresh_token
+    if ! old_refresh_token=$(jq -r '.refresh_token // empty' "$session_file" 2>/dev/null); then
+        old_refresh_token=""
+    fi
+    if [ -z "$old_refresh_token" ]; then
+        error "Refresh token missing immediately after successful backup-code login"
+        record_test "Refresh token prerequisites" "FAIL"
+    fi
+    record_test "Refresh token prerequisites" "PASS"
+
+    local rotate_body_file rotate_body rotate_http rotate_code
+    rotate_body_file=$(mktemp "$TEST_DATA_DIR/refresh-rotate.XXXXXX")
+    safe_exec rotate_http rotate_code \
+        curl -skS -o "$rotate_body_file" -w '%{http_code}' \
+        -X POST "${SERVER_URL}/api/refresh" \
+        -H "Content-Type: application/json" \
+        -d "{\"refresh_token\":\"${old_refresh_token}\"}"
+    rotate_body=$(<"$rotate_body_file")
+    rm -f "$rotate_body_file"
+
+    local new_access_token new_refresh_token
+    if ! new_access_token=$(echo "$rotate_body" | jq -r '.data.token // empty' 2>/dev/null); then
+        new_access_token=""
+    fi
+    if ! new_refresh_token=$(echo "$rotate_body" | jq -r '.data.refresh_token // empty' 2>/dev/null); then
+        new_refresh_token=""
+    fi
+    if [ $rotate_code -eq 0 ] \
+        && [ "$rotate_http" = "200" ] \
+        && [ -n "$new_access_token" ] \
+        && [ -n "$new_refresh_token" ] \
+        && [ "$new_refresh_token" != "$old_refresh_token" ]; then
+        record_test "Refresh rotation returns a new token pair" "PASS"
+    else
+        error "Refresh rotation did not return HTTP 200 with a new JWT and refresh token"
+        record_test "Refresh rotation returns a new token pair" "FAIL"
+    fi
+
+    local reuse_http reuse_code
+    safe_exec reuse_http reuse_code \
+        curl -skS -o /dev/null -w '%{http_code}' \
+        -X POST "${SERVER_URL}/api/refresh" \
+        -H "Content-Type: application/json" \
+        -d "{\"refresh_token\":\"${old_refresh_token}\"}"
+    if [ $reuse_code -eq 0 ] && [ "$reuse_http" = "401" ]; then
+        record_test "Refresh token reuse rejected" "PASS"
+    else
+        error "Expected HTTP 401 on superseded refresh-token replay, got HTTP $reuse_http"
+        record_test "Refresh token reuse rejected" "FAIL"
+    fi
+
+    local family_http family_code
+    safe_exec family_http family_code \
+        curl -skS -o /dev/null -w '%{http_code}' \
+        -X POST "${SERVER_URL}/api/refresh" \
+        -H "Content-Type: application/json" \
+        -d "{\"refresh_token\":\"${new_refresh_token}\"}"
+    if [ $family_code -eq 0 ] && [ "$family_http" = "401" ]; then
+        record_test "Refresh-token family revoked after reuse" "PASS"
+    else
+        error "Expected HTTP 401 for refresh token in reused family, got HTTP $family_http"
+        record_test "Refresh-token family revoked after reuse" "FAIL"
+    fi
+
+    local reused_jwt_http reused_jwt_code
+    safe_exec reused_jwt_http reused_jwt_code \
+        curl -skS -o /dev/null -w '%{http_code}' \
+        -H "Authorization: Bearer ${new_access_token}" \
+        "${SERVER_URL}/api/files"
+    if [ $reused_jwt_code -eq 0 ] && [ "$reused_jwt_http" = "401" ]; then
+        record_test "JWT revoked after refresh-token reuse" "PASS"
+    else
+        error "Expected HTTP 401 for JWT after refresh-token reuse, got HTTP $reused_jwt_http"
+        record_test "JWT revoked after refresh-token reuse" "FAIL"
+    fi
+
     user_login_with_totp "User re-login after rotation test"
 
     success "User authentication complete"
@@ -1250,6 +1268,68 @@ run_files_standard() {
         echo "$list_output"
         record_test "File listing verification" "FAIL"
     fi
+
+    scenario "Agent digest privacy and session enforcement"
+    local agent_default_out agent_default_code
+    safe_exec agent_default_out agent_default_code "$CLIENT" agent status
+    if [ $agent_default_code -eq 0 ] \
+        && ! echo "$agent_default_out" | grep -Fq "$UPLOADED_FILE_ID" \
+        && ! echo "$agent_default_out" | grep -Fq "$UPLOADED_FILE_SHA256"; then
+        record_test "Agent status hides file IDs and digests by default" "PASS"
+    else
+        error "Default agent status exposed a file ID or plaintext digest"
+        record_test "Agent status hides file IDs and digests by default" "FAIL"
+    fi
+
+    local agent_digests_out agent_digests_code
+    safe_exec agent_digests_out agent_digests_code "$CLIENT" agent status --show-digests
+    if [ $agent_digests_code -eq 0 ] \
+        && echo "$agent_digests_out" | grep -Fq "$UPLOADED_FILE_ID" \
+        && echo "$agent_digests_out" | grep -Fq "$UPLOADED_FILE_SHA256"; then
+        record_test "Agent diagnostic status shows bound digest cache" "PASS"
+    else
+        error "Diagnostic agent status did not show the expected bound digest entry"
+        record_test "Agent diagnostic status shows bound digest cache" "FAIL"
+    fi
+
+    local client_session_file="$HOME/.arkfile-session.json"
+    local session_backup="$TEST_DATA_DIR/client-session-backup.json"
+    local expired_session="$TEST_DATA_DIR/client-session-expired.json"
+    if [ ! -f "$client_session_file" ]; then
+        error "Client session file missing before expiry enforcement tests"
+        record_test "Client session expiry prerequisites" "FAIL"
+    fi
+    cp "$client_session_file" "$session_backup"
+    if ! jq '.expires_at = "2000-01-01T00:00:00Z"' "$client_session_file" > "$expired_session"; then
+        rm -f "$session_backup" "$expired_session"
+        error "Could not construct an expired client session"
+        record_test "Client session expiry prerequisites" "FAIL"
+    fi
+    mv "$expired_session" "$client_session_file"
+    chmod 600 "$client_session_file"
+
+    local expired_digest_out expired_digest_code
+    safe_exec expired_digest_out expired_digest_code "$CLIENT" agent status --show-digests
+    local expired_list_out expired_list_code
+    safe_exec expired_list_out expired_list_code \
+        "$CLIENT" --server-url "$SERVER_URL" --tls-insecure list-files
+
+    mv "$session_backup" "$client_session_file"
+    chmod 600 "$client_session_file"
+
+    if [ $expired_digest_code -ne 0 ] && echo "$expired_digest_out" | grep -qi "session expired"; then
+        record_test "Agent digest diagnostics reject expired session" "PASS"
+    else
+        error "Agent digest diagnostics did not reject an expired session"
+        record_test "Agent digest diagnostics reject expired session" "FAIL"
+    fi
+    if [ $expired_list_code -ne 0 ] && echo "$expired_list_out" | grep -qi "session expired"; then
+        record_test "Authenticated client command rejects expired session" "PASS"
+    else
+        error "list-files did not reject an expired client session"
+        record_test "Authenticated client command rejects expired session" "FAIL"
+    fi
+
     scenario "Verifying list-files --raw API privacy"
     local list_raw_output list_raw_exit_code
     safe_exec list_raw_output list_raw_exit_code \
@@ -1931,8 +2011,8 @@ run_shares() {
             warning "Expected 404 for unknown share, got $nf_code"
         fi
     else
-        warning "Share A ID not available, skipping ticket endpoint validation"
-        record_test "Share download ticket endpoint validation" "SKIP"
+        error "Share A ID not available for ticket endpoint validation"
+        record_test "Share download ticket endpoint validation" "FAIL"
     fi
     scenario "Visitor downloads custom-password share"
 
@@ -2022,8 +2102,8 @@ run_shares() {
             error "Per-share rate limiter returned HTTP $token_code_5 (expected 429)"
         fi
     else
-        warning "Share B ID not available, skipping invalid download token test"
-        record_test "Invalid download token rate limiting" "SKIP"
+        error "Share B ID not available for invalid download token test"
+        record_test "Invalid download token rate limiting" "FAIL"
     fi
     # Hit unique fake share IDs via curl to trigger the enumeration threshold.
     # The enumeration guard tracks unique 404s per entity in a 10-minute window
@@ -2256,13 +2336,8 @@ run_shares() {
         record_test "Session file cleared after revoke-all" "FAIL"
     fi
 
-    # Re-login so the CLI session is fresh for the 10.23 logout step and
-    # the post-logout rejection checks that follow.
+    # Re-login so the CLI session is fresh for the post-logout rejection checks.
     user_login_with_totp "User re-login after self-revoke test"
-    E2E_REVOCATION_TEST_TOKEN=""
-    if [ -f "$HOME/.arkfile-session.json" ]; then
-        E2E_REVOCATION_TEST_TOKEN=$(jq -r '.access_token // empty' "$HOME/.arkfile-session.json" 2>/dev/null)
-    fi
     scenario "User logout and post-logout command rejection"
     logout_user_session "User logout (post-revoke)"
 
@@ -2497,6 +2572,29 @@ run_admin_operations() {
         echo "$update_user_output"
         record_test "Admin update-user" "FAIL"
     fi
+    scenario "Establish active user JWT before admin MFA reset"
+    user_login_with_totp "User login before admin MFA reset"
+    local pre_reset_access_token
+    if ! pre_reset_access_token=$(jq -r '.access_token // empty' "$HOME/.arkfile-session.json" 2>/dev/null); then
+        pre_reset_access_token=""
+    fi
+    if [ -z "$pre_reset_access_token" ]; then
+        error "Could not extract an access token before admin MFA reset"
+        record_test "MFA reset JWT revocation prerequisite" "FAIL"
+    fi
+
+    local pre_reset_http pre_reset_code
+    safe_exec pre_reset_http pre_reset_code \
+        curl -skS -o /dev/null -w '%{http_code}' \
+        -H "Authorization: Bearer ${pre_reset_access_token}" \
+        "${SERVER_URL}/api/files"
+    if [ $pre_reset_code -eq 0 ] && [ "$pre_reset_http" = "200" ]; then
+        record_test "JWT valid immediately before admin MFA reset" "PASS"
+    else
+        error "Expected HTTP 200 before admin MFA reset, got HTTP $pre_reset_http"
+        record_test "JWT valid immediately before admin MFA reset" "FAIL"
+    fi
+
     scenario "Admin reset-user-mfa"
     local reset_mfa_output reset_mfa_code
     safe_exec reset_mfa_output reset_mfa_code \
@@ -2511,29 +2609,18 @@ run_admin_operations() {
         echo "$reset_mfa_output"
         record_test "Admin reset-user-mfa" "FAIL"
     fi
-    # After admin MFA reset the test user's JWT revocation is written to
-    # revoked_tokens. Any subsequent request using an old JWT must be
-    # rejected with 401 by TokenRevocationMiddleware.
     scenario "Per-request user-wide revocation check"
-    local old_access_token="${E2E_REVOCATION_TEST_TOKEN:-}"
-    if [ -n "$old_access_token" ]; then
-        # Allow up to 35 seconds for the 30-second in-process cache to expire
-        info "Waiting 35s for revocation cache to expire before verifying..."
-        sleep 35
-        local revoke_check_resp
-        revoke_check_resp=$(curl -sk -o /dev/null -w '%{http_code}' \
-            -H "Authorization: Bearer ${old_access_token}" \
-            "${SERVER_URL}/api/files" 2>/dev/null)
-        if [ "$revoke_check_resp" = "401" ]; then
-            record_test "MFA reset: per-request revocation rejects old JWT" "PASS"
-            info "Old JWT correctly rejected with 401 after MFA reset"
-        else
-            error "Expected 401 on old JWT after MFA reset, got HTTP $revoke_check_resp"
-            record_test "MFA reset: per-request revocation rejects old JWT" "FAIL"
-        fi
+    local revoke_check_http revoke_check_code
+    safe_exec revoke_check_http revoke_check_code \
+        curl -skS -o /dev/null -w '%{http_code}' \
+        -H "Authorization: Bearer ${pre_reset_access_token}" \
+        "${SERVER_URL}/api/files"
+    if [ $revoke_check_code -eq 0 ] && [ "$revoke_check_http" = "401" ]; then
+        record_test "MFA reset immediately revokes active JWT" "PASS"
+        info "Active JWT rejected immediately after MFA reset"
     else
-        warning "No stashed access token for revocation replay; skipping e2e test"
-        record_test "MFA reset: per-request revocation rejects old JWT" "PASS"
+        error "Expected HTTP 401 immediately after MFA reset, got HTTP $revoke_check_http"
+        record_test "MFA reset immediately revokes active JWT" "FAIL"
     fi
     scenario "Admin revoke-share"
     if [ -n "$SHARE_D_ID" ]; then
@@ -2550,8 +2637,8 @@ run_admin_operations() {
             record_test "Admin revoke-share" "FAIL"
         fi
     else
-        info "Skipping revoke-share test (SHARE_D_ID not set)"
-        record_test "Admin revoke-share" "SKIP"
+        error "SHARE_D_ID not set for admin revoke-share test"
+        record_test "Admin revoke-share" "FAIL"
     fi
     scenario "Admin delete-file"
     if [ -n "$CUSTOM_FILE_ID" ]; then
@@ -2568,8 +2655,8 @@ run_admin_operations() {
             record_test "Admin delete-file" "FAIL"
         fi
     else
-        info "Skipping delete-file test (CUSTOM_FILE_ID not set)"
-        record_test "Admin delete-file" "SKIP"
+        error "CUSTOM_FILE_ID not set for admin delete-file test"
+        record_test "Admin delete-file" "FAIL"
     fi
 
     # NOTE: admin delete-user is NOT tested here because e2e-playwright.sh
