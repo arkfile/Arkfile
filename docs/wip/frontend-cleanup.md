@@ -4,11 +4,11 @@ This plan applies the same audit methodology as `docs/wip/archive/server-cleanup
 
 Status: planning (audit document)
 Created: 2026-07-18
-Scope: `client/static/js/src/**` (~50 source modules, ~18,400 LOC), `client/static/js/sw-download.js` (built from `sw-download.ts`), HTML entrypoints that load the bundle (`index.html`, `shared.html`). No server or CLI code changes unless a contract fix requires a matching E2E assertion. Prior security review findings in `docs/wip/archive/review/06-frontend-supply-ops.md` (CSP, innerHTML, supply chain) are referenced but not re-litigated here unless they intersect with dead code or misleading behavior.
+Scope: `client/static/js/src/**` (~50 source modules, ~18,400 LOC), `client/static/js/sw-download.js` (built from `sw-download.ts`), HTML entrypoints that load the bundle (`index.html`, `shared.html`). Server, schema, and CLI changes are in scope when required to remove a privacy-breaking contract, including the plaintext `password_hint` field. Other server or CLI changes remain out of scope unless a contract fix requires a matching E2E assertion. Prior security review findings in `docs/wip/archive/review/06-frontend-supply-ops.md` (CSP, innerHTML, supply chain) are referenced but not re-litigated here unless they intersect with dead code or misleading behavior.
 
 ## Principles
 
-One canonical way per browser operation (upload, owner download, share create/list/revoke, anonymous share download, export backup, billing panel load). Fail closed: no fake admin contacts, no silent decode-success on malformed API responses, no console logging of sensitive metadata in production bundles unless gated. Delete dead exports and legacy no-op APIs rather than keep them for compatibility. Shared pure helpers belong in one module (`utils/format.ts` or similar), not four copies of `formatBytes`. CLI and frontend critical crypto flows should mirror naming and logic (compare against `cmd/arkfile-client/commands.go`, `cli/*`, and Go crypto packages). After each workstream: `sudo bash scripts/dev-reset.sh`, `bash scripts/testing/e2e-test.sh`, `sudo bash scripts/testing/e2e-playwright.sh`, and `cd client/static/js && bun test`.
+One canonical way per browser operation (upload, owner download, share create/list/revoke, anonymous share download, export backup, billing panel load). Fail closed: no fake admin contacts, no silent decode-success on malformed API responses, no plaintext file metadata or password-derived information sent to the server, and no console logging of sensitive metadata in production bundles unless gated. Custom password hints are file metadata and must be encrypted client-side with the Account Key; the server must never receive or store them in plaintext. Delete dead exports and legacy no-op APIs rather than keep them for compatibility. Shared pure helpers belong in one module (`utils/format.ts` or similar), not four copies of `formatBytes`. CLI and frontend critical crypto flows should mirror naming and logic (compare against `cmd/arkfile-client/commands.go`, `cli/*`, and Go crypto packages). After each workstream: `sudo bash scripts/dev-reset.sh`, `bash scripts/testing/e2e-test.sh`, `sudo bash scripts/testing/e2e-playwright.sh`, and `cd client/static/js && bun test`.
 
 ## Progress tracker
 
@@ -16,6 +16,7 @@ One canonical way per browser operation (upload, owner download, share create/li
 |------------|--------|-------|
 | Audit inventory and reachability map | [ ] pending | grep + import graph + Playwright phase map |
 | One canonical path audit (upload/download/share) | [ ] pending | `upload.ts`, `download.ts`, `streaming-download.ts`, `share-*.ts` |
+| Encrypt custom password hints | [ ] pending | remove plaintext API/database field; coordinate frontend, CLI, server, schema, and E2E |
 | Share auth ticket-only alignment | [ ] pending | coordinate with deferred server ticket-only pass |
 | Dead code and legacy API removal | [ ] pending | unused exports, no-op token helpers, duplicate wrappers |
 | CLI parity matrix and drift fixes | [ ] pending | crypto, billing, share, export, contact-info |
@@ -46,16 +47,17 @@ One canonical way per browser operation (upload, owner download, share create/li
 
 **Highest-impact findings (initial grep/read pass)**
 
-1. **`upload.ts` is 7% of the frontend** — batch queue, retry, quota, and UI handler coexist; prime candidate for decomposition after correctness audit, similar to admin `main.go` split in CLI cleanup.
-2. **Four independent byte formatters** — `formatBytes` in `billing.ts`, `share-access.ts`, `progress.ts`; `formatFileSize` in `share-list.ts`. Server and CLI already consolidated formatters.
-3. **Share download has two exported entry points but one is dead** — `downloadSharedFileWithTicket` is used from `share-access.ts`; `downloadSharedFileChunked` is exported from `streaming-download.ts` with no callers (candidate delete).
-4. **Static `X-Download-Token` fallback remains in browser** — `streaming-download.ts` `applyShareAuthHeader` falls back when ticket provider fails; server cleanup deferred ticket-only auth. Browser, CLI, server, and E2E should move together.
-5. **Playwright still hedges on share error copy** — Phase 11 accepts many `includes(...)` alternatives for expiry, max downloads, revoked, and not-found states; server cleanup tightened the same class of assertions on the shell E2E side.
-6. **Strong crypto unit tests, weak UI flow tests** — 21 test files cover primitives well; no tests for `login.ts`, `register.ts`, `billing.ts`, `share-access.ts`, `contact-info.ts`, or `app.ts` event wiring.
-7. **Large functional gaps vs Playwright** — no browser E2E for registration, WebAuthn MFA, MFA settings, `.arkbackup` export/download, subscription checkout (only partial billing), `revoke-all`, pending-approval UX, or Service Worker large-file path.
-8. **Hygiene violations** — decorative `// ===...===` section blocks in `list.ts`, `password-modal.ts`, `share-crypto.ts`, tests; `showProgressMessage` labeled "Legacy compatibility" in `progress.ts`; comment "for now" in `opaque.ts`.
-9. **Console logging in hot paths** — `download.ts` and `streaming-download.ts` log timing and metadata fields (`password_type`, chunk counts); audit for production bundle and privacy (filename/hash must never appear).
-10. **CLI parity not yet systematically mapped** — billing human panel vs `arkfile-client billing show`, share ticket flow, digest-cache behavior (browser `digest-cache.ts` vs CLI agent), export format.
+1. **Custom password hints are sent to and stored by the server in plaintext** — `upload.ts` sends `password_hint` in `/api/uploads/init`; the server persists and returns it. Hints can reveal sensitive context or partial password material. Encrypt hints client-side with the Account Key, migrate the frontend/CLI/server/schema contract together, and prove through raw API/database assertions that plaintext hints never leave the client.
+2. **`upload.ts` is 7% of the frontend** — batch queue, retry, quota, and UI handler coexist; prime candidate for decomposition after correctness audit, similar to admin `main.go` split in CLI cleanup.
+3. **Four independent byte formatters** — `formatBytes` in `billing.ts`, `share-access.ts`, `progress.ts`; `formatFileSize` in `share-list.ts`. Server and CLI already consolidated formatters.
+4. **Share download has two exported entry points but one is dead** — `downloadSharedFileWithTicket` is used from `share-access.ts`; `downloadSharedFileChunked` is exported from `streaming-download.ts` with no callers (candidate delete).
+5. **Static `X-Download-Token` fallback remains in browser** — `streaming-download.ts` `applyShareAuthHeader` falls back when ticket provider fails; server cleanup deferred ticket-only auth. Browser, CLI, server, and E2E should move together.
+6. **Playwright still hedges on share error copy** — Phase 11 accepts many `includes(...)` alternatives for expiry, max downloads, revoked, and not-found states; server cleanup tightened the same class of assertions on the shell E2E side.
+7. **Strong crypto unit tests, weak UI flow tests** — 21 test files cover primitives well; no tests for `login.ts`, `register.ts`, `billing.ts`, `share-access.ts`, `contact-info.ts`, or `app.ts` event wiring.
+8. **Large functional gaps vs Playwright** — no browser E2E for registration, WebAuthn MFA, MFA settings, `.arkbackup` export/download, subscription checkout (only partial billing), `revoke-all`, pending-approval UX, or Service Worker large-file path.
+9. **Hygiene violations** — decorative `// ===...===` section blocks in `list.ts`, `password-modal.ts`, `share-crypto.ts`, tests; `showProgressMessage` labeled "Legacy compatibility" in `progress.ts`; comment "for now" in `opaque.ts`.
+10. **Console logging in hot paths** — `download.ts` and `streaming-download.ts` log timing and metadata fields (`password_type`, chunk counts); audit for production bundle and privacy (filename/hash must never appear).
+11. **CLI parity not yet systematically mapped** — billing human panel vs `arkfile-client billing show`, share ticket flow, digest-cache behavior (browser `digest-cache.ts` vs CLI agent), export format.
 
 ---
 
@@ -75,7 +77,7 @@ For each module under `client/static/js/src/`:
 | Reachable? | grep exports + import graph; flag exports with zero importers |
 | E2E exercised? | Map to Playwright phase or mark "not exercised" |
 | CLI mirror? | Name/logic compare to `arkfile-client` for crypto/upload/download/share/export |
-| Privacy? | Does it send plaintext filename/hash/password to network or logs? |
+| Privacy? | Does it send plaintext filename/hash/password/password hint to the network, server storage, or logs? |
 
 Produce a table (like CLI command inventory) listing each exported symbol, file, Playwright coverage (Y/N/partial), and recommended action (keep / fix / delete / add E2E).
 
@@ -98,6 +100,38 @@ Produce a table (like CLI command inventory) listing each exported symbol, file,
 **Review questions:** Is `handleFileUpload` the only UI entry? Are retry paths (`retry-handler.ts`) all reachable? Does batch upload mirror CLI multi-file behavior? On 409 duplicate, is there exactly one user-facing error string (Playwright Phase 4 expects `duplicate file detected`)?
 
 **Compare CLI:** `cmd/arkfile-client/commands.go` upload init/chunk/complete and duplicate detection messaging.
+
+### Custom password hint privacy
+
+#### Problem
+
+`upload.ts` sends the user-provided custom password hint as the plaintext `password_hint` field in `/api/uploads/init`. The server persists that value in upload sessions and file metadata and returns it to clients. A hint may contain personal information, describe the protected file, or expose part of the password. This violates Arkfile's requirement that file metadata remain encrypted from the server.
+
+The server does not need the plaintext hint. File metadata is always encrypted and decrypted with the Account Key, including when the FEK is wrapped with a custom-password-derived key. The frontend and CLI can therefore decrypt the hint before prompting for the custom password.
+
+#### Target design
+
+Replace plaintext `password_hint` with Account-Key-encrypted hint ciphertext and nonce fields using a dedicated, versioned metadata AAD context bound to the canonical file ID and owner. Use the existing metadata encryption primitives where appropriate, but do not reuse the filename or SHA-256 AAD context. Empty hints must have one canonical representation. The server treats encrypted hint fields as opaque and never receives, logs, indexes, or returns a plaintext hint.
+
+Because Arkfile is greenfield, remove the plaintext field and compatibility fallback rather than retaining dual plaintext/encrypted decoding. Coordinate these changes atomically:
+
+| Layer | Required change |
+|-------|-----------------|
+| Browser upload/download/share | Encrypt hints with the Account Key before upload; decrypt before displaying or prompting; never place plaintext hints in request bodies or logs |
+| CLI upload/download/share | Use the same encrypted field format, nonce rules, and AAD as the browser |
+| Server handlers/models/schema | Replace plaintext storage and API fields with opaque encrypted hint fields; reject obsolete plaintext input |
+| Export/backup | Carry only encrypted hint metadata and preserve the same cryptographic binding |
+| Tests | Add cross-client vectors, raw API assertions, database assertions, wrong-key/tamper failures, empty-hint behavior, and owner/custom/share flows |
+
+#### Acceptance criteria
+
+- Browser and CLI produce and consume the same encrypted hint format and AAD.
+- Raw upload, list, metadata, share, and export API responses contain no plaintext hint.
+- Database upload-session and file-metadata records contain no plaintext hint column or value.
+- The server rejects requests that attempt to submit the obsolete plaintext field.
+- Account-encrypted and custom-encrypted files display the decrypted hint only after the Account Key is available and before any custom-password prompt that needs it.
+- Hint ciphertext or AAD tampering fails closed and does not display corrupted text.
+- Tests use a unique sentinel hint and prove that it does not appear in network payloads, server responses, database contents, server logs, or production browser logs.
 
 ### Owner download
 
@@ -171,6 +205,7 @@ AGENTS.md requires mirrored critical functions. Audit each row; file mismatches 
 |-----------|---------------|-------------------|---------------|
 | Argon2id params | `crypto/constants` via API | `crypto/constants.ts`, `floors.ts` | Same floor resolution; same salt contexts (`account`, `custom`, share random salt) |
 | Chunk encrypt/upload | `commands.go` upload | `upload.ts` | Same chunk size source; same envelope/AAD layout |
+| Custom password hint | upload/download metadata | `upload.ts`, `download.ts`, `list.ts`, `share.ts` | Account-Key encryption, dedicated AAD, no plaintext server field, same empty-hint representation |
 | Chunk download/decrypt | `commands.go` download | `download.ts` + `streaming-download.ts` | Same metadata decrypt order (account key for metadata even on custom FEK) |
 | Share create | `commands.go` share create | `share-crypto.ts`, `share-creation.ts` | Envelope JSON shape, download token hash upload |
 | Share recipient download | ticket + chunks | `share-access.ts`, `share-ticket.ts` | Ticket refresh on 403; no password on wire |
@@ -334,6 +369,7 @@ Crypto primitives, AAD, Argon2 conformance, file encryption, share-crypto, strea
 | `billing.ts` render helpers | Pure functions for balance/runway formatting |
 | `share-access.ts` envelope error mapping | Anonymous share edge cases |
 | `contact-info.ts` row builders | DOM-safe HTML escaping |
+| Encrypted password hint contract | Cross-client vectors, tamper rejection, empty hint, and no plaintext request/response fields |
 | Flag: production log stripping | If debug gate added |
 
 Keep full upload/share integration in Playwright unless flakiness forces slimmer unit tests with mocked `fetch`.
@@ -355,18 +391,19 @@ Keep full upload/share integration in Playwright unless flakiness forces slimmer
 Work silent correctness and privacy before cosmetic cleanup:
 
 1. **Audit inventory** — reachability map and CLI parity matrix (read-only pass produces the function table).
-2. **Canonical path verification** — confirm single upload/download/share paths; delete `downloadSharedFileChunked` if confirmed dead.
-3. **Error message standardization** — unlock Playwright tightening.
-4. **Admin contacts frontend verification** — small, server already fixed.
-5. **Privacy logging gate** — before production deploy hardening.
-6. **Share ticket-only** — coordinate with server deferred workstream.
-7. **Duplicate formatters** — low-risk consolidation.
-8. **Dead legacy API cleanup** — `getTokenExpiry` export policy, window global audit.
-9. **Playwright hedging removal** — depends on steps 3-4.
-10. **Playwright gap fill** — registration, export, subscription.
-11. **`app.ts` decomposition** — mechanical, after behavior stable.
-12. **Hygiene pass** — dividers, comments.
-13. **Unit tests** — alongside each fix.
+2. **Encrypt custom password hints** — remove the plaintext frontend/CLI/server/schema contract and add cross-client/privacy proof before lower-risk cleanup.
+3. **Canonical path verification** — confirm single upload/download/share paths; delete `downloadSharedFileChunked` if confirmed dead.
+4. **Error message standardization** — unlock Playwright tightening.
+5. **Admin contacts frontend verification** — small, server already fixed.
+6. **Privacy logging gate** — before production deploy hardening.
+7. **Share ticket-only** — coordinate with server deferred workstream.
+8. **Duplicate formatters** — low-risk consolidation.
+9. **Dead legacy API cleanup** — `getTokenExpiry` export policy, window global audit.
+10. **Playwright hedging removal** — depends on steps 4-5.
+11. **Playwright gap fill** — registration, export, subscription.
+12. **`app.ts` decomposition** — mechanical, after behavior stable.
+13. **Hygiene pass** — dividers, comments.
+14. **Unit tests** — alongside each fix.
 
 ---
 
@@ -380,8 +417,11 @@ Work silent correctness and privacy before cosmetic cleanup:
 - [ ] Manual: 6 GB file upload/download on constrained tab (or documented SW test)
 - [ ] Manual: shared file anonymous download with ticket refresh after forced 403
 - [ ] Manual: billing panel shows transactions + runway matching CLI `billing show --json` fields
+- [ ] Browser and CLI encrypted password-hint conformance vectors pass; custom hint remains usable in owner download and share creation
+- [ ] Raw API, database, server-log, and production-browser-log checks prove a unique plaintext hint sentinel appears nowhere outside client plaintext memory/UI
+- [ ] Server rejects obsolete plaintext `password_hint` input; schema and models contain no plaintext hint storage path
 - [ ] Grep `client/static/js/src` for `default-admin`, `admin@example.com`, `docs/wip/`, decorative `===`/`---` in comments, `for now`, `backward compatibility` — zero inappropriate hits
-- [ ] Grep frontend for `console.log` of filename, sha256, password, fek — zero in production path or gated
+- [ ] Grep frontend for `console.log` of filename, sha256, password, password hint, fek — zero in production path or gated
 
 ---
 
@@ -421,7 +461,7 @@ Work silent correctness and privacy before cosmetic cleanup:
 
 ## Out of scope (this document)
 
-Vendored `libopaque.js` rebuild pipeline (see supply-chain review). Caddy/CSP/systemd changes. Server API changes except those required for frontend contract tests. Full rewrite of `06-frontend-supply-ops.md` findings. CLI changes except parity verification. Windows or non-browser clients.
+Vendored `libopaque.js` rebuild pipeline (see supply-chain review). Caddy/CSP/systemd changes. Server and CLI changes unrelated to required privacy-contract remediation; encrypted password-hint API/schema/model/CLI changes are explicitly in scope. Full rewrite of `06-frontend-supply-ops.md` findings. Windows or non-browser clients.
 
 ---
 
@@ -430,6 +470,7 @@ Vendored `libopaque.js` rebuild pipeline (see supply-chain review). Caddy/CSP/sy
 | Prior cleanup item | Frontend follow-up |
 |--------------------|-------------------|
 | Admin contacts honest API | Verify `auth.ts`, `footer.ts`, `list.ts`; add Playwright assert |
+| Plaintext custom password hint | Replace with Account-Key-encrypted metadata across browser, CLI, server, schema, export, and E2E |
 | Share ticket-only (deferred) | Remove `X-Download-Token` fallback in `streaming-download.ts` |
 | E2E hedging removal pattern | Apply to `e2e-playwright.ts` Phase 6b, 11, 12 |
 | CLI billing human parity | Match `billing.ts` display fields to CLI output |
@@ -446,7 +487,8 @@ Bounded first pass before writing fixes:
 1. Run the reachability inventory (exports with zero importers).
 2. Read `upload.ts`, `download.ts`, `streaming-download.ts`, and `share-access.ts` end-to-end with the Function Review Sanity Check list literally in hand.
 3. Map Playwright phases to functions (tables above are the starter).
-4. Build the CLI parity matrix for upload, download, share create, share receive, export.
-5. Grep for hygiene and privacy violations; triage into workstream rows.
+4. Trace `password_hint` across browser, CLI, API handlers, database schema, exports, shares, tests, and logs; define the encrypted replacement contract and sentinel privacy test.
+5. Build the CLI parity matrix for upload, download, share create, share receive, export.
+6. Grep for hygiene and privacy violations; triage into workstream rows.
 
 That first session should produce the filled-in **Function inventory (frontend)** table and a prioritized top-10 fix list, the same outcome the server and CLI audits produced before implementation began.
