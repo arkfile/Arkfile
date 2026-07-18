@@ -70,7 +70,7 @@ func TestUvFromCreation(t *testing.T) {
 
 func TestBuildAttestationObject(t *testing.T) {
 	authData := []byte{0x01, 0x02}
-	raw, err := buildAttestationObject("none", authData)
+	raw, err := buildAttestationObject(authData)
 	if err != nil {
 		t.Fatalf("buildAttestationObject: %v", err)
 	}

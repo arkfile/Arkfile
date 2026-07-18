@@ -196,17 +196,14 @@ func TestEntityIDAnonymity(t *testing.T) {
 	testIP := net.ParseIP("192.168.1.100")
 	entityID := service.GetEntityID(testIP)
 
-	// Verify entity ID doesn't contain the original IP
+	// Verify entity ID doesn't contain the original IP (full string or dotted fragments).
 	ipString := testIP.String()
 	if contains(entityID, ipString) {
 		t.Errorf("Entity ID should not contain original IP address: %s contains %s", entityID, ipString)
 	}
-
-	// Verify entity ID doesn't contain obvious IP fragments
-	ipParts := []string{"192", "168", "100"}
-	for _, part := range ipParts {
-		if contains(entityID, part) {
-			t.Errorf("Entity ID should not contain IP address fragments: %s contains %s", entityID, part)
+	for _, frag := range []string{"192.168", "168.1", "1.100"} {
+		if contains(entityID, frag) {
+			t.Errorf("Entity ID should not contain IP address fragments: %s contains %s", entityID, frag)
 		}
 	}
 }

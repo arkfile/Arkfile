@@ -32,8 +32,10 @@ func main() {
 			invoiceID = "mock_prov_abc123"
 		}
 
+		providerID := "btcpay_mock_" + invoiceID
+
 		response := map[string]interface{}{
-			"id":           "test_provider_id",
+			"id":           providerID,
 			"checkoutLink": fmt.Sprintf("http://localhost:3000/checkout/%s", invoiceID),
 		}
 

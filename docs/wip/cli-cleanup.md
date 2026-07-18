@@ -2,7 +2,7 @@
 
 This plan follows the same audit methodology as `docs/wip/server-cleanup.md`, applied to the Go CLI utilities: `cmd/arkfile-admin`, `cmd/arkfile-client`, the credential agent (`agent.go` and platform stubs), and the shared MFA package (`cli/mfa`). Every command handler and helper is reviewed against the Function Review Sanity Checks in `docs/AGENTS.md`: required, correctly implemented, well placed, reachable, privacy-preserving, and free of stubs, deprecated paths, duplicated logic, and leftover placeholder code. Arkfile is greenfield; we delete unused or unreachable CLI paths rather than maintain compatibility shims. The audit was cross-checked against `scripts/testing/e2e-test.sh` and `scripts/testing/e2e-playwright.sh` so we keep what E2E actually exercises and either delete or add coverage for what it does not. Where E2E hedges (`|| true`, pass-with-warning, or multiple acceptable outcomes), we tighten tests and fix CLI or server behavior so there is one canonical expected result.
 
-Status: implementation complete — `e2e-test.sh` pending re-verification after broader hedging + `version`/`--json` regressions (auth/session/agent pass verified 2026-07-17)
+Status: implementation complete — verified 2026-07-18 (`e2e-test.sh` 227/227 PASS; `go test ./...` all packages PASS with AGENTS.md CGO flags)
 Created: 2026-07-17  
 Scope: `cmd/arkfile-admin/` (~6,200 source LOC across decomposed files), `cmd/arkfile-client/` (~6,964 source LOC plus tests), `cli/mfa/` (~973 source LOC plus tests), new shared packages under `cli/{flags,format,jsonutil,secureinput}/`. No TypeScript frontend changes in this document unless a CLI contract fix requires a matching API assertion.
 
@@ -42,8 +42,8 @@ One canonical way per operation within each binary (single upload path, single s
 |--------|---------------|----------------|---------|
 | Go files (including tests) | 14 | 23 | 7 |
 | Source LOC | 6,325 | 6,964 | 973 |
-| Test LOC | 0 | 2,238 | 113 |
-| `_test.go` files | **0** | 5 | 2 |
+| Test LOC | 112 | 2,238 | 113 |
+| `_test.go` files | 2 | 5 | 2 |
 | Top-level / subcommands | 52 wired | 30+ | via client + admin wrappers |
 | E2E-exercised commands | ~35 invocations | ~40+ invocations | setup, recovery, backup-code, defer-MFA, and TOTP paths |
 | Dead / unwired symbols | 5+ confirmed | 1 dead alias | none |
@@ -465,7 +465,7 @@ Make an explicit decision and document it in this plan: keep per-subcommand `--j
 | `setup_test.go` | `ParseMFAMethod`, `extractOptionsJSON` |
 | `manage_test.go` | Credential parsing, reset method pick |
 
-**arkfile-admin:** none.
+**arkfile-admin:** `session_test.go`, `helpers_test.go`.
 
 ### Priority tests to add
 
@@ -536,7 +536,7 @@ Classify each `|| true` into: **teardown** (keep), **best-effort setup** (replac
 
 **Auth/session/agent (verified 2026-07-17):** removes cached MFA enrollment shortcuts; redacts credential logging; refresh rotation and MFA-reset JWT revocation; agent digest privacy and expired-session rejection; prerequisite IDs fail closed instead of SKIP.
 
-**Broader billing/subscriptions/storage/throttle (2026-07-17):** removes `|| true` from subscription gift/bridge CLI steps, registration-throttle register loops, and post-test `set-approval-policy`; tightens billing drain and PAYG cap loops to fail on non-zero admin exits; requires exact `copy-all` skip count; requires exit 0 for post-cancel top-up; fails when secondary storage is not empty at test start (requires `dev-reset.sh`).
+**Broader billing/subscriptions/storage/throttle (verified 2026-07-18):** removes `|| true` from subscription gift/bridge CLI steps, registration-throttle register loops, and post-test `set-approval-policy`; tightens billing drain and PAYG cap loops to fail on non-zero admin exits; requires exact `copy-all` skip count; requires exit 0 for post-cancel top-up; secondary empty check uses `storage-status --json`; BTCPay mock returns unique `btcpay_mock_<invoice_id>` provider IDs.
 
 **Preflight regressions:** preflight now exercises `arkfile-client version`, `arkfile-admin version`, `billing set-price --json 19.99`, and trailing `billing set-price 19.99 --json`.
 
@@ -570,12 +570,24 @@ Work in an order that fixes silent correctness bugs before cosmetic cleanup:
 
 ---
 
+## Verification results (2026-07-18)
+
+| Gate | Command | Result |
+|------|---------|--------|
+| Shell E2E | `bash scripts/testing/e2e-test.sh` (after `dev-reset.sh`) | **227/227 PASS** — includes auth/session/agent hardening, broader hedging removal, `version`/`--json` regressions, JSON secondary storage check, unique BTCPay mock provider IDs |
+| Go unit/integration | `source scripts/setup/build-config.sh && export CGO_ENABLED=1 CGO_CFLAGS="$(cli_fido_cgo_cflags)" CGO_LDFLAGS="$(cli_fido_cgo_ldflags "$PWD")" && go test ./... -count=1` | **All packages PASS** (~87s) — `auth`, `handlers`, `storage`, `cmd/arkfile-admin`, `cmd/arkfile-client`, `cli/mfa`, `cli/flags`, `clictap`, and the rest; packages without `_test.go` report `[no test files]` as expected |
+| Playwright E2E | `sudo bash scripts/testing/e2e-playwright.sh` | Not run in this verification pass |
+
+Minor test fixes applied during the unit-test gate: `clictap/webauthn_ceremony_test.go` updated for `buildAttestationObject` arity; `logging/entity_id_test.go` anonymity check no longer false-fails on hex substrings like `192`.
+
+---
+
 ## Verification checklist (final)
 
-- [ ] `sudo bash scripts/dev-reset.sh`
-- [ ] `bash scripts/testing/e2e-test.sh` — re-run after broader hedging + version/`--json` regressions (auth/session/agent pass was 100% PASS on 2026-07-17)
+- [x] `sudo bash scripts/dev-reset.sh` (prerequisite for e2e run reported by developer)
+- [x] `bash scripts/testing/e2e-test.sh` — 227/227 PASS on 2026-07-18
 - [ ] `sudo bash scripts/testing/e2e-playwright.sh` — all PASS
-- [ ] `go test ./cmd/arkfile-client/... ./cli/mfa/... ./cmd/arkfile-admin/...` — pass (after admin tests added)
+- [x] `go test ./...` — all PASS on 2026-07-18 (AGENTS.md CGO flags; full module, not CLI-only subset)
 - [x] E2E preflight: `arkfile-client version` and `arkfile-admin version` emit `<binary> <version>`
 - [x] E2E billing: `billing set-price --json 19.99` and `billing set-price 19.99 --json` both emit JSON with `microcents_per_gib_per_hour=2711`
 - [ ] Manual: `arkfile-client billing show --json` retains the raw API transactions, runway, and billable bytes/rate fields when present

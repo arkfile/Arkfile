@@ -2817,12 +2817,23 @@ run_storage_replication() {
         record_test "Multi-backend: storage-status shows both providers" "FAIL"
     fi
 
-    # Verify secondary has 0 files initially
-    if echo "$ss_output" | grep -A5 "seaweedfs-secondary" | grep -q "Files:.*0"; then
+    # Verify secondary has 0 files initially (JSON avoids brittle human-output parsing).
+    local ss_json ss_json_code secondary_objects
+    safe_exec ss_json ss_json_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure storage-status --json
+    secondary_objects=$(echo "$ss_json" | jq -r \
+        '.providers[]? | select(.provider_id == "seaweedfs-secondary") | .total_objects // empty' \
+        2>/dev/null)
+    if [ $ss_json_code -eq 0 ] && [ "$secondary_objects" = "0" ]; then
         record_test "Multi-backend: secondary starts with 0 files" "PASS"
     else
-        error "Secondary did not start with 0 files (run dev-reset before e2e):"
-        echo "$ss_output" | grep -A5 "seaweedfs-secondary" || true
+        error "Secondary seaweedfs-secondary total_objects is not 0 (run dev-reset before e2e):"
+        if [ $ss_json_code -eq 0 ]; then
+            echo "$ss_json" | jq '.providers[]? | select(.provider_id == "seaweedfs-secondary")' 2>/dev/null \
+                || echo "$ss_json"
+        else
+            echo "$ss_json"
+        fi
         record_test "Multi-backend: secondary starts with 0 files" "FAIL"
     fi
     scenario "Copy single file to secondary storage"
@@ -3497,9 +3508,9 @@ run_payments() {
     scenario "Simulate BTCPay webhook and verify credit"
 
     # Settle the invoice by sending a signed webhook payload to /api/webhooks/btcpay
-    # Payload format
+    local provider_invoice_id="btcpay_mock_${invoice_id}"
     local webhook_payload
-    webhook_payload='{"type":"InvoiceSettled","storeId":"test_store_id","invoiceId":"test_provider_id","metadata":{"invoice_id":"'"$invoice_id"'"}}'
+    webhook_payload='{"type":"InvoiceSettled","storeId":"test_store_id","invoiceId":"'"$provider_invoice_id"'","metadata":{"invoice_id":"'"$invoice_id"'"}}'
     
     # Compute signature: hmac sha256 of payload with secret "test_webhook_secret"
     local signature
@@ -3899,14 +3910,20 @@ run_subscriptions() {
 
     scenario "Invoice API allowed after gift cancel"
     user_token=$(user_access_token)
-    invoice_http=$(curl -sk -o /dev/null -w '%{http_code}' -X POST \
+    local post_cancel_invoice_raw post_cancel_invoice_out post_cancel_invoice_http post_cancel_invoice_id
+    post_cancel_invoice_raw=$(curl -sk -w '\n%{http_code}' -X POST \
         -H "Authorization: Bearer $user_token" \
         -H "Content-Type: application/json" \
         -d '{"amount_usd":"1.00"}' \
         "$SERVER_URL/api/billing/invoice")
-    if [ "$invoice_http" != "409" ]; then
+    post_cancel_invoice_http=$(echo "$post_cancel_invoice_raw" | tail -n1)
+    post_cancel_invoice_out=$(echo "$post_cancel_invoice_raw" | sed '$d')
+    post_cancel_invoice_id=$(echo "$post_cancel_invoice_out" | jq -r '.data.invoice_id // empty' 2>/dev/null)
+    if [ "$post_cancel_invoice_http" = "200" ] && [ -n "$post_cancel_invoice_id" ]; then
         record_test "Invoice API allowed after gift cancel" "PASS"
+        info "Post-cancel invoice id: $post_cancel_invoice_id"
     else
+        error "Expected invoice API HTTP 200 after gift cancel (http=$post_cancel_invoice_http): $post_cancel_invoice_out"
         record_test "Invoice API allowed after gift cancel" "FAIL"
     fi
 
@@ -3917,7 +3934,7 @@ run_subscriptions() {
     if [ $topup_code -eq 0 ]; then
         record_test "CLI top-up allowed after gift cancel" "PASS"
     else
-        error "Top-up still blocked by subscription after gift cancel: $topup_out"
+        error "CLI top-up failed after gift cancel (expected exit 0): $topup_out"
         record_test "CLI top-up allowed after gift cancel" "FAIL"
     fi
 
