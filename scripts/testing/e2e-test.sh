@@ -681,6 +681,28 @@ run_preflight() {
         record_test "arkfile-admin available" "FAIL"
     fi
 
+    scenario "CLI version commands"
+    local client_version_out client_version_code admin_version_out admin_version_code
+    safe_exec client_version_out client_version_code "$CLIENT" version
+    if [ $client_version_code -eq 0 ] && echo "$client_version_out" | grep -Eq '^arkfile-client .+'; then
+        record_test "arkfile-client version" "PASS"
+        info "Client version: $client_version_out"
+    else
+        error "arkfile-client version failed:"
+        echo "$client_version_out"
+        record_test "arkfile-client version" "FAIL"
+    fi
+
+    safe_exec admin_version_out admin_version_code "$ADMIN" version
+    if [ $admin_version_code -eq 0 ] && echo "$admin_version_out" | grep -Eq '^arkfile-admin .+'; then
+        record_test "arkfile-admin version" "PASS"
+        info "Admin version: $admin_version_out"
+    else
+        error "arkfile-admin version failed:"
+        echo "$admin_version_out"
+        record_test "arkfile-admin version" "FAIL"
+    fi
+
     success "Environment verification complete"
 }
 
@@ -2799,8 +2821,9 @@ run_storage_replication() {
     if echo "$ss_output" | grep -A5 "seaweedfs-secondary" | grep -q "Files:.*0"; then
         record_test "Multi-backend: secondary starts with 0 files" "PASS"
     else
-        warning "Secondary may already have files (ok if re-running without dev-reset)"
-        record_test "Multi-backend: secondary starts with 0 files" "PASS"
+        error "Secondary did not start with 0 files (run dev-reset before e2e):"
+        echo "$ss_output" | grep -A5 "seaweedfs-secondary" || true
+        record_test "Multi-backend: secondary starts with 0 files" "FAIL"
     fi
     scenario "Copy single file to secondary storage"
     if [ -z "$EXTRA_FILE_C_ID" ]; then
@@ -2869,8 +2892,9 @@ run_storage_replication() {
                 if echo "$ca_poll_output" | grep -q "Skipped: 1"; then
                     record_test "Multi-backend: copy-all skipped existing" "PASS"
                 else
-                    warning "copy-all did not report Skipped: 1 (may vary if re-running)"
-                    record_test "Multi-backend: copy-all skipped existing" "PASS"
+                    error "copy-all did not report Skipped: 1:"
+                    echo "$ca_poll_output"
+                    record_test "Multi-backend: copy-all skipped existing" "FAIL"
                 fi
                 record_test "Multi-backend: copy-all completed" "PASS"
             else
@@ -3096,13 +3120,27 @@ run_billing() {
     local setprice_rate
     setprice_rate=$(echo "$setprice_out" | jq -r '.microcents_per_gib_per_hour // empty' 2>/dev/null)
     if [ $setprice_code -eq 0 ] && [ "$setprice_rate" = "2711" ]; then
-        record_test "set-price 19.99 updates to 2711 microcents/GiB/hour" "PASS"
+        record_test "set-price --json 19.99 updates to 2711 microcents/GiB/hour" "PASS"
         info "set-price output:"
         echo "$setprice_out"
     else
-        error "set-price 19.99 failed or did not return microcents_per_gib_per_hour=2711"
+        error "set-price --json 19.99 failed or did not return microcents_per_gib_per_hour=2711"
         echo "$setprice_out"
-        record_test "set-price 19.99 updates to 2711 microcents/GiB/hour" "FAIL"
+        record_test "set-price --json 19.99 updates to 2711 microcents/GiB/hour" "FAIL"
+    fi
+
+    local setprice_trailing_out setprice_trailing_code setprice_trailing_rate
+    safe_exec setprice_trailing_out setprice_trailing_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing set-price 19.99 --json
+
+    setprice_trailing_rate=$(echo "$setprice_trailing_out" | jq -r '.microcents_per_gib_per_hour // empty' 2>/dev/null)
+    if [ $setprice_trailing_code -eq 0 ] && [ "$setprice_trailing_rate" = "2711" ]; then
+        record_test "set-price 19.99 --json accepts trailing --json flag" "PASS"
+    else
+        error "set-price 19.99 --json failed or did not return microcents_per_gib_per_hour=2711"
+        echo "$setprice_trailing_out"
+        record_test "set-price 19.99 --json accepts trailing --json flag" "FAIL"
     fi
 
     # Tick + sweep at the new price; the new usage row should reflect it.
@@ -3141,7 +3179,12 @@ run_billing() {
     # to the documented default after the loop exits.
     safe_exec _drain_sp_out _drain_sp_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        billing set-price 9999.99 || true
+        billing set-price 9999.99
+    if [ $_drain_sp_code -ne 0 ]; then
+        error "Failed to set extreme price for balance drain test:"
+        echo "$_drain_sp_out"
+        record_test "Set extreme price for balance drain" "FAIL"
+    fi
 
     local max_sweeps=20
     local sweep_count=0
@@ -3151,7 +3194,12 @@ run_billing() {
     while [ "$sweep_count" -lt "$max_sweeps" ]; do
         safe_exec tick_out tick_code \
             $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-            billing tick-now --sweep --json || true
+            billing tick-now --sweep --json
+        if [ $tick_code -ne 0 ]; then
+            error "tick-now --sweep failed during balance drain (sweep $((sweep_count + 1))):"
+            echo "$tick_out"
+            record_test "Balance drain tick-now --sweep" "FAIL"
+        fi
         sweep_count=$((sweep_count + 1))
 
         # Re-check balance
@@ -3194,7 +3242,12 @@ run_billing() {
     # Restore price to documented default after the drain test.
     safe_exec _restore_sp_out _restore_sp_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        billing set-price 10.00 || true
+        billing set-price 10.00
+    if [ $_restore_sp_code -ne 0 ]; then
+        error "Failed to restore price to 10.00 after balance drain test:"
+        echo "$_restore_sp_out"
+        record_test "Restore price after balance drain" "FAIL"
+    fi
 
     info "Billing complete"
 }
@@ -3264,15 +3317,16 @@ run_payments() {
         --tls-insecure \
         upload \
         --file "$cap_test_file" \
-        --password-type account || true
+        --password-type account
 
-    if echo "$cap_small_out" | grep -qi "payment_required" \
-        || echo "$cap_small_out" | grep -qi "HTTP 402"; then
-        error "Upload blocked at small negative balance (within cap):"
+    if [ $cap_small_code -eq 0 ] \
+        && ! echo "$cap_small_out" | grep -qi "payment_required" \
+        && ! echo "$cap_small_out" | grep -qi "HTTP 402"; then
+        record_test "Small negative balance does not block upload" "PASS"
+    else
+        error "Upload blocked or failed at small negative balance (within cap):"
         echo "$cap_small_out"
         record_test "Small negative balance does not block upload" "FAIL"
-    else
-        record_test "Small negative balance does not block upload" "PASS"
     fi
 
     # --- Step 2: drive balance below the -$10 cap ----------------------
@@ -3281,7 +3335,12 @@ run_payments() {
     # accumulator, then one sweep settles each round.
     safe_exec _cap_sp_out _cap_sp_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        billing set-price 999999.99 || true
+        billing set-price 999999.99
+    if [ $_cap_sp_code -ne 0 ]; then
+        error "Failed to set extreme price for PAYG cap drain:"
+        echo "$_cap_sp_out"
+        record_test "Set extreme price for PAYG cap drain" "FAIL"
+    fi
 
     local cap_drain_round=0
     local cap_max_drain_rounds=5
@@ -3300,11 +3359,21 @@ run_payments() {
         for cap_tick_i in $(seq 1 "$cap_ticks_per_round"); do
             safe_exec tick_out tick_code \
                 $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-                billing tick-now --json || true
+                billing tick-now --json
+            if [ $tick_code -ne 0 ]; then
+                error "tick-now failed during PAYG cap drain (round $((cap_drain_round + 1)), tick $cap_tick_i):"
+                echo "$tick_out"
+                record_test "PAYG cap drain tick-now" "FAIL"
+            fi
         done
         safe_exec tick_out tick_code \
             $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-            billing tick-now --sweep --json || true
+            billing tick-now --sweep --json
+        if [ $tick_code -ne 0 ]; then
+            error "tick-now --sweep failed during PAYG cap drain (round $((cap_drain_round + 1))):"
+            echo "$tick_out"
+            record_test "PAYG cap drain tick-now --sweep" "FAIL"
+        fi
         cap_drain_round=$((cap_drain_round + 1))
         safe_exec credits_after_out credits_after_code \
             $ADMIN --server-url "$SERVER_URL" --tls-insecure \
@@ -3331,15 +3400,16 @@ run_payments() {
         --tls-insecure \
         upload \
         --file "$cap_test_file" \
-        --password-type account || true
+        --password-type account
 
-    if echo "$cap_block_out" | grep -qi "payment_required" \
+    if [ $cap_block_code -ne 0 ] \
+        && echo "$cap_block_out" | grep -qi "payment_required" \
         && echo "$cap_block_out" | grep -qi "HTTP 402"; then
         record_test "Upload blocked at negative cap (402 payment_required)" "PASS"
         info "Blocked upload output:"
         echo "$cap_block_out"
     else
-        error "Upload was NOT blocked at negative cap (expected 402 payment_required):"
+        error "Upload was NOT blocked at negative cap (expected non-zero exit and 402 payment_required):"
         echo "$cap_block_out"
         record_test "Upload blocked at negative cap (402 payment_required)" "FAIL"
     fi
@@ -3367,7 +3437,12 @@ run_payments() {
 
     safe_exec _cap_restore_sp_out _cap_restore_sp_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        billing set-price 10.00 || true
+        billing set-price 10.00
+    if [ $_cap_restore_sp_code -ne 0 ]; then
+        error "Failed to restore price to 10.00 after PAYG cap test:"
+        echo "$_cap_restore_sp_out"
+        record_test "Restore price after PAYG cap test" "FAIL"
+    fi
 
     # Extract the token directly from the user's active session file
     local user_token
@@ -3648,7 +3723,7 @@ run_subscriptions() {
     local plans_out plans_code
     safe_exec plans_out plans_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        subscriptions list-plans --json || true
+        subscriptions list-plans --json
     if [ $plans_code -eq 0 ] && echo "$plans_out" | grep -q 'plan_dev_250gb'; then
         record_test "Dev plan plan_dev_250gb present" "PASS"
     else
@@ -3658,7 +3733,7 @@ run_subscriptions() {
     scenario "Grant gift subscription"
     safe_exec gift_out gift_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        subscriptions grant-gift-subscription --user "$TEST_USERNAME" --plan-id plan_dev_250gb --days 30 --note "e2e gift" || true
+        subscriptions grant-gift-subscription --user "$TEST_USERNAME" --plan-id plan_dev_250gb --days 30 --note "e2e gift"
     if [ $gift_code -eq 0 ]; then
         record_test "Grant gift subscription" "PASS"
     else
@@ -3686,7 +3761,7 @@ run_subscriptions() {
     local admin_sub_out admin_sub_code
     safe_exec admin_sub_out admin_sub_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        subscriptions show --user "$TEST_USERNAME" --json || true
+        subscriptions show --user "$TEST_USERNAME" --json
     if [ $admin_sub_code -eq 0 ] \
         && echo "$admin_sub_out" | jq -e '.billing_mode == "subscribed" and .subscription.source == "gift"' >/dev/null 2>&1 \
         && echo "$admin_sub_out" | jq -e ".effective_storage_limit_bytes == $dev_plan_storage_bytes" >/dev/null 2>&1; then
@@ -3700,7 +3775,7 @@ run_subscriptions() {
     local billing_show_out billing_show_code
     safe_exec billing_show_out billing_show_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure \
-        billing show || true
+        billing show
     if [ $billing_show_code -eq 0 ] && echo "$billing_show_out" | grep -qi "subscribed"; then
         record_test "CLI billing show while subscribed" "PASS"
     else
@@ -3711,7 +3786,7 @@ run_subscriptions() {
     local sub_status_out sub_status_code
     safe_exec sub_status_out sub_status_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure \
-        subscription status || true
+        subscription status
     if [ $sub_status_code -eq 0 ] \
         && echo "$sub_status_out" | grep -qi "250 GB" \
         && echo "$sub_status_out" | grep -qi "active"; then
@@ -3724,7 +3799,7 @@ run_subscriptions() {
     local sub_plans_out sub_plans_code
     safe_exec sub_plans_out sub_plans_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure \
-        subscription plans || true
+        subscription plans
     if [ $sub_plans_code -eq 0 ] && echo "$sub_plans_out" | grep -q 'plan_dev_250gb'; then
         record_test "CLI subscription plans while subscribed" "PASS"
     else
@@ -3753,7 +3828,7 @@ run_subscriptions() {
     scenario "CLI top-up rejected while gift subscribed"
     safe_exec topup_out topup_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure \
-        billing top-up --amount 1.00 || true
+        billing top-up --amount 1.00
     if [ $topup_code -ne 0 ] && echo "$topup_out" | grep -qi "subscription"; then
         record_test "Top-up rejected while gift subscribed" "PASS"
     else
@@ -3764,18 +3839,31 @@ run_subscriptions() {
     local tx_before_out tx_before_code tick_sub_out tick_sub_code tx_after_out tx_after_code
     safe_exec tx_before_out tx_before_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        billing show --user "$TEST_USERNAME" --json || true
+        billing show --user "$TEST_USERNAME" --json
     tx_count_before=$(echo "$tx_before_out" | jq -r '.pagination.count // 0' 2>/dev/null)
     safe_exec tick_sub_out tick_sub_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        billing tick-now --json || true
+        billing tick-now --json
     safe_exec tx_after_out tx_after_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        billing show --user "$TEST_USERNAME" --json || true
+        billing show --user "$TEST_USERNAME" --json
     tx_count_after=$(echo "$tx_after_out" | jq -r '.pagination.count // 0' 2>/dev/null)
-    if [ $tick_sub_code -eq 0 ] && [ "$tx_count_before" = "$tx_count_after" ]; then
+    if [ $tx_before_code -eq 0 ] && [ $tx_after_code -eq 0 ] && [ $tick_sub_code -eq 0 ] \
+        && [ "$tx_count_before" = "$tx_count_after" ]; then
         record_test "tick-now skips usage while gift subscribed" "PASS"
     else
+        if [ $tx_before_code -ne 0 ]; then
+            error "billing show before gift tick failed:"
+            echo "$tx_before_out"
+        fi
+        if [ $tick_sub_code -ne 0 ]; then
+            error "tick-now failed while gift subscribed:"
+            echo "$tick_sub_out"
+        fi
+        if [ $tx_after_code -ne 0 ]; then
+            error "billing show after gift tick failed:"
+            echo "$tx_after_out"
+        fi
         error "Usage tx count changed while subscribed: before=$tx_count_before after=$tx_count_after"
         record_test "tick-now skips usage while gift subscribed" "FAIL"
     fi
@@ -3783,7 +3871,7 @@ run_subscriptions() {
     scenario "Cancel gift subscription"
     safe_exec cancel_out cancel_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        subscriptions cancel-gift-subscription --user "$TEST_USERNAME" --immediate || true
+        subscriptions cancel-gift-subscription --user "$TEST_USERNAME" --immediate
     if [ $cancel_code -eq 0 ]; then
         record_test "Cancel gift subscription" "PASS"
     else
@@ -3825,8 +3913,8 @@ run_subscriptions() {
     scenario "CLI top-up allowed after gift cancel"
     safe_exec topup_out topup_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure \
-        billing top-up --amount 1.00 || true
-    if [ $topup_code -eq 0 ] || ! echo "$topup_out" | grep -qi "subscription"; then
+        billing top-up --amount 1.00
+    if [ $topup_code -eq 0 ]; then
         record_test "CLI top-up allowed after gift cancel" "PASS"
     else
         error "Top-up still blocked by subscription after gift cancel: $topup_out"
@@ -3883,7 +3971,7 @@ run_subscriptions() {
     scenario "CLI subscription status after bridge activate"
     safe_exec sub_status_out sub_status_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure \
-        subscription status || true
+        subscription status
     if [ $sub_status_code -eq 0 ] \
         && echo "$sub_status_out" | grep -qi "250 GB" \
         && echo "$sub_status_out" | grep -qi "active"; then
@@ -3895,7 +3983,7 @@ run_subscriptions() {
     scenario "Grant gift rejected with bridge subscription"
     safe_exec gift_dup_out gift_dup_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        subscriptions grant-gift-subscription --user "$TEST_USERNAME" --plan-id plan_dev_250gb --days 30 --note "e2e duplicate gift" || true
+        subscriptions grant-gift-subscription --user "$TEST_USERNAME" --plan-id plan_dev_250gb --days 30 --note "e2e duplicate gift"
     if [ $gift_dup_code -ne 0 ] && echo "$gift_dup_out" | grep -Eiq "active|subscription|already"; then
         record_test "Grant gift rejected with bridge subscription" "PASS"
     else
@@ -3906,7 +3994,7 @@ run_subscriptions() {
     scenario "Cancel gift rejected for bridge subscription"
     safe_exec cancel_bridge_out cancel_bridge_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        subscriptions cancel-gift-subscription --user "$TEST_USERNAME" --immediate || true
+        subscriptions cancel-gift-subscription --user "$TEST_USERNAME" --immediate
     if [ $cancel_bridge_code -ne 0 ] && echo "$cancel_bridge_out" | grep -Eiq "paid|portal|processor|bridge"; then
         record_test "Cancel gift rejected for bridge subscription" "PASS"
     else
@@ -3930,7 +4018,7 @@ run_subscriptions() {
     scenario "CLI top-up rejected while bridge subscribed"
     safe_exec topup_out topup_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure \
-        billing top-up --amount 1.00 || true
+        billing top-up --amount 1.00
     if [ $topup_code -ne 0 ] && echo "$topup_out" | grep -qi "subscription"; then
         record_test "Top-up rejected while bridge subscribed" "PASS"
     else
@@ -3942,13 +4030,14 @@ run_subscriptions() {
     if [ -n "$bridge_sub_ref" ]; then
         safe_exec admin_sub_before admin_sub_before_code \
             $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-            subscriptions show --user "$TEST_USERNAME" --json || true
+            subscriptions show --user "$TEST_USERNAME" --json
         dup_wh1=$(mock_bridge_replay "$bridge_sub_ref")
         dup_wh2=$(mock_bridge_replay "$bridge_sub_ref")
         safe_exec admin_sub_after admin_sub_after_code \
             $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-            subscriptions show --user "$TEST_USERNAME" --json || true
-        if echo "$dup_wh1" | jq -e '.success == true' >/dev/null 2>&1 \
+            subscriptions show --user "$TEST_USERNAME" --json
+        if [ $admin_sub_before_code -eq 0 ] && [ $admin_sub_after_code -eq 0 ] \
+            && echo "$dup_wh1" | jq -e '.success == true' >/dev/null 2>&1 \
             && echo "$dup_wh2" | jq -e '.success == true' >/dev/null 2>&1 \
             && [ "$admin_sub_before" = "$admin_sub_after" ]; then
             record_test "Duplicate subscription bridge webhook idempotent" "PASS"
@@ -4013,7 +4102,7 @@ run_registration_throttle() {
     local reset_out reset_code
     safe_exec reset_out reset_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        reset-registration-throttle --json || true
+        reset-registration-throttle --json
     if [ $reset_code -eq 0 ]; then
         record_test "reset-registration-throttle (pre)" "PASS"
     else
@@ -4031,7 +4120,7 @@ run_registration_throttle() {
                 --server-url '$SERVER_URL' \
                 --tls-insecure \
                 register \
-                --username '${throttle_prefix}-${i}'" || true
+                --username '${throttle_prefix}-${i}'"
         if [ $code -eq 0 ] && echo "$out" | grep -q "Registration successful"; then
             ok_count=$((ok_count + 1))
         else
@@ -4054,7 +4143,7 @@ run_registration_throttle() {
             --server-url '$SERVER_URL' \
             --tls-insecure \
             register \
-            --username '${throttle_prefix}-8'" || true
+            --username '${throttle_prefix}-8'"
 
     if [ $eighth_code -ne 0 ] \
         && echo "$eighth_out" | grep -qi "HTTP 429" \
@@ -4071,7 +4160,7 @@ run_registration_throttle() {
     scenario "Reset registration throttle (cleanup)"
     safe_exec reset_out reset_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        reset-registration-throttle --json || true
+        reset-registration-throttle --json
     if [ $reset_code -eq 0 ]; then
         record_test "reset-registration-throttle (cleanup)" "PASS"
     else
@@ -4094,7 +4183,7 @@ run_enable_auto_approval() {
     local flip_out flip_code
     safe_exec flip_out flip_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        set-approval-policy --require-approval false || true
+        set-approval-policy --require-approval false
     if [ $flip_code -eq 0 ]; then
         record_test "set-approval-policy --require-approval false" "PASS"
         info "$flip_out"
