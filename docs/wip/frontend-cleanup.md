@@ -2,29 +2,30 @@
 
 This plan applies the same audit methodology as `docs/wip/archive/server-cleanup.md` and `docs/wip/archive/cli-cleanup.md` to the TypeScript browser client under `client/static/js/src/`. Every exported function, class method, and UI flow handler is reviewed against the Function Review Sanity Checks in `AGENTS.md`: required, correctly implemented, well placed, reachable, privacy-preserving, and free of stubs, deprecated paths, duplicated logic, and leftover placeholder code. Arkfile is greenfield; delete unused or misleading frontend paths rather than maintain compatibility shims. The audit is cross-checked against `scripts/testing/e2e-playwright.sh` (primary frontend proof), `scripts/testing/e2e-test.sh` (CLI/API baseline the browser should mirror), and `bun test` in `client/static/js/`. Where Playwright hedges (`includes(...)` with many alternatives, idempotent SKIP, pass-without-assertion), tighten tests and fix frontend behavior so there is one canonical expected result. Cross-client parity with `arkfile-client` is explicit: AGENTS.md requires one way to encrypt/upload, download/decrypt, and share per client type, with matching structure where practical.
 
-Status: implementation complete (2026-07-21) — unit tests passing; run dev-reset + e2e locally to verify
+Status: verified complete (2026-07-21) — unit tests, `e2e-test.sh`, and `e2e-playwright.sh` all passed (Playwright 18/18)
 Created: 2026-07-18
 Audited: 2026-07-20
 Priorities updated: 2026-07-21
 Tranches and Playwright scope locked: 2026-07-21
 Findings rechecked against implementation: 2026-07-21
 Implementation: 2026-07-21
+E2E verified: 2026-07-21 (`e2e-test.sh` + Playwright 18 passed in 5.2m)
 Scope: `client/static/js/src/**` (47 source modules excl. tests/`.d.ts`, ~18,043 LOC), `client/static/js/sw-download.js` (built from `sw-download.ts`), HTML entrypoints that load the bundle (`index.html`, `shared.html`). Server, schema, and CLI changes are in scope when required to remove a privacy-breaking shared contract, including plaintext `password_hint`, or to correct the shared chunk-accounting defect. Cross-stack documentation updates for intentionally server-visible operational metadata (billable storage size) are in scope; do not change size visibility or billing behavior merely to conceal size. Other server or CLI changes remain out of scope unless a contract or chunk fix requires matching implementation and E2E assertions. Archived WIP documents are reference material only and are not changed by this project.
 
 ## Principles
 
-One canonical way per browser operation (upload, owner download, share create/list/revoke, anonymous share download, export backup, billing panel load, verify local file digest). Fail closed where technically possible: no fake admin contacts, no silent decode-success on malformed API responses, and no console logging of sensitive metadata in production bundles unless gated. Target state: no sensitive plaintext file metadata is sent to or stored by the server except explicitly documented operational fields whose necessity has been reviewed. That target is not met today for custom password hints (plaintext end-to-end). Custom password hints must be encrypted client-side with the Account Key. Remove the plaintext contract completely from clients, handlers, models, schema, tests, and comments; do not retain compatibility branches, deprecated names, or explanatory remnants of the removed path. The server knowing or computing pre-padded file size (encrypted length and inferable plaintext size) is intentional for storage accounting and billing; document this clearly across the codebase and do not change the wire contract merely to conceal size. Large-file downloads must remain possible on all client types: CLI streams decrypt-to-disk; browser uses the Service Worker path with chunk-bounded memory. Retain the working Blob fallback for environments where Service Worker streaming is unavailable or cannot initialize, without an Arkfile-imposed file-size cap; clearly explain that Blob fallback buffers the plaintext and may exhaust browser resources for large files. Download integrity UX must be honest about browser limits: always surface the expected SHA-256 at completion; when inline verification ran, show its result; when a streamed download may already be on disk before the whole-file digest is known, explain why and point users to the Verify File tool or an offline hasher. Do not claim clean success when inline verification reports a mismatch. Delete dead exports and legacy no-op APIs rather than keep them for compatibility. Shared pure helpers belong in one module (`utils/format.ts` or similar), not four copies of `formatBytes`. CLI and frontend critical crypto flows should mirror protocol behavior and test vectors (envelope bytes, AAD, salts, ticket refresh, chunk accounting, digest display and verification semantics); matching function names is secondary. The Go CLI is the current reference implementation after its cleanup, but parity does not prove correctness: shared frontend/CLI protocol deficiencies must be recorded and fixed in both. After each workstream: `sudo bash scripts/dev-reset.sh`, `bash scripts/testing/e2e-test.sh`, `sudo bash scripts/testing/e2e-playwright.sh`, and `cd client/static/js && bun test`.
+One canonical way per browser operation (upload, owner download, share create/list/revoke, anonymous share download, export backup, billing panel load, verify local file digest). Fail closed where technically possible: no fake admin contacts, no silent decode-success on malformed API responses, and no console logging of sensitive metadata in production bundles unless gated. Target state: no sensitive plaintext file metadata is sent to or stored by the server except explicitly documented operational fields whose necessity has been reviewed. Custom password hints are Account-Key encrypted (`encrypted_password_hint` + nonce); the plaintext hint contract has been removed from clients, handlers, models, schema, tests, and comments with no compatibility remnants. The server knowing or computing pre-padded file size (encrypted length and inferable plaintext size) is intentional for storage accounting and billing; document this clearly across the codebase and do not change the wire contract merely to conceal size. Large-file downloads must remain possible on all client types: CLI streams decrypt-to-disk; browser uses the Service Worker path with chunk-bounded memory. Retain the working Blob fallback for environments where Service Worker streaming is unavailable or cannot initialize, without an Arkfile-imposed file-size cap; clearly explain that Blob fallback buffers the plaintext and may exhaust browser resources for large files. Download integrity UX must be honest about browser limits: always surface the expected SHA-256 at completion; when inline verification ran, show its result; when a streamed download may already be on disk before the whole-file digest is known, explain why and point users to the Verify File tool or an offline hasher. Do not claim clean success when inline verification reports a mismatch. Delete dead exports and legacy no-op APIs rather than keep them for compatibility. Shared pure helpers belong in one module (`utils/format.ts` or similar), not four copies of `formatBytes`. CLI and frontend critical crypto flows should mirror protocol behavior and test vectors (envelope bytes, AAD, salts, ticket refresh, chunk accounting, digest display and verification semantics); matching function names is secondary. The Go CLI is the current reference implementation after its cleanup, but parity does not prove correctness: shared frontend/CLI protocol deficiencies must be recorded and fixed in both. After each workstream: `sudo bash scripts/dev-reset.sh`, `bash scripts/testing/e2e-test.sh`, `sudo bash scripts/testing/e2e-playwright.sh`, and `cd client/static/js && bun test`.
 
 ## Progress tracker
 
 | Workstream | Status | Notes |
 |------------|--------|-------|
 | Audit inventory and reachability map | [x] done | 2026-07-20: ~271 runtime exports by source scan; zero-importer count provisional; actionable inventory below |
-| One canonical path audit (upload/download/share) | [x] done | Single upload/owner-download/share-ticket paths confirmed; download integrity UX open |
+| One canonical path audit (upload/download/share) | [x] done | Single upload/owner-download/share-ticket paths confirmed; integrity UX implemented |
 | CLI parity matrix and drift fixes | [x] audited | Matrix filled; crypto mostly matches; shared hint defect and frontend-only Blob defects recorded |
 | Encrypt custom password hints (tranche 1) | [x] done | Account-Key encrypted hint + nonce; greenfield removal of plaintext contract across FE/CLI/server/schema |
 | Canonical chunk accounting (tranche 1) | [x] done | `models.CalculateChunkCount` uses encrypted span; completion/meta use session/DB counts; boundary unit tests |
-| Download integrity UX + Verify File tool (tranche 1) | [x] done | Integrity panel helpers; Blob mismatch blocks trigger; Verify File panel + streaming hasher; uncapped Blob retained |
+| Download integrity UX + Verify File tool (tranche 1) | [x] done | Integrity panel helpers; Blob mismatch blocks trigger; Verify File panel + streaming hasher; uncapped Blob retained; nav-panel mutual exclusion includes integrity panel |
 | Server-visible metadata documentation (tranche 1) | [x] done | AGENTS.md + docs/security.md + uploads handler comments |
 | Account key cache lifecycle (tranche 2) | [x] done | Unified teardown via cleanupAccountKeyCache; orphan ciphertext clear; docs/claims corrected |
 | Share auth ticket-only cleanup (tranche 2) | [x] done | Dead static wrapper removed; ticket failure fails closed; server static fallback removed |
@@ -36,7 +37,8 @@ One canonical way per browser operation (upload, owner download, share create/li
 | Error message consistency (tranche 2) | [x] done | Stable `data-testid` for wrong-password and share access errors |
 | `app.ts` decomposition (tranche 3) | [ ] deferred | Behavior stabilized; mechanical split left for a follow-up (low risk, low urgency) |
 | Playwright hedging removal (tranche 2) | [x] done | Upload SKIP and share OR-hedges tightened; billing top-up fails closed |
-| Playwright registration flow (tranche 3) | [x] done | Isolated register → TOTP → 25 MB custom upload → verify → revoke-all |
+| Playwright registration flow (tranche 3) | [x] done | Isolated register → TOTP → 25 MB custom upload → verify → revoke-all; E2E passed (spaced TOTP secret + integrity-panel overlay fixes) |
+| E2E verification (`e2e-test.sh` + Playwright) | [x] done | 2026-07-21: CLI/API e2e green; Playwright 18/18 in 5.2m |
 | Frontend billing display parity (tranche 3) | [x] done | PAYG upload cap, `rate_human`, run-out timestamp |
 | Structural consolidation + hygiene (tranche 3) | [x] done | Formatters + hygiene + prod debug gate; `app.ts` split deferred |
 | Unit test gap fill | [x] done | Hint round-trip, chunk counts, admin contacts, ticket fail-closed, integrity helpers |
@@ -117,7 +119,7 @@ Work proceeds in three tranches. Do not expand Playwright beyond the single appr
 | Runtime exports surveyed | ~271 (source scan; approximate) |
 | Exports with zero external importers | Provisional count; individually listed candidates reverified |
 | Largest modules | `upload.ts` (~1,288), `billing.ts` (~880), `totp.ts` (~871), `streaming-download.ts` (~807), `account-key-cache.ts` (~756), `app.ts` (~748) |
-| Playwright E2E coverage | Existing: login-through-logout shared-page suite + billing + contact-info embedded in share-revocation test. Planned (tranche 3): one isolated registration → TOTP → 25 MB custom-password round trip → revoke-all flow |
+| Playwright E2E coverage | Existing shared-page suite + billing + contact-info; tranche-3 isolated registration → TOTP → 25 MB custom-password round trip → revoke-all — verified 2026-07-21 (18/18) |
 | `bun test` focus | Crypto, streaming download, upload batch helpers, auth cookie model; minimal UI/integration |
 
 **Highest-impact findings (post-audit, prioritized)**
@@ -905,7 +907,19 @@ Use test titles in `scripts/testing/e2e-playwright.ts` when referring to coverag
 | Billing top-up modal creates invoice and embeds checkout iframe | billing top-up modal | Top-up **SKIP-pass** |
 | External-tab checkout return opens billing panel and confirms paid invoice | billing checkout return | No |
 | Logout and post-logout security checks | cookies/sessionStorage | Soft re-login skip |
-| *(planned tranche 3)* Registration, TOTP, 25 MB custom upload, verify, revoke-all | `register.ts`, `totp-setup.ts`, `upload.ts`, `download.ts`, `auth.ts` | **Not yet in spec** — add as single isolated test |
+| Register, TOTP, 25 MB custom upload, verify, revoke-all | `register.ts`, `totp-setup.ts`, `upload.ts`, `download.ts`, `auth.ts` | No — isolated describe; TOTP uses normalized manual-entry secret; revoke waits for toast/integrity panel clear |
+
+---
+
+## Verification record (2026-07-21)
+
+Implementation and post-fix hardening verified on a local `dev-reset` instance:
+
+- `go test ./...` (CGO/FIDO flags per AGENTS.md) and `cd client/static/js && bun test` / `bun run lint` — green during implementation.
+- `bash scripts/testing/e2e-test.sh` — passed (including encrypted-hint sentinel and ticket-issuance invalid-token rate limiting; no `X-Download-Token` on chunks).
+- `sudo bash scripts/testing/e2e-playwright.sh` — **18 passed (5.2m)**. Registration-flow fixes applied during verification: strip spaces from TOTP `manual_entry` before `generate-totp`; hide `#download-integrity-panel` via shared nav-panel mutual exclusion before revoke-all.
+
+Remaining deferred (explicitly out of this project's Playwright scope): mechanical `app.ts` split; dedicated Verify File / 6 GB SW browser E2E; export-click, WebAuthn, MFA settings, subscription, admin-contacts footer, and custom-password share recipient browser coverage (covered by CLI e2e, unit tests, or manual proof as noted above).
 
 ---
 

@@ -2,6 +2,29 @@
  * UI section management utilities
  */
 
+/** Absolute-positioned nav dropdown panels that must be mutually exclusive. */
+export const NAV_INLINE_PANEL_IDS = [
+  'security-settings',
+  'contact-info-panel',
+  'billing-panel',
+  'verify-file-panel',
+  'download-integrity-panel',
+] as const;
+
+/**
+ * Hide all nav inline panels except the given id (or hide all when keep is omitted).
+ * Prevents stacked .security-panel overlays from intercepting clicks.
+ */
+export function closeNavInlinePanelsExcept(keep?: string): void {
+  for (const id of NAV_INLINE_PANEL_IDS) {
+    if (keep !== undefined && id === keep) continue;
+    const el = document.getElementById(id);
+    if (el && !el.classList.contains('hidden')) {
+      el.classList.add('hidden');
+    }
+  }
+}
+
 export function showFileSection(): void {
   const authSection = document.getElementById('auth-section');
   const fileSection = document.getElementById('file-section');
@@ -123,6 +146,7 @@ export function toggleSecuritySettings(): void {
     const opening = securityPanel.classList.contains('hidden');
     securityPanel.classList.toggle('hidden');
     if (opening) {
+      closeNavInlinePanelsExcept('security-settings');
       void import('../auth/mfa-settings.js').then(({ loadMFASettingsPanel }) => loadMFASettingsPanel());
     }
   }

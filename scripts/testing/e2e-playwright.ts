@@ -31,7 +31,7 @@
  */
 
 import { test, expect, type Page, type Download, type BrowserContext } from '@playwright/test';
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import { createHash } from 'crypto';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
@@ -111,12 +111,23 @@ async function waitForMfaWindow(context: string): Promise<void> {
 /**
  * Generate a TOTP code using arkfile-client CLI for an arbitrary secret.
  * Must be called AFTER waitForMfaWindow().
+ *
+ * UI "manual entry" secrets are space-grouped (e.g. "ABCD EFGH ..."); strip
+ * whitespace and pass via argv so the full base32 secret reaches the CLI.
  */
 function generateTotpCode(secret: string, context: string): string {
-  const output = execSync(`${CLIENT_BIN} generate-totp --secret ${secret}`, {
-    encoding: 'utf-8',
-    timeout: 10_000,
-  }).trim();
+  const normalized = secret.replace(/\s+/g, '');
+  if (normalized.length < 16) {
+    throw new Error(`TOTP secret too short after normalization (len=${normalized.length})`);
+  }
+  const output = execFileSync(
+    CLIENT_BIN,
+    ['generate-totp', '--secret', normalized],
+    { encoding: 'utf-8', timeout: 10_000 },
+  ).trim();
+  if (!/^\d{6}$/.test(output)) {
+    throw new Error(`generate-totp returned unexpected output: ${output}`);
+  }
   logStep(context, `Generated TOTP code: ${output}`);
   return output;
 }
@@ -1332,11 +1343,32 @@ test.describe.serial('Arkfile Playwright registration flow', () => {
     const totpCode = generateTotpCode(totpSecret, 'reg-flow');
     await page.fill('#totp-setup-code', totpCode);
     await page.waitForSelector('#complete-totp-setup:not([disabled])', { timeout: 5_000 });
+
+    const verifyResponsePromise = page.waitForResponse(
+      (res) => res.url().includes('/api/mfa/verify') && res.request().method() === 'POST',
+      { timeout: 60_000 },
+    );
     await page.click('#complete-totp-setup');
+    const verifyResponse = await verifyResponsePromise;
+    if (!verifyResponse.ok()) {
+      const body = await verifyResponse.text().catch(() => '');
+      throw new Error(
+        `TOTP setup verify failed: HTTP ${verifyResponse.status()} ${body.slice(0, 300)}`,
+      );
+    }
 
     // Auto-approval (set by e2e-test.sh run_enable_auto_approval) yields authenticated file section.
+    // Unapproved users land on pending-approval instead — fail clearly if that happens.
     logStep('reg-flow', 'Waiting for authenticated file section after TOTP...');
-    await page.waitForSelector('#file-section', { state: 'visible', timeout: 120_000 });
+    const postTotp = await Promise.race([
+      page.waitForSelector('#file-section', { state: 'visible', timeout: 120_000 }).then(() => 'file' as const),
+      page.waitForSelector('#pending-approval-section', { state: 'visible', timeout: 120_000 }).then(() => 'pending' as const),
+    ]);
+    if (postTotp === 'pending') {
+      throw new Error(
+        'Registration completed but user is pending approval; ensure e2e-test.sh enabled require_approval=false',
+      );
+    }
     console.log('[OK] Registration + TOTP complete; file section visible');
 
     // 3. Custom-password upload of 25 MB fixture
@@ -1417,8 +1449,12 @@ test.describe.serial('Arkfile Playwright registration flow', () => {
 
     // 5. Revoke all sessions and assert protected UI requires re-login
     logStep('reg-flow', 'Opening Security Settings and revoking all sessions...');
+    // Toasts / download-integrity panel share the nav overlay stack; wait for
+    // toasts to clear, then open Security Settings (which hides the integrity panel).
+    await page.locator('#message-container .toast').waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {});
     await page.click('#security-settings-toggle');
     await page.waitForSelector('#security-settings:not(.hidden)', { timeout: 10_000 });
+    await expect(page.locator('#download-integrity-panel')).toBeHidden();
     await page.click('#revoke-sessions-btn');
 
     await page.waitForSelector('.home-container:not(.hidden)', { state: 'visible', timeout: 30_000 });

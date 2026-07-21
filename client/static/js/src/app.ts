@@ -328,23 +328,10 @@ class ArkFileApp {
       });
       securityToggle.addEventListener('click', async (e) => {
         e.preventDefault();
+        // Mutual exclusion (incl. download-integrity-panel) is handled inside
+        // toggleSecuritySettings when opening.
         const { toggleSecuritySettings } = await import('./ui/sections');
         toggleSecuritySettings();
-        // Close contact info panel if open
-        const contactPanel = document.getElementById('contact-info-panel');
-        if (contactPanel && !contactPanel.classList.contains('hidden')) {
-          contactPanel.classList.add('hidden');
-        }
-        // Close billing panel if open
-        const billingPanel = document.getElementById('billing-panel');
-        if (billingPanel && !billingPanel.classList.contains('hidden')) {
-          billingPanel.classList.add('hidden');
-        }
-        // Close verify file panel if open
-        const verifyPanel = document.getElementById('verify-file-panel');
-        if (verifyPanel && !verifyPanel.classList.contains('hidden')) {
-          verifyPanel.classList.add('hidden');
-        }
       });
     }
 
@@ -353,13 +340,9 @@ class ArkFileApp {
     if (contactToggle) {
       contactToggle.addEventListener('click', async (e) => {
         e.preventDefault();
+        // Mutual exclusion handled inside toggleContactInfoPanel when opening.
         const { toggleContactInfoPanel } = await import('./ui/contact-info');
         await toggleContactInfoPanel();
-        // Close billing panel if open (mutual exclusion with the other inline panels).
-        const billingPanel = document.getElementById('billing-panel');
-        if (billingPanel && !billingPanel.classList.contains('hidden')) {
-          billingPanel.classList.add('hidden');
-        }
       });
     }
 

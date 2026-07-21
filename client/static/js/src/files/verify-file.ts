@@ -10,6 +10,7 @@ import { computeStreamingSHA256, normalizeSha256Hex, constantTimeHexEqual } from
 import { getChunkingParams } from '../crypto/constants.js';
 import { showError, showSuccess } from '../ui/messages.js';
 import { showProgress, updateProgress, hideProgress } from '../ui/progress.js';
+import { closeNavInlinePanelsExcept } from '../ui/sections.js';
 
 export type VerifyFileOutcome = 'match' | 'mismatch' | 'invalid_expected' | 'cancelled' | 'error';
 
@@ -60,13 +61,7 @@ export async function verifyLocalFileDigest(
 
 /** Close sibling nav panels except the given id. */
 function closeSiblingPanels(keep: string): void {
-  for (const id of ['security-settings', 'contact-info-panel', 'billing-panel', 'verify-file-panel']) {
-    if (id === keep) continue;
-    const el = document.getElementById(id);
-    if (el && !el.classList.contains('hidden')) {
-      el.classList.add('hidden');
-    }
-  }
+  closeNavInlinePanelsExcept(keep);
 }
 
 /**

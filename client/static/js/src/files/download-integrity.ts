@@ -20,6 +20,7 @@
  */
 
 import { showError, showSuccess, showWarning, showInfo } from '../ui/messages.js';
+import { closeNavInlinePanelsExcept } from '../ui/sections.js';
 import { openVerifyFilePanel } from './verify-file.js';
 
 export type HashVerification = 'skipped' | 'match' | 'mismatch' | 'unavailable';
@@ -81,6 +82,10 @@ export function renderDownloadIntegrityPanel(
   if (!panel) return;
 
   panel.classList.remove('hidden');
+  // Main-app integrity panel shares absolute positioning with other nav panels.
+  if (panelId === 'download-integrity-panel') {
+    closeNavInlinePanelsExcept('download-integrity-panel');
+  }
   panel.innerHTML = '';
 
   const heading = document.createElement('h3');

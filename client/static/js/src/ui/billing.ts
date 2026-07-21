@@ -25,6 +25,7 @@
 
 import { authenticatedFetch, refreshToken, isAuthenticated, validateToken } from '../utils/auth';
 import { formatBytes } from '../utils/format.js';
+import { closeNavInlinePanelsExcept } from './sections.js';
 
 /** Toggle the billing panel visibility, loading data on open. */
 export async function toggleBillingPanel(): Promise<void> {
@@ -34,22 +35,10 @@ export async function toggleBillingPanel(): Promise<void> {
   const isHidden = panel.classList.contains('hidden');
   panel.classList.toggle('hidden');
 
-  // Mutual exclusion with the other inline panels.
-  closeOtherPanels('billing-panel');
-
+  // Mutual exclusion with the other inline panels (incl. download integrity).
   if (isHidden) {
+    closeNavInlinePanelsExcept('billing-panel');
     await loadBilling();
-  }
-}
-
-/** Close any open sibling panel except `keep`. */
-function closeOtherPanels(keep: string): void {
-  for (const id of ['security-settings', 'contact-info-panel', 'billing-panel', 'verify-file-panel']) {
-    if (id === keep) continue;
-    const el = document.getElementById(id);
-    if (el && !el.classList.contains('hidden')) {
-      el.classList.add('hidden');
-    }
   }
 }
 
@@ -551,7 +540,7 @@ export async function resumePendingBillingCheckout(): Promise<boolean> {
   const panel = document.getElementById('billing-panel');
   if (panel) {
     panel.classList.remove('hidden');
-    closeOtherPanels('billing-panel');
+    closeNavInlinePanelsExcept('billing-panel');
   }
 
   const content = document.getElementById('billing-panel-content');
@@ -594,7 +583,7 @@ export async function resumePendingSubscriptionCheckout(): Promise<boolean> {
   const panel = document.getElementById('billing-panel');
   if (panel) {
     panel.classList.remove('hidden');
-    closeOtherPanels('billing-panel');
+    closeNavInlinePanelsExcept('billing-panel');
   }
   const content = document.getElementById('billing-panel-content');
   if (content) {
