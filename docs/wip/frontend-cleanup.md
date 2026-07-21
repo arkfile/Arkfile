@@ -2,25 +2,26 @@
 
 This plan applies the same audit methodology as `docs/wip/archive/server-cleanup.md` and `docs/wip/archive/cli-cleanup.md` to the TypeScript browser client under `client/static/js/src/`. Every exported function, class method, and UI flow handler is reviewed against the Function Review Sanity Checks in `AGENTS.md`: required, correctly implemented, well placed, reachable, privacy-preserving, and free of stubs, deprecated paths, duplicated logic, and leftover placeholder code. Arkfile is greenfield; delete unused or misleading frontend paths rather than maintain compatibility shims. The audit is cross-checked against `scripts/testing/e2e-playwright.sh` (primary frontend proof), `scripts/testing/e2e-test.sh` (CLI/API baseline the browser should mirror), and `bun test` in `client/static/js/`. Where Playwright hedges (`includes(...)` with many alternatives, idempotent SKIP, pass-without-assertion), tighten tests and fix frontend behavior so there is one canonical expected result. Cross-client parity with `arkfile-client` is explicit: AGENTS.md requires one way to encrypt/upload, download/decrypt, and share per client type, with matching structure where practical.
 
-Status: audit complete (2026-07-20) — ready for implementation; no application code changes from this pass
+Status: audit complete (2026-07-20); priorities refined (2026-07-21) — ready for implementation
 Created: 2026-07-18
 Audited: 2026-07-20
-Scope: `client/static/js/src/**` (47 source modules excl. tests/`.d.ts`, ~18,043 LOC), `client/static/js/sw-download.js` (built from `sw-download.ts`), HTML entrypoints that load the bundle (`index.html`, `shared.html`). Server, schema, and CLI changes are in scope when required to remove a privacy-breaking shared contract, including plaintext `password_hint` and any approved remediation for exact-size/key-type leakage. Other server or CLI changes remain out of scope unless a contract fix requires a matching E2E assertion. Prior security review findings in `docs/wip/archive/review/06-frontend-supply-ops.md` (CSP, innerHTML, supply chain) are referenced but not re-litigated here unless they intersect with dead code or misleading behavior.
+Priorities updated: 2026-07-21
+Scope: `client/static/js/src/**` (47 source modules excl. tests/`.d.ts`, ~18,043 LOC), `client/static/js/sw-download.js` (built from `sw-download.ts`), HTML entrypoints that load the bundle (`index.html`, `shared.html`). Server, schema, and CLI changes are in scope when required to remove a privacy-breaking shared contract, including plaintext `password_hint`. Cross-stack documentation updates for intentionally server-visible operational metadata (billable storage size) are in scope; wire-format or behavior changes for size accounting are not. Other server or CLI changes remain out of scope unless a contract fix requires a matching E2E assertion. Prior security review findings in `docs/wip/archive/review/06-frontend-supply-ops.md` (CSP, innerHTML, supply chain) are referenced but not re-litigated here unless they intersect with dead code or misleading behavior.
 
 ## Principles
 
-One canonical way per browser operation (upload, owner download, share create/list/revoke, anonymous share download, export backup, billing panel load). Fail closed where technically possible: no fake admin contacts, no silent decode-success on malformed API responses, and no console logging of sensitive metadata in production bundles unless gated. Target state: no sensitive plaintext file metadata is sent to or stored by the server except explicitly documented operational fields whose necessity and leakage have been reviewed. That target is not met today: custom password hints are plaintext, and exact original size is inferable from the client-declared encrypted length and chunk count. Custom password hints must be encrypted client-side with the Account Key. Blob fallback must not fully buffer files beyond a documented safe bound. A Blob-path whole-file digest mismatch must prevent the browser download; a Service Worker mismatch is known only after bytes have streamed, so the UI must report an integrity failure and must not claim clean success. Delete dead exports and legacy no-op APIs rather than keep them for compatibility. Shared pure helpers belong in one module (`utils/format.ts` or similar), not four copies of `formatBytes`. CLI and frontend critical crypto flows should mirror protocol behavior and test vectors (envelope bytes, AAD, salts, ticket refresh, digest mismatch handling); matching function names is secondary. The Go CLI is the current reference implementation after its cleanup, but parity does not prove correctness: shared frontend/CLI protocol deficiencies must be recorded and fixed in both. After each workstream: `sudo bash scripts/dev-reset.sh`, `bash scripts/testing/e2e-test.sh`, `sudo bash scripts/testing/e2e-playwright.sh`, and `cd client/static/js && bun test`.
+One canonical way per browser operation (upload, owner download, share create/list/revoke, anonymous share download, export backup, billing panel load, verify local file digest). Fail closed where technically possible: no fake admin contacts, no silent decode-success on malformed API responses, and no console logging of sensitive metadata in production bundles unless gated. Target state: no sensitive plaintext file metadata is sent to or stored by the server except explicitly documented operational fields whose necessity has been reviewed. That target is not met today for custom password hints (plaintext end-to-end). Custom password hints must be encrypted client-side with the Account Key. The server knowing or computing pre-padded file size (encrypted length and inferable plaintext size) is intentional for storage accounting and billing; document this clearly across the codebase and do not change the wire contract. Large-file downloads must remain possible on all client types: CLI streams decrypt-to-disk; browser uses the Service Worker path with chunk-bounded memory. Blob fallback is a small-file / SW-unavailable escape hatch only and must not fully buffer files beyond a documented safe bound. Download integrity UX must be honest about browser limits: always surface the expected SHA-256 at completion; when inline verification ran, show its result; when a streamed download may already be on disk before the whole-file digest is known, explain why and point users to the Verify File tool or an offline hasher. Do not claim clean success when inline verification reports a mismatch. Delete dead exports and legacy no-op APIs rather than keep them for compatibility. Shared pure helpers belong in one module (`utils/format.ts` or similar), not four copies of `formatBytes`. CLI and frontend critical crypto flows should mirror protocol behavior and test vectors (envelope bytes, AAD, salts, ticket refresh, digest display and verification semantics); matching function names is secondary. The Go CLI is the current reference implementation after its cleanup, but parity does not prove correctness: shared frontend/CLI protocol deficiencies must be recorded and fixed in both. After each workstream: `sudo bash scripts/dev-reset.sh`, `bash scripts/testing/e2e-test.sh`, `sudo bash scripts/testing/e2e-playwright.sh`, and `cd client/static/js && bun test`.
 
 ## Progress tracker
 
 | Workstream | Status | Notes |
 |------------|--------|-------|
 | Audit inventory and reachability map | [x] done | 2026-07-20: ~271 runtime exports by source scan; zero-importer count provisional; actionable inventory below |
-| One canonical path audit (upload/download/share) | [x] done | Single upload/owner-download/share-ticket paths confirmed; Blob integrity open |
+| One canonical path audit (upload/download/share) | [x] done | Single upload/owner-download/share-ticket paths confirmed; Area 2 integrity UX open |
 | CLI parity matrix and drift fixes | [x] audited | Matrix filled; crypto mostly matches; shared hint defect and frontend-only Blob defects recorded |
-| Encrypt custom password hints | [ ] pending | Highest priority implementation; coordinate frontend, CLI, server, schema, E2E |
-| Server-visible metadata contract | [ ] pending | Exact original size inferable; `password_type`/FEK key-type leakage needs explicit decision |
-| Blob download integrity and buffering bound | [ ] pending | Full-file Blob buffering; owner and share Blob callers ignore hash mismatch |
+| Encrypt custom password hints | [ ] pending | **Area 1 — highest priority**; coordinate frontend, CLI, server, schema, E2E |
+| Download integrity UX + Verify File tool | [ ] pending | **Area 2**; SW large-file path, expected-digest display, tips/popups, Blob bounds, new verify tool |
+| Server-visible metadata documentation | [ ] pending | **Area 3 — docs only**; billable size is intentional; no wire/behavior change |
 | Account key cache lifecycle | [ ] pending | Production session binding absent; teardown does not wipe wrapping key consistently |
 | Share auth ticket-only cleanup | [ ] pending | Live UI is ticket-only in practice; dead generic/static-token paths and server fallback remain |
 | Dead code and legacy API removal | [ ] pending | `downloadSharedFileChunked` confirmed dead; stubs and stale window globals listed |
@@ -34,6 +35,32 @@ One canonical way per browser operation (upload, owner download, share create/li
 | Playwright coverage gaps | [ ] pending | register, export click, MFA, WebAuthn, revoke-all, SW large-file, etc. |
 | Unit test gap fill | [ ] pending | Alongside each fix; hint contract, admin contacts, wrong-password |
 | Production build hygiene | [ ] pending | Do not assume minify strips console; add explicit drop/gate |
+
+---
+
+## Top three implementation areas (agreed 2026-07-21)
+
+These three areas take precedence over the rest of this plan. They reflect audit findings plus product decisions from the 2026-07-21 review.
+
+### Area 1 — Encrypt custom password hints (shared frontend / CLI / server)
+
+Both clients still send `password_hint` in plaintext; the server stores and returns it. This is the clearest cross-client privacy break and the first implementation tranche. Replace with Account-Key-encrypted `encrypted_password_hint` + nonce using metadata AAD bound to file ID and owner username; remove the plaintext contract atomically across browser, CLI, server, schema, and tests. See **Custom password hint privacy** below for the full target design and acceptance criteria.
+
+### Area 2 — Download integrity UX, large-file streaming, and Verify File tool (frontend)
+
+Large downloads must work on constrained devices (e.g. 3 GB RAM, 6 GB file) without holding the whole plaintext in page memory. The Service Worker streaming path is the canonical browser mechanism: decrypt and hash incrementally with chunk-bounded memory while the browser download manager writes to disk. The Blob fallback accumulates the full file before trigger and must be capped or refused above a documented safe bound; it is not the large-file path.
+
+Integrity semantics must be honest about browser limits. Whole-file SHA-256 can be computed inline during SW streaming with bounded memory, but a mismatch is often detected only after bytes may already be saved by the OS download manager — the app cannot "un-download" without buffering the entire file first, which defeats streaming. Per-chunk AES-GCM still authenticates each chunk during decrypt. The UX model is: always show the expected SHA-256 at download completion (from decrypted metadata or share envelope); when inline verification ran, show match/mismatch alongside it; never show a clean success message when inline verification reports mismatch; on SW and other post-write paths, show tips explaining that users who need certainty should compare the expected digest using Verify File or an offline tool and delete the file if it differs.
+
+Add a new **Verify this file** tool to the frontend, reachable at any time (not only immediately after download). The user picks a local file via the file picker; the app hashes it in chunks using the same streaming pattern as upload (`file.slice()` + incremental SHA-256, peak memory ~one chunk). The user supplies or pastes an expected hex digest (or the tool pre-fills it when launched from a download completion panel). Show match/mismatch without loading the whole file into JS heap. Works fully offline once the expected digest is known. Surface contextual hints, tips, and popups at appropriate moments — e.g. before or during a large SW download (explain streaming limits), and on the download completion panel (expected digest, optional inline result, link/button to Verify File).
+
+Blob-path fixes remain for small files only: check `hashVerification` before `triggerBrowserDownloadFromUrl`, revoke the Blob URL on mismatch, and do not claim success. Document SW vs Blob vs CLI post-write verification limits in `sw-streaming-download.ts`, `streaming-download.ts`, `download.ts`, and `share-access.ts`.
+
+### Area 3 — Document server-visible operational metadata (docs only; no behavior change)
+
+The server knowing or computing pre-padded file size — encrypted declared length, inferable plaintext size from chunk count and fixed per-chunk overhead, `size_bytes`, and `padded_size` — is **intentional**. Arkfile must account for storage and bill users accurately; hiding exact size from the server would break billing, quotas, chunk download, padding removal, export, and replication. Padding obscures size from the storage backend and outside observers, not from the Arkfile server that receives the pre-padding length at upload init.
+
+Do **not** change upload/download wire behavior for size. Instead, document accepted visibility consistently in `AGENTS.md`, `docs/security.md`, handler comments (e.g. `handlers/uploads.go`), and this plan. Classify server-visible fields as required operational data vs encrypted owner metadata (filename, content digest, password hint once fixed). Optionally document `password_type` and FEK envelope key-type visibility in the same pass; that is a separate disclosure from billable size and needs no protocol change unless product decides otherwise later.
 
 ---
 
@@ -53,10 +80,10 @@ One canonical way per browser operation (upload, owner download, share create/li
 
 **Highest-impact findings (post-audit, prioritized)**
 
-1. **Shared frontend/CLI privacy defect: custom password hints are plaintext end-to-end** — Both clients send `password_hint`; the server stores and returns it. Encrypt with Account Key in both clients and remove the plaintext contract.
-2. **Frontend-only correctness defect: owner and anonymous-share Blob paths ignore digest mismatch** — The manager computes `hashVerification`, but both callers trigger the Blob download and report success without checking it. The Go CLI returns an error on mismatch (although its output file may already exist).
-3. **Frontend-only constrained-device defect: full-file Blob buffering is unbounded** — The fallback retains the complete plaintext in browser-managed Blob storage before download. This is not necessarily JS-heap RAM, but it is subject to platform Blob limits and does not prove the 6 GB / 3 GB persona.
-4. **Shared protocol privacy gap: exact original size is server-inferable** — Both clients declare exact encrypted length before server-side padding. Given chunk count and the fixed 28-byte per-chunk overhead, the server can recover plaintext size. Plaintext `password_type` and the FEK envelope's visible key-type byte also reveal account-vs-custom compartmentalization. This conflicts with the stated encrypted-metadata goal and needs an explicit cross-stack decision.
+1. **Shared frontend/CLI privacy defect: custom password hints are plaintext end-to-end** — Both clients send `password_hint`; the server stores and returns it. Encrypt with Account Key in both clients and remove the plaintext contract. **Area 1.**
+2. **Frontend download integrity UX is misleading** — Blob callers ignore `hashVerification`; SW path can show success before warning on mismatch. Large files must use SW streaming (chunk-bounded memory); users need expected digest at completion, honest inline results, contextual tips, and a standalone Verify File tool. **Area 2.**
+3. **Frontend Blob fallback is unbounded and not a large-file path** — Full-file Blob retention before trigger; enforce safe bound and refuse above it; SW remains canonical for multi-GB downloads. **Area 2.**
+4. **Server-visible file size is intentional operational metadata** — Pre-padded encrypted length and inferable plaintext size support billing and storage accounting. Document across codebase; do not change wire behavior. **Area 3.**
 5. **Frontend account-key cache claims a production session binding that does not exist** — HttpOnly-cookie callers pass no token, so `token_hash` is empty and checks are skipped. Clearing session data removes ciphertext and makes the cache unusable, but does not consistently wipe the in-heap wrapping key. Rate Medium–High, not equivalent to the hint/Blob defects.
 6. **Share auth cleanup is needed, but the live UI does not downgrade** — `applyShareAuthHeader` contains static-token fallback code, yet `share-access.ts` → `downloadSharedFileWithTicket` passes only `shareTicket`; ticket failure sends no auth header. Static-token support is reachable through the dead wrapper/generic manager and remains accepted by the server.
 7. **Stale window globals and over-exposed globals** — `registrationData` and `totpLoginData` are never set; `window.arkfile` exposes whole modules though `shared-init.js` only needs `ShareAccessUI`; `window.arkfileApp` is also set with no repository reader.
@@ -70,15 +97,15 @@ One canonical way per browser operation (upload, owner download, share create/li
 
 | # | Finding | Severity | Action |
 |---|---------|----------|--------|
-| 1 | Plaintext `password_hint` (frontend + CLI + server contract) | High | Account-Key encryption; schema/API/both clients together; sentinel privacy E2E |
-| 2 | Blob mismatch handling (frontend owner + share) | High | Blob: block trigger and revoke URL; SW: report integrity failure and never clean success |
-| 3 | Full-file Blob buffering (frontend) | High | Enforce tested safe bound; refuse above it; SW remains large-file path |
-| 4 | Server-visible metadata contract (frontend + CLI + server) | High design review | Decide how to hide or explicitly document exact size and key-type leakage |
+| 1 | Plaintext `password_hint` (frontend + CLI + server contract) | High | **Area 1:** Account-Key encryption; schema/API/both clients together; sentinel privacy E2E |
+| 2 | Download integrity UX + Verify File tool (frontend) | High | **Area 2:** Expected digest at completion; inline result when available; tips/popups; standalone verify tool; honest success/mismatch messaging |
+| 3 | Blob path + large-file policy (frontend) | High | **Area 2:** Enforce tested safe Blob bound; SW canonical for large files; Blob mismatch blocks trigger; document streaming limits |
+| 4 | Server-visible size documentation (cross-stack docs) | Medium | **Area 3:** Document intentional billable size visibility in AGENTS.md, security.md, handlers; no wire change |
 | 5 | Account key cache lifecycle (frontend) | Medium–High | Fix claims and teardown; decide whether server session epoch is warranted |
 | 6 | Dead static share auth paths | Medium | Delete wrapper/fallback; server ticket-only coordination; actionable ticket errors |
 | 7 | Stale globals + dead exports | Medium | Remove/unexport; narrow browser global surface |
 | 8 | Admin contacts stale cache | Medium | Clear on every failed refresh; unit + fixture-aware Playwright assert |
-| 9 | Playwright hedges / missing coverage | Medium | Stable error identity; deterministic fixtures; add privacy/integrity assertions |
+| 9 | Playwright hedges / missing coverage | Medium | Stable error identity; deterministic fixtures; verify tool + large-file SW when fixture budget allows |
 | 10 | Hygiene + production logging | Low | Remove dividers/WIP refs/emoji; gate debug/info while preserving warnings/errors |
 
 ---
@@ -99,7 +126,7 @@ Reachability pass completed via export/import graph, dynamic imports from `app.t
 
 ### Privacy check (inventory)
 
-Does the module send sensitive plaintext metadata to the network, server storage, or logs? **Yes.** Password hints are plaintext end-to-end. Filenames and SHA-256 are encrypted, but exact plaintext size is inferable from the declared encrypted length and known chunk overhead. `password_type` is plaintext and the FEK envelope exposes the same account/custom key type in its header. Hot-path logs use `password_type`, sizes, and timings; no plaintext password/FEK was found, but production gating is still required.
+Does the module send sensitive plaintext metadata to the network, server storage, or logs? **Yes for password hints** (plaintext end-to-end; Area 1 fix). Filenames and content SHA-256 are encrypted in owner metadata. Declared upload size and inferable plaintext size are intentionally server-visible for billing and storage accounting (Area 3 documentation). `password_type` and the FEK envelope key-type byte are also server-visible; document in the same pass if helpful. Hot-path logs use `password_type`, sizes, and timings; no plaintext password/FEK was found, but production gating is still required.
 
 ---
 
@@ -150,34 +177,50 @@ Because Arkfile is greenfield, remove the plaintext field and compatibility fall
 - Hint ciphertext or AAD tampering fails closed and does not display corrupted text.
 - Tests use a unique sentinel hint and prove that it does not appear in network payloads, server responses, database contents, server logs, or production browser logs.
 
-### Server-visible metadata contract (shared frontend/CLI/server gap)
+### Server-visible operational metadata (Area 3 — document only; no behavior change)
 
-#### Problem (verified)
+#### Current behavior (verified; intentional)
 
-Both clients send `total_size` as the exact encrypted-data length before the server adds padding. The server computes `total_chunks` from that value using the known `chunk_size + 28` encrypted chunk size, then stores the unpadded length as `file_metadata.size_bytes`. For a non-empty file, plaintext size is directly recoverable as `total_size - (28 * total_chunks)`. Server-generated storage padding therefore obscures size from the storage backend or outside observer, but not from the Arkfile server that received the pre-padding length.
+Both clients send `total_size` as the exact encrypted-data length before the server adds padding. The server computes `total_chunks` from that value using the known `chunk_size + 28` encrypted chunk size, then stores the unpadded length as `file_metadata.size_bytes` and padded totals for storage objects. For a non-empty file, plaintext size is directly recoverable as `total_size - (28 * total_chunks)`. This is **required operational metadata**: the server must account for storage consumption and bill users accurately. Server-generated padding obscures size from the storage backend or an outside observer of S3 objects, but not from the Arkfile server that received the pre-padding length at upload init.
 
-Both clients also send plaintext `password_type`. Removing that field alone would not hide account-vs-custom compartmentalization because the FEK envelope includes a visible key-type header byte. These are shared protocol deficiencies, not TypeScript-only drift, and were not corrected by the prior CLI cleanup.
+Both clients also send plaintext `password_type`, and the FEK envelope includes a visible key-type header byte. These reveal account-vs-custom compartmentalization to the server. They are separate from billable size; document alongside size visibility if product wants one consolidated "server-visible metadata" section in `docs/security.md`.
 
-#### Required design decision
+#### Target (documentation only)
 
-Inventory every server-visible file field and classify it as required operational data, avoidable leakage, or intentionally accepted leakage. At minimum cover declared/unpadded size, padded size, chunk count, chunk size, password/key type, upload time, and storage accounting. If exact size must be hidden from the server as `AGENTS.md` intends, client-side padding and encrypted true-length metadata are required; the server cannot receive the pre-padding exact length first. If key type must be hidden, the FEK envelope header format and client routing need coordinated redesign. Do not remove `password_type` alone while leaving the same plaintext key-type byte in `encrypted_fek`.
+Do not change upload init, chunk download, padding, billing, or quota wire behavior for size. Update documentation and code comments so developers and security reviewers understand the split:
+
+| Category | Examples | Server visibility |
+|----------|----------|-------------------|
+| Encrypted owner metadata | filename, content SHA-256, password hint (once Area 1 lands) | Opaque ciphertext + nonce only |
+| Intentional operational metadata | `total_size`, `size_bytes`, `padded_size`, chunk count, billable bytes | Known or computable by server; required for billing/accounting |
+| Protocol routing fields | `password_type`, FEK envelope key-type byte | Visible; documents compartmentalization choice |
+
+#### Files to update
+
+| Location | Change |
+|----------|--------|
+| `AGENTS.md` | Nuance "server must know nothing about the nature of the data" — no passwords, no plaintext filenames, no file contents; billable storage size is known by design |
+| `docs/security.md` | New or expanded section: server-visible operational metadata vs encrypted owner metadata |
+| `handlers/uploads.go` (and related) | Align comments with billing/accounting intent (partially present today) |
+| This plan | Record decision (done in Area 3 above) |
 
 #### Acceptance criteria
 
-- Stable security documentation states exactly which metadata the server can observe or infer.
-- Tests prove any claimed size-hiding property against request bodies, database rows, and storage objects.
-- Frontend and CLI use one revised wire contract and cross-client vectors.
-- Billing, quotas, range/chunk download, padding removal, export, and replication continue to work without restoring hidden values as plaintext fallback fields.
+- Security documentation states exactly which metadata the server observes, stores, or infers, and why (especially billable size).
+- No code or schema change alters size declaration, padding, or billing math solely for privacy of size from the server.
+- Frontend and CLI upload/download behavior unchanged; cross-client size vectors still pass existing E2E.
+- Optional: same documentation pass covers `password_type` / FEK key-type visibility without implying a pending protocol fix.
 
-### Owner download — CONFIRMED single path; integrity OPEN
+### Owner download — CONFIRMED single path; integrity UX OPEN (Area 2)
 
 | Layer | File | Role |
 |-------|------|------|
 | Orchestration | `download.ts` `downloadFile()` | Sole list-item path from `list.ts` |
 | Streaming | `streaming-download.ts` `downloadFileChunked` → manager | Chunk fetch, AES-GCM decrypt, SW vs Blob |
-| SW integration | `sw-streaming-download.ts`, `sw-download.ts` | Preferred large-file path |
+| SW integration | `sw-streaming-download.ts`, `sw-download.ts` | Canonical large-file path |
+| Verify File (new) | TBD module + UI entry | Anytime local file vs expected digest; chunk-bounded hashing |
 
-**Answers:** Single owner download API. SW path streams with roughly chunk-bounded page-side memory. Blob fallback in `streamDecryptedChunks` builds `new Blob([blob, chunk])` for the entire file with no size bound; Blob backing may be browser-managed memory or temporary storage, but the complete file is retained before download and browser limits apply. `download.ts` warns on `hashVerification === 'mismatch'` only for SW; Blob path triggers download and success without checking. The broad SW fallback classifier (`DataCloneError`, `ack timeout`, generic “Service Worker” text) can fall through with the same generator; synchronous clone failure is normally pre-consumption, while timeout/operational cases create a credible partial-consumption risk. No Playwright coverage of large-file SW path (fixtures are 50–100 KB).
+**Answers:** Single owner download API. SW path streams with roughly chunk-bounded page-side memory and can compute whole-file SHA-256 inline during the stream, but a mismatch may be detected only after the OS download manager has already saved bytes — document this limit and surface expected digest + tips at completion. Blob fallback builds `new Blob([blob, chunk])` for the entire file with no size bound today; cap or refuse above safe limit. `download.ts` warns on SW mismatch but still calls `showSuccess` first; Blob path triggers download and success without checking `hashVerification`. Add completion UI: expected SHA-256 (copyable), inline verification result when available, link to Verify File tool. No Playwright coverage of large-file SW path (fixtures are 50–100 KB).
 
 ### Share (owner + recipient) — CONFIRMED; delete dead wrapper
 
@@ -187,28 +230,69 @@ Inventory every server-visible file field and classify it as required operationa
 | List/revoke | `share-list.ts` | Live; Playwright Phase 9/12 |
 | Anonymous access | `share-access.ts` → `share-ticket.ts` → `downloadSharedFileWithTicket` | Sole live export |
 
-**Answers:** Anonymous download always goes through `downloadSharedFileWithTicket`. **Delete `downloadSharedFileChunked`.** The live wrapper passes only `shareTicket`, so ticket-provider failure does not actually downgrade to a static token; it produces a request without an auth header and fails. `share-access.ts` has the same Blob mismatch bug as owner `download.ts`. Generic manager/static-token support and server acceptance remain cleanup debt.
+**Answers:** Anonymous download always goes through `downloadSharedFileWithTicket`. **Delete `downloadSharedFileChunked`.** The live wrapper passes only `shareTicket`, so ticket-provider failure does not actually downgrade to a static token; it produces a request without an auth header and fails. `share-access.ts` needs the same Area 2 integrity UX as owner `download.ts` (expected digest from share envelope at completion, inline result, tips, Verify File launch). Generic manager/static-token support and server acceptance remain cleanup debt.
 
 ---
 
-## Blob download integrity and buffering bound
+## Download integrity UX, Verify File tool, and Blob bounds (Area 2)
 
 ### Problem (verified)
 
-When Service Worker streaming is unavailable or transfer fails, `streamDecryptedChunks` retains the complete plaintext in a Blob regardless of size. This is full-file buffering in browser-managed Blob storage, not necessarily equivalent to allocating the whole file on the JavaScript heap, but it is still subject to browser/device limits and does not satisfy the constrained-device persona. Blob completion returns `hashVerification`, yet both `download.ts` and `share-access.ts` trigger the Blob download and report success without checking it.
+When Service Worker streaming is unavailable or transfer fails, `streamDecryptedChunks` retains the complete plaintext in a Blob regardless of size. This is full-file buffering in browser-managed Blob storage, not a large-file path. Blob completion returns `hashVerification`, yet both `download.ts` and `share-access.ts` trigger the Blob download and report success without checking it.
 
-The Service Worker path differs fundamentally: the whole-file digest is known only after bytes have streamed to the browser's download manager. It cannot prevent already-written bytes without buffering the entire file, which would defeat streaming. Per-chunk AES-GCM authentication still fails during the stream on chunk tampering; final SHA-256 supplies additional whole-file consistency verification.
+The Service Worker path streams with chunk-bounded memory and can hash plaintext incrementally during the stream (same memory profile as upload-side `computeStreamingSHA256`). However, the whole-file digest is often known only after bytes have been handed to the browser download manager. Preventing a bad file from landing on disk would require buffering the entire plaintext first, which defeats streaming and the 6 GB / 3 GB RAM requirement. Per-chunk AES-GCM authentication still fails during the stream on chunk tampering; whole-file SHA-256 is an additional consistency check whose result may arrive post-write. The CLI has the same timing on disk: it verifies after `computeStreamingSHA256` on the output path and returns an error on mismatch, but the file may already exist.
 
-### Target
+Current UI is misleading: SW path can show success then warn; Blob path ignores mismatch entirely. Users are not shown the expected digest prominently or guided to offline verification when inline blocking is impossible.
 
-| Rule | Requirement |
-|------|-------------|
-| Prefer SW | Keep SW as the only large-file path; do not call it “unbounded” without browser/download-manager qualification |
-| Bound Blob | Document and enforce a tested safe maximum below browser/platform limits; owner and share flows refuse above it |
-| Blob integrity | On mismatch, revoke the Blob URL, do not call `triggerBrowserDownloadFromUrl`, and report failure |
-| SW integrity | Do not report clean success on mismatch; prominently instruct the user to delete the already-downloaded artifact |
-| Generator safety | Capability failure may fall back only before consumption; otherwise recreate a generator from chunk zero or fail |
-| Tests | Owner + share caller tests, SW/Blob mismatch tests, size-bound tests, and large-file Playwright when fixture budget allows |
+### Target design
+
+#### Streaming download policy
+
+| Path | Large files | Memory | Inline whole-file SHA-256 | On mismatch |
+|------|-------------|--------|---------------------------|-------------|
+| SW (canonical) | Yes | Chunk-bounded | Computed during stream | Do not claim clean success; show expected + computed digests; tip to delete file and use Verify File |
+| Blob (fallback) | No above safe bound | Full file in Blob store before trigger | Computed before trigger | Revoke Blob URL; do not trigger download; show failure |
+| CLI | Yes | Chunk-bounded decrypt-to-disk | After write via streaming hash | Error after write; file may remain (document parity) |
+
+Enforce a tested safe maximum for Blob fallback; refuse with clear message directing users to a browser/environment that supports SW streaming (proven multi-GB on `test.arkfile.net`). Harden SW registration and fallback rules: only fall back before generator consumption when possible.
+
+#### Download completion UX (owner + share)
+
+At download finalization, always display the expected SHA-256 hex (owner: decrypted metadata; share: envelope). Copy-to-clipboard. When inline verification ran, show match or mismatch beside it. Never show an unqualified success message when inline verification is `mismatch`. Contextual hints and popups:
+
+- **Before / during large SW download:** brief note that the file streams to the download folder with chunk-bounded memory; whole-file digest is checked as data flows but a problem may be detected only after the file is saved.
+- **After SW completion with match:** success plus expected digest for the user's records.
+- **After SW completion with mismatch:** integrity failure panel — expected digest, computed digest if available, instruction to delete the downloaded file, button to open Verify File with expected digest pre-filled.
+- **After Blob completion (small files):** success only if inline verification passed or was skipped with explicit reason.
+
+#### Verify this file tool (new; anytime)
+
+Add a standalone frontend feature reachable from the main app (and optionally `shared.html` for share recipients who saved an expected digest):
+
+| Aspect | Requirement |
+|--------|-------------|
+| Entry | Persistent nav/menu item or tools section; also deep-link from download completion |
+| Input | User picks local file via `<input type="file">` (browser cannot read Downloads silently) |
+| Expected digest | User paste, or pre-fill from download/share completion |
+| Hashing | Reuse upload streaming pattern: `file.slice()` + incremental `@noble/hashes` SHA-256; peak memory ~one chunk |
+| Offline | Works with no network once expected digest is known |
+| Output | Match / mismatch / invalid hex; copy buttons; no logging of digest values in production info logs |
+
+Extract shared `computeStreamingSHA256(file, chunkSize)` from `upload.ts` into a crypto or utils module for upload, verify tool, and tests.
+
+#### Code comments and developer docs
+
+Document in source why post-write verification is unavoidable on SW streams and how that differs from Blob pre-trigger verification. Reference CLI `computeStreamingSHA256` in `crypto_utils.go` and offline `decrypt-blob` post-write check as the same class of limitation.
+
+### Acceptance criteria
+
+- Multi-GB owner and share downloads use SW path on supported browsers without whole-file page buffering.
+- Blob fallback refuses files above documented safe bound with actionable message.
+- Owner and share Blob callers check `hashVerification` before trigger; mismatch revokes URL and does not claim success.
+- SW mismatch never shows unqualified success; completion UI shows expected digest and guidance.
+- Verify File tool available anytime; hashes large local files without loading entire file into JS heap.
+- Contextual tips/popups appear on large SW downloads and at completion as specified.
+- Unit tests: Blob mismatch blocking, completion messaging, verify tool streaming hash; Playwright: verify tool smoke + large-file SW when fixture budget allows.
 
 ---
 
@@ -306,8 +390,8 @@ AGENTS.md requires mirrored critical protocol behavior. Status after audit:
 | Argon2id params / salts | `crypto/key_derivation.go` | `constants.ts`, `floors.ts`, `file-encryption.ts` | MATCH wire values; LOW loading drift | FE fetches API + applies compiled floors; Go embeds JSON. FE lowercases defensively; valid/CLI usernames are already normalized lowercase |
 | Chunk encrypt/upload | `commands.go` upload | `upload.ts` | MATCH | Same chunk size, AAD, FEK wrap |
 | Custom password hint | upload init + meta | `upload.ts`, `download.ts`, `list.ts`, `share.ts` | SHARED DEFECT | Both clients send plaintext; FE displays hint, CLI does not |
-| Declared size / key type | upload init + FEK envelope | `upload.ts` | SHARED DESIGN GAP | Both clients expose exact inferable size and account/custom type to server |
-| Chunk download/decrypt | `commands.go` download | `download.ts` + `streaming-download.ts` | MATCH crypto; FRONTEND DEFECT | Metadata always Account Key; FE Blob callers ignore mismatch. CLI returns error on mismatch, though output may remain |
+| Declared size / key type | upload init + FEK envelope | `upload.ts` | DOCUMENTED INTENTIONAL | Server-visible for billing/accounting and routing; Area 3 docs only |
+| Chunk download/decrypt | `commands.go` download | `download.ts` + `streaming-download.ts` | MATCH crypto; FE UX GAP | Metadata always Account Key; FE needs Area 2 completion UX + Verify File. CLI verifies after write via streaming hash |
 | Share create | `CreateShareEnvelope` | `share-crypto.ts` | MATCH | Same JSON + AAD + token hash |
 | Share recipient download | ticket-only | `share-access.ts`, `share-ticket.ts` | LIVE PATH MATCH | FE live UI is ticket-only; dead generic/static-token support remains cleanup |
 | Export backup | `export.go` | `export.ts` | MATCH artifact | Intentional auth difference (Bearer vs short-lived token) |
@@ -419,7 +503,7 @@ Prefer stable selectors over brittle exact-copy-only asserts. Fix frontend first
 | `app/event-bindings.ts` | Upload, auth toggle, billing toggle, contact-info, security settings |
 | `app.ts` | `ArkFileApp` orchestration only |
 
-Template: CLI admin decomposition in `docs/wip/archive/cli-cleanup.md`. Defer until top-10 privacy/integrity items land.
+Template: CLI admin decomposition in `docs/wip/archive/cli-cleanup.md`. Defer until Areas 1–3 and related integrity UX land.
 
 ---
 
@@ -449,7 +533,8 @@ Template: CLI admin decomposition in `docs/wip/archive/cli-cleanup.md`. Defer un
 | Subscription checkout/portal | Partial (top-up mocked) | Add after billing top-up stable |
 | `revoke-all` | UI exists (`#revoke-sessions-btn`); untested | Add phase |
 | Admin contacts footer | Untested (user contact-info is covered) | Assert footer + API |
-| Large file SW download | 50–100 KB only | Dedicated fixture + timeout |
+| Large file SW download | 50–100 KB only | Dedicated fixture + timeout; completion digest UI |
+| Verify File tool | Untested | Add unit tests + Playwright smoke |
 | Custom-password share recipient | Shares only from account-password file | Add share of custom-password file |
 | Reregistration | Untested | Align with CLI reregistration E2E |
 
@@ -466,7 +551,8 @@ Crypto primitives, AAD, Argon2 conformance, file encryption, share-crypto, strea
 | Target | Rationale |
 |--------|-----------|
 | Encrypted password hint contract | Cross-client vectors, tamper rejection, empty hint, no plaintext fields |
-| Blob + SW `hashVerification` mismatch handling | Locks integrity fix |
+| Verify File tool + shared streaming hasher | Chunk-bounded hash of user-picked file; match/mismatch; extract from upload.ts |
+| Download completion UX + Blob/SW integrity | Expected digest display, tips, Blob mismatch blocking, SW honest messaging |
 | Account key cache lifecycle | Logout / binding / inactivity |
 | `fetchAdminContacts` failed refresh clears state | Stale cache bug |
 | `getUserFriendlyMessage` / wrong-password path | Stabilizes Playwright |
@@ -491,20 +577,19 @@ Keep full upload/share integration in Playwright unless flakiness forces slimmer
 
 Work silent correctness and privacy before cosmetic cleanup:
 
-1. **Encrypt custom password hints** — remove the plaintext frontend/CLI/server/schema contract; re-encrypt per file-ID attempt; add cross-client and sentinel privacy proof.
-2. **Fix Blob integrity in owner and anonymous-share callers** — block Blob trigger/revoke URL on mismatch; SW reports integrity failure without claiming clean success.
-3. **Bound Blob buffering and make SW fallback restart-safe** — enforce a tested safe maximum; recreate generator from chunk zero or fail.
-4. **Resolve server-visible metadata contract** — decide exact-size and key-type privacy across frontend, CLI, server, schema, quotas, and downloads before claiming metadata confidentiality.
-5. **Account key cache lifecycle** — unify key teardown, correct security claims, decide whether a server session epoch is warranted.
-6. **Delete confirmed dead exports and static share paths** — `downloadSharedFileChunked`, token stubs, stale globals; coordinate server removal of static credential acceptance.
-7. **Admin contacts failed-refresh clear + fixture-aware Playwright footer** — small, high confidence.
-8. **Error identity standardization** — unlock Playwright tightening without brittle copy-only asserts.
-9. **Privacy logging gate** — preserve security warnings/errors; verify `build:prod` artifact.
-10. **Playwright hedging removal and gap fill** — deterministic fixtures; revoke-all, export click, registration, subscription, large-file SW.
-11. **Duplicate formatters** — low-risk consolidation.
-12. **`app.ts` decomposition** — mechanical, after behavior stable.
-13. **Hygiene pass** — dividers, WIP refs, legacy comments.
-14. **Unit tests** — alongside each fix (not a final batch).
+1. **Encrypt custom password hints (Area 1)** — remove the plaintext frontend/CLI/server/schema contract; re-encrypt per file-ID attempt; add cross-client and sentinel privacy proof.
+2. **Download integrity UX + Verify File tool (Area 2)** — expected digest at completion; inline result when available; tips/popups for SW post-write limits; standalone verify tool; Blob mismatch blocking; Blob size bound; SW canonical for large files.
+3. **Document server-visible operational metadata (Area 3)** — AGENTS.md, security.md, handler comments; billable size intentional; no wire change.
+4. **Account key cache lifecycle** — unify key teardown, correct security claims, decide whether a server session epoch is warranted.
+5. **Delete confirmed dead exports and static share paths** — `downloadSharedFileChunked`, token stubs, stale globals; coordinate server removal of static credential acceptance.
+6. **Admin contacts failed-refresh clear + fixture-aware Playwright footer** — small, high confidence.
+7. **Error identity standardization** — unlock Playwright tightening without brittle copy-only asserts.
+8. **Privacy logging gate** — preserve security warnings/errors; verify `build:prod` artifact.
+9. **Playwright hedging removal and gap fill** — deterministic fixtures; verify tool, revoke-all, export click, registration, subscription, large-file SW.
+10. **Duplicate formatters** — low-risk consolidation.
+11. **`app.ts` decomposition** — mechanical, after behavior stable.
+12. **Hygiene pass** — dividers, WIP refs, legacy comments.
+13. **Unit tests** — alongside each fix (not a final batch).
 
 ---
 
@@ -515,15 +600,17 @@ Work silent correctness and privacy before cosmetic cleanup:
 - [ ] `sudo bash scripts/testing/e2e-playwright.sh` — all PASS, zero undocumented SKIP
 - [ ] `cd client/static/js && bun test` — all PASS
 - [ ] `cd client/static/js && bun run lint` — type-check clean
-- [ ] Manual: 6 GB file upload/download on constrained tab (or documented SW test with refuse-Blob-above-limit)
+- [ ] Manual: 6 GB file upload/download on constrained tab (SW path; Blob refused above bound)
 - [ ] Manual: shared file anonymous download with ticket refresh after forced 403
+- [ ] Manual: Verify File tool hashes a multi-GB local file without excessive memory; match/mismatch against known digest
+- [ ] Manual: large SW download shows streaming-limit tip; completion panel shows expected SHA-256 and Verify File entry point
 - [ ] Manual: billing panel shows transactions + runway matching CLI `billing show --json` fields
 - [ ] Browser and CLI encrypted password-hint conformance vectors pass; custom hint remains usable in owner download and share creation
 - [ ] Raw API, database, server-log, and production-browser-log checks prove a unique plaintext hint sentinel appears nowhere outside client plaintext memory/UI
 - [ ] Obsolete plaintext `password_hint` cannot persist or return; schema and models contain no plaintext hint storage path
 - [ ] Owner and share Blob mismatches do not trigger browser download and revoke the Blob URL
-- [ ] SW mismatch never reports clean success and clearly identifies the already-downloaded artifact as untrusted
-- [ ] Security documentation and tests accurately state server-visible size/key-type metadata; no claim exceeds what request/DB/storage checks prove
+- [ ] SW mismatch never shows unqualified success; completion UI shows expected digest, inline result when available, and Verify File guidance
+- [ ] `AGENTS.md` and `docs/security.md` document intentional server-visible billable size; no doc claims size is hidden from the server
 - [ ] Account key ciphertext and wrapping key are cleared after logout / revoke-all / inactivity as designed
 - [ ] Grep `client/static/js/src` for `default-admin`, `admin@example.com`, `docs/wip/`, decorative `===`/`---` in comments, `for now`, `backward compatibility`, emoji — zero inappropriate hits
 - [ ] Grep frontend for `console.log` of filename, sha256, password, password hint, fek — zero in production path or gated
@@ -537,14 +624,14 @@ Work silent correctness and privacy before cosmetic cleanup:
 |------|------------------------|
 | Auth | `login.ts`, `totp.ts`, `password-modal.ts` cache opt-in; `#login-btn`, `#verify-totp-login` |
 | Upload | `upload.ts`, `app.ts` file input; account + custom password |
-| Download | `download.ts`, `list.ts` Download action |
+| Download | `download.ts`, `list.ts` Download action; completion digest UI; Verify File entry (Area 2) |
 | Delete | `list.ts` delete + export backup button **text** presence (not click) |
 | Shares | `share.ts`, `share-list.ts`, `share-access.ts`; create A/B/C, list, revoke |
-| Anonymous share | `shared.html` + `share-access.ts`; Phase 10-11 |
+| Anonymous share | `shared.html` + `share-access.ts`; Phase 10-11; Area 2 completion digest + optional Verify File on share page |
 | Contact info | `contact-info.ts`; Phase 12 embedded tests |
 | Billing | `billing.ts`; balance, usage grid, transactions, top-up modal (may SKIP) |
 | Logout | `login.ts` logout; Phase 13 sessionStorage/CSRF checks |
-| API privacy | Phase 7 checks encrypted filename/hash only; it does not check hint, inferable size, or key type |
+| API privacy | Phase 7 checks encrypted filename/hash only; it does not assert hint absence (Area 1) or re-check intentional server-visible size/key type (Area 3) |
 
 ---
 
@@ -578,8 +665,9 @@ Vendored `libopaque.js` rebuild pipeline (see supply-chain review). Caddy/CSP/sy
 | Prior cleanup item | Frontend follow-up |
 |--------------------|-------------------|
 | Admin contacts honest API | Clear stale cache on every failed refresh; verify footer/list/sections; fixture-aware Playwright assert |
-| Plaintext custom password hint | Replace with Account-Key-encrypted metadata across browser, CLI, server, schema, export, and E2E |
-| Server-visible size/key type | Prior cleanup did not resolve this shared protocol leakage; coordinate frontend/CLI/server contract review |
+| Plaintext custom password hint | Replace with Account-Key-encrypted metadata across browser, CLI, server, schema, export, and E2E (Area 1) |
+| Server-visible billable size | Document intentional operational visibility; no wire change (Area 3) |
+| Download integrity + Verify File | Expected digest UX, tips/popups, standalone verify tool, Blob bounds (Area 2) |
 | Share ticket-only (deferred) | Live UI already fails ticket-only; remove dead static-token wrapper/generic support and server fallback |
 | E2E hedging removal pattern | Apply to `e2e-playwright.ts` Phase 2/5/11/12 and billing SKIP |
 | CLI billing human parity | Match remaining display fields (`rate_human`, approx runway) if product wants parity |
@@ -599,7 +687,9 @@ Audit date: 2026-07-20. Method: named/dynamic import graph across `client/static
 |--------|------|------------|--------|
 | `handleFileUpload` | `upload.ts` | Y | Keep — sole upload UI entry |
 | `uploadFiles` / `uploadFile` | `upload.ts` | Y / tests | Keep; consider unexporting `uploadFile` |
-| `downloadFile` | `download.ts` | Y | Keep — sole owner download entry |
+| `downloadFile` | `download.ts` | Y | Keep — sole owner download entry; Area 2 completion UX |
+| `verifyLocalFileDigest` (or similar) | new verify module | N | **Add** — anytime Verify File tool; chunk-bounded |
+| `computeStreamingSHA256` (shared) | extract from `upload.ts` | P (upload) | **Extract** for upload + verify tool + tests |
 | `downloadFileChunked` | `streaming-download.ts` | Y | Keep |
 | `downloadSharedFileWithTicket` | `streaming-download.ts` | Y | Keep — sole anonymous share download |
 | `StreamingDownloadManager` | `streaming-download.ts` | P (unit) | Keep; tests construct directly |
@@ -683,5 +773,6 @@ Completed 2026-07-20 (read-only; documentation update only):
 5. CLI parity matrix for upload, download, share, export, billing, contact, digest, revoke-all, hints, size, and key type.
 6. Hygiene and privacy greps (`===` dividers, WIP refs, console/sensitive patterns, emoji).
 7. Independent correction pass for live share-ticket reachability, Blob/SW integrity semantics, cache teardown, AAD design, and selected inventory accuracy.
+8. Priority refinement (2026-07-21): three implementation areas — encrypted hints, download integrity UX + Verify File tool, server-visible size documentation only.
 
-Deliverables: this filled inventory, prioritized top-10 fix list, and updated progress tracker. Application code was not modified in this pass.
+Deliverables: this filled inventory, prioritized top-10 fix list, top-three areas section, and updated progress tracker. Application code was not modified in this pass.
