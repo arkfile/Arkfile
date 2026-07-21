@@ -84,7 +84,7 @@ func TestRateFormatHumanReadable(t *testing.T) {
 
 // TestCachedRate_AtomicSwap verifies that concurrent reads during a write
 // never observe a torn Rate value. (atomic.Pointer guarantees this; the test
-// is a smoke check that the API contract holds.)
+// confirms the API contract holds under concurrent use.)
 func TestCachedRate_AtomicSwap(t *testing.T) {
 	defer ResetCachedRateForTest()
 	ResetCachedRateForTest()

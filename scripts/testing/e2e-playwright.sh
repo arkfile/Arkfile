@@ -26,8 +26,7 @@ success() { echo -e "${GREEN}[OK] $1${NC}"; }
 error()   { echo -e "${RED}[X] $1${NC}"; }
 warning() { echo -e "${YELLOW}[!] $1${NC}"; }
 info()    { echo -e "${CYAN}[i] $1${NC}"; }
-section() { echo -e "\n${BLUE}$1${NC}"; }
-phase()   { echo -e "\n${CYAN}# $1${NC}\n"; }
+section() { echo -e "\n${CYAN}$1${NC}\n"; }
 
 # CONFIGURATION
 
@@ -50,7 +49,7 @@ CLIENT="/opt/arkfile/bin/arkfile-client"
 
 # PREFLIGHT CHECKS
 
-phase "PREFLIGHT CHECKS"
+section "PREFLIGHT CHECKS"
 
 # Check server connectivity
 section "Checking server connectivity"
@@ -145,7 +144,7 @@ fi
 
 # INSTALL PLAYWRIGHT (if needed)
 
-phase "DEPENDENCY SETUP"
+section "DEPENDENCY SETUP"
 
 cd "$PROJECT_DIR"
 
@@ -172,7 +171,7 @@ fi
 
 # GENERATE TEST FILES
 
-phase "GENERATING TEST FILES"
+section "GENERATING TEST FILES"
 
 mkdir -p "$PLAYWRIGHT_TEMP_DIR"
 
@@ -203,7 +202,7 @@ success "Custom file: $CUSTOM_FILE_PATH (SHA-256: ${CUSTOM_FILE_SHA256:0:16}...)
 
 # RUN PLAYWRIGHT TESTS
 
-phase "RUNNING PLAYWRIGHT TESTS"
+section "RUNNING PLAYWRIGHT TESTS"
 
 info "Server URL: $SERVER_URL"
 info "Test User: $TEST_USERNAME"
@@ -233,7 +232,7 @@ bunx playwright test --config playwright.config.ts || PLAYWRIGHT_EXIT_CODE=$?
 
 # CLEANUP
 
-phase "CLEANUP"
+section "CLEANUP"
 
 section "Cleaning up test files"
 rm -f "$TEST_FILE_PATH" "$CUSTOM_FILE_PATH"
@@ -242,7 +241,7 @@ success "Temp files cleaned up"
 
 # RESULTS
 
-phase "RESULTS"
+section "RESULTS"
 
 if [ $PLAYWRIGHT_EXIT_CODE -eq 0 ]; then
     echo ""
