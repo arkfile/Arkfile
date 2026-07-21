@@ -40,16 +40,15 @@
 // Canonical AAD field-label constants for metadata encryption.
 //
 // These strings are permanent wire-format commitments:
-// changing either value would invalidate every existing file's metadata
+// changing any value would invalidate every existing file's metadata
 // AAD. They are AAD labels only -- they are NOT renames of any DB column
-// or API field. The existing schema and API field names remain
-// "encrypted_filename" and "encrypted_sha256sum" (which is also why these
-// are the chosen label strings -- the AAD label tracks the stored field's
-// name verbatim).
+// or API field. The label tracks the stored field's name verbatim
+// (encrypted_filename, encrypted_sha256sum, encrypted_password_hint).
 //
 // Callers of buildMetadataFieldAAD MUST reference these constants.
 export const AAD_FIELD_FILENAME = 'encrypted_filename';
 export const AAD_FIELD_SHA256 = 'encrypted_sha256sum';
+export const AAD_FIELD_PASSWORD_HINT = 'encrypted_password_hint';
 
 // uint64 wire-format upper bound (2^64 - 1). bigint values outside [0, MAX_U64]
 // are rejected before encoding, since the wire format is a fixed 8-byte BE uint.
@@ -135,8 +134,8 @@ export function buildFEKEnvelopeAAD(
  * Binding ownerUsername prevents moving a metadata row to a different
  * user's account.
  *
- * fieldName MUST be one of the canonical constants: AAD_FIELD_FILENAME or
- * AAD_FIELD_SHA256.
+ * fieldName MUST be one of the canonical constants: AAD_FIELD_FILENAME,
+ * AAD_FIELD_SHA256, or AAD_FIELD_PASSWORD_HINT.
  */
 export function buildMetadataFieldAAD(
   fileID: string,

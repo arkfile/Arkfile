@@ -117,19 +117,6 @@ export function showTOTPSetupSection(predefinedData?: any): void {
   }
 }
 
-export function hideTOTPSetupSection(): void {
-  const totpSetupForm = document.getElementById('totp-setup-form');
-  const loginForm = document.getElementById('login-form');
-  
-  if (totpSetupForm) {
-    totpSetupForm.classList.add('hidden');
-  }
-  
-  if (loginForm) {
-    loginForm.classList.remove('hidden');
-  }
-}
-
 export function toggleSecuritySettings(): void {
   const securityPanel = document.getElementById('security-settings');
   if (securityPanel) {
@@ -185,15 +172,3 @@ export function showPendingApprovalSection(): void {
   }).catch(() => {});
 }
 
-export function hidePendingApprovalSection(): void {
-  const pendingApprovalSection = document.getElementById('pending-approval-section');
-  const loginForm = document.getElementById('login-form');
-  
-  if (pendingApprovalSection) {
-    pendingApprovalSection.classList.add('hidden');
-  }
-  
-  if (loginForm) {
-    loginForm.classList.remove('hidden');
-  }
-}

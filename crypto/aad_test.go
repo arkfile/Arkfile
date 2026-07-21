@@ -183,6 +183,10 @@ func TestAADFieldLabels_AreCanonicalStrings(t *testing.T) {
 		t.Errorf("AADFieldSha256 drifted: got %q, expected exactly %q",
 			AADFieldSha256, "encrypted_sha256sum")
 	}
+	if AADFieldPasswordHint != "encrypted_password_hint" {
+		t.Errorf("AADFieldPasswordHint drifted: got %q, expected exactly %q",
+			AADFieldPasswordHint, "encrypted_password_hint")
+	}
 }
 
 // =============================================================================

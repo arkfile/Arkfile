@@ -43,7 +43,8 @@ type File struct {
 	FileID                 string         `json:"file_id"`    // UUID v4 for file identification
 	StorageID              string         `json:"storage_id"` // UUID v4 for storage backend
 	OwnerUsername          string         `json:"owner_username"`
-	PasswordHint           string         `json:"password_hint,omitempty"`
+	EncryptedPasswordHint  string         `json:"encrypted_password_hint,omitempty"`
+	PasswordHintNonce      string         `json:"password_hint_nonce,omitempty"`
 	PasswordType           string         `json:"password_type"`
 	FilenameNonce          string         // Now stored as base64 strings directly
 	EncryptedFilename      string         // Now stored as base64 strings directly
@@ -86,22 +87,18 @@ func GenerateFileID() string {
 	return uuid.New().String()
 }
 
-// CalculateChunkCount calculates the number of chunks needed for a file of given size
-func CalculateChunkCount(sizeBytes int64, chunkSizeBytes int64) int64 {
+// CalculateChunkCount returns the number of encrypted chunks for an encrypted
+// stream of sizeBytes when each full encrypted chunk spans
+// plaintextChunkSizeBytes + AesGcmOverhead() bytes. Empty streams use one chunk.
+func CalculateChunkCount(sizeBytes int64, plaintextChunkSizeBytes int64) int64 {
 	if sizeBytes <= 0 {
 		return 1
 	}
-	if chunkSizeBytes <= 0 {
-		chunkSizeBytes = crypto.PlaintextChunkSize()
+	if plaintextChunkSizeBytes <= 0 {
+		plaintextChunkSizeBytes = crypto.PlaintextChunkSize()
 	}
-	count := sizeBytes / chunkSizeBytes
-	if sizeBytes%chunkSizeBytes != 0 {
-		count++
-	}
-	if count == 0 {
-		count = 1
-	}
-	return count
+	encryptedChunkSize := plaintextChunkSizeBytes + int64(crypto.AesGcmOverhead())
+	return (sizeBytes + encryptedChunkSize - 1) / encryptedChunkSize
 }
 
 // GetFileByFileID retrieves a file record by file_id
@@ -115,7 +112,7 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 	var uploadDateStr string       // Scan as string first to handle RQLite timestamp format
 
 	err := db.QueryRow(`
-		SELECT id, file_id, storage_id, owner_username, password_hint, password_type,
+		SELECT id, file_id, storage_id, owner_username, COALESCE(encrypted_password_hint, ''), COALESCE(password_hint_nonce, ''), password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum,
 			   COALESCE(encrypted_file_sha256sum, ''), encrypted_fek, size_bytes, padded_size,
 			   chunk_count, chunk_size_bytes, upload_date
@@ -123,7 +120,7 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 		fileID,
 	).Scan(
 		&file.ID, &file.FileID, &file.StorageID, &file.OwnerUsername,
-		&file.PasswordHint, &file.PasswordType,
+		&file.EncryptedPasswordHint, &file.PasswordHintNonce, &file.PasswordType,
 		&file.FilenameNonce, &file.EncryptedFilename,
 		&file.Sha256sumNonce, &file.EncryptedSha256sum,
 		&encryptedFileSha256sum, &file.EncryptedFEK,
@@ -225,7 +222,7 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 	var uploadDateStr string       // Scan as string first to handle RQLite timestamp format
 
 	err := db.QueryRow(`
-		SELECT id, file_id, storage_id, owner_username, password_hint, password_type,
+		SELECT id, file_id, storage_id, owner_username, COALESCE(encrypted_password_hint, ''), COALESCE(password_hint_nonce, ''), password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum,
 			   COALESCE(encrypted_file_sha256sum, ''), encrypted_fek, size_bytes, padded_size,
 			   chunk_count, chunk_size_bytes, upload_date
@@ -233,7 +230,7 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 		storageID,
 	).Scan(
 		&file.ID, &file.FileID, &file.StorageID, &file.OwnerUsername,
-		&file.PasswordHint, &file.PasswordType,
+		&file.EncryptedPasswordHint, &file.PasswordHintNonce, &file.PasswordType,
 		&file.FilenameNonce, &file.EncryptedFilename,
 		&file.Sha256sumNonce, &file.EncryptedSha256sum,
 		&encryptedFileSha256sum, &file.EncryptedFEK,
@@ -331,7 +328,7 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 	}
 
 	query := `
-		SELECT id, file_id, storage_id, owner_username, password_hint, password_type,
+		SELECT id, file_id, storage_id, owner_username, COALESCE(encrypted_password_hint, ''), COALESCE(password_hint_nonce, ''), password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, 
 			   COALESCE(encrypted_file_sha256sum, ''), encrypted_fek, size_bytes, padded_size,
 			   chunk_count, chunk_size_bytes, upload_date 
@@ -355,7 +352,7 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 
 		err := rows.Scan(
 			&file.ID, &file.FileID, &file.StorageID, &file.OwnerUsername,
-			&file.PasswordHint, &file.PasswordType,
+			&file.EncryptedPasswordHint, &file.PasswordHintNonce, &file.PasswordType,
 			&file.FilenameNonce, &file.EncryptedFilename,
 			&file.Sha256sumNonce, &file.EncryptedSha256sum,
 			&encryptedFileSha256sum, &file.EncryptedFEK,
@@ -590,18 +587,19 @@ func DeleteFile(db *sql.DB, fileID string, ownerUsername string) error {
 // transport. OwnerUsername is included so the client can rebuild the
 // metadata AAD (encrypted_filename and encrypted_sha256sum decrypt require it).
 type FileMetadataForClient struct {
-	FileID             string    `json:"file_id"`
-	StorageID          string    `json:"storage_id"`
-	OwnerUsername      string    `json:"owner_username"`
-	PasswordHint       string    `json:"password_hint,omitempty"`
-	PasswordType       string    `json:"password_type"`
-	FilenameNonce      string    `json:"filename_nonce"`
-	EncryptedFilename  string    `json:"encrypted_filename"`
-	Sha256sumNonce     string    `json:"sha256sum_nonce"`
-	EncryptedSha256sum string    `json:"encrypted_sha256sum"`
-	EncryptedFEK       string    `json:"encrypted_fek"`
-	SizeBytes          int64     `json:"size_bytes"`
-	UploadDate         time.Time `json:"upload_date"`
+	FileID                string    `json:"file_id"`
+	StorageID             string    `json:"storage_id"`
+	OwnerUsername         string    `json:"owner_username"`
+	EncryptedPasswordHint string    `json:"encrypted_password_hint,omitempty"`
+	PasswordHintNonce     string    `json:"password_hint_nonce,omitempty"`
+	PasswordType          string    `json:"password_type"`
+	FilenameNonce         string    `json:"filename_nonce"`
+	EncryptedFilename     string    `json:"encrypted_filename"`
+	Sha256sumNonce        string    `json:"sha256sum_nonce"`
+	EncryptedSha256sum    string    `json:"encrypted_sha256sum"`
+	EncryptedFEK          string    `json:"encrypted_fek"`
+	SizeBytes             int64     `json:"size_bytes"`
+	UploadDate            time.Time `json:"upload_date"`
 }
 
 // ToClientMetadata converts a File to FileMetadataForClient for sending to
@@ -609,17 +607,18 @@ type FileMetadataForClient struct {
 // them as-is.
 func (f *File) ToClientMetadata() *FileMetadataForClient {
 	return &FileMetadataForClient{
-		FileID:             f.FileID,
-		StorageID:          f.StorageID,
-		OwnerUsername:      f.OwnerUsername,
-		PasswordHint:       f.PasswordHint,
-		PasswordType:       f.PasswordType,
-		FilenameNonce:      f.FilenameNonce,
-		EncryptedFilename:  f.EncryptedFilename,
-		Sha256sumNonce:     f.Sha256sumNonce,
-		EncryptedSha256sum: f.EncryptedSha256sum,
-		EncryptedFEK:       f.EncryptedFEK,
-		SizeBytes:          f.SizeBytes,
-		UploadDate:         f.UploadDate,
+		FileID:                f.FileID,
+		StorageID:             f.StorageID,
+		OwnerUsername:         f.OwnerUsername,
+		EncryptedPasswordHint: f.EncryptedPasswordHint,
+		PasswordHintNonce:     f.PasswordHintNonce,
+		PasswordType:          f.PasswordType,
+		FilenameNonce:         f.FilenameNonce,
+		EncryptedFilename:     f.EncryptedFilename,
+		Sha256sumNonce:        f.Sha256sumNonce,
+		EncryptedSha256sum:    f.EncryptedSha256sum,
+		EncryptedFEK:          f.EncryptedFEK,
+		SizeBytes:             f.SizeBytes,
+		UploadDate:            f.UploadDate,
 	}
 }

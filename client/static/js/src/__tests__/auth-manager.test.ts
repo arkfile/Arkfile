@@ -1,24 +1,21 @@
 /**
  * Unit Tests -- AuthManager
  *
- * Tests for: cookie-based auth model, no-op legacy stubs,
- *            ServiceUnavailableError, admin contact defaults,
- *            clearAllSessionData
+ * Tests for: cookie-based auth model, ServiceUnavailableError,
+ *            admin contact refresh, clearAllSessionData
  *
- * Session tokens are now stored exclusively in HttpOnly __Host-* cookies set
+ * Session tokens are stored exclusively in HttpOnly __Host-* cookies set
  * by the server. JS cannot read those cookies. The tests here verify that:
  *
- *  - Legacy token accessors (getToken, setTokens, etc.) are no-ops that
- *    return null/undefined without throwing.
  *  - isAuthenticated() correctly reads the CSRF cookie from document.cookie.
  *  - getUsernameFromToken() reads from the module-level cache, not localStorage.
  *  - clearAllSessionData() zeroes the cache without touching cookies.
  *  - ServiceUnavailableError is a distinct Error subclass.
- *  - Admin contact helpers return expected defaults.
+ *  - Admin contact helpers clear state after any failed refresh.
  */
 
 import './setup';
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 
 // Import after setup so that document/window globals are available
 import {
@@ -38,16 +35,6 @@ beforeEach(() => {
 });
 
 // ============================================================================
-// Token expiry (getTokenExpiry always returns null — JWT is HttpOnly)
-// ============================================================================
-
-describe('AuthManager.getTokenExpiry', () => {
-  test('returns null (JWT is HttpOnly, not readable by JS)', () => {
-    expect(AuthManager.getTokenExpiry()).toBeNull();
-  });
-});
-
-// ============================================================================
 // isAuthenticated -- reads the __Host-arkfile-csrf cookie
 // ============================================================================
 
@@ -62,10 +49,6 @@ describe('AuthManager.isAuthenticated (CSRF cookie)', () => {
   test('returns false after clearAllSessionData clears the state', () => {
     AuthManager.clearAllSessionData();
     expect(AuthManager.isAuthenticated()).toBe(false);
-  });
-
-  test('isTokenExpired returns true when no session (CSRF cookie absent)', () => {
-    expect(AuthManager.isTokenExpired()).toBe(true);
   });
 });
 
@@ -138,6 +121,79 @@ describe('AuthManager admin contact defaults', () => {
 
   test('isAdminContactsConfigured returns false before fetch', () => {
     expect(AuthManager.isAdminContactsConfigured()).toBe(false);
+  });
+});
+
+describe('AuthManager.fetchAdminContacts', () => {
+  let origFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    origFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+  });
+
+  test('stores configured contact on success', async () => {
+    (globalThis as any).fetch = async () =>
+      new Response(
+        JSON.stringify({
+          admin_usernames: ['adminuser1'],
+          admin_contact: 'admin@example.test',
+          configured: true,
+        }),
+        { status: 200 },
+      );
+
+    const result = await AuthManager.fetchAdminContacts();
+    expect(result.configured).toBe(true);
+    expect(result.contact).toBe('admin@example.test');
+    expect(result.usernames).toEqual(['adminuser1']);
+    expect(AuthManager.isAdminContactsConfigured()).toBe(true);
+  });
+
+  test('clears previous state on non-OK response', async () => {
+    (globalThis as any).fetch = async () =>
+      new Response(
+        JSON.stringify({
+          admin_usernames: ['adminuser1'],
+          admin_contact: 'admin@example.test',
+          configured: true,
+        }),
+        { status: 200 },
+      );
+    await AuthManager.fetchAdminContacts();
+    expect(AuthManager.isAdminContactsConfigured()).toBe(true);
+
+    (globalThis as any).fetch = async () => new Response('error', { status: 500 });
+    const result = await AuthManager.fetchAdminContacts();
+    expect(result.configured).toBe(false);
+    expect(result.contact).toBe('');
+    expect(result.usernames).toEqual([]);
+    expect(AuthManager.isAdminContactsConfigured()).toBe(false);
+    expect(AuthManager.getAdminContact()).toBe('');
+  });
+
+  test('clears previous state on fetch exception', async () => {
+    (globalThis as any).fetch = async () =>
+      new Response(
+        JSON.stringify({
+          admin_usernames: ['adminuser1'],
+          admin_contact: 'admin@example.test',
+          configured: true,
+        }),
+        { status: 200 },
+      );
+    await AuthManager.fetchAdminContacts();
+
+    (globalThis as any).fetch = async () => {
+      throw new Error('network down');
+    };
+    const result = await AuthManager.fetchAdminContacts();
+    expect(result.configured).toBe(false);
+    expect(result.contact).toBe('');
+    expect(result.usernames).toEqual([]);
   });
 });
 

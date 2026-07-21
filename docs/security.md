@@ -34,8 +34,20 @@ The following assets are bound by strict client-side cryptography. They are neve
 
 - **User Password**: Standard credentials never reach the server, protected by OPAQUE, a Password-Authenticated Key Exchange (PAKE) protocol that allows a client to prove password ownership and authenticate without transmitting the password itself.
 - **File Payloads**: Encrypted entirely client-side under a cryptographically random, per-file File Encryption Key (FEK) using AES-256-GCM.
-- **File Metadata**: Original filenames and plaintext SHA-256 hashes are encrypted client-side under an Account Key derived solely on the client-side using the user's password.
+- **File Metadata**: Original filenames, plaintext SHA-256 hashes, and custom-password hints are encrypted client-side under an Account Key derived solely on the client using the user's password. The server stores only opaque ciphertext and nonces for these fields.
 - **Share Envelopes**: File details (e.g. key, filename, size) are wrapped inside an encrypted payload client-side that is only decryptable by a recipient who inputs the correct share password.
+
+#### Server-Visible Operational Metadata
+
+Arkfile's zero-knowledge posture covers passwords, file contents, and encrypted owner metadata. It does not conceal every storage-accounting field from the Arkfile server. The following are intentionally known or computable by the server because billing, quotas, chunked download ranges, padding removal, export, and replication require them:
+
+| Category | Examples | Why visible |
+|----------|----------|-------------|
+| Encrypted owner metadata | `encrypted_filename`, `encrypted_sha256sum`, `encrypted_password_hint` (plus nonces) | Opaque only; server cannot read plaintext |
+| Billable / storage accounting | upload `total_size`, `size_bytes`, `padded_size`, chunk count | User quota and projected billing use pre-padding encrypted `size_bytes`; provider stats and replication also use `padded_size` |
+| Protocol / ownership | `owner_username`, plaintext `chunk_size_bytes`, `password_type`, FEK envelope key-type byte | Ownership, metadata AAD reconstruction, encrypted byte-range math, and account-vs-custom routing |
+
+For a non-empty file, the canonical chunk count is `ceil(size_bytes / (chunk_size_bytes + 28))`, where 28 is the per-chunk AES-GCM overhead (nonce + tag). Plaintext length is then `size_bytes - (28 × chunk_count)`. Empty files use one chunk by convention. Server-generated padding obscures exact size from storage backends and outside observers of S3 objects; it does not hide size from the Arkfile server that received the pre-padding length at upload init.
 
 #### Compromise Scenarios and Impact Bounds
 

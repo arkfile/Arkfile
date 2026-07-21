@@ -86,12 +86,3 @@ export function addPasswordTogglesInContainer(container: HTMLElement): void {
     });
 }
 
-/**
- * Adds password toggles to all password inputs on the page
- */
-export function addPasswordTogglesGlobal(): void {
-    const passwordInputs = document.querySelectorAll('input[type="password"]') as NodeListOf<HTMLInputElement>;
-    passwordInputs.forEach(input => {
-        addPasswordToggle(input);
-    });
-}

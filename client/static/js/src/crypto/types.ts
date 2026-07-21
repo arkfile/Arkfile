@@ -4,9 +4,7 @@
  * Defines TypeScript interfaces and types for all cryptographic operations.
  */
 
-// ============================================================================
 // Key Types
-// ============================================================================
 
 /**
  * File encryption key derived from password using Argon2id
@@ -64,9 +62,7 @@ export interface CryptoKey {
   metadata?: Record<string, unknown>;
 }
 
-// ============================================================================
 // OPAQUE Protocol Types
-// ============================================================================
 
 /**
  * OPAQUE registration request (client → server)
@@ -224,9 +220,7 @@ export interface OpaqueClientState {
   createdAt: number;
 }
 
-// ============================================================================
 // File Encryption Types
-// ============================================================================
 
 /**
  * Encrypted file metadata
@@ -293,9 +287,7 @@ export interface DecryptedFile {
   metadata: EncryptedFileMetadata;
 }
 
-// ============================================================================
 // Salt Derivation Types
-// ============================================================================
 
 /**
  * Salt derivation parameters
@@ -325,9 +317,7 @@ export interface DerivedSalt {
   domain: string;
 }
 
-// ============================================================================
 // Key Derivation Types
-// ============================================================================
 
 /**
  * Argon2id key derivation parameters
@@ -374,9 +364,7 @@ export interface KeyDerivationResult {
   duration: number;
 }
 
-// ============================================================================
 // Encryption/Decryption Types
-// ============================================================================
 
 /**
  * Encryption request
@@ -434,9 +422,7 @@ export interface DecryptionResult {
   plaintext: Uint8Array;
 }
 
-// ============================================================================
 // Storage Types
-// ============================================================================
 
 /**
  * Cached key in sessionStorage
@@ -458,9 +444,7 @@ export interface CachedKey {
   expiresAt?: number;
 }
 
-// ============================================================================
 // Utility Types
-// ============================================================================
 
 /**
  * Result type for operations that can fail
@@ -489,9 +473,7 @@ export type HexString = string;
  */
 export type Timestamp = number;
 
-// ============================================================================
 // Type Guards
-// ============================================================================
 
 /**
  * Type guard for FileEncryptionKey

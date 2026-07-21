@@ -431,11 +431,12 @@ func DecryptFEK(encryptedFEK []byte, password []byte, username, fileID string) (
 // METADATA OPERATIONS
 // =============================================================================
 
-// DecryptedFileMetadata represents decrypted file metadata.
+// DecryptedFileMetadata represents decrypted file metadata held only on the client.
+// Password hints remain Account-Key encrypted on the wire
+// (encrypted_password_hint + password_hint_nonce) and are not part of this view.
 type DecryptedFileMetadata struct {
 	FileID       string `json:"file_id"`
 	StorageID    string `json:"storage_id"`
-	PasswordHint string `json:"password_hint"`
 	PasswordType string `json:"password_type"`
 	Filename     string `json:"filename"`
 	SHA256       string `json:"sha256"`

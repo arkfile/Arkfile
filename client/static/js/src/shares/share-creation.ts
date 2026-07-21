@@ -11,9 +11,7 @@ import { validateSharePassword, type PasswordValidationResult } from '../crypto/
 import { authenticatedFetch } from '../utils/auth.js';
 import { randomBytes, toBase64 } from '../crypto/primitives.js';
 
-// ============================================================================
 // Types
-// ============================================================================
 
 /**
  * File information needed for share creation
@@ -61,9 +59,7 @@ interface ShareCreationAPIResponse {
   share_url: string;
 }
 
-// ============================================================================
 // ShareCreator Class
-// ============================================================================
 
 /**
  * Handles share creation workflow including validation and encryption
@@ -203,8 +199,6 @@ export class ShareCreator {
   }
 }
 
-// ============================================================================
 // Exports
-// ============================================================================
 
 export { shareCrypto as ShareCrypto };

@@ -13,8 +13,7 @@
  *  - refreshToken()       calls POST /api/refresh
  */
 
-import { clearAllCachedAccountKeys } from '../crypto/file-encryption.js';
-import { clearDigestCache } from './digest-cache.js';
+import { cleanupAccountKeyCache } from '../crypto/file-encryption.js';
 
 // Cookie names (must match handlers/cookies.go constants)
 const CSRF_COOKIE_NAME = '__Host-arkfile-csrf';
@@ -191,15 +190,16 @@ export class AuthManager {
     return _cachedUser?.username ?? null;
   }
 
-  // Token expiry: not available client-side (JWT is HttpOnly).
-  // Auto-refresh timer provides the functional equivalent.
-  public static getTokenExpiry(): Date | null { return null; }
-  public static isTokenExpired(): boolean { return !checkAuthenticated(); }
-
   // Admin contact management
   private static adminUsernames: string[] = [];
   private static adminContact: string = '';
   private static adminContactsConfigured: boolean = false;
+
+  private static clearAdminContactsState(): void {
+    this.adminUsernames = [];
+    this.adminContact = '';
+    this.adminContactsConfigured = false;
+  }
 
   public static async fetchAdminContacts(): Promise<{usernames: string[], contact: string, configured: boolean}> {
     try {
@@ -209,9 +209,12 @@ export class AuthManager {
         this.adminUsernames = Array.isArray(data.admin_usernames) ? data.admin_usernames : [];
         this.adminContact = typeof data.admin_contact === 'string' ? data.admin_contact : '';
         this.adminContactsConfigured = data.configured === true;
+      } else {
+        this.clearAdminContactsState();
       }
     } catch (error) {
       console.warn('Could not fetch admin contacts:', error);
+      this.clearAdminContactsState();
     }
     return {
       usernames: this.adminUsernames,
@@ -313,19 +316,15 @@ export class AuthManager {
     }
   }
 
-  // Session state management
+  // Session state management. Wipes Account Key ciphertext and heap wrapping key.
   public static clearAllSessionData(): void {
     _cachedUser = null;
     this.stopAutoRefresh();
 
-    // Clear cached encryption keys and digest cache.
-    clearAllCachedAccountKeys();
-    clearDigestCache();
+    cleanupAccountKeyCache();
 
-    // Clear any window-level auth flow data that may still be present.
+    // Clear live MFA setup flow data on window (registration/login resume).
     if (typeof window !== 'undefined') {
-      delete window.registrationData;
-      delete window.totpLoginData;
       delete window.totpSetupData;
     }
   }
@@ -342,11 +341,8 @@ export function csrfHeader(): Record<string, string> {
 }
 
 // Utility function exports
-export const getCsrfTokenExport = getCsrfToken;
 export const isAuthenticated = AuthManager.isAuthenticated.bind(AuthManager);
 export const getUsernameFromToken = AuthManager.getUsernameFromToken.bind(AuthManager);
-export const isTokenExpired = AuthManager.isTokenExpired.bind(AuthManager);
-export const getTokenExpiry = AuthManager.getTokenExpiry.bind(AuthManager);
 export const refreshToken = AuthManager.refreshToken.bind(AuthManager);
 export const revokeAllSessions = AuthManager.revokeAllSessions.bind(AuthManager);
 export const logout = AuthManager.logout.bind(AuthManager);

@@ -88,13 +88,19 @@ func GetFileMeta(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Account pending approval. File downloads are restricted until your account is approved by an administrator. You can still access other features of your account.")
 	}
 
-	// Calculate chunk size and total chunks from config
+	// Prefer persisted chunk_count from upload completion (canonical encrypted-stream accounting).
 	chunkSize := crypto.PlaintextChunkSize()
-	totalChunks := (file.SizeBytes + chunkSize - 1) / chunkSize
+	if file.ChunkSizeBytes > 0 {
+		chunkSize = file.ChunkSizeBytes
+	}
+	totalChunks := file.ChunkCount
+	if totalChunks <= 0 {
+		totalChunks = models.CalculateChunkCount(file.SizeBytes, chunkSize)
+	}
 
 	logging.InfoLogger.Printf("File metadata requested: file_id %s (size: %d bytes, chunks: %d)", fileID, file.SizeBytes, totalChunks)
 
-	return c.JSON(http.StatusOK, map[string]interface{}{
+	resp := map[string]interface{}{
 		"file_id":               file.FileID,
 		"owner_username":        file.OwnerUsername, // needed for metadata AAD reconstruction
 		"encrypted_filename":    file.EncryptedFilename,
@@ -102,15 +108,19 @@ func GetFileMeta(c echo.Context) error {
 		"encrypted_sha256sum":   file.EncryptedSha256sum,
 		"sha256sum_nonce":       file.Sha256sumNonce,
 		"encrypted_fek":         file.EncryptedFEK,
-		"password_hint":         file.PasswordHint,
 		"password_type":         file.PasswordType,
 		"size_bytes":            file.SizeBytes,
 		"chunk_size":            chunkSize,
 		"total_chunks":          totalChunks,
-		"chunk_count":           file.ChunkCount,
-		"chunk_size_bytes":      file.ChunkSizeBytes,
+		"chunk_count":           totalChunks,
+		"chunk_size_bytes":      chunkSize,
 		"encrypted_file_sha256": file.EncryptedFileSha256sum.Valid && file.EncryptedFileSha256sum.String != "",
-	})
+	}
+	if file.EncryptedPasswordHint != "" && file.PasswordHintNonce != "" {
+		resp["encrypted_password_hint"] = file.EncryptedPasswordHint
+		resp["password_hint_nonce"] = file.PasswordHintNonce
+	}
+	return c.JSON(http.StatusOK, resp)
 }
 
 // ListRecentFileMetadata returns a paginated recent metadata listing for the

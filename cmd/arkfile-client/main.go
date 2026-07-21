@@ -141,26 +141,27 @@ type Response struct {
 // ServerFileInfo represents file metadata from server response.
 //
 // OwnerUsername is required to reconstruct the metadata AAD when
-// decrypting `encrypted_filename` and `encrypted_sha256sum`
-// For owner-only endpoints it equals the
+// decrypting `encrypted_filename`, `encrypted_sha256sum`, and
+// `encrypted_password_hint`. For owner-only endpoints it equals the
 // authenticated user, but the server is the authority on this
 // value so it is taken from the response.
 type ServerFileInfo struct {
-	FileID            string `json:"file_id"`
-	StorageID         string `json:"storage_id"`
-	OwnerUsername     string `json:"owner_username"`
-	PasswordHint      string `json:"password_hint"`
-	PasswordType      string `json:"password_type"`
-	FilenameNonce     string `json:"filename_nonce"`
-	EncryptedFilename string `json:"encrypted_filename"`
-	SHA256Nonce       string `json:"sha256sum_nonce"`
-	EncryptedSHA256   string `json:"encrypted_sha256sum"`
-	EncryptedFEK      string `json:"encrypted_fek"`
-	SizeBytes         int64  `json:"size_bytes"`
-	SizeReadable      string `json:"size_readable"`
-	UploadDate        string `json:"upload_date"`
-	ChunkCount        int64  `json:"chunk_count"`
-	ChunkSizeBytes    int64  `json:"chunk_size_bytes"`
+	FileID                string `json:"file_id"`
+	StorageID             string `json:"storage_id"`
+	OwnerUsername         string `json:"owner_username"`
+	EncryptedPasswordHint string `json:"encrypted_password_hint,omitempty"`
+	PasswordHintNonce     string `json:"password_hint_nonce,omitempty"`
+	PasswordType          string `json:"password_type"`
+	FilenameNonce         string `json:"filename_nonce"`
+	EncryptedFilename     string `json:"encrypted_filename"`
+	SHA256Nonce           string `json:"sha256sum_nonce"`
+	EncryptedSHA256       string `json:"encrypted_sha256sum"`
+	EncryptedFEK          string `json:"encrypted_fek"`
+	SizeBytes             int64  `json:"size_bytes"`
+	SizeReadable          string `json:"size_readable"`
+	UploadDate            string `json:"upload_date"`
+	ChunkCount            int64  `json:"chunk_count"`
+	ChunkSizeBytes        int64  `json:"chunk_size_bytes"`
 }
 
 // ServerFileListResponse represents the server's file list response format

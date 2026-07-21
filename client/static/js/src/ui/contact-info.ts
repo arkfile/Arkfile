@@ -37,6 +37,16 @@ export async function toggleContactInfoPanel(): Promise<void> {
     securityPanel.classList.add('hidden');
   }
 
+  const verifyPanel = document.getElementById('verify-file-panel');
+  if (verifyPanel && !verifyPanel.classList.contains('hidden')) {
+    verifyPanel.classList.add('hidden');
+  }
+
+  const billingPanel = document.getElementById('billing-panel');
+  if (billingPanel && !billingPanel.classList.contains('hidden')) {
+    billingPanel.classList.add('hidden');
+  }
+
   // Load contact info when opening the panel
   if (isHidden) {
     await loadContactInfo();

@@ -1,24 +1,31 @@
 /**
  * Account Key Cache Module
- * 
+ *
  * Manages caching of the user's Account Key (derived from account password + username)
  * in sessionStorage for convenient file encryption/decryption operations.
  *
- * Security features:
- * - **Ephemeral wrapping key**: The account key is never stored as plaintext in
- *   sessionStorage. Instead, it is AES-GCM encrypted with a random 32-byte
- *   wrapping key held only in a module-level variable (JS heap). If sessionStorage
- *   is read by an attacker (XSS, browser extension), they get only ciphertext.
- * - **Session binding**: The cached key is bound to a specific JWT access token
- *   via SHA-256 hash. If the session changes, the cache auto-locks.
- * - **Inactivity auto-lock**: After a configurable idle period (default 15 min),
- *   the cache is automatically locked and the wrapping key wiped.
- * - **Integrity HMAC**: Each cache entry includes an HMAC-SHA256 of the stored
+ * Security model (browser / HttpOnly cookie auth):
+ * - Ephemeral wrapping key: The account key is never stored as plaintext in
+ *   sessionStorage. It is AES-GCM encrypted with a random 32-byte wrapping key
+ *   held only in a module-level variable (JS heap). If sessionStorage is read by
+ *   an attacker (XSS, browser extension), they get only ciphertext.
+ * - Heap-only wrapping is the real protection under cookie auth. Callers do not
+ *   pass a JWT access token (HttpOnly), so `token_hash` is stored empty and the
+ *   optional token-binding check is skipped. A page reload drops the wrapping key;
+ *   leftover sessionStorage ciphertext is treated as orphaned and cleared.
+ * - Optional token_hash: retained for callers that supply an access token (e.g.
+ *   tests or non-cookie clients). When provided, a mismatch auto-locks the cache.
+ * - Per-tab scope: module state and sessionStorage are tab-scoped (a newly opened
+ *   tab may receive an initial copy depending on browser/opener behavior, but
+ *   updates are not shared across tabs).
+ * - Inactivity auto-lock: After a configurable idle period (default 15 min), the
+ *   cache is locked and the wrapping key wiped.
+ * - Integrity HMAC: Each cache entry includes an HMAC-SHA256 of the stored
  *   ciphertext, verified on every read to detect tampering.
- * - **Configurable expiration**: 1-4 hours (default 1 hour).
- * - **User must explicitly opt-in** to caching.
- * - **Lock function** to manually clear cached keys.
- * - **Automatic cleanup** on logout and page unload.
+ * - Configurable expiration: 1-4 hours (default 1 hour); user must opt in.
+ * - Teardown: `cleanupAccountKeyCache()` (via `clearAllSessionData()` and logout)
+ *   clears ciphertext and wipes the wrapping key. Explicit lock and inactivity
+ *   use `lockAccountKey()` for the same wipe.
  */
 
 import {
@@ -35,9 +42,7 @@ import { hmac } from '@noble/hashes/hmac.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { clearDigestCache } from '../utils/digest-cache.js';
 
-// ============================================================================
 // Types (Unified shape — matches Go agent's accountKeyEntry)
-// ============================================================================
 
 /**
  * Cache duration options in hours
@@ -72,7 +77,7 @@ interface AccountKeyCache {
   wrapping_tag: string;
   /** HMAC-SHA256 hex of the ciphertext (integrity check) */
   integrity_hmac: string;
-  /** SHA-256 hex of the bound session access token */
+  /** SHA-256 hex of a bound access token when supplied; empty under cookie auth */
   token_hash: string;
   /** Username this key belongs to */
   username: string;
@@ -86,9 +91,7 @@ interface AccountKeyCache {
   ttl_hours: number;
 }
 
-// ============================================================================
 // Constants
-// ============================================================================
 
 /** Storage key prefix for Account Key cache */
 const ACCOUNT_KEY_PREFIX = 'arkfile_account_key_';
@@ -114,9 +117,7 @@ const DEFAULT_INACTIVITY_TIMEOUT_MINUTES = 15;
 /** Inactivity check interval in milliseconds */
 const INACTIVITY_CHECK_INTERVAL_MS = 60_000; // 1 minute
 
-// ============================================================================
 // Module-level ephemeral state (never persisted)
-// ============================================================================
 
 /**
  * Ephemeral wrapping key — exists only in JS heap memory.
@@ -141,9 +142,7 @@ let inactivityIntervalId: ReturnType<typeof setInterval> | null = null;
  */
 let activityListenersRegistered = false;
 
-// ============================================================================
 // Configuration Functions
-// ============================================================================
 
 /**
  * Gets the current Account Key cache configuration
@@ -201,13 +200,10 @@ export function setAccountKeyCacheConfig(config: AccountKeyCacheConfig): void {
   }
 }
 
-// ============================================================================
-// Session Binding Helpers
-// ============================================================================
-
 /**
- * Computes SHA-256 hex hash of a session access token.
- * Matches the Go agent's hashToken() function.
+ * Computes SHA-256 hex hash of an access token when optional binding is used.
+ * Matches the Go agent's hashToken() function. Browser cookie auth does not
+ * supply a token, so production cache entries store an empty token_hash.
  */
 function hashToken(token: string): string {
   const encoder = new TextEncoder();
@@ -225,9 +221,7 @@ function computeIntegrityHMAC(data: Uint8Array, key: Uint8Array): string {
   return toHex(mac);
 }
 
-// ============================================================================
 // Cache Functions
-// ============================================================================
 
 /**
  * Caches an Account Key in sessionStorage, encrypted with an ephemeral wrapping key.
@@ -238,7 +232,7 @@ function computeIntegrityHMAC(data: Uint8Array, key: Uint8Array): string {
  * 
  * @param username - The user's username
  * @param key - The derived Account Key (32 bytes)
- * @param accessToken - The current JWT access token (for session binding)
+ * @param accessToken - Optional access token for binding (omitted under cookie auth)
  * @param durationHours - Optional override for cache duration (1-4 hours)
  */
 export async function cacheAccountKey(
@@ -281,9 +275,7 @@ export async function cacheAccountKey(
       wrapping_iv: toBase64(encrypted.iv),
       wrapping_tag: toBase64(encrypted.tag),
       integrity_hmac: integrityHMAC,
-      // When no token is available (cookie-based auth), store empty string.
-      // getCachedAccountKey skips the token-binding check when accessToken is
-      // undefined/empty, so the cache still works correctly without a token.
+      // Cookie auth: no readable JWT; empty hash and binding check skipped.
       token_hash: accessToken ? hashToken(accessToken) : '',
       username: username.trim(),
       context: 'account',
@@ -318,11 +310,11 @@ export async function cacheAccountKey(
 /**
  * Retrieves a cached Account Key from sessionStorage.
  * 
- * Performs expiration check, session binding validation, and integrity HMAC
+ * Performs expiration check, optional token binding, and integrity HMAC
  * verification before decrypting with the ephemeral wrapping key.
- * 
+ *
  * @param username - The user's username
- * @param accessToken - Optional current access token for session binding check
+ * @param accessToken - Optional access token for binding check (unused under cookie auth)
  * @returns The cached Account Key, or null if not cached/expired/locked/invalid
  */
 export async function getCachedAccountKey(
@@ -334,9 +326,10 @@ export async function getCachedAccountKey(
     if (isAccountKeyLocked()) {
       return null;
     }
-    
-    // Wrapping key must exist in memory
+
+    // Wrapping key must exist in memory; clear orphaned ciphertext after reload.
     if (wrappingKey === null) {
+      clearOrphanedCiphertextIfNoWrappingKey();
       return null;
     }
     
@@ -369,23 +362,21 @@ export async function getCachedAccountKey(
       return null;
     }
     
-    // Session binding: verify token hash if provided
+    // Optional token binding when a readable access token is supplied
     if (accessToken && accessToken !== '') {
       const currentTokenHash = hashToken(accessToken);
       if (currentTokenHash !== cached.token_hash) {
-        // Session mismatch — auto-lock for security
         console.warn('Session mismatch detected. Locking account key cache.');
         lockAccountKey();
         return null;
       }
     }
-    
+
     // Integrity HMAC verification
     const ciphertextBytes = fromBase64(cached.account_key);
     const expectedHMAC = computeIntegrityHMAC(ciphertextBytes, wrappingKey);
     if (expectedHMAC !== cached.integrity_hmac) {
-      // Tampering detected — force lock and alert
-      console.error('⚠️ Account key cache integrity check failed! Possible tampering detected. Locking.');
+      console.error('[X] Account key cache integrity check failed. Possible tampering detected. Locking.');
       lockAccountKey();
       return null;
     }
@@ -465,7 +456,11 @@ export function clearAllCachedAccountKeys(): void {
  * @returns True if a valid (non-expired) key is cached and wrapping key exists
  */
 export function isAccountKeyCached(username: string): boolean {
-  if (isAccountKeyLocked() || wrappingKey === null) {
+  if (isAccountKeyLocked()) {
+    return false;
+  }
+  if (wrappingKey === null) {
+    clearOrphanedCiphertextIfNoWrappingKey();
     return false;
   }
   
@@ -490,7 +485,11 @@ export function isAccountKeyCached(username: string): boolean {
  */
 export function cachedAccountKeyExpiresAt(username: string): number | null {
   try {
-    if (isAccountKeyLocked() || wrappingKey === null) {
+    if (isAccountKeyLocked()) {
+      return null;
+    }
+    if (wrappingKey === null) {
+      clearOrphanedCiphertextIfNoWrappingKey();
       return null;
     }
     
@@ -532,9 +531,7 @@ export function cachedAccountKeyTimeRemaining(username: string): number | null {
   return remaining > 0 ? remaining : null;
 }
 
-// ============================================================================
 // Lock Functions
-// ============================================================================
 
 /**
  * Locks the Account Key cache, clearing all cached keys and wiping the wrapping key.
@@ -601,9 +598,7 @@ export function isAccountKeyLocked(): boolean {
   }
 }
 
-// ============================================================================
 // Inactivity Auto-Lock
-// ============================================================================
 
 /**
  * Records user activity (called by event listeners).
@@ -676,15 +671,13 @@ function stopInactivityMonitor(): void {
   }
 }
 
-// ============================================================================
 // Cleanup Functions
-// ============================================================================
 
 /**
  * Performs full cleanup of Account Key cache.
- * 
- * Called on logout or when user explicitly clears session data.
- * Wipes the wrapping key, all cached data, and config.
+ *
+ * Primary teardown primitive for logout, revoke-all, and session expiry via
+ * `clearAllSessionData()`. Wipes the wrapping key, all cached ciphertext, and config.
  */
 export function cleanupAccountKeyCache(): void {
   try {
@@ -693,15 +686,15 @@ export function cleanupAccountKeyCache(): void {
       secureWipe(wrappingKey);
       wrappingKey = null;
     }
-    
+
     clearAllCachedAccountKeys();
-    
+
     // Clear digest cache (SHA-256 digests are sensitive — content fingerprinting)
     clearDigestCache();
-    
+
     sessionStorage.removeItem(ACCOUNT_KEY_CONFIG);
     sessionStorage.removeItem(ACCOUNT_KEY_LOCKED);
-    
+
     stopInactivityMonitor();
   } catch (error) {
     console.warn('Failed to cleanup Account Key cache:', error);
@@ -709,48 +702,26 @@ export function cleanupAccountKeyCache(): void {
 }
 
 /**
+ * Clears sessionStorage ciphertext when the heap wrapping key is absent.
+ * After a reload the wrapping key is gone; leftover ciphertext is unusable.
+ */
+function clearOrphanedCiphertextIfNoWrappingKey(): void {
+  if (wrappingKey !== null) {
+    return;
+  }
+  clearAllCachedAccountKeys();
+}
+
+/**
  * Registers cleanup handlers for automatic key clearing.
- * 
- * Sets up event listeners for:
- * - beforeunload (tab/browser close) — locks and wipes wrapping key
+ *
+ * Clears orphaned ciphertext left after a reload (wrapping key already null),
+ * and locks on beforeunload so the wrapping key is wiped on tab close.
  */
 export function registerAccountKeyCleanupHandlers(): void {
-  // Clear on tab/browser close
+  clearOrphanedCiphertextIfNoWrappingKey();
+
   window.addEventListener('beforeunload', () => {
     lockAccountKey();
   });
-  
-  // Note: sessionStorage is automatically cleared on tab close,
-  // but we explicitly lock to ensure the wrapping key is wiped.
 }
-
-// ============================================================================
-// Exports
-// ============================================================================
-
-export const accountKeyCache = {
-  // Configuration
-  getAccountKeyCacheConfig,
-  setAccountKeyCacheConfig,
-  
-  // Caching
-  cacheAccountKey,
-  getCachedAccountKey,
-  clearCachedAccountKey,
-  clearAllCachedAccountKeys,
-  isAccountKeyCached,
-  cachedAccountKeyExpiresAt,
-  cachedAccountKeyTimeRemaining,
-  
-  // Session binding
-  hashToken,
-  
-  // Locking
-  lockAccountKey,
-  unlockAccountKey,
-  isAccountKeyLocked,
-  
-  // Cleanup
-  cleanupAccountKeyCache,
-  registerAccountKeyCleanupHandlers,
-};

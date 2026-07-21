@@ -26,6 +26,7 @@ import {
   buildMetadataFieldAAD,
   AAD_FIELD_FILENAME,
   AAD_FIELD_SHA256,
+  AAD_FIELD_PASSWORD_HINT,
 } from '../crypto/aad';
 
 // ----------------------------------------------------------------------------
@@ -246,6 +247,17 @@ describe('decryptMetadataField', () => {
 
     const got = await decryptMetadataField(encrypted, nonce, key, FILE_ID, AAD_FIELD_SHA256, OWNER);
     expect(got).toBe(hex);
+  });
+
+  test('round-trip for password hint field', async () => {
+    const key = randomBytes(32);
+    const hint = 'my favorite color';
+    const { encrypted, nonce } = await buildEncryptedMetadata(
+      hint, key, FILE_ID, AAD_FIELD_PASSWORD_HINT, OWNER,
+    );
+
+    const got = await decryptMetadataField(encrypted, nonce, key, FILE_ID, AAD_FIELD_PASSWORD_HINT, OWNER);
+    expect(got).toBe(hint);
   });
 
   test('wrong fileID fails AEAD verification', async () => {

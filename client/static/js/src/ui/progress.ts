@@ -4,6 +4,7 @@
  */
 
 import { ProgressOptions, ProgressState } from '../types/dom';
+import { formatBytes } from '../utils/format.js';
 
 export class ProgressManager {
   private static activeProgress: HTMLElement | null = null;
@@ -191,11 +192,7 @@ export class ProgressManager {
   }
 
   private static formatBytes(bytes: number): string {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    return formatBytes(bytes);
   }
 
   private static formatTime(seconds: number): string {
@@ -234,7 +231,7 @@ export function isProgressVisible(): boolean {
   return ProgressManager.isProgressVisible();
 }
 
-// Legacy compatibility function for simple progress messages
+// Simple progress toast function for simple progress messages
 export function showProgressMessage(message: string): HTMLElement {
   return ProgressManager.showProgress({
     title: 'Processing...',

@@ -6,22 +6,28 @@
  *
  * LARGE FILE DOWNLOADS
  * --------------------
- * Downloads stream through the same-origin Service Worker registered at app
- * init (see app.ts -> registerSwDownload). The SW intercepts a synthetic
- * /sw-download/<uuid> URL and responds with a streaming Response carrying
- * Content-Disposition: attachment, so the browser writes the bytes directly
- * to disk with no Blob accumulation and no 2 GB ceiling.
+ * Prefer Service Worker streaming (registerSwDownload at app init). The SW
+ * intercepts /sw-download/<uuid> and responds with a streaming Response
+ * carrying Content-Disposition: attachment so the browser writes bytes to
+ * disk with chunk-bounded page memory and no Arkfile-imposed size cap.
  *
- * If the SW is unavailable (very old browsers, certain private-browsing
- * modes), the streaming-download manager falls back to incremental Blob
- * construction and we trigger the download from a blob URL here.
+ * Whole-file SHA-256 on the SW path is computed as data flows; a mismatch may
+ * be detected only after the OS download manager has saved bytes. Same class
+ * of post-write limit as CLI computeStreamingSHA256 and offline decrypt-blob.
+ * Never claim unqualified success on mismatch; show expected digest and tips.
+ *
+ * Blob fallback remains when SW is unavailable or cannot initialize before
+ * generator consumption. It buffers the complete plaintext in browser Blob
+ * storage with no Arkfile size cap; browser resources may still be
+ * insufficient. Check hashVerification BEFORE triggerBrowserDownloadFromUrl;
+ * revoke the Blob URL on mismatch and do not claim success.
  *
  * SECURITY: All FEK decryption happens client-side using Argon2id-derived keys.
  * The server NEVER sees the plaintext FEK or the user's password.
  */
 
 import { authenticatedFetch, isAuthenticated, getUsernameFromToken, getCurrentUser } from '../utils/auth';
-import { showError, showSuccess, showWarning } from '../ui/messages';
+import { showError } from '../ui/messages';
 import { showProgress, hideProgress } from '../ui/progress';
 import { showPasswordPrompt } from '../ui/password-modal';
 import {
@@ -29,11 +35,20 @@ import {
   triggerBrowserDownloadFromUrl,
   StreamingDownloadResult,
 } from './streaming-download';
+import { isSwAvailable } from './sw-streaming-download';
+import {
+  finalizeDownloadIntegrity,
+  showSwStreamingTip,
+  showBlobBufferWarning,
+  showPartialDownloadWarning,
+} from './download-integrity';
+import { debugLog } from '../utils/debug-log.js';
 
 import { deriveFileEncryptionKey } from '../crypto/file-encryption';
 import { getAccountKey, decryptFEK } from '../crypto/metadata-helpers';
 
 const LOG_PREFIX = '[arkfile-download]';
+const INTEGRITY_PANEL_ID = 'download-integrity-panel';
 
 interface FileMetaResponse {
   /** Canonical file_id (required to reconstruct FEK / metadata AAD). */
@@ -62,9 +77,9 @@ interface FileMetaResponse {
  * 4. Decrypt FEK
  * 5. Stream-decrypt all chunks via the streaming manager:
  *    - SW path (preferred): bytes flow to the browser's download manager via
- *      the Service Worker; SHA-256 verified inline.
- *    - Blob fallback: accumulate incrementally, trigger download from blob URL.
- * 6. Show success or hash-mismatch warning.
+ *      the Service Worker; SHA-256 verified inline (may be post-write on disk).
+ *    - Blob fallback: accumulate incrementally; check hash before trigger.
+ * 6. Show integrity panel (expected digest, inline result, Verify File entry).
  */
 export async function downloadFile(
   fileId: string,
@@ -73,7 +88,7 @@ export async function downloadFile(
   passwordType: string,
 ): Promise<void> {
   const t0 = Date.now();
-  console.log(`${LOG_PREFIX} downloadFile() invoked (passwordType=${passwordType})`);
+  debugLog(`${LOG_PREFIX} downloadFile() invoked (passwordType=${passwordType})`);
 
   try {
     if (!isAuthenticated()) {
@@ -96,7 +111,7 @@ export async function downloadFile(
 
     // Fetch file metadata
     const tMeta = Date.now();
-    console.log(`${LOG_PREFIX} Fetching file metadata...`);
+    debugLog(`${LOG_PREFIX} Fetching file metadata...`);
     const metaResponse = await authenticatedFetch(`/api/files/${fileId}/meta`);
     if (!metaResponse.ok) {
       const errorData = await metaResponse.json().catch(() => ({}));
@@ -105,17 +120,17 @@ export async function downloadFile(
       return;
     }
     const meta: FileMetaResponse = await metaResponse.json();
-    console.log(`${LOG_PREFIX} Metadata fetched in ${Date.now() - tMeta}ms (size_bytes=${meta.size_bytes}, total_chunks=${meta.total_chunks}, password_type=${meta.password_type})`);
+    debugLog(`${LOG_PREFIX} Metadata fetched in ${Date.now() - tMeta}ms (size_bytes=${meta.size_bytes}, total_chunks=${meta.total_chunks}, password_type=${meta.password_type})`);
 
     let fek: Uint8Array;
     let metadataDecryptionKey: Uint8Array;
 
     if (passwordType === 'account' || meta.password_type === 'account') {
       // Account-encrypted: get Account Key, decrypt FEK
-      console.log(`${LOG_PREFIX} Resolving account key for FEK decryption (passwordType=account)`);
+      debugLog(`${LOG_PREFIX} Resolving account key for FEK decryption (passwordType=account)`);
       const accountKey = await getAccountKey(username);
       if (!accountKey) {
-        console.log(`${LOG_PREFIX} Account key resolution cancelled or failed`);
+        debugLog(`${LOG_PREFIX} Account key resolution cancelled or failed`);
         return;
       }
       metadataDecryptionKey = accountKey;
@@ -123,7 +138,7 @@ export async function downloadFile(
       try {
         const tDec = Date.now();
         fek = await decryptFEK(meta.encrypted_fek, accountKey, meta.file_id);
-        console.log(`${LOG_PREFIX} FEK decrypted in ${Date.now() - tDec}ms`);
+        debugLog(`${LOG_PREFIX} FEK decrypted in ${Date.now() - tDec}ms`);
       } catch (error) {
         console.error(`${LOG_PREFIX} Failed to decrypt FEK with account key:`, error instanceof Error ? error.message : error);
         showError('Failed to decrypt file key. Your password may be incorrect.');
@@ -131,10 +146,10 @@ export async function downloadFile(
       }
     } else {
       // Custom-encrypted: need account key for metadata AND custom key for FEK
-      console.log(`${LOG_PREFIX} Resolving account key for metadata decryption (passwordType=custom)`);
+      debugLog(`${LOG_PREFIX} Resolving account key for metadata decryption (passwordType=custom)`);
       const accountKey = await getAccountKey(username);
       if (!accountKey) {
-        console.log(`${LOG_PREFIX} Account key resolution cancelled or failed`);
+        debugLog(`${LOG_PREFIX} Account key resolution cancelled or failed`);
         return;
       }
       metadataDecryptionKey = accountKey;
@@ -149,7 +164,7 @@ export async function downloadFile(
         cancelLabel: 'Cancel',
       });
       if (!promptResult) {
-        console.log(`${LOG_PREFIX} Custom password prompt cancelled`);
+        debugLog(`${LOG_PREFIX} Custom password prompt cancelled`);
         return;
       }
       const password = promptResult.password;
@@ -163,23 +178,30 @@ export async function downloadFile(
 
         const tKdf = Date.now();
         const customKey = await deriveFileEncryptionKey(password, username, 'custom');
-        console.log(`${LOG_PREFIX} Custom key derived (Argon2id) in ${Date.now() - tKdf}ms`);
+        debugLog(`${LOG_PREFIX} Custom key derived (Argon2id) in ${Date.now() - tKdf}ms`);
         hideProgress();
 
         const tDec = Date.now();
         fek = await decryptFEK(meta.encrypted_fek, customKey, meta.file_id);
-        console.log(`${LOG_PREFIX} FEK decrypted with custom key in ${Date.now() - tDec}ms`);
+        debugLog(`${LOG_PREFIX} FEK decrypted with custom key in ${Date.now() - tDec}ms`);
       } catch (error) {
         hideProgress();
         console.error(`${LOG_PREFIX} Failed to decrypt FEK with custom password:`, error instanceof Error ? error.message : error);
-        showError('Failed to decrypt file key. Check your password.');
+        const toast = showError('Failed to decrypt file key. Check your password.');
+        toast.setAttribute('data-testid', 'wrong-custom-password');
         return;
       }
     }
 
+    if (isSwAvailable()) {
+      showSwStreamingTip();
+    } else {
+      showBlobBufferWarning();
+    }
+
     // Stream-decrypt all chunks via the streaming download manager.
-    // Picks the SW path when available; falls back to Blob otherwise.
-    console.log(`${LOG_PREFIX} Beginning chunked streaming download...`);
+    // Picks the SW path when available; falls back to Blob only when safe.
+    debugLog(`${LOG_PREFIX} Beginning chunked streaming download...`);
     const result: StreamingDownloadResult = await downloadFileChunked(
       fileId,
       fek,
@@ -197,10 +219,13 @@ export async function downloadFile(
 
     if (!result.success) {
       if (result.error === 'Download cancelled') {
-        console.log(`${LOG_PREFIX} Download cancelled by user`);
+        debugLog(`${LOG_PREFIX} Download cancelled by user`);
         return;
       }
       console.error(`${LOG_PREFIX} Streaming download returned failure: ${result.error}`);
+      if (result.error && /partial file may already/i.test(result.error)) {
+        showPartialDownloadWarning();
+      }
       showError(result.error || 'Download failed.');
       return;
     }
@@ -214,33 +239,47 @@ export async function downloadFile(
     // Sanity check: server-stored expectedHash from list.ts row should match
     // the freshly-decrypted sha256sum from this download's metadata. They are
     // both ciphertext over the same value with the same account key, so a
-    // mismatch here indicates metadata tampering or a code bug.
+    // mismatch here indicates metadata tampering or a stale list view.
     if (result.sha256sum && expectedHash && result.sha256sum !== expectedHash) {
       console.warn(`${LOG_PREFIX} SHA-256 metadata mismatch -- possible tampering or stale list view`);
     }
 
+    const integrity = {
+      filename: result.filename,
+      expectedSha256: result.sha256sum,
+      computedSha256: result.computedSha256Hex,
+      hashVerification: result.hashVerification,
+      streamedViaSw: result.streamedViaSw === true,
+    };
+
     if (result.streamedViaSw) {
-      // SW path: bytes streamed directly to the browser's download manager.
-      console.log(`${LOG_PREFIX} File streamed via Service Worker (total elapsed ${Date.now() - t0}ms, hash_verification=${result.hashVerification ?? 'n/a'})`);
-      showSuccess(`Downloaded: ${result.filename}`);
-      if (result.hashVerification === 'mismatch') {
-        showWarning('SHA-256 verification failed for the downloaded file. The file may be corrupted or tampered with. Consider deleting it and re-downloading.');
-      }
+      debugLog(`${LOG_PREFIX} File streamed via Service Worker (total elapsed ${Date.now() - t0}ms, hash_verification=${result.hashVerification ?? 'n/a'})`);
+      finalizeDownloadIntegrity(integrity, INTEGRITY_PANEL_ID);
       return;
     }
 
-    // Blob fallback path: trigger browser download from blob URL
+    // Blob fallback path: check hash BEFORE trigger; revoke on mismatch.
     if (!result.blobUrl) {
       console.error(`${LOG_PREFIX} Result missing blobUrl on fallback path`);
       showError('Download completed but no file data was produced.');
       return;
     }
 
-    console.log(`${LOG_PREFIX} Triggering browser download from blob URL (SW unavailable, total elapsed ${Date.now() - t0}ms)`);
+    const decision = finalizeDownloadIntegrity(integrity, INTEGRITY_PANEL_ID);
+    if (decision.blockBlobTrigger) {
+      console.warn(`${LOG_PREFIX} Blob download blocked due to hash mismatch; revoking Blob URL`);
+      URL.revokeObjectURL(result.blobUrl);
+      return;
+    }
+
+    debugLog(`${LOG_PREFIX} Triggering browser download from blob URL (SW unavailable, total elapsed ${Date.now() - t0}ms)`);
     triggerBrowserDownloadFromUrl(result.blobUrl, result.filename);
-    showSuccess(`Downloaded: ${result.filename}`);
   } catch (error) {
     console.error(`${LOG_PREFIX} Unhandled download error:`, error instanceof Error ? error.message : error);
+    const msg = error instanceof Error ? error.message : '';
+    if (/partial file may already/i.test(msg)) {
+      showPartialDownloadWarning();
+    }
     showError('An error occurred during file download.');
   }
 }

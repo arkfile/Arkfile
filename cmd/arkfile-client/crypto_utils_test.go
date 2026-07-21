@@ -141,6 +141,44 @@ func TestEncryptChunk_EmptyFileID(t *testing.T) {
 
 // -- encryptMetadata / decryptMetadataField: positive and negative AAD tests --
 
+// TestEncryptDecryptPasswordHint_RoundTrip verifies Account-Key encrypt
+// of a custom-password hint under AADFieldPasswordHint, plus empty-omit.
+func TestEncryptDecryptPasswordHint_RoundTrip(t *testing.T) {
+	accountKey, err := crypto.GenerateAESKey()
+	if err != nil {
+		t.Fatalf("GenerateAESKey failed: %v", err)
+	}
+
+	encEmpty, nonceEmpty, err := encryptPasswordHint("", accountKey, testFileID, testOwner)
+	if err != nil {
+		t.Fatalf("encryptPasswordHint empty failed: %v", err)
+	}
+	if encEmpty != "" || nonceEmpty != "" {
+		t.Fatalf("empty hint must omit both fields, got enc=%q nonce=%q", encEmpty, nonceEmpty)
+	}
+
+	hint := "my favorite color"
+	encHint, hintNonce, err := encryptPasswordHint(hint, accountKey, testFileID, testOwner)
+	if err != nil {
+		t.Fatalf("encryptPasswordHint failed: %v", err)
+	}
+	if encHint == "" || hintNonce == "" {
+		t.Fatal("non-empty hint must produce ciphertext and nonce")
+	}
+
+	got, err := decryptMetadataField(encHint, hintNonce, accountKey, testFileID, crypto.AADFieldPasswordHint, testOwner)
+	if err != nil {
+		t.Fatalf("decryptMetadataField (password hint) failed: %v", err)
+	}
+	if got != hint {
+		t.Errorf("hint mismatch: got %q, expected %q", got, hint)
+	}
+
+	if _, err := decryptMetadataField(encHint, hintNonce, accountKey, testFileID, crypto.AADFieldFilename, testOwner); err == nil {
+		t.Fatal("decrypting password hint under filename AAD label must fail")
+	}
+}
+
 // TestEncryptDecryptMetadata_WithAAD_RoundTrip verifies metadata
 // encrypt/decrypt round-trip when AAD inputs match.
 func TestEncryptDecryptMetadata_WithAAD_RoundTrip(t *testing.T) {

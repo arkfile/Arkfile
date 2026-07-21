@@ -291,4 +291,47 @@ describe('cleanupAccountKeyCache', () => {
     const config = getAccountKeyCacheConfig();
     expect(config.enabled).toBe(false);
   });
+
+  test('clearAllCachedAccountKeys leaves wrapping key usable until cleanup', async () => {
+    const key = makeKey();
+    await cacheAccountKey(TEST_USERNAME, key, TEST_TOKEN, 1);
+    clearAllCachedAccountKeys();
+    // Ciphertext gone; wrapping key may still exist in heap until cleanup/lock.
+    expect(isAccountKeyCached(TEST_USERNAME)).toBe(false);
+    cleanupAccountKeyCache();
+    expect(await getCachedAccountKey(TEST_USERNAME, TEST_TOKEN)).toBeNull();
+  });
+});
+
+describe('orphaned ciphertext after reload simulation', () => {
+  test('getCachedAccountKey clears sessionStorage ciphertext when wrapping key is null', async () => {
+    const key = makeKey();
+    await cacheAccountKey(TEST_USERNAME, key, TEST_TOKEN, 1);
+
+    const storageKey = `arkfile_account_key_${TEST_USERNAME}`;
+    expect(sessionStorage.getItem(storageKey)).not.toBeNull();
+
+    // Simulate page reload: wipe wrapping key via cleanup, then re-seed ciphertext
+    // without a wrapping key (as would happen if only sessionStorage survived).
+    const leftover = sessionStorage.getItem(storageKey)!;
+    cleanupAccountKeyCache();
+    sessionStorage.setItem(storageKey, leftover);
+
+    const result = await getCachedAccountKey(TEST_USERNAME, TEST_TOKEN);
+    expect(result).toBeNull();
+    expect(sessionStorage.getItem(storageKey)).toBeNull();
+  });
+});
+
+describe('lockAccountKey teardown', () => {
+  test('wipes ciphertext so getCachedAccountKey cannot recover after unlock alone', async () => {
+    const key = makeKey();
+    await cacheAccountKey(TEST_USERNAME, key, TEST_TOKEN, 1);
+
+    lockAccountKey();
+    unlockAccountKey();
+
+    expect(await getCachedAccountKey(TEST_USERNAME, TEST_TOKEN)).toBeNull();
+    expect(sessionStorage.getItem(`arkfile_account_key_${TEST_USERNAME}`)).toBeNull();
+  });
 });

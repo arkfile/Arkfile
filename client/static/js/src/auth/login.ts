@@ -21,12 +21,11 @@ import { getOpaqueClient, storeClientSecret, retrieveClientSecret, clearClientSe
 import {
   deriveFileEncryptionKey,
   deriveFileEncryptionKeyWithCache,
-  cleanupAccountKeyCache,
 } from '../crypto/file-encryption.js';
 import { decryptMetadataField } from '../crypto/metadata-helpers.js';
 import { AAD_FIELD_FILENAME } from '../crypto/aad.js';
 import { promptForCacheOptIn } from '../ui/password-modal.js';
-import { populateDigestCache, clearDigestCache, type RawFileEntry } from '../utils/digest-cache.js';
+import { populateDigestCache, type RawFileEntry } from '../utils/digest-cache.js';
 import type { ReregistrationVerifier, ReregistrationRequiredData } from '../types/api.js';
 
 // Stable error code the server returns (HTTP 409) when an account has been
@@ -534,11 +533,9 @@ export class LoginManager {
       const { logout } = await import('../utils/auth.js');
       await logout();
 
-      // Clear all session data including OPAQUE secrets, Account Key cache, and digest cache
+      // clearAllSessionData wipes Account Key ciphertext + wrapping key and digest cache
       clearAllSessionData();
       clearClientSecret('login_secret');
-      cleanupAccountKeyCache();
-      clearDigestCache();
 
       // Navigate back to auth section
       const { showAuthSection } = await import('../ui/sections.js');
@@ -551,8 +548,6 @@ export class LoginManager {
       // Still attempt cleanup even on error
       clearAllSessionData();
       clearClientSecret('login_secret');
-      cleanupAccountKeyCache();
-      clearDigestCache();
 
       const { showAuthSection } = await import('../ui/sections.js');
       showAuthSection();

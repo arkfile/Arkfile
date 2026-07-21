@@ -245,6 +245,7 @@
                     <a href="#" id="billing-toggle" class="nav-link">Billing</a>
                     <a href="#" id="security-settings-toggle" class="nav-link">Security Settings</a>
                     <a href="#" id="contact-info-toggle" class="nav-link">Contact Info</a>
+                    <a href="#" id="verify-file-toggle" class="nav-link">Verify File</a>
                     <a href="#" id="logout-link" class="nav-link logout-link">Logout</a>
                 </div>
 
@@ -276,6 +277,27 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- Verify File panel (hidden by default) -->
+                <div id="verify-file-panel" class="security-panel hidden">
+                    <h3>Verify File</h3>
+                    <p>Hash a local file with streaming SHA-256 and compare it to an expected digest. Works offline once you have the digest.</p>
+                    <div class="setting-item">
+                        <label for="verify-file-input"><strong>Local file</strong></label>
+                        <input type="file" id="verify-file-input">
+                    </div>
+                    <div class="setting-item">
+                        <label for="verify-file-expected"><strong>Expected SHA-256</strong> (64 hex characters)</label>
+                        <input type="text" id="verify-file-expected" maxlength="128" placeholder="Paste expected digest" autocomplete="off" spellcheck="false">
+                    </div>
+                    <div class="setting-item">
+                        <button type="button" id="verify-file-run-btn" class="btn-primary">Verify</button>
+                    </div>
+                    <div id="verify-file-result"></div>
+                </div>
+
+                <!-- Download integrity panel (populated after owner downloads) -->
+                <div id="download-integrity-panel" class="security-panel hidden"></div>
 
                 <!-- Contact info panel (hidden by default) -->
                 <div id="contact-info-panel" class="security-panel hidden">

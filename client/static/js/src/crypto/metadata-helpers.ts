@@ -25,9 +25,7 @@ import {
 import { unlockAccountKey } from './account-key-cache.js';
 import { promptForAccountKeyPassword } from '../ui/password-modal.js';
 
-// ============================================================================
 // Base64 Helpers
-// ============================================================================
 
 /**
  * Decode a base64 string to a Uint8Array.
@@ -40,9 +38,7 @@ export function base64ToBytes(base64: string): Uint8Array {
   return bytes;
 }
 
-// ============================================================================
 // Account Key Resolution
-// ============================================================================
 
 /**
  * Resolve the Account Key from cache or by prompting the user.
@@ -96,9 +92,7 @@ export async function getAccountKey(username: string): Promise<Uint8Array | null
   }
 }
 
-// ============================================================================
 // FEK Decryption
-// ============================================================================
 
 /**
  * Decrypt an encrypted FEK (File Encryption Key).
@@ -154,9 +148,7 @@ export async function decryptFEK(
   return fek;
 }
 
-// ============================================================================
 // Metadata Field Decryption
-// ============================================================================
 
 /**
  * Decrypt a single metadata field (filename or SHA-256 hash).
@@ -177,7 +169,7 @@ export async function decryptFEK(
  * @param nonce_base64      - Base64-encoded nonce (12 bytes)
  * @param account_key       - The Account Key (32 bytes)
  * @param fileID            - Canonical file_id from the metadata row
- * @param fieldName         - Must be AAD_FIELD_FILENAME or AAD_FIELD_SHA256 from ./aad
+ * @param fieldName         - Must be AAD_FIELD_FILENAME, AAD_FIELD_SHA256, or AAD_FIELD_PASSWORD_HINT from ./aad
  * @param ownerUsername     - Canonical owner_username from the metadata row
  * @returns The decrypted plaintext string (e.g. filename or hex SHA-256)
  */

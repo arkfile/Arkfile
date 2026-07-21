@@ -358,7 +358,7 @@ export class OpaqueClient {
       // Convert authU to base64 for server transmission
       const authData = uint8ArrayToBase64(credentials.authU);
       
-      // Derive session key from export key (simple hash for now)
+      // Derive session key from the OPAQUE export key via SHA-256.
       const sessionKey = await this.deriveSessionKey(credentials.export_key);
       
       return {

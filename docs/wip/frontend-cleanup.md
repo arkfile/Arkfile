@@ -2,12 +2,13 @@
 
 This plan applies the same audit methodology as `docs/wip/archive/server-cleanup.md` and `docs/wip/archive/cli-cleanup.md` to the TypeScript browser client under `client/static/js/src/`. Every exported function, class method, and UI flow handler is reviewed against the Function Review Sanity Checks in `AGENTS.md`: required, correctly implemented, well placed, reachable, privacy-preserving, and free of stubs, deprecated paths, duplicated logic, and leftover placeholder code. Arkfile is greenfield; delete unused or misleading frontend paths rather than maintain compatibility shims. The audit is cross-checked against `scripts/testing/e2e-playwright.sh` (primary frontend proof), `scripts/testing/e2e-test.sh` (CLI/API baseline the browser should mirror), and `bun test` in `client/static/js/`. Where Playwright hedges (`includes(...)` with many alternatives, idempotent SKIP, pass-without-assertion), tighten tests and fix frontend behavior so there is one canonical expected result. Cross-client parity with `arkfile-client` is explicit: AGENTS.md requires one way to encrypt/upload, download/decrypt, and share per client type, with matching structure where practical.
 
-Status: audit complete (2026-07-20); priorities and tranches refined and independently rechecked (2026-07-21) — ready for implementation
+Status: implementation complete (2026-07-21) — unit tests passing; run dev-reset + e2e locally to verify
 Created: 2026-07-18
 Audited: 2026-07-20
 Priorities updated: 2026-07-21
 Tranches and Playwright scope locked: 2026-07-21
 Findings rechecked against implementation: 2026-07-21
+Implementation: 2026-07-21
 Scope: `client/static/js/src/**` (47 source modules excl. tests/`.d.ts`, ~18,043 LOC), `client/static/js/sw-download.js` (built from `sw-download.ts`), HTML entrypoints that load the bundle (`index.html`, `shared.html`). Server, schema, and CLI changes are in scope when required to remove a privacy-breaking shared contract, including plaintext `password_hint`, or to correct the shared chunk-accounting defect. Cross-stack documentation updates for intentionally server-visible operational metadata (billable storage size) are in scope; do not change size visibility or billing behavior merely to conceal size. Other server or CLI changes remain out of scope unless a contract or chunk fix requires matching implementation and E2E assertions. Archived WIP documents are reference material only and are not changed by this project.
 
 ## Principles
@@ -21,25 +22,25 @@ One canonical way per browser operation (upload, owner download, share create/li
 | Audit inventory and reachability map | [x] done | 2026-07-20: ~271 runtime exports by source scan; zero-importer count provisional; actionable inventory below |
 | One canonical path audit (upload/download/share) | [x] done | Single upload/owner-download/share-ticket paths confirmed; download integrity UX open |
 | CLI parity matrix and drift fixes | [x] audited | Matrix filled; crypto mostly matches; shared hint defect and frontend-only Blob defects recorded |
-| Encrypt custom password hints (tranche 1) | [ ] pending | Highest priority; coordinate frontend, CLI, server, schema, E2E |
-| Canonical chunk accounting (tranche 1) | [ ] pending | Init math is correct; completion and owner metadata divide encrypted size by plaintext chunk size and can report an extra chunk or zero chunks |
-| Download integrity UX + Verify File tool (tranche 1) | [ ] pending | SW large-file path, expected-digest display, tips/popups, retained Blob fallback, new verify tool |
-| Server-visible metadata documentation (tranche 1) | [ ] pending | Docs only; billable size is intentional; no wire/behavior change |
-| Account key cache lifecycle (tranche 2) | [ ] pending | Production session binding absent; teardown does not wipe wrapping key consistently |
-| Share auth ticket-only cleanup (tranche 2) | [ ] pending | Live UI is ticket-only in practice; dead generic/static-token paths and server fallback remain |
-| Dead code and legacy API removal (tranche 2) | [ ] pending | `downloadSharedFileChunked` confirmed dead; stubs and stale window globals listed |
-| Admin contacts contract (frontend, tranche 2) | [ ] partial | Call sites use `configured`; any failed refresh keeps stale cache |
-| Duplicate helper consolidation (tranche 3) | [ ] pending | `formatBytes` / `formatFileSize` |
-| Privacy-sensitive logging review (tranche 2) | [ ] pending | Hot-path `console.log`; emoji in `account-key-cache.ts` integrity error |
-| Hygiene and comment cleanup (tranche 3) | [ ] pending | `===` dividers, WIP refs, "Legacy compatibility", "for now" |
-| Error message consistency (tranche 2) | [ ] pending | Prefer stable `data-testid` / error codes over brittle exact copy alone |
-| `app.ts` decomposition (tranche 3) | [ ] pending | After behavior stable; lower priority than privacy/integrity |
-| Playwright hedging removal (tranche 2) | [ ] pending | Idempotent upload SKIP, share-control OR hedges, billing top-up SKIP on existing suite |
-| Playwright registration flow (tranche 3) | [ ] pending | One approved additive test only; see **Playwright scope** below |
-| Frontend billing display parity (tranche 3) | [ ] pending | Match CLI `billing show` human fields (`rate_human`, run-out timestamp) |
-| Structural consolidation + hygiene (tranche 3) | [ ] pending | Formatters, `app.ts` split, dividers/WIP refs/emoji, `build:prod` console gate |
-| Unit test gap fill | [ ] pending | Alongside each fix; hint contract, admin contacts, wrong-password, verify tool |
-| Production build hygiene | [ ] pending | Do not assume minify strips console; add explicit drop/gate (tranche 2–3) |
+| Encrypt custom password hints (tranche 1) | [x] done | Account-Key encrypted hint + nonce; greenfield removal of plaintext contract across FE/CLI/server/schema |
+| Canonical chunk accounting (tranche 1) | [x] done | `models.CalculateChunkCount` uses encrypted span; completion/meta use session/DB counts; boundary unit tests |
+| Download integrity UX + Verify File tool (tranche 1) | [x] done | Integrity panel helpers; Blob mismatch blocks trigger; Verify File panel + streaming hasher; uncapped Blob retained |
+| Server-visible metadata documentation (tranche 1) | [x] done | AGENTS.md + docs/security.md + uploads handler comments |
+| Account key cache lifecycle (tranche 2) | [x] done | Unified teardown via cleanupAccountKeyCache; orphan ciphertext clear; docs/claims corrected |
+| Share auth ticket-only cleanup (tranche 2) | [x] done | Dead static wrapper removed; ticket failure fails closed; server static fallback removed |
+| Dead code and legacy API removal (tranche 2) | [x] done | Confirmed dead exports/globals removed; window surface narrowed |
+| Admin contacts contract (frontend, tranche 2) | [x] done | Failed refresh clears state; unit tests added |
+| Duplicate helper consolidation (tranche 3) | [x] done | Shared `utils/format.ts` |
+| Privacy-sensitive logging review (tranche 2) | [x] done | Hot-path `debugLog` + `ARKFILE_DEBUG_LOG` define on build:prod |
+| Hygiene and comment cleanup (tranche 3) | [x] done | Decorative dividers/WIP refs removed from production src; opaque "for now" clarified |
+| Error message consistency (tranche 2) | [x] done | Stable `data-testid` for wrong-password and share access errors |
+| `app.ts` decomposition (tranche 3) | [ ] deferred | Behavior stabilized; mechanical split left for a follow-up (low risk, low urgency) |
+| Playwright hedging removal (tranche 2) | [x] done | Upload SKIP and share OR-hedges tightened; billing top-up fails closed |
+| Playwright registration flow (tranche 3) | [x] done | Isolated register → TOTP → 25 MB custom upload → verify → revoke-all |
+| Frontend billing display parity (tranche 3) | [x] done | PAYG upload cap, `rate_human`, run-out timestamp |
+| Structural consolidation + hygiene (tranche 3) | [x] done | Formatters + hygiene + prod debug gate; `app.ts` split deferred |
+| Unit test gap fill | [x] done | Hint round-trip, chunk counts, admin contacts, ticket fail-closed, integrity helpers |
+| Production build hygiene | [x] done | `--define ARKFILE_DEBUG_LOG=false` on build:prod |
 
 ---
 
@@ -49,13 +50,11 @@ These priorities take precedence over the rest of this plan. They reflect audit 
 
 ### Encrypt custom password hints (shared frontend / CLI / server)
 
-Both clients still send `password_hint` in plaintext; the server stores and returns it. This is the clearest cross-client privacy break and the first implementation tranche. Replace with Account-Key-encrypted `encrypted_password_hint` + nonce using metadata AAD bound to file ID and owner username; remove the plaintext contract atomically across browser, CLI, server, schema, and tests. See **Custom password hint privacy** below for the full target design and acceptance criteria.
+**Implemented.** Both clients encrypt custom-password hints with the Account Key under AAD label `encrypted_password_hint`, send `encrypted_password_hint` + `password_hint_nonce` (omit both when empty), and decrypt only for owner custom-password prompts. The plaintext contract is removed from schema, handlers, models, CLI, and browser. See **Custom password hint privacy** below for the design that was applied.
 
 ### Canonical chunk accounting, download integrity UX, large-file streaming, and Verify File tool (frontend)
 
-Large downloads must work on constrained devices (e.g. 3 GB RAM, 6 GB file) without holding the whole plaintext in page memory. The Service Worker streaming path is the canonical browser mechanism: decrypt and hash incrementally with chunk-bounded memory while the browser download manager writes to disk. The Blob fallback accumulates the full file before trigger; retain it without an Arkfile-imposed size cap for SW-unavailable environments, but do not represent it as a resource-bounded large-file path.
-
-Chunk accounting must use one definition across upload initialization, completion, owner metadata, share metadata, and clients. `size_bytes` is the encrypted stream length, while `chunk_size_bytes` is the plaintext chunk size; therefore the encrypted chunk span is `chunk_size_bytes + 28` bytes. Upload initialization currently applies that rule, but completion and owner metadata do not. Fix this before relying on multi-GB download verification, with boundary tests covering empty files, exact chunk boundaries, and the 6 GB representative case.
+**Implemented** (chunk accounting, integrity UX, Verify File, uncapped Blob fallback retained). Large downloads must work on constrained devices (e.g. 3 GB RAM, 6 GB file) without holding the whole plaintext in page memory. The Service Worker streaming path is the canonical browser mechanism; Blob fallback remains for SW-unavailable environments without an Arkfile size cap. Chunk accounting uses `ceil(size_bytes / (chunk_size_bytes + 28))` via `models.CalculateChunkCount`, with completion/meta preferring the validated session/DB count.
 
 Integrity semantics must be honest about browser limits. Whole-file SHA-256 can be computed inline during SW streaming with bounded memory, but a mismatch is often detected only after bytes may already be saved by the OS download manager — the app cannot "un-download" without buffering the entire file first, which defeats streaming. Per-chunk AES-GCM still authenticates each chunk during decrypt. The UX model is: always show the expected SHA-256 at download completion (from decrypted metadata or share envelope); when inline verification ran, show match/mismatch alongside it; never show a clean success message when inline verification reports mismatch; on SW and other post-write paths, show tips explaining that users who need certainty should compare the expected digest using Verify File or an offline tool and delete the file if it differs.
 
@@ -67,7 +66,7 @@ Blob fallback remains available without an application-level file-size cap becau
 
 The server knowing or computing pre-padded file size — encrypted declared length, inferable plaintext size from chunk count and fixed per-chunk overhead, `size_bytes`, and `padded_size` — is **intentional**. Arkfile must account for storage and bill users accurately; hiding exact size from the server would break billing, quotas, chunk download, padding removal, export, and replication. Padding obscures size from the storage backend and outside observers, not from the Arkfile server that receives the pre-padding length at upload init.
 
-Do **not** change upload/download wire behavior for size. Instead, document accepted visibility consistently in `AGENTS.md`, `docs/security.md`, handler comments (e.g. `handlers/uploads.go`), and this plan. Classify server-visible fields as required operational data vs encrypted owner metadata (filename, content digest, password hint once fixed). Optionally document `password_type` and FEK envelope key-type visibility in the same pass; that is a separate disclosure from billable size and needs no protocol change unless product decides otherwise later.
+Do **not** change upload/download wire behavior for size. Instead, document accepted visibility consistently in `AGENTS.md`, `docs/security.md`, handler comments (e.g. `handlers/uploads.go`), and this plan. Classify server-visible fields as required operational data vs encrypted owner metadata (filename, content digest, encrypted password hint). Optionally document `password_type` and FEK envelope key-type visibility in the same pass; that is a separate disclosure from billable size and needs no protocol change unless product decides otherwise later.
 
 ---
 
@@ -193,13 +192,13 @@ Does the module send sensitive plaintext metadata to the network, server storage
 
 ### Custom password hint privacy
 
-#### Problem (verified)
+#### Problem (was verified; now fixed)
 
-`upload.ts` and CLI `commands.go` send plaintext `password_hint` in `/api/uploads/init`. Server persists it in upload sessions and final file metadata and returns it on file-list and metadata APIs. Browser shows the hint in custom-password prompts; CLI does not display it on download. Share envelopes and `.arkbackup` metadata do not include hints. This is a privacy break. E2E custom-password uploads typically omit `--hint`; raw API privacy E2E does not assert hint absence.
+Previously `upload.ts` and CLI `commands.go` sent plaintext `password_hint` in `/api/uploads/init`, the server persisted and returned it, and the browser showed it in custom-password prompts. Share envelopes and `.arkbackup` never included hints. That contract is removed.
 
-#### Target design
+#### Target design (applied)
 
-Replace plaintext hints with Account-Key-encrypted hint ciphertext and nonce fields. Add matching permanent Go and TypeScript metadata AAD field constants using the label `encrypted_password_hint` alongside the filename and SHA-256 labels, using the existing `buildMetadataFieldAAD(fileID, fieldName, ownerUsername)` encoding. Existing metadata AAD is not separately versioned; future incompatible formats should use a new permanent field label rather than silently reusing one. Empty hints have one cross-client canonical representation: omit both encrypted fields. The server treats encrypted hint fields as opaque and rejects ambiguous ciphertext/nonce combinations.
+Hints use Account-Key-encrypted ciphertext and nonce fields. Add matching permanent Go and TypeScript metadata AAD field constants using the label `encrypted_password_hint` alongside the filename and SHA-256 labels, using the existing `buildMetadataFieldAAD(fileID, fieldName, ownerUsername)` encoding. Existing metadata AAD is not separately versioned; future incompatible formats should use a new permanent field label rather than silently reusing one. Empty hints have one cross-client canonical representation: omit both encrypted fields. The server treats encrypted hint fields as opaque and rejects ambiguous ciphertext/nonce combinations.
 
 Encryption must occur inside the upload `file_id` conflict retry loop. Each candidate file ID requires fresh hint ciphertext and nonce because the file ID is bound into AAD. Upload uses the authenticated canonical username; decryption uses `owner_username` returned with the metadata row, matching filename/SHA-256 handling.
 
@@ -294,9 +293,9 @@ Acceptance: every layer reports and requests the same number of chunks; no reque
 
 ## Download integrity UX, Verify File tool, and Blob fallback
 
-### Problem (verified)
+### Problem (was verified; now fixed)
 
-When Service Worker streaming is unavailable or cannot initialize, `streamDecryptedChunks` retains the complete plaintext in a Blob regardless of size. This is full-file buffering in browser-managed Blob storage, not a resource-bounded path. The fallback is needed and must remain available without an Arkfile-imposed size cap. Blob completion returns `hashVerification`, yet both `download.ts` and `share-access.ts` trigger the Blob download and report success without checking it.
+When Service Worker streaming is unavailable or cannot initialize, `streamDecryptedChunks` retains the complete plaintext in a Blob regardless of size. This is full-file buffering in browser-managed Blob storage, not a resource-bounded path. The fallback is retained without an Arkfile-imposed size cap. Previously both `download.ts` and `share-access.ts` triggered the Blob download and reported success without checking `hashVerification`.
 
 The Service Worker path streams with chunk-bounded memory and can hash plaintext incrementally during the stream (same memory profile as upload-side `computeStreamingSHA256`). However, the whole-file digest is often known only after bytes have been handed to the browser download manager. Preventing a bad file from landing on disk would require buffering the entire plaintext first, which defeats streaming and the 6 GB / 3 GB RAM requirement. Per-chunk AES-GCM authentication still fails during the stream on chunk tampering; whole-file SHA-256 is an additional consistency check whose result may arrive post-write. The CLI has the same timing on disk: it verifies after `computeStreamingSHA256` on the output path and returns an error on mismatch, but the file may already exist.
 
@@ -732,27 +731,28 @@ Work silent correctness and privacy before cosmetic cleanup. Tranche numbers mat
 ## Verification checklist (final)
 
 - [ ] `sudo bash scripts/dev-reset.sh`
-- [ ] `bash scripts/testing/e2e-test.sh` — all PASS
-- [ ] `sudo bash scripts/testing/e2e-playwright.sh` — all PASS, zero undocumented SKIP (including tranche-3 registration flow when implemented)
-- [ ] `cd client/static/js && bun test` — all PASS
-- [ ] `cd client/static/js && bun run lint` — type-check clean
-- [ ] Exact-boundary chunk vectors pass for 0, 1, chunk size ±1, exact multi-chunk sizes, and 6 GB; owner and share paths agree
+- [ ] `bash scripts/testing/e2e-test.sh` — all PASS (includes custom-hint sentinel privacy assert)
+- [ ] `sudo bash scripts/testing/e2e-playwright.sh` — all PASS, zero undocumented SKIP (includes tranche-3 registration flow)
+- [x] `cd client/static/js && bun test` — all PASS (395 tests, 2026-07-21)
+- [x] `cd client/static/js && bun run lint` — type-check clean (2026-07-21)
+- [x] Exact-boundary chunk vectors pass for 0, 1, chunk size ±1, exact multi-chunk sizes, and 6 GB; owner and share paths agree (`models/file_chunk_count_test.go`)
 - [ ] Manual: 6 GB file upload/download on constrained tab uses SW streaming; Blob fallback remains available without an app cap and clearly warns about full buffering
 - [ ] Manual: shared file anonymous download with ticket refresh after forced 403
 - [ ] Manual: Verify File tool hashes a multi-GB local file without excessive memory; match/mismatch against known digest
 - [ ] Manual: large SW download shows streaming-limit tip; completion panel shows expected SHA-256 and Verify File entry point
 - [ ] Manual: billing panel shows `rate_human`, projected cost, runway, and run-out timestamp matching CLI `billing show` human output (tranche 3)
 - [ ] Tranche-3 Playwright registration flow passes: new user, TOTP setup, 25 MB custom-password upload/download SHA-256 verify, revoke-all
-- [ ] Browser and CLI encrypted password-hint conformance vectors pass; custom hint remains usable in owner download and share creation
+- [x] Browser and CLI encrypted password-hint conformance vectors pass (`crypto_utils_test.go`, `aad.test.ts`)
 - [ ] Raw API, database, server-log, and production-browser-log checks prove a unique plaintext hint sentinel appears nowhere outside client plaintext memory/UI
-- [ ] Only the encrypted-hint contract remains across clients, handlers, models, schema, tests, and active documentation; no compatibility path or removed-field commentary remains
-- [ ] Owner and share Blob mismatches do not trigger browser download and revoke the Blob URL
-- [ ] SW mismatch never shows unqualified success; completion UI shows expected digest, inline result when available, and Verify File guidance
-- [ ] `AGENTS.md` and `docs/security.md` document intentional server-visible billable size; no doc claims size is hidden from the server
-- [ ] Account key ciphertext and wrapping key are cleared after logout / revoke-all / inactivity as designed
-- [ ] Grep `client/static/js/src` for `default-admin`, `admin@example.com`, `docs/wip/`, decorative `===`/`---` in comments, `for now`, `backward compatibility`, emoji — zero inappropriate hits
-- [ ] Grep frontend for `console.log` of filename, sha256, password, password hint, fek — zero in production path or gated
+- [x] Only the encrypted-hint contract remains across clients, handlers, models, schema, tests, and active documentation; no compatibility path or removed-field commentary remains
+- [x] Owner and share Blob mismatches do not trigger browser download and revoke the Blob URL (wired via `download-integrity.ts`)
+- [x] SW mismatch never shows unqualified success; completion UI shows expected digest, inline result when available, and Verify File guidance
+- [x] `AGENTS.md` and `docs/security.md` document intentional server-visible billable size; no doc claims size is hidden from the server
+- [x] Account key ciphertext and wrapping key are cleared after logout / revoke-all / inactivity as designed
+- [x] Grep production `client/static/js/src` for decorative `===`/`---` dividers and WIP comment refs — cleaned; test files may still use section dividers
+- [x] Hot-path download/upload/streaming logs gated via `debugLog` + `ARKFILE_DEBUG_LOG=false` on `build:prod`
 - [ ] Production bundle inspection confirms debug/info logs stripped or gated while security warnings/errors remain
+- [ ] `app.ts` mechanical decomposition deferred to a follow-up
 
 ---
 

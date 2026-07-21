@@ -18,15 +18,11 @@
 import { decryptMetadataField } from '../crypto/metadata-helpers.js';
 import { AAD_FIELD_SHA256 } from '../crypto/aad.js';
 
-// ============================================================================
 // Storage key
-// ============================================================================
 
 const CACHE_KEY = 'arkfile.digestCache';
 
-// ============================================================================
 // Internal helpers
-// ============================================================================
 
 function readCache(): Record<string, string> {
   try {
@@ -47,9 +43,7 @@ function writeCache(cache: Record<string, string>): void {
   }
 }
 
-// ============================================================================
 // Public API
-// ============================================================================
 
 /**
  * Raw file entry as returned by GET /api/files

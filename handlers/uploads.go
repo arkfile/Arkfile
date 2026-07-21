@@ -72,10 +72,11 @@ func CreateUploadSession(c echo.Context) error {
 		Sha256sumNonce     string `json:"sha256sum_nonce"`
 		EncryptedFek       string `json:"encrypted_fek"`
 
-		TotalSize    int64  `json:"total_size"`
-		ChunkSize    int    `json:"chunk_size"`
-		PasswordHint string `json:"password_hint"`
-		PasswordType string `json:"password_type"`
+		TotalSize             int64  `json:"total_size"`
+		ChunkSize             int    `json:"chunk_size"`
+		EncryptedPasswordHint string `json:"encrypted_password_hint"`
+		PasswordHintNonce     string `json:"password_hint_nonce"`
+		PasswordType          string `json:"password_type"`
 	}
 
 	// Bind the JSON request body to the struct
@@ -119,6 +120,18 @@ func CreateUploadSession(c echo.Context) error {
 	if request.PasswordType != "account" && request.PasswordType != "custom" {
 		return JSONErrorCode(c, http.StatusBadRequest, "invalid_password_type",
 			"Invalid password type")
+	}
+
+	// Encrypted hint fields are opaque and must both be present or both omitted.
+	hasHintCipher := request.EncryptedPasswordHint != ""
+	hasHintNonce := request.PasswordHintNonce != ""
+	if hasHintCipher != hasHintNonce {
+		return JSONErrorCode(c, http.StatusBadRequest, "invalid_password_hint",
+			"encrypted_password_hint and password_hint_nonce must both be present or both omitted")
+	}
+	if request.PasswordType != "custom" && (hasHintCipher || hasHintNonce) {
+		return JSONErrorCode(c, http.StatusBadRequest, "invalid_password_hint",
+			"password hint fields are only valid for custom password files")
 	}
 
 	// Check user's storage limit and approval status
@@ -174,25 +187,12 @@ func CreateUploadSession(c echo.Context) error {
 		request.ChunkSize = int(crypto.PlaintextChunkSize())
 	}
 
-	// Compute the expected number of chunks from the *encrypted* total size.
-	//
-	// chunks are uniform [nonce (12)][ciphertext][tag (16)] with no
-	// per-chunk envelope header. The FEK envelope still carries
-	// [version][key_type] but it lives in file_metadata.encrypted_fek,
-	// not in the chunk stream. So every encrypted chunk is exactly
-	// `ChunkSize + 28` bytes (last chunk may be smaller).
-	//
-	//   encryptedChunkSize = ChunkSize + 28  (plaintext + GCM overhead)
-	//   totalChunks        = ceil(TotalSize / encryptedChunkSize)
-	const aesGcmOverheadBytes = 28 // nonce(12) + tag(16)
-	encryptedChunkSize := int64(request.ChunkSize) + aesGcmOverheadBytes
-	var totalChunks int64
-	if request.TotalSize <= 0 {
-		// Empty file: still record one (empty) chunk for accounting.
-		totalChunks = 1
-	} else {
-		totalChunks = (request.TotalSize + encryptedChunkSize - 1) / encryptedChunkSize
-	}
+	// Canonical chunk count from encrypted stream length and plaintext chunk size.
+	// Each stored chunk is [nonce][ciphertext][tag] with span chunk_size + AesGcmOverhead().
+	// request.TotalSize is the client-declared encrypted-stream length before
+	// server padding; the server stores it as size_bytes for billing/quota and
+	// chunk byte-range math (intentional operational metadata — see docs/security.md).
+	totalChunks := models.CalculateChunkCount(request.TotalSize, int64(request.ChunkSize))
 
 	// Begin transaction
 	tx, err := database.DB.Begin()
@@ -299,8 +299,8 @@ func CreateUploadSession(c echo.Context) error {
 	// pre-check above and this INSERT, surface the same stable
 	// file_id_conflict code so the client can retry uniformly.
 	_, err = tx.Exec(
-		"INSERT INTO upload_sessions (id, file_id, encrypted_filename, filename_nonce, encrypted_sha256sum, sha256sum_nonce, encrypted_fek, owner_username, total_size, chunk_size, total_chunks, password_hint, password_type, storage_id, padded_size, status, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		sessionID, fileID, encryptedFilename, filenameNonce, encryptedSha256sum, sha256sumNonce, encryptedFek, username, request.TotalSize, request.ChunkSize, totalChunks, request.PasswordHint, request.PasswordType, storageID, paddedSize, "in_progress", time.Now().Add(24*time.Hour),
+		"INSERT INTO upload_sessions (id, file_id, encrypted_filename, filename_nonce, encrypted_sha256sum, sha256sum_nonce, encrypted_fek, owner_username, total_size, chunk_size, total_chunks, encrypted_password_hint, password_hint_nonce, password_type, storage_id, padded_size, status, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		sessionID, fileID, encryptedFilename, filenameNonce, encryptedSha256sum, sha256sumNonce, encryptedFek, username, request.TotalSize, request.ChunkSize, totalChunks, request.EncryptedPasswordHint, request.PasswordHintNonce, request.PasswordType, storageID, paddedSize, "in_progress", time.Now().Add(24*time.Hour),
 	)
 	if err != nil {
 		if isUniqueConstraintFileID(err) {
@@ -791,7 +791,8 @@ func CompleteUpload(c echo.Context) error {
 		storageUploadID sql.NullString
 		status          string
 		totalChunks     int
-		passwordHint    sql.NullString
+		encPasswordHint sql.NullString
+		passwordHintNonce sql.NullString
 		passwordType    sql.NullString
 	)
 
@@ -809,13 +810,13 @@ func CompleteUpload(c echo.Context) error {
 
 	err := database.DB.QueryRow(
 		`SELECT owner_username, file_id, storage_id, storage_upload_id, status, total_chunks,
-                total_size, chunk_size, padded_size, password_hint, password_type, encrypted_filename, filename_nonce,
+                total_size, chunk_size, padded_size, encrypted_password_hint, password_hint_nonce, password_type, encrypted_filename, filename_nonce,
                 encrypted_sha256sum, sha256sum_nonce, encrypted_fek
          FROM upload_sessions WHERE id = ?`,
 		sessionID,
 	).Scan(
 		&ownerUsername, &fileID, &storageID, &storageUploadID, &status, &totalChunks,
-		&totalSizeRaw, &chunkSizeRaw, &paddedSizeRaw, &passwordHint, &passwordType,
+		&totalSizeRaw, &chunkSizeRaw, &paddedSizeRaw, &encPasswordHint, &passwordHintNonce, &passwordType,
 		&encryptedFilenameBytes, &filenameNonceBytes, &encryptedSha256sumBytes, &sha256sumNonceBytes, &encryptedFekBytes,
 	)
 
@@ -1001,10 +1002,10 @@ func CompleteUpload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Upload size mismatch: stored size does not match expected padded size")
 	}
 
-	// Calculate chunk_count from the encrypted data size (not padded)
-	var chunkCount int64 = 1
-	if declaredSize > 0 && chunkSizeBytes > 0 {
-		chunkCount = (declaredSize + chunkSizeBytes - 1) / chunkSizeBytes
+	// Persist the validated init total_chunks (canonical encrypted-stream accounting).
+	chunkCount := int64(totalChunks)
+	if chunkCount <= 0 {
+		chunkCount = models.CalculateChunkCount(declaredSize, chunkSizeBytes)
 	}
 
 	// Create the final file metadata record with chunk info for resumable downloads.
@@ -1013,9 +1014,9 @@ func CompleteUpload(c echo.Context) error {
 	// encrypted_file_sha256sum = hash of encrypted data only (pre-padding).
 	// stored_blob_sha256sum = hash of all bytes stored in S3 (encrypted data + padding).
 	_, err = tx.Exec(`
-		INSERT INTO file_metadata (file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, encrypted_file_sha256sum, stored_blob_sha256sum, encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		fileID.String, storageID.String, username, passwordHint.String, passwordType.String, filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, serverCalculatedHash, storedBlobHash, encryptedFek, declaredSize, paddedSize, chunkCount, chunkSizeBytes,
+		INSERT INTO file_metadata (file_id, storage_id, owner_username, encrypted_password_hint, password_hint_nonce, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, encrypted_file_sha256sum, stored_blob_sha256sum, encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		fileID.String, storageID.String, username, encPasswordHint.String, passwordHintNonce.String, passwordType.String, filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, serverCalculatedHash, storedBlobHash, encryptedFek, declaredSize, paddedSize, chunkCount, chunkSizeBytes,
 	)
 	if err != nil {
 		if isUniqueConstraintFileID(err) {

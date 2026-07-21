@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS file_metadata (
     file_id VARCHAR(36) UNIQUE NOT NULL,        -- UUID v4 for file identification
     storage_id VARCHAR(36) UNIQUE NOT NULL,     -- UUID v4 for storage backend
     owner_username TEXT NOT NULL,
-    password_hint TEXT,
+    encrypted_password_hint TEXT,               -- base64-encoded AES-GCM encrypted custom-password hint (Account Key + AAD)
+    password_hint_nonce TEXT,                   -- base64-encoded 12-byte nonce for password-hint encryption
     password_type TEXT NOT NULL DEFAULT 'custom',
     filename_nonce TEXT NOT NULL,               -- base64-encoded 12-byte nonce for filename encryption
     encrypted_filename TEXT NOT NULL,           -- base64-encoded AES-GCM encrypted filename
@@ -233,7 +234,8 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
     total_size BIGINT NOT NULL,
     chunk_size INTEGER NOT NULL,
     total_chunks INTEGER NOT NULL,
-    password_hint TEXT,
+    encrypted_password_hint TEXT,
+    password_hint_nonce TEXT,
     password_type TEXT NOT NULL,
     storage_upload_id TEXT,
     storage_id VARCHAR(36),

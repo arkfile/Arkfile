@@ -308,6 +308,18 @@ class ArkFileApp {
       });
     }
 
+    // Verify File tool
+    void import('./files/verify-file.js').then(({ wireVerifyFilePanel, toggleVerifyFilePanel }) => {
+      wireVerifyFilePanel();
+      const verifyToggle = document.getElementById('verify-file-toggle');
+      if (verifyToggle) {
+        verifyToggle.addEventListener('click', (e) => {
+          e.preventDefault();
+          toggleVerifyFilePanel();
+        });
+      }
+    });
+
     // Security settings toggle
     const securityToggle = document.getElementById('security-settings-toggle');
     if (securityToggle) {
@@ -327,6 +339,11 @@ class ArkFileApp {
         const billingPanel = document.getElementById('billing-panel');
         if (billingPanel && !billingPanel.classList.contains('hidden')) {
           billingPanel.classList.add('hidden');
+        }
+        // Close verify file panel if open
+        const verifyPanel = document.getElementById('verify-file-panel');
+        if (verifyPanel && !verifyPanel.classList.contains('hidden')) {
+          verifyPanel.classList.add('hidden');
         }
       });
     }
@@ -556,33 +573,10 @@ class ArkFileApp {
     if (code.length !== 6) return;
     const verifyResult = await completeTOTPSetup(code);
     if (verifyResult) {
-      // The server returns tokens + user info on successful TOTP verify.
-      // Extract token, refresh_token, and is_approved from the response.
-      const newToken = verifyResult.token;
-      const newRefreshToken = verifyResult.refresh_token || '';
-      const isApproved = verifyResult.user?.is_approved;
-
       // Full-access tokens are in HttpOnly cookies set by the server.
-      // Clear progress modal before proceeding to login completion
+      // MFA setup completion navigation is handled by totp-setup / register flows.
       const { hideProgress } = await import('./ui/progress');
       hideProgress();
-
-      // Check if we came from login flow with incomplete TOTP (window.totpLoginData set)
-      const flowData = typeof window !== 'undefined' ? (window as any).totpLoginData : null;
-      if (flowData) {
-        const carriedPassword = flowData.password;
-        if (flowData.password) { flowData.password = ''; }
-        delete (window as any).totpLoginData;
-
-        const { LoginManager } = await import('./auth/login');
-        await LoginManager.completeLogin({
-          token: newToken || '',
-          refresh_token: newRefreshToken,
-          auth_method: 'OPAQUE',
-          is_approved: isApproved,
-        }, flowData.username, carriedPassword);
-      }
-      // If from registration, the totp.ts completeTOTPSetup -> handler in register.ts handles navigation
     }
   }
 
@@ -722,27 +716,14 @@ if (document.readyState === 'loading') {
   app.initialize();
 }
 
-// Export for global access
+// Expose ShareAccessUI for shared.html bootstrap (shared-init.js).
 if (typeof window !== 'undefined') {
-  window.arkfileApp = app;
-  
-  // Export modules needed for standalone pages like file-share.html
-  // We use dynamic imports to ensure they are available
   window.arkfile = window.arkfile || {};
-  
-  import('./shares/share-creation').then(module => {
-    window.arkfile!.shares = { ...(window.arkfile!.shares || {}), ...module };
-  });
 
   import('./shares/share-access').then(module => {
-    window.arkfile!.shares = { ...(window.arkfile!.shares || {}), ...module };
-  });
-  
-  import('./crypto/file-encryption').then(module => {
-    window.arkfile!.encryption = module as unknown as Record<string, unknown>;
-  });
-
-  import('./utils/auth').then(module => {
-    window.arkfile!.auth = module as unknown as Record<string, unknown>;
+    window.arkfile!.shares = {
+      ...(window.arkfile!.shares || {}),
+      ShareAccessUI: module.ShareAccessUI,
+    };
   });
 }

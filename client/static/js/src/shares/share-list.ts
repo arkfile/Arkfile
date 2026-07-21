@@ -10,10 +10,9 @@ import { showError, showSuccess } from '../ui/messages.js';
 import { getCachedAccountKey } from '../crypto/file-encryption.js';
 import { decryptMetadataField } from '../crypto/metadata-helpers.js';
 import { AAD_FIELD_FILENAME, AAD_FIELD_SHA256 } from '../crypto/aad.js';
+import { formatFileSize } from '../utils/format.js';
 
-// ============================================================================
 // Types
-// ============================================================================
 
 interface Share {
   share_id: string;
@@ -55,9 +54,7 @@ interface MetadataBatchResponse {
   missing: string[];
 }
 
-// ============================================================================
 // Share List UI Class
-// ============================================================================
 
 export class ShareListUI {
   private container: HTMLElement;
@@ -207,7 +204,7 @@ export class ShareListUI {
     const createdText = `Created: ${new Date(share.created_at).toLocaleString()}`;
     
     const sizeText = share.size !== null
-      ? `Size: ${this.formatFileSize(share.size)}`
+      ? `Size: ${formatFileSize(share.size)}`
       : '';
 
     const filenameDisplay = share.filename_local 
@@ -245,7 +242,7 @@ export class ShareListUI {
           <div class="share-title">
             <h3>${filenameDisplay}${inactiveBadge}</h3>
           </div>
-          <div class="share-status-badge ${statusClass}">${statusText}</div>
+          <div class="share-status-badge ${statusClass}"${!share.is_active ? ' data-testid="share-status-revoked"' : ''}>${statusText}</div>
         </div>
         
         <div class="share-details">
@@ -410,19 +407,6 @@ export class ShareListUI {
   }
 
   /**
-   * Formats file size for display
-   */
-  private formatFileSize(bytes: number): string {
-    if (bytes === 0) return '0 Bytes';
-    
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    
-    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
-  }
-
-  /**
    * Refreshes the share list
    */
   async refresh(): Promise<void> {
@@ -430,9 +414,7 @@ export class ShareListUI {
   }
 }
 
-// ============================================================================
 // Initialization Function
-// ============================================================================
 
 /**
  * Initialize the share list UI
@@ -450,8 +432,6 @@ export async function initializeShareList(): Promise<void> {
   }
 }
 
-// ============================================================================
 // Exports
-// ============================================================================
 
 export default ShareListUI;

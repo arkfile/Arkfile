@@ -11,15 +11,15 @@
  * Tests that need network use fetch mocking (Map-based implementation so
  * tests remain deterministic and offline-safe).
  *
- * localStorage is needed by AuthManager (token storage used by getToken /
- * getTokenExpiry).
+ * localStorage may still be used by upload helpers under test; session auth
+ * itself is cookie-based (CSRF cookie / isAuthenticated).
  */
 
 import './setup.js';
 import { describe, test, expect, beforeEach } from 'bun:test';
 
 // ============================================================================
-// localStorage mock -- AuthManager / getToken / getTokenExpiry use it
+// localStorage mock
 // ============================================================================
 
 class MockLocalStorage implements Storage {
@@ -147,7 +147,7 @@ function buildJwt(exp: number): string {
   return `${header}.${payload}.${sig}`;
 }
 
-// Store a JWT in localStorage so getToken / getTokenExpiry can read it
+// Store a leftover JWT in localStorage (not used for cookie-auth session checks)
 function storeToken(exp: number): void {
   const jwt = buildJwt(exp);
   localStorage.setItem('token', jwt);
@@ -159,38 +159,20 @@ function storeToken(exp: number): void {
 // indirectly by observing what uploadFiles does with a near-expired token.
 // For the direct helper tests, we test the exported helpers via fetch mocking.
 
-describe('Token expiry helpers via getTokenExpiry', () => {
-  // Tokens are now in HttpOnly cookies; getTokenExpiry() always returns null
-  // and isTokenExpired() reflects the CSRF-cookie session state (always false
-  // in the test environment where no document.cookie is set).
+describe('Session presence via isAuthenticated', () => {
+  // JWT is HttpOnly; JS infers session presence from the CSRF cookie only.
 
-  test('getTokenExpiry returns null (JWT is HttpOnly, not readable by JS)', async () => {
-    const { getTokenExpiry } = await import('../utils/auth.js');
+  test('isAuthenticated returns false when no CSRF cookie is set', async () => {
+    const { isAuthenticated } = await import('../utils/auth.js');
     localStorage.removeItem('token');
-    expect(getTokenExpiry()).toBeNull();
+    expect(isAuthenticated()).toBe(false);
   });
 
-  test('getTokenExpiry returns null even when localStorage has a JWT (no longer used)', async () => {
-    const { getTokenExpiry } = await import('../utils/auth.js');
+  test('isAuthenticated returns false even when localStorage has a leftover JWT', async () => {
+    const { isAuthenticated } = await import('../utils/auth.js');
     const futureExp = Math.floor(Date.now() / 1000) + 3600;
     storeToken(futureExp);
-    // getTokenExpiry() always returns null; token is in an HttpOnly cookie
-    expect(getTokenExpiry()).toBeNull();
-  });
-
-  test('isTokenExpired returns true when no CSRF cookie (no active session)', async () => {
-    const { isTokenExpired } = await import('../utils/auth.js');
-    const pastExp = Math.floor(Date.now() / 1000) - 60;
-    storeToken(pastExp);
-    expect(isTokenExpired()).toBe(true);
-  });
-
-  test('isTokenExpired returns true when no CSRF cookie (test environment has no document.cookie)', async () => {
-    const { isTokenExpired } = await import('../utils/auth.js');
-    const futureExp = Math.floor(Date.now() / 1000) + 3600;
-    storeToken(futureExp);
-    // Without a CSRF cookie, isAuthenticated() returns false, so isTokenExpired() returns true
-    expect(isTokenExpired()).toBe(true);
+    expect(isAuthenticated()).toBe(false);
   });
 });
 

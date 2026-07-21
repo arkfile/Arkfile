@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "build": "bun build src/app.ts --outdir dist --target browser --format iife && bun build src/sw-download.ts --outfile sw-download.js --target browser --format esm",
+    "build": "bun build src/app.ts --outdir dist --target browser --format iife --define ARKFILE_DEBUG_LOG=true && bun build src/sw-download.ts --outfile sw-download.js --target browser --format esm --define ARKFILE_DEBUG_LOG=true",
     "build:watch": "bun build src/app.ts --outdir dist --target browser --format iife --watch & bun build src/sw-download.ts --outfile sw-download.js --target browser --format esm --watch",
     "type-check": "bun tsc --noEmit && bun tsc --noEmit -p ../../../tsconfig.sw.json",
     "test": "bun test src/__tests__/",
@@ -11,8 +11,8 @@
     "dev": "bun build src/app.ts --outdir dist --target browser --watch & bun build src/sw-download.ts --outfile sw-download.js --target browser --format esm --watch",
     "clean": "rm -rf dist/* && rm -f sw-download.js sw-download.js.map",
     "lint": "bun tsc --noEmit && bun tsc --noEmit -p ../../../tsconfig.sw.json && echo '[OK] TypeScript checks passed'",
-    "build:dev": "bun build src/app.ts --outdir dist --target browser --format iife --sourcemap && bun build src/sw-download.ts --outfile sw-download.js --target browser --format esm",
-    "build:prod": "bun build src/app.ts --outdir dist --target browser --format iife --minify --sourcemap=external && bun build src/sw-download.ts --outfile sw-download.js --target browser --format esm --minify"
+    "build:dev": "bun build src/app.ts --outdir dist --target browser --format iife --sourcemap --define ARKFILE_DEBUG_LOG=true && bun build src/sw-download.ts --outfile sw-download.js --target browser --format esm --define ARKFILE_DEBUG_LOG=true",
+    "build:prod": "bun build src/app.ts --outdir dist --target browser --format iife --minify --sourcemap=external --define ARKFILE_DEBUG_LOG=false && bun build src/sw-download.ts --outfile sw-download.js --target browser --format esm --minify --define ARKFILE_DEBUG_LOG=false"
   },
   "devDependencies": {
     "@types/zxcvbn": "4.4.5",

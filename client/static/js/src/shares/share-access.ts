@@ -6,28 +6,56 @@
  *
  * LARGE FILE DOWNLOADS
  * --------------------
- * Downloads stream through the same-origin Service Worker registered at
- * /sw-download.js (see sw-download.ts and sw-streaming-download.ts). The SW
- * intercepts a synthetic /sw-download/<uuid> request and responds with a
- * streaming Response carrying Content-Disposition: attachment, so the browser's
- * download manager writes the bytes straight to disk. This bypasses the
- * Chromium blob-URL ~2 GB ceiling and works first-class in Tor Browser.
+ * Prefer Service Worker streaming (/sw-download.js). The SW intercepts a
+ * synthetic /sw-download/<uuid> request and responds with a streaming Response
+ * carrying Content-Disposition: attachment so the browser writes bytes to disk
+ * with chunk-bounded page memory and no Arkfile-imposed size cap.
  *
- * If the SW is unavailable (rare: very old browsers, certain private-browsing
- * modes), the streaming-download manager falls back to incremental Blob
- * construction and we trigger the download from a blob URL here.
+ * Whole-file SHA-256 on the SW path may finish only after bytes are on disk
+ * (same post-write class as CLI computeStreamingSHA256 and offline decrypt-blob).
+ * Never claim unqualified success on mismatch; show expected digest from the
+ * share envelope and tips to Verify File / delete a bad download.
+ *
+ * Blob fallback remains when SW is unavailable or cannot initialize before
+ * generator consumption. It buffers the complete plaintext with no Arkfile
+ * size cap; browser resources may still fail. Check hashVerification BEFORE
+ * triggerBrowserDownloadFromUrl; revoke on mismatch and do not claim success.
  */
 
 import { shareCrypto } from './share-crypto';
-import { showError, showWarning } from '../ui/messages';
+import { showError, showSuccess } from '../ui/messages';
 import { isSwAvailable } from '../files/sw-streaming-download';
 import {
   downloadSharedFileWithTicket,
   triggerBrowserDownloadFromUrl,
   StreamingDownloadResult,
 } from '../files/streaming-download';
+import {
+  finalizeDownloadIntegrity,
+  showSwStreamingTip,
+  showBlobBufferWarning,
+  showPartialDownloadWarning,
+} from '../files/download-integrity';
 import { addPasswordToggle } from '../utils/password-toggle';
 import { ShareTicketHolder } from './share-ticket';
+
+/**
+ * Map envelope API failures to stable status identities for Playwright and UI.
+ * Server messages from GetShareEnvelope distinguish expired / exhausted / revoked / not found.
+ */
+function classifyShareAccessError(status: number, apiMessage: string): string {
+  const msg = apiMessage.toLowerCase();
+  if (status === 404 || msg.includes('not found')) {
+    return 'share-not-found';
+  }
+  if (msg.includes('expired')) {
+    return 'share-expired';
+  }
+  if (msg.includes('exhausted') || msg.includes('download limit')) {
+    return 'share-max-downloads';
+  }
+  return 'share-revoked';
+}
 
 interface ShareEnvelope {
   share_id: string;
@@ -43,6 +71,8 @@ export class ShareAccessUI {
   private envelope: ShareEnvelope | null = null;
   private downloadToken: string | null = null; // Static token from envelope (proof of decryption)
   private ticketHolder: ShareTicketHolder | null = null;
+  /** Expected SHA-256 from decrypted share envelope metadata (when present). */
+  private expectedSha256: string | undefined;
 
   constructor(containerId: string, shareId: string) {
     this.containerId = containerId;
@@ -73,9 +103,24 @@ export class ShareAccessUI {
         <h3>File Details</h3>
         <p id="fileNameDisplay"></p>
         <p id="fileSizeDisplay"></p>
+        <div id="shareExpectedDigestRow" class="hidden" style="margin: 0.75rem 0;">
+          <p><strong>Expected SHA-256</strong></p>
+          <code id="shareExpectedDigest" style="word-break: break-all; font-size: 0.85rem;"></code>
+          <button type="button" id="shareCopyDigestBtn" class="btn-copy-hash" style="margin-left: 0.5rem;">copy</button>
+        </div>
         <p id="swUnavailableNote" class="warning-note" style="display:none;"></p>
         <button id="downloadBtn" class="btn primary">Download</button>
-        <a id="swDownloadAnywayLink" href="#" style="display:none; font-size:0.9em; margin-left:0.5rem;">Download anyway</a>
+        <div id="share-integrity-panel" class="hidden" style="margin-top: 1rem;"></div>
+        <div id="share-verify-section" style="margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--depth-4, #444);">
+          <h3>Verify File</h3>
+          <p style="font-size: 0.9rem;">Hash a local copy and compare it to the expected digest (works offline once you have the digest).</p>
+          <label for="share-verify-file-input">Local file</label>
+          <input type="file" id="share-verify-file-input">
+          <label for="share-verify-expected" style="display:block; margin-top: 0.5rem;">Expected SHA-256</label>
+          <input type="text" id="share-verify-expected" placeholder="64 hex characters" style="width: 100%; font-family: monospace; font-size: 0.85rem;">
+          <button type="button" id="share-verify-run-btn" class="btn secondary" style="margin-top: 0.5rem;">Verify</button>
+          <div id="share-verify-result" style="margin-top: 0.5rem;"></div>
+        </div>
       </div>
     `;
 
@@ -89,6 +134,51 @@ export class ShareAccessUI {
     if (sharePassword) {
       addPasswordToggle(sharePassword);
     }
+
+    this.wireShareVerify();
+  }
+
+  private wireShareVerify(): void {
+    const runBtn = document.getElementById('share-verify-run-btn');
+    if (!runBtn || (runBtn as HTMLElement).dataset['wired'] === '1') return;
+    (runBtn as HTMLElement).dataset['wired'] = '1';
+
+    runBtn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const { verifyLocalFileDigest } = await import('../files/verify-file.js');
+      const fileInput = document.getElementById('share-verify-file-input') as HTMLInputElement | null;
+      const expectedInput = document.getElementById('share-verify-expected') as HTMLInputElement | null;
+      const resultEl = document.getElementById('share-verify-result');
+      const file = fileInput?.files?.[0];
+      if (!file) {
+        showError('Choose a local file to verify.');
+        return;
+      }
+      const expected = expectedInput?.value || this.expectedSha256 || '';
+      if (!expected.trim()) {
+        showError('Paste the expected SHA-256 hex digest.');
+        return;
+      }
+      if (resultEl) {
+        resultEl.textContent = 'Hashing…';
+        resultEl.className = '';
+      }
+      const result = await verifyLocalFileDigest(file, expected);
+      if (!resultEl) return;
+      if (result.outcome === 'match') {
+        resultEl.textContent = 'Match: local file SHA-256 matches the expected digest.';
+        resultEl.className = 'success-message';
+      } else if (result.outcome === 'mismatch') {
+        resultEl.textContent = 'Mismatch: local file does not match the expected digest.';
+        resultEl.className = 'error-message';
+      } else if (result.outcome === 'invalid_expected') {
+        resultEl.textContent = 'Expected digest must be 64 hexadecimal characters.';
+        resultEl.className = 'error-message';
+      } else {
+        resultEl.textContent = result.error || 'Verification failed.';
+        resultEl.className = 'error-message';
+      }
+    });
   }
 
   private async handleUnlock(): Promise<void> {
@@ -123,6 +213,7 @@ export class ShareAccessUI {
       statusDiv.textContent =
         'Verifying… can take a few minutes on slow networks/old devices.';
       statusDiv.className = '';
+      statusDiv.removeAttribute('data-testid');
     }
     console.log('[arkfile-share] Verifying share access…');
 
@@ -136,9 +227,13 @@ export class ShareAccessUI {
           // Both mean the recipient cannot access this share - show a clear message
           // and do not attempt decryption (no point running the KDF)
           if (response.status === 403 || response.status === 404) {
+            const errBody = await response.json().catch(() => ({} as { message?: string; error?: string }));
+            const apiMessage = String(errBody.message || errBody.error || '');
+            const testId = classifyShareAccessError(response.status, apiMessage);
             if (statusDiv) {
               statusDiv.textContent = 'This share is no longer valid.';
               statusDiv.className = 'error-message';
+              statusDiv.setAttribute('data-testid', testId);
             }
             // Disable the password form - retrying will not help
             const form = document.getElementById('shareAccessForm') as HTMLFormElement | null;
@@ -178,6 +273,7 @@ export class ShareAccessUI {
       const filename = decryptedEnvelope.metadata?.filename || 'shared-file';
       const sha256 = decryptedEnvelope.metadata?.sha256;
       const sizeBytes = decryptedEnvelope.metadata?.sizeBytes || this.envelope.size_bytes;
+      this.expectedSha256 = sha256;
 
       // 4. Show file details and enable download
       this.showFileDetails(filename, sizeBytes, decryptedEnvelope.fek, sha256);
@@ -207,54 +303,41 @@ export class ShareAccessUI {
     if (nameDisplay) nameDisplay.textContent = filename;
     if (sizeDisplay) sizeDisplay.textContent = this.formatBytes(size);
 
-    // Surface a warning + GATE the download action when SW streaming is
-    // unavailable AND the file is larger than ~2 GiB.
-    //
-    // Background: when the SW path is unavailable, downloads fall through to
-    // the Blob fallback path, which accumulates the full plaintext into the
-    // browser's internal Blob store before triggering the download. For files
-    // >~2 GiB this can fail in many ways depending on the user's specific
-    // browser/device combination — anywhere from a silent timeout to an
-    // OS-level memory pressure cascade that has been observed to take down
-    // the user's WiFi/VPN connection on memory-constrained mobile devices.
-    //
-    // We do not detect the user's browser/device/RAM (privacy posture +
-    // unreliable signals), so we cannot predict what will happen on any
-    // specific setup. We only know SW is unavailable AND the file is large.
-    // The honest framing is: alternatives are more reliable; user can
-    // override if they accept the risk.
-    //
-    // Behavior: download button is DISABLED, warning is shown, an
-    // "Download anyway" override link re-enables the button.
-    const SW_LARGE_FILE_WARN_THRESHOLD = 2 * 1024 * 1024 * 1024; // 2 GiB
-    const swNote = document.getElementById('swUnavailableNote');
-    const downloadAnywayLink = document.getElementById('swDownloadAnywayLink') as HTMLAnchorElement | null;
-    const swWarningTriggered = !isSwAvailable() && size > SW_LARGE_FILE_WARN_THRESHOLD;
-
-    if (swWarningTriggered && swNote) {
-      swNote.textContent =
-        'Large file. For most reliable results with files this size, use a desktop browser, or the arkfile-client CLI.';
-      swNote.style.display = '';
-      if (downloadBtn) (downloadBtn as HTMLButtonElement).disabled = true;
-      if (downloadAnywayLink) {
-        downloadAnywayLink.style.display = '';
-        downloadAnywayLink.onclick = (e) => {
+    // Surface expected digest from share envelope when available.
+    const digestRow = document.getElementById('shareExpectedDigestRow');
+    const digestCode = document.getElementById('shareExpectedDigest');
+    const copyBtn = document.getElementById('shareCopyDigestBtn') as HTMLButtonElement | null;
+    const verifyExpected = document.getElementById('share-verify-expected') as HTMLInputElement | null;
+    if (sha256 && digestRow && digestCode) {
+      digestCode.textContent = sha256;
+      digestRow.classList.remove('hidden');
+      if (verifyExpected) verifyExpected.value = sha256;
+      if (copyBtn) {
+        copyBtn.onclick = async (e) => {
           e.preventDefault();
-          // User has chosen to proceed despite the warning. Hide the warning
-          // and the override link, and re-enable the Download button.
-          if (swNote) swNote.style.display = 'none';
-          downloadAnywayLink.style.display = 'none';
-          if (downloadBtn) (downloadBtn as HTMLButtonElement).disabled = false;
+          try {
+            await navigator.clipboard.writeText(sha256);
+            showSuccess('SHA-256 copied to clipboard!');
+          } catch {
+            showError('Could not copy to clipboard.');
+          }
         };
       }
+    }
+
+    // When SW streaming is unavailable, warn that Blob buffers the complete
+    // plaintext and may fail under browser resource limits. No Arkfile size
+    // cap — download remains available.
+    const swNote = document.getElementById('swUnavailableNote');
+    if (!isSwAvailable() && swNote) {
+      swNote.textContent =
+        'Service Worker streaming is unavailable. Download will buffer the complete decrypted file in the browser before saving. Large files may fail under browser memory or storage limits. Prefer a desktop browser with Service Worker support, or the arkfile-client CLI.';
+      swNote.style.display = '';
     }
 
     if (downloadBtn) {
       downloadBtn.onclick = () => {
         console.log('[arkfile-share] Download button clicked');
-        // SW path: registration happens at app init; the download function picks
-        // it up via isSwAvailable(). No synchronous user-gesture work is required
-        // here, so this can simply kick off the async download.
         this.downloadFile(filename, fek, sha256);
       };
     }
@@ -272,6 +355,12 @@ export class ShareAccessUI {
       statusDiv.className = '';
     }
 
+    if (isSwAvailable()) {
+      showSwStreamingTip();
+    } else {
+      showBlobBufferWarning();
+    }
+
     try {
       // Validate we have the Download Token (proof of decryption used to
       // obtain a short-lived download ticket) and the ticket holder.
@@ -283,9 +372,9 @@ export class ShareAccessUI {
       }
 
       // The streaming-download manager picks the SW path when available and
-      // falls back to incremental Blob construction otherwise. It sends the
-      // short-lived X-Share-Ticket per chunk (refreshing on 403) instead of the
-      // never-rotated static token, mirroring the arkfile-client CLI flow.
+      // falls back to incremental Blob construction only when generator
+      // consumption has not started. It sends the short-lived X-Share-Ticket
+      // per chunk (refreshing on 403), mirroring the arkfile-client CLI flow.
       const result: StreamingDownloadResult = await downloadSharedFileWithTicket(
         this.shareId,
         fek,
@@ -313,6 +402,9 @@ export class ShareAccessUI {
           }
           return;
         }
+        if (result.error && /partial file may already/i.test(result.error)) {
+          showPartialDownloadWarning();
+        }
         if (result.error?.includes('403') || result.error?.includes('invalid')) {
           throw new Error('Download token invalid or share has been revoked');
         }
@@ -321,23 +413,45 @@ export class ShareAccessUI {
 
       // Use the filename from the result, or fall back to the one we already have
       const downloadFilename = result.filename || filename;
+      const expected = result.sha256sum || sha256;
+
+      const integrity = {
+        filename: downloadFilename,
+        expectedSha256: expected,
+        computedSha256: result.computedSha256Hex,
+        hashVerification: result.hashVerification,
+        streamedViaSw: result.streamedViaSw === true,
+      };
 
       if (result.streamedViaSw) {
-        // SW path: bytes were streamed directly to the browser's download manager.
         console.log('[arkfile-share] File streamed via Service Worker');
+        const decision = finalizeDownloadIntegrity(integrity, 'share-integrity-panel');
         if (statusDiv) {
-          statusDiv.textContent = 'Download complete!';
-          statusDiv.className = 'success-message';
-        }
-        if (result.hashVerification === 'mismatch') {
-          showWarning('SHA-256 verification failed. The downloaded file may be corrupted or tampered with. Consider deleting it and re-downloading.');
+          if (decision.allowSuccess) {
+            statusDiv.textContent = 'Download complete!';
+            statusDiv.className = 'success-message';
+          } else {
+            statusDiv.textContent = 'Download finished with integrity failure. See details below.';
+            statusDiv.className = 'error-message';
+          }
         }
         return;
       }
 
-      // Blob fallback path: trigger browser download from blob URL
+      // Blob fallback path: check hash BEFORE trigger; revoke on mismatch.
       if (!result.blobUrl) {
         throw new Error('Download completed but no file data was produced');
+      }
+
+      const decision = finalizeDownloadIntegrity(integrity, 'share-integrity-panel');
+      if (decision.blockBlobTrigger) {
+        console.warn('[arkfile-share] Blob download blocked due to hash mismatch; revoking Blob URL');
+        URL.revokeObjectURL(result.blobUrl);
+        if (statusDiv) {
+          statusDiv.textContent = 'Integrity check failed. Download was not started.';
+          statusDiv.className = 'error-message';
+        }
+        return;
       }
 
       console.log('[arkfile-share] Triggering browser download from blob URL (SW unavailable)');
@@ -350,8 +464,12 @@ export class ShareAccessUI {
 
     } catch (error) {
       console.error('Download error:', error);
+      const msg = error instanceof Error ? error.message : 'Download failed.';
+      if (/partial file may already/i.test(msg)) {
+        showPartialDownloadWarning();
+      }
       if (statusDiv) {
-        statusDiv.textContent = error instanceof Error ? error.message : 'Download failed.';
+        statusDiv.textContent = msg;
         statusDiv.className = 'error-message';
       }
     }

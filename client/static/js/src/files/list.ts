@@ -8,7 +8,8 @@
  * Server response shape (GET /api/files):
  * {
  *   files: [{
- *     file_id, storage_id, password_type, password_hint,
+ *     file_id, storage_id, password_type,
+ *     encrypted_password_hint?, password_hint_nonce?,
  *     encrypted_filename, filename_nonce,
  *     encrypted_sha256sum, sha256sum_nonce,
  *     encrypted_fek, size_bytes, upload_date,
@@ -27,12 +28,10 @@ import {
   getAccountKey,
   decryptMetadataField,
 } from '../crypto/metadata-helpers';
-import { AAD_FIELD_FILENAME, AAD_FIELD_SHA256 } from '../crypto/aad';
+import { AAD_FIELD_FILENAME, AAD_FIELD_SHA256, AAD_FIELD_PASSWORD_HINT } from '../crypto/aad';
 import { getCachedAccountKey } from '../crypto/file-encryption';
 
-// ============================================================================
 // Types (match server response, snake_case)
-// ============================================================================
 
 /** Single file entry as returned by GET /api/files */
 export interface ServerFileEntry {
@@ -41,7 +40,8 @@ export interface ServerFileEntry {
   owner_username: string;
   storage_id: string;
   password_type: 'account' | 'custom';
-  password_hint?: string;
+  encrypted_password_hint?: string;
+  password_hint_nonce?: string;
   encrypted_filename: string;
   filename_nonce: string;
   encrypted_sha256sum: string;
@@ -66,6 +66,7 @@ export interface FilesResponse {
 interface DecryptedFileEntry {
   file_id: string;
   password_type: 'account' | 'custom';
+  /** Plaintext custom-password hint after Account Key decrypt (empty if none). */
   password_hint: string;
   filename: string;        // decrypted or "[Encrypted]"
   sha256sum: string;       // decrypted hex or ""
@@ -74,9 +75,7 @@ interface DecryptedFileEntry {
   metadata_decrypted: boolean;
 }
 
-// ============================================================================
 // File Loading
-// ============================================================================
 
 export async function loadFiles(): Promise<void> {
   try {
@@ -94,9 +93,7 @@ export async function loadFiles(): Promise<void> {
   }
 }
 
-// ============================================================================
 // File Display (with client-side decryption)
-// ============================================================================
 
 export async function displayFiles(data: FilesResponse): Promise<void> {
   const filesList = document.getElementById('filesList');
@@ -153,7 +150,7 @@ export async function displayFiles(data: FilesResponse): Promise<void> {
     const entry: DecryptedFileEntry = {
       file_id: file.file_id,
       password_type: file.password_type,
-      password_hint: file.password_hint || '',
+      password_hint: '',
       filename: '[Encrypted]',
       sha256sum: '',
       size_readable: file.size_readable,
@@ -187,6 +184,21 @@ export async function displayFiles(data: FilesResponse): Promise<void> {
         );
       } catch (err) {
         console.warn(`Failed to decrypt sha256 for ${file.file_id}:`, err);
+      }
+
+      if (file.encrypted_password_hint && file.password_hint_nonce) {
+        try {
+          entry.password_hint = await decryptMetadataField(
+            file.encrypted_password_hint,
+            file.password_hint_nonce,
+            accountKey,
+            file.file_id,
+            AAD_FIELD_PASSWORD_HINT,
+            file.owner_username,
+          );
+        } catch (err) {
+          console.warn(`Failed to decrypt password hint for ${file.file_id}:`, err);
+        }
       }
     }
 
@@ -288,9 +300,7 @@ export async function displayFiles(data: FilesResponse): Promise<void> {
   updateStorageInfo(data.storage);
 }
 
-// ============================================================================
 // Storage Info
-// ============================================================================
 
 export function updateStorageInfo(storage: FilesResponse['storage']): void {
   const storageInfo = document.getElementById('storageInfo');
@@ -336,9 +346,7 @@ async function fetchAdminContactForStorage(): Promise<void> {
   }
 }
 
-// ============================================================================
 // File Deletion
-// ============================================================================
 
 async function confirmAndDeleteFile(fileId: string, filename: string): Promise<void> {
   const displayName = filename === '[Encrypted]' ? fileId : filename;
@@ -369,9 +377,7 @@ async function confirmAndDeleteFile(fileId: string, filename: string): Promise<v
   }
 }
 
-// ============================================================================
 // Metadata Modal
-// ============================================================================
 
 function showMetadataModal(file: DecryptedFileEntry): void {
   const overlay = document.createElement('div');
@@ -460,9 +466,7 @@ function showMetadataModal(file: DecryptedFileEntry): void {
   document.body.appendChild(overlay);
 }
 
-// ============================================================================
 // Utility
-// ============================================================================
 
 function escapeHtml(unsafe: string): string {
   return unsafe

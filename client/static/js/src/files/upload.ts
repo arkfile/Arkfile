@@ -22,7 +22,6 @@
  * This keeps file lists readable without requiring custom passwords.
  */
 
-import { sha256 } from '@noble/hashes/sha2.js';
 import {
   randomBytes,
   encryptAESGCM,
@@ -32,13 +31,16 @@ import {
   secureWipe,
   concatBytes,
 } from '../crypto/primitives.js';
+import { computeStreamingSHA256 } from '../crypto/streaming-hash.js';
 import {
   buildChunkAAD,
   buildFEKEnvelopeAAD,
   buildMetadataFieldAAD,
   AAD_FIELD_FILENAME,
   AAD_FIELD_SHA256,
+  AAD_FIELD_PASSWORD_HINT,
 } from '../crypto/aad.js';
+import { debugLog } from '../utils/debug-log.js';
 import {
   deriveFileEncryptionKey,
   deriveFileEncryptionKeyWithCache,
@@ -64,9 +66,7 @@ import {
 } from '../utils/auth.js';
 import { loadFiles } from './list.js';
 
-// ============================================================================
 // Types
-// ============================================================================
 
 export interface UploadOptions {
   /** Pre-derived account key for metadata encryption (skips derivation if provided) */
@@ -123,9 +123,7 @@ interface UploadSession {
   expires_at: string;
 }
 
-// ============================================================================
 // Auth helpers (preemptive refresh + 401-refresh-retry)
-// ============================================================================
 
 /**
  * Refresh threshold for the per-file token check. If the JWT has fewer than
@@ -241,9 +239,7 @@ async function ensureFreshToken(_thresholdSeconds = TOKEN_REFRESH_THRESHOLD_SECO
   // so that an explicit logout in another tab aborts the batch gracefully.
 }
 
-// ============================================================================
 // Helper Functions
-// ============================================================================
 
 /**
  * Makes an authenticated API request. On 401, attempts a single refresh and
@@ -413,39 +409,6 @@ async function resolveAccountKey(
 }
 
 /**
- * Computes SHA-256 of a File using streaming reads.
- * Reads one chunk at a time via file.slice(), never loading the whole file.
- * Mirrors Go CLI's computeStreamingSHA256(). Peak memory: ~chunkSize bytes.
- */
-async function computeStreamingSHA256(
-  file: File,
-  chunkSize: number,
-  onProgress?: (bytesHashed: number, totalBytes: number) => void
-): Promise<string> {
-  const hasher = sha256.create();
-  let offset = 0;
-
-  while (offset < file.size) {
-    const end = Math.min(offset + chunkSize, file.size);
-    const slice = file.slice(offset, end);
-    const buffer = await slice.arrayBuffer();
-    hasher.update(new Uint8Array(buffer));
-    offset = end;
-
-    if (onProgress) {
-      onProgress(offset, file.size);
-    }
-  }
-
-  // Handle empty files (0-byte)
-  if (file.size === 0) {
-    hasher.update(new Uint8Array(0));
-  }
-
-  return toHex(hasher.digest());
-}
-
-/**
  * Calculates total encrypted size deterministically from plaintext file size.
  * Pure math -- no file reading needed. Mirrors Go CLI's
  * calculateTotalEncryptedSize() under uniform-chunk layout.
@@ -477,9 +440,7 @@ function calculateTotalEncryptedSize(
   return numFullChunks * (chunkSize + overhead) + (lastChunkPlaintext + overhead);
 }
 
-// ============================================================================
 // Main Upload Function
-// ============================================================================
 
 /**
  * Uploads a file with client-side encryption using streaming.
@@ -529,7 +490,7 @@ export async function uploadFile(
     const logTiming = (step: string, startTime: number) => {
       const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
       const total = ((performance.now() - uploadStart) / 1000).toFixed(2);
-      console.log(`[upload] ${step} (${elapsed}s, total: ${total}s)`);
+      debugLog(`[upload] ${step} (${elapsed}s, total: ${total}s)`);
     };
 
     // Privacy-safe filename for logging: first char + extension only
@@ -555,11 +516,9 @@ export async function uploadFile(
       : chunkCfg.envelope.keyTypes.custom;
     logTiming('Config loaded', stepStart);
 
-    console.log(`[upload] File: ${logName}, size: ${(file.size / 1024 / 1024).toFixed(1)} MB, chunk size: ${(CHUNK_SIZE / 1024 / 1024).toFixed(0)} MB`);
+    debugLog(`[upload] File: ${logName}, size: ${(file.size / 1024 / 1024).toFixed(1)} MB, chunk size: ${(CHUNK_SIZE / 1024 / 1024).toFixed(0)} MB`);
 
-    // ================================================================
     // Step 1: Resolve keys
-    // ================================================================
     reportProgress({ phase: 'deriving-key', percent: 0 });
     stepStart = performance.now();
 
@@ -578,22 +537,18 @@ export async function uploadFile(
       logTiming('Step 1b: Custom key derived', stepStart);
     }
 
-    // ================================================================
     // Step 2: Generate FEK
-    // ================================================================
     reportProgress({ phase: 'deriving-key', percent: 3 });
 
     // Generate random FEK (File Encryption Key)
     const fek = randomBytes(KEY_SIZES.FILE_ENCRYPTION_KEY);
 
-    // ================================================================
     // Step 3: Streaming SHA-256 of plaintext file
     // Reads file one chunk at a time -- never loads whole file into memory.
     // Mirrors Go CLI's computeStreamingSHA256().
-    // ================================================================
     reportProgress({ phase: 'hashing', percent: 5 });
     stepStart = performance.now();
-    console.log(`[upload] Step 3: Starting streaming SHA-256 hash of ${(file.size / 1024 / 1024).toFixed(1)} MB...`);
+    debugLog(`[upload] Step 3: Starting streaming SHA-256 hash of ${(file.size / 1024 / 1024).toFixed(1)} MB...`);
 
     const plaintextHashHex = await computeStreamingSHA256(file, CHUNK_SIZE, (bytesHashed, totalBytes) => {
       // Hash phase: 5% to 15%
@@ -602,9 +557,7 @@ export async function uploadFile(
     });
     logTiming(`Step 3: SHA-256 hash complete (${plaintextHashHex.substring(0, 8)}...)`, stepStart);
 
-    // ================================================================
     // Step 4: Deduplication check
-    // ================================================================
     const existingFileId = checkDuplicate(plaintextHashHex);
     if (existingFileId) {
       secureWipe(fek);
@@ -614,7 +567,6 @@ export async function uploadFile(
       );
     }
 
-    // ================================================================
     // Step 5: Generate client-side file_id and encrypt metadata
     // with ACCOUNT key (always, regardless of password type).
     //
@@ -623,7 +575,6 @@ export async function uploadFile(
     // validates strict UUID v4 + global uniqueness; on a 409
     // `file_id_conflict` the surrounding init+retry loop mints a fresh UUID
     // and retries up to FILE_ID_CONFLICT_MAX_RETRIES times.
-    // ================================================================
     reportProgress({ phase: 'encrypting', percent: 16 });
     stepStart = performance.now();
 
@@ -631,15 +582,13 @@ export async function uploadFile(
     const totalEncryptedSize = calculateTotalEncryptedSize(
       file.size, CHUNK_SIZE, aesGcmOverhead,
     );
-    console.log(`[upload] Step 5/6: Total encrypted size: ${(totalEncryptedSize / 1024 / 1024).toFixed(1)} MB, chunks: ${totalChunks}`);
+    debugLog(`[upload] Step 5/6: Total encrypted size: ${(totalEncryptedSize / 1024 / 1024).toFixed(1)} MB, chunks: ${totalChunks}`);
 
-    // ================================================================
     // Step 7: Init upload session with retry on file_id_conflict.
     // Encrypts metadata + FEK under AAD bound to the candidate fileID.
-    // ================================================================
     reportProgress({ phase: 'init-session', percent: 18 });
     stepStart = performance.now();
-    console.log('[upload] Step 7: Initializing upload session...');
+    debugLog('[upload] Step 7: Initializing upload session...');
 
     let session: UploadSession | undefined;
     let chosenFileID = '';
@@ -660,6 +609,15 @@ export async function uploadFile(
         plaintextHashHex, accountKey, candidateFileID, AAD_FIELD_SHA256, username,
       );
 
+      // Encrypt optional custom-password hint with Account Key. Empty hint:
+      // omit both fields from the init payload (do not send empty strings).
+      let encryptedHint: { encrypted: string; nonce: string } | null = null;
+      if (passwordHint) {
+        encryptedHint = await encryptMetadata(
+          passwordHint, accountKey, candidateFileID, AAD_FIELD_PASSWORD_HINT, username,
+        );
+      }
+
       // Encrypt FEK with the appropriate KEK + FEK-envelope AAD.
       // Wire layout: [version(1)][keyType(1)][nonce(12)][ciphertext][tag(16)]
       // (matches crypto.EncryptFEK() in Go).
@@ -679,20 +637,24 @@ export async function uploadFile(
       );
 
       try {
+        const initBody: Record<string, unknown> = {
+          file_id: candidateFileID,
+          encrypted_filename: encryptedFilename.encrypted,
+          filename_nonce: encryptedFilename.nonce,
+          encrypted_sha256sum: encryptedSha256.encrypted,
+          sha256sum_nonce: encryptedSha256.nonce,
+          encrypted_fek: toBase64(encryptedFek),
+          total_size: totalEncryptedSize,
+          chunk_size: CHUNK_SIZE,
+          password_type: passwordType,
+        };
+        if (encryptedHint) {
+          initBody.encrypted_password_hint = encryptedHint.encrypted;
+          initBody.password_hint_nonce = encryptedHint.nonce;
+        }
         session = await apiRequest<UploadSession>('/api/uploads/init', {
           method: 'POST',
-          body: JSON.stringify({
-            file_id: candidateFileID,
-            encrypted_filename: encryptedFilename.encrypted,
-            filename_nonce: encryptedFilename.nonce,
-            encrypted_sha256sum: encryptedSha256.encrypted,
-            sha256sum_nonce: encryptedSha256.nonce,
-            encrypted_fek: toBase64(encryptedFek),
-            total_size: totalEncryptedSize,
-            chunk_size: CHUNK_SIZE,
-            password_hint: passwordHint || '',
-            password_type: passwordType,
-          }),
+          body: JSON.stringify(initBody),
         });
         chosenFileID = candidateFileID;
         // Server echoes the file_id back in the response; sanity-check.
@@ -721,12 +683,10 @@ export async function uploadFile(
     }
     logTiming(`Step 7: Upload session created (${session.session_id}, file_id=${chosenFileID}, attempts=${attempt})`, stepStart);
 
-    // ================================================================
     // Step 8: Streaming encrypt-and-upload loop
     // For each chunk: read from disk, encrypt, upload, release.
     // Only one plaintext chunk + one encrypted chunk in memory at a time.
     // Mirrors Go CLI's doChunkedUpload().
-    // ================================================================
     let bytesUploaded = 0;
 
     for (let i = 0; i < totalChunks; i++) {
@@ -790,7 +750,7 @@ export async function uploadFile(
 
       bytesUploaded += chunkToUpload.length;
       const chunkTotal = ((performance.now() - chunkStart) / 1000).toFixed(2);
-      console.log(`[upload] Chunk ${i + 1}/${totalChunks} (${chunkSizeMB} MB): read=${readTime}s encrypt=${encryptTime}s hash=${hashTime}s upload=${uploadTime}s total=${chunkTotal}s`);
+      debugLog(`[upload] Chunk ${i + 1}/${totalChunks} (${chunkSizeMB} MB): read=${readTime}s encrypt=${encryptTime}s hash=${hashTime}s upload=${uploadTime}s total=${chunkTotal}s`);
 
       // Upload phase: 20% to 95%
       const uploadPercent = 20 + Math.floor((i + 1) / totalChunks * 75);
@@ -810,9 +770,7 @@ export async function uploadFile(
       secureWipe(fekEncryptionKey);
     }
 
-    // ================================================================
     // Step 9: Complete upload
-    // ================================================================
     reportProgress({ phase: 'completing', percent: 96 });
     stepStart = performance.now();
 
@@ -837,7 +795,7 @@ export async function uploadFile(
     addDigest(result.file_id, plaintextHashHex);
 
     const totalTime = ((performance.now() - uploadStart) / 1000).toFixed(2);
-    console.log(`[upload] SUCCESS: ${logName} (${(file.size / 1024 / 1024).toFixed(1)} MB) uploaded in ${totalTime}s, file_id=${result.file_id}`);
+    debugLog(`[upload] SUCCESS: ${logName} (${(file.size / 1024 / 1024).toFixed(1)} MB) uploaded in ${totalTime}s, file_id=${result.file_id}`);
 
     return {
       fileId: result.file_id,
@@ -861,9 +819,7 @@ export async function uploadFile(
   }
 }
 
-// ============================================================================
 // Batch (multi-file) upload
-// ============================================================================
 
 /**
  * Per-file outcome in a batch upload.
@@ -1013,9 +969,7 @@ export async function uploadFiles(
   return result;
 }
 
-// ============================================================================
 // UI Integration
-// ============================================================================
 
 /**
  * Handles file upload from the UI. Supports single-file and multi-file
@@ -1278,11 +1232,3 @@ export async function handleFileUpload(): Promise<void> {
   }
 }
 
-// ============================================================================
-// Exports
-// ============================================================================
-
-export const upload = {
-  uploadFile,
-  handleFileUpload,
-};

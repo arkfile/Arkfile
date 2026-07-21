@@ -56,8 +56,9 @@ import (
 //
 // Callers of BuildMetadataFieldAAD MUST reference these constants.
 const (
-	AADFieldFilename = "encrypted_filename"
-	AADFieldSha256   = "encrypted_sha256sum"
+	AADFieldFilename     = "encrypted_filename"
+	AADFieldSha256       = "encrypted_sha256sum"
+	AADFieldPasswordHint = "encrypted_password_hint"
 )
 
 // BuildChunkAAD constructs the AAD for a file-content chunk.
@@ -110,8 +111,8 @@ func BuildFEKEnvelopeAAD(fileID string, keyTypeByte byte) []byte {
 // Binding ownerUsername prevents moving a metadata row to a different
 // user's account.
 //
-// fieldName MUST be one of the canonical constants: AADFieldFilename or
-// AADFieldSha256.
+// fieldName MUST be one of the canonical constants: AADFieldFilename,
+// AADFieldSha256, or AADFieldPasswordHint.
 func BuildMetadataFieldAAD(fileID, fieldName, ownerUsername string) []byte {
 	fidBytes := []byte(fileID)
 	fnBytes := []byte(fieldName)

@@ -27,9 +27,7 @@ import {
   wrapError,
 } from './errors';
 
-// ============================================================================
 // Salt Derivation
-// ============================================================================
 
 /**
  * Derives a deterministic salt from username with domain separation
@@ -57,7 +55,7 @@ export function deriveSaltFromUsername(username: string, context: PasswordContex
     throw new InvalidUsernameError('Username cannot be empty');
   }
   
-  // Canonicalize: trim whitespace, then lowercase (see docs/wip/prod-prep/01-security.md).
+  // Canonicalize: trim whitespace, then lowercase (see.
   // Valid usernames are already lowercase-only; this keeps salts stable if mixed
   // case is ever passed programmatically.
   const normalizedUsername = username.trim().toLowerCase();
@@ -91,9 +89,7 @@ export function deriveSaltFromUsername(username: string, context: PasswordContex
   }
 }
 
-// ============================================================================
 // Key Derivation
-// ============================================================================
 
 /**
  * Derives a file encryption key from password and username
@@ -133,9 +129,7 @@ export async function deriveFileEncryptionKey(
   }
 }
 
-// ============================================================================
 // Key Caching (Session Storage)
-// ============================================================================
 
 // Import the new Account Key cache module for consistent caching
 import {
@@ -179,7 +173,7 @@ export {
  * @param password - The user's password
  * @param username - The user's username
  * @param context - The password context (account or custom)
- * @param accessToken - The current JWT access token (for session binding)
+ * @param accessToken - Optional; omitted under cookie auth (heap wrapping is the real bind)
  * @param cacheDuration - Optional cache duration in hours (1-4, only for 'account' context)
  * @returns A 32-byte encryption key
  */
@@ -202,8 +196,6 @@ export async function deriveFileEncryptionKeyWithCache(
     const key = await deriveFileEncryptionKey(password, username, context);
     
     // Cache it with the specified duration whenever the user opted in.
-    // accessToken is optional (undefined in cookie-based auth); cacheAccountKey
-    // handles that by storing an empty token_hash and skipping session binding.
     if (cacheDuration !== undefined) {
       await cacheAccountKey(username, key, accessToken, cacheDuration);
     }
@@ -223,7 +215,7 @@ export async function deriveFileEncryptionKeyWithCache(
  * 
  * @param password - The user's account password
  * @param username - The user's username
- * @param accessToken - The current JWT access token (for session binding)
+ * @param accessToken - Optional; omitted under cookie auth
  * @param cacheDuration - Optional cache duration in hours (1-4)
  * @returns A 32-byte Account Key
  */
@@ -236,28 +228,3 @@ export async function deriveAccountKeyWithCache(
   return deriveFileEncryptionKeyWithCache(password, username, 'account', accessToken, cacheDuration);
 }
 
-// ============================================================================
-// Exports
-// ============================================================================
-
-export const fileEncryption = {
-  // Salt derivation
-  deriveSaltFromUsername,
-  
-  // Key derivation
-  deriveFileEncryptionKey,
-  deriveFileEncryptionKeyWithCache,
-  deriveAccountKeyWithCache,
-  
-  // Account Key caching
-  cacheAccountKey,
-  getCachedAccountKey,
-  clearCachedAccountKey,
-  clearAllCachedAccountKeys,
-  isAccountKeyCached,
-  cachedAccountKeyExpiresAt,
-  lockAccountKey,
-  unlockAccountKey,
-  isAccountKeyLocked,
-  cleanupAccountKeyCache,
-};

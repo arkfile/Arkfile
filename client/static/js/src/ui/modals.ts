@@ -399,14 +399,3 @@ export function showModal(options: ModalOptions): HTMLElement {
   return ModalManager.createModal(options);
 }
 
-export function showConfirmModal(options: ConfirmModalOptions): HTMLElement {
-  return ModalManager.createConfirmModal(options);
-}
-
-export function closeModal(modal: HTMLElement): void {
-  ModalManager.closeModal(modal);
-}
-
-export function closeAllModals(): void {
-  ModalManager.closeAllModals();
-}

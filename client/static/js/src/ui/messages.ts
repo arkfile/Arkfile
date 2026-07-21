@@ -244,7 +244,7 @@ export function showWarning(message: string, duration?: number): HTMLElement {
 export function showInfo(message: string, duration?: number): HTMLElement {
   const options: ToastOptions = {
     message,
-    type: 'info'
+    type: 'info',
   };
   if (duration !== undefined) {
     options.duration = duration;
@@ -252,10 +252,3 @@ export function showInfo(message: string, duration?: number): HTMLElement {
   return MessageManager.showToast(options);
 }
 
-export function showToast(options: ToastOptions): HTMLElement {
-  return MessageManager.showToast(options);
-}
-
-export function clearAllMessages(): void {
-  MessageManager.clearAllMessages();
-}

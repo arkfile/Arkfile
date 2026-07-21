@@ -73,7 +73,6 @@ function makeShareMeta(
     encrypted_sha256sum: '',
     sha256sum_nonce: '',
     encrypted_fek: '',
-    password_hint: '',
     password_type: 'account',
     size_bytes: totalBytes,
     chunk_size: chunkSizeBytes,
@@ -138,7 +137,10 @@ function withChunkingConfig(fn: (url: string) => Promise<Response>): (url: strin
 const FAKE_FILE_ID = 'test-file-1234';
 const FAKE_SHARE_ID = 'test-share-5678';
 const FAKE_AUTH_TOKEN = 'test-auth-token';
-const FAKE_DOWNLOAD_TOKEN = 'test-download-token';
+const FAKE_SHARE_TICKET = {
+  get: async () => 'test-share-ticket',
+  refresh: async () => 'test-share-ticket-refreshed',
+};
 
 // ── Blob fallback path tests (SW unavailable) ──────────────────────────────
 
@@ -171,7 +173,7 @@ describe('StreamingDownloadManager - Blob fallback path (SW unavailable)', () =>
     }));
 
     const manager = new StreamingDownloadManager('', {
-      downloadToken: FAKE_DOWNLOAD_TOKEN,
+      shareTicket: FAKE_SHARE_TICKET,
       showProgressUI: false,
     });
 
@@ -220,7 +222,7 @@ describe('StreamingDownloadManager - Blob fallback path (SW unavailable)', () =>
     }));
 
     const manager = new StreamingDownloadManager('', {
-      downloadToken: FAKE_DOWNLOAD_TOKEN,
+      shareTicket: FAKE_SHARE_TICKET,
       showProgressUI: false,
     });
 
@@ -249,7 +251,7 @@ describe('StreamingDownloadManager - Blob fallback path (SW unavailable)', () =>
     }));
 
     const manager = new StreamingDownloadManager('', {
-      downloadToken: FAKE_DOWNLOAD_TOKEN,
+      shareTicket: FAKE_SHARE_TICKET,
       showProgressUI: false,
     });
 
@@ -258,6 +260,10 @@ describe('StreamingDownloadManager - Blob fallback path (SW unavailable)', () =>
     expect(result.success).toBe(true);
     expect(result.blobUrl).toBeDefined();
     expect(result.hashVerification).toBe('mismatch');
+    expect(result.computedSha256Hex).toBe(hexDigest(plaintext));
+    // Callers must check this before triggerBrowserDownloadFromUrl and revoke on mismatch.
+    const { shouldBlockBlobDownload } = await import('../files/download-integrity');
+    expect(shouldBlockBlobDownload(result.hashVerification)).toBe(true);
   });
 
   test('Blob fallback returns hashVerification skipped when no expected hash is provided', async () => {
@@ -277,7 +283,7 @@ describe('StreamingDownloadManager - Blob fallback path (SW unavailable)', () =>
     }));
 
     const manager = new StreamingDownloadManager('', {
-      downloadToken: FAKE_DOWNLOAD_TOKEN,
+      shareTicket: FAKE_SHARE_TICKET,
       showProgressUI: false,
     });
 
@@ -286,6 +292,58 @@ describe('StreamingDownloadManager - Blob fallback path (SW unavailable)', () =>
     expect(result.success).toBe(true);
     expect(result.blobUrl).toBeDefined();
     expect(result.hashVerification).toBe('skipped');
+  });
+
+  test('ticket provider failure fails closed without sending X-Download-Token', async () => {
+    const seenHeaders: Array<Record<string, string> | undefined> = [];
+    setFetchMock(withChunkingConfig(async (url: string, init?: RequestInit) => {
+      seenHeaders.push(init?.headers as Record<string, string> | undefined);
+      return new Response('should not reach network for share auth', { status: 500 });
+    }));
+
+    const failingTicket = {
+      get: async () => {
+        throw new Error('ticket issuer unavailable');
+      },
+      refresh: async () => 'unused',
+    };
+
+    const fek = randomBytes(32);
+    const manager = new StreamingDownloadManager('', {
+      shareTicket: failingTicket,
+      showProgressUI: false,
+    });
+
+    const result = await manager.downloadSharedFile(FAKE_SHARE_ID, fek, { filename: 'test.bin' });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('share download ticket');
+    for (const headers of seenHeaders) {
+      if (!headers) continue;
+      expect(headers['X-Download-Token']).toBeUndefined();
+    }
+  });
+
+  test('missing shareTicket fails closed without sending X-Download-Token', async () => {
+    const seenHeaders: Array<Record<string, string> | undefined> = [];
+    setFetchMock(withChunkingConfig(async (_url: string, init?: RequestInit) => {
+      seenHeaders.push(init?.headers as Record<string, string> | undefined);
+      return new Response('should not authorize', { status: 500 });
+    }));
+
+    const fek = randomBytes(32);
+    const manager = new StreamingDownloadManager('', {
+      showProgressUI: false,
+    });
+
+    const result = await manager.downloadSharedFile(FAKE_SHARE_ID, fek, { filename: 'test.bin' });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('share ticket');
+    for (const headers of seenHeaders) {
+      if (!headers) continue;
+      expect(headers['X-Download-Token']).toBeUndefined();
+    }
   });
 });
 
@@ -335,7 +393,6 @@ describe('StreamingDownloadManager - owner download path', () => {
           encrypted_sha256sum: 'AAAAAAAAAAAAAAAA',
           sha256sum_nonce: btoa(String.fromCharCode(...new Uint8Array(12))),
           encrypted_fek: '',
-          password_hint: '',
           password_type: 'account',
           size_bytes: plaintext.length,
           chunk_size: plaintext.length,
@@ -440,7 +497,7 @@ describe('StreamingDownloadManager - SW DataCloneError Fallback', () => {
 
     // 3. Trigger download
     const manager = new StreamingDownloadManager('', {
-      downloadToken: FAKE_DOWNLOAD_TOKEN,
+      shareTicket: FAKE_SHARE_TICKET,
       showProgressUI: false,
     });
 
@@ -451,5 +508,52 @@ describe('StreamingDownloadManager - SW DataCloneError Fallback', () => {
     expect(result.streamedViaSw).toBeFalsy(); // should not have streamed via SW
     expect(result.blobUrl).toBeDefined(); // should have generated a Blob url instead!
     expect(result.blobUrl!.startsWith('blob:')).toBe(true);
+    // Fresh generator on fallback must produce plaintext (manager logs Blob size;
+    // createObjectURL is present and success is true).
+    expect(result.success).toBe(true);
+    expect(result.streamedViaSw).toBeFalsy();
+  });
+
+  test('does not fall back to Blob when SW reports ack timeout', async () => {
+    // Simulate ack timeout by rejecting from postMessage path with the same
+    // message swStreamDownload uses — must NOT reuse the generator for Blob.
+    const controller = {
+      postMessage: () => {
+        throw new Error('SW init ack timeout');
+      },
+    };
+    (globalThis as any).navigator = {
+      serviceWorker: {
+        controller,
+        register: async () => ({ active: { state: 'activated' } }),
+      },
+    };
+
+    const fek = randomBytes(32);
+    const plaintext = new TextEncoder().encode('ack timeout no fallback');
+    const FILE_ID = 'test-ack-timeout';
+    const encryptedChunk = await buildEncryptedChunk(plaintext, fek, FILE_ID, 0, 1);
+
+    setFetchMock(withChunkingConfig(async (url: string) => {
+      if (url.includes('/metadata')) {
+        return new Response(JSON.stringify(makeShareMeta(plaintext.length, 1, plaintext.length, FILE_ID)), { status: 200 });
+      }
+      if (url.includes('/chunks/0')) {
+        return new Response(encryptedChunk.buffer as ArrayBuffer, { status: 200 });
+      }
+      return new Response('not found', { status: 404 });
+    }));
+
+    const manager = new StreamingDownloadManager('', {
+      shareTicket: FAKE_SHARE_TICKET,
+      showProgressUI: false,
+    });
+
+    const result = await manager.downloadSharedFile(FAKE_SHARE_ID, fek, { filename: 'ack.bin' });
+
+    expect(result.success).toBe(false);
+    expect(result.blobUrl).toBeUndefined();
+    expect(result.streamedViaSw).toBeUndefined();
+    expect(result.error).toMatch(/ack timeout/i);
   });
 });

@@ -5,9 +5,7 @@
  * These constants ensure consistency and security across all crypto operations.
  */
 
-// ============================================================================
 // Argon2id Parameters (imported from single source of truth)
-// ============================================================================
 
 /**
  * SINGLE SOURCE OF TRUTH: config/argon2id-params.json
@@ -73,9 +71,7 @@ export async function getArgon2Params(): Promise<{
   };
 }
 
-// ============================================================================
 // Key Sizes
-// ============================================================================
 
 /**
  * Standard key sizes used throughout the application
@@ -103,9 +99,7 @@ export const KEY_SIZES = {
   AUTH_TAG: 16,
 } as const;
 
-// ============================================================================
 // OPAQUE Protocol Configuration
-// ============================================================================
 
 /**
  * OPAQUE protocol configuration
@@ -128,9 +122,7 @@ export const OPAQUE_CONFIG = {
   hash: 'SHA512' as const,
 } as const;
 
-// ============================================================================
 // Encryption Algorithm Configuration
-// ============================================================================
 
 /**
  * AES-GCM configuration for file encryption
@@ -149,9 +141,7 @@ export const AES_GCM_CONFIG = {
   tagLength: 128,
 } as const;
 
-// ============================================================================
 // Chunked Upload/Download Constants (loaded from single source of truth)
-// ============================================================================
 
 /**
  * SINGLE SOURCE OF TRUTH: crypto/chunking-params.json
@@ -194,9 +184,7 @@ export async function getChunkingParams(): Promise<ChunkingConfig> {
 }
 
 
-// ============================================================================
 // Salt Domain Prefixes
-// ============================================================================
 
 /**
  * Domain separation prefixes for deterministic salt derivation
@@ -216,9 +204,7 @@ export const SALT_DOMAIN_PREFIXES: Record<PasswordContext, string> = {
   custom: 'arkfile-custom-key-salt:',
 } as const;
 
-// ============================================================================
 // Protocol Version
-// ============================================================================
 
 /**
  * Protocol version for encrypted file format
@@ -232,9 +218,7 @@ export const PROTOCOL_VERSION = 1;
  */
 export const FILE_ENCRYPTION_VERSION = 1;
 
-// ============================================================================
 // Timeouts and Limits
-// ============================================================================
 
 /**
  * Various timeouts and limits
@@ -244,9 +228,7 @@ export const LIMITS = {
   KEY_DERIVATION_TIMEOUT: 30000,
 } as const;
 
-// ============================================================================
 // Type Guards
-// ============================================================================
 
 /**
  * Validates that a value is a valid Argon2 variant

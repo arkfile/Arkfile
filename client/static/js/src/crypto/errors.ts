@@ -5,9 +5,7 @@
  * These errors provide detailed context for debugging and user feedback.
  */
 
-// ============================================================================
 // Base Crypto Error
-// ============================================================================
 
 /**
  * Base class for all cryptographic errors
@@ -37,9 +35,7 @@ export class CryptoError extends Error {
   }
 }
 
-// ============================================================================
 // Key Derivation Errors
-// ============================================================================
 
 /**
  * Error during key derivation (Argon2id)
@@ -77,9 +73,7 @@ export class InvalidArgon2ParamsError extends KeyDerivationError {
   }
 }
 
-// ============================================================================
 // Encryption/Decryption Errors
-// ============================================================================
 
 /**
  * Error during encryption
@@ -124,9 +118,7 @@ export class CorruptedDataError extends DecryptionError {
   }
 }
 
-// ============================================================================
 // OPAQUE Protocol Errors
-// ============================================================================
 
 /**
  * Base error for OPAQUE protocol operations
@@ -184,9 +176,7 @@ export class InvalidOpaqueStateError extends OpaqueError {
   }
 }
 
-// ============================================================================
 // Salt Derivation Errors
-// ============================================================================
 
 /**
  * Error during salt derivation
@@ -211,9 +201,7 @@ export class InvalidUsernameError extends SaltDerivationError {
   }
 }
 
-// ============================================================================
 // Key Management Errors
-// ============================================================================
 
 /**
  * Error when a key is invalid
@@ -270,9 +258,7 @@ export class KeyNotFoundError extends CryptoError {
   }
 }
 
-// ============================================================================
 // Storage Errors
-// ============================================================================
 
 /**
  * Error during storage operations
@@ -307,9 +293,7 @@ export class StorageQuotaExceededError extends StorageError {
   }
 }
 
-// ============================================================================
 // Protocol Version Errors
-// ============================================================================
 
 /**
  * Error when protocol version is unsupported
@@ -325,9 +309,7 @@ export class UnsupportedProtocolVersionError extends CryptoError {
   }
 }
 
-// ============================================================================
 // Web Crypto API Errors
-// ============================================================================
 
 /**
  * Error when Web Crypto API is not available
@@ -356,9 +338,7 @@ export class WebCryptoError extends CryptoError {
   }
 }
 
-// ============================================================================
 // Validation Errors
-// ============================================================================
 
 /**
  * Error when input validation fails
@@ -384,9 +364,7 @@ export class InvalidPasswordError extends ValidationError {
   }
 }
 
-// ============================================================================
 // Network Errors
-// ============================================================================
 
 /**
  * Error during network operations
@@ -411,9 +389,7 @@ export class ServerError extends NetworkError {
   }
 }
 
-// ============================================================================
 // Utility Functions
-// ============================================================================
 
 /**
  * Wraps an unknown error in a CryptoError

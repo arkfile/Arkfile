@@ -157,7 +157,8 @@ interface FileUploadRequest {
   encrypted: boolean;
   keyType: 'account' | 'custom';
   hasCustomPassword?: boolean;
-  passwordHint?: string;
+  encryptedPasswordHint?: string;
+  passwordHintNonce?: string;
   multiKey?: boolean;
   additionalKeys?: Array<{ id: string; hint?: string }>;
 }

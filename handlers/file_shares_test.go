@@ -10,6 +10,7 @@ import (
 
 	"github.com/arkfile/Arkfile/auth"
 	"github.com/arkfile/Arkfile/config"
+	"github.com/arkfile/Arkfile/crypto"
 	"github.com/DATA-DOG/go-sqlmock"
 	jwt "github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
@@ -473,14 +474,17 @@ func TestRevokeShare_InvalidReasonRejected(t *testing.T) {
 }
 
 func TestDownloadShareChunk_AtomicDoubleSpendBlocked(t *testing.T) {
-	tokenStr := "MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI="
-	expectedHash, _ := hashDownloadToken(tokenStr)
+	_, expectedHash := ticketTokenAndHash(t)
+	ticketKey, err := crypto.GetShareTicketKey()
+	require.NoError(t, err)
+	ticket, err := crypto.IssueShareTicket(ticketKey, "test-share-id", "uninitialized", time.Now())
+	require.NoError(t, err)
 
 	// Create an exhausted share attempt
 	c, _, mock, _ := setupTestEnv(t, http.MethodGet, "/api/public/shares/test-share-id/chunks/0", nil)
 	c.SetParamNames("id", "chunkIndex")
 	c.SetParamValues("test-share-id", "0")
-	c.Request().Header.Set("X-Download-Token", tokenStr)
+	c.Request().Header.Set("X-Share-Ticket", ticket)
 
 	// 1. Mock share SELECT lookup
 	shareSQL := `SELECT file_id, owner_username, expires_at, revoked_at, revoked_reason, \s*download_token_hash, access_count, max_accesses`
@@ -488,8 +492,8 @@ func TestDownloadShareChunk_AtomicDoubleSpendBlocked(t *testing.T) {
 		AddRow("test-file-123", "owneruser", nil, nil, nil, expectedHash, float64(2), float64(2)) // access_count == max_accesses
 	mock.ExpectQuery(shareSQL).WithArgs("test-share-id").WillReturnRows(shareRows)
 
-	// Since access_count >= max_accesses, the token-verification and atomic UPDATE are never reached because chunkIndex == 0 check blocks early.
-	err := DownloadShareChunk(c)
+	// Since access_count >= max_accesses, the atomic UPDATE is never reached because chunkIndex == 0 check blocks early.
+	err = DownloadShareChunk(c)
 	require.Error(t, err)
 	httpErr, ok := err.(*echo.HTTPError)
 	require.True(t, ok)
@@ -500,14 +504,17 @@ func TestDownloadShareChunk_AtomicDoubleSpendBlocked(t *testing.T) {
 }
 
 func TestDownloadShareChunk_AtomicConditionalFailure(t *testing.T) {
-	tokenStr := "MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI="
-	expectedHash, _ := hashDownloadToken(tokenStr)
+	_, expectedHash := ticketTokenAndHash(t)
+	ticketKey, err := crypto.GetShareTicketKey()
+	require.NoError(t, err)
+	ticket, err := crypto.IssueShareTicket(ticketKey, "test-share-id", "uninitialized", time.Now())
+	require.NoError(t, err)
 
 	// Simulate an active atomic UPDATE returning RowsAffected == 0 because limit was synchronously hit
 	c, _, mock, _ := setupTestEnv(t, http.MethodGet, "/api/public/shares/test-share-id/chunks/0", nil)
 	c.SetParamNames("id", "chunkIndex")
 	c.SetParamValues("test-share-id", "0")
-	c.Request().Header.Set("X-Download-Token", tokenStr)
+	c.Request().Header.Set("X-Share-Ticket", ticket)
 
 	// 1. Mock share SELECT lookup
 	shareSQL := `SELECT file_id, owner_username, expires_at, revoked_at, revoked_reason, \s*download_token_hash, access_count, max_accesses`
@@ -525,7 +532,7 @@ func TestDownloadShareChunk_AtomicConditionalFailure(t *testing.T) {
 	updateSQL := `UPDATE file_share_keys`
 	mock.ExpectExec(updateSQL).WithArgs("test-share-id").WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows affected
 
-	err := DownloadShareChunk(c)
+	err = DownloadShareChunk(c)
 	require.Error(t, err)
 	httpErr, ok := err.(*echo.HTTPError)
 	require.True(t, ok)

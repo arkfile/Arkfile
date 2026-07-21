@@ -1134,6 +1134,8 @@ run_files_custom_password() {
         error "Failed to generate custom test file:"; echo "$gen_output"
         record_test "Custom test file creation" "FAIL"
     fi
+    # Unique sentinel hint: must never appear as plaintext in API/DB/list output.
+    local CUSTOM_HINT_SENTINEL="e2e-hint-sentinel-$(date +%s)-$$"
     # CLI prompts for: custom password (once) + confirmation (once)
     scenario "Uploading file with custom password"
     local custom_upload_output custom_upload_exit_code
@@ -1143,7 +1145,8 @@ run_files_custom_password() {
         --tls-insecure \
         upload \
         --file '$custom_test_file' \
-        --password-type custom"
+        --password-type custom \
+        --hint '$CUSTOM_HINT_SENTINEL'"
 
     if [ $custom_upload_exit_code -eq 0 ]; then
         CUSTOM_FILE_ID=$(echo "$custom_upload_output" | grep '^\[OK\]' | grep -o 'file_id=[^ )]*' | cut -d= -f2)
@@ -1164,10 +1167,23 @@ run_files_custom_password() {
     if echo "$list_raw_output" | grep -q "custom_test_file.bin" || echo "$list_raw_output" | grep -q "$CUSTOM_FILE_SHA256"; then
         error "Security failure: Raw list API exposed plaintext name or hash for custom-password file!"
         record_test "Raw List API Privacy (custom file)" "FAIL"
-    elif echo "$list_raw_output" | jq -e '.files[] | select(.encrypted_filename != null and .encrypted_filename != "")' >/dev/null 2>&1; then
+    elif echo "$list_raw_output" | grep -Fq "$CUSTOM_HINT_SENTINEL"; then
+        error "Security failure: Raw list API exposed plaintext password hint sentinel!"
+        record_test "Raw List API Privacy (custom file)" "FAIL"
+    elif echo "$list_raw_output" | grep -q '"password_hint"'; then
+        error "Security failure: Raw list API still exposes password_hint field!"
+        record_test "Raw List API Privacy (custom file)" "FAIL"
+    elif echo "$list_raw_output" | jq -e --arg fid "$CUSTOM_FILE_ID" '
+        .files[]
+        | select(.file_id == $fid)
+        | (.encrypted_password_hint | type == "string" and length > 0)
+          and (.password_hint_nonce | type == "string" and length > 0)
+          and (.encrypted_filename != null and .encrypted_filename != "")
+      ' >/dev/null 2>&1; then
         record_test "Raw List API Privacy (custom file)" "PASS"
     else
-        error "Security failure: Raw list API missing encrypted metadata for custom-password file!"
+        error "Security failure: Raw list API missing encrypted metadata/hint fields for custom-password file!"
+        echo "$list_raw_output" | head -c 2000
         record_test "Raw List API Privacy (custom file)" "FAIL"
     fi
     # This proves the server-side metadata record is reachable through the CLI's own decryption flow.
@@ -4192,10 +4208,10 @@ run_registration_throttle() {
 run_enable_auto_approval() {
     group "Enable auto-approval (post-test setup)"
 
-    # Pure setup step for subsequent MANUAL testing in the dev-reset
-    # environment: flip the live approval policy so newly-registered users
-    # are auto-approved.  This is NOT an assertion about the e2e run; failure
-    # is recorded for visibility but does not fail the suite.
+    # Required setup for subsequent Playwright registration and manual testing
+    # in the dev-reset environment: set require_approval=false so newly
+    # registered users are auto-approved. Failure fails the suite via
+    # record_test (same as other groups).
     scenario "Set approval policy: require-approval=false (auto-approve on)"
     local flip_out flip_code
     safe_exec flip_out flip_code \
@@ -4210,7 +4226,7 @@ run_enable_auto_approval() {
         record_test "set-approval-policy --require-approval false" "FAIL"
     fi
 
-    success "Auto-approval enabled for manual testing"
+    success "Auto-approval enabled for Playwright and manual testing"
 }
 
 run_teardown() {

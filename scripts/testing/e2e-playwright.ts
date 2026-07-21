@@ -17,9 +17,14 @@
  * Anonymous visitor tests (anonymous share download and share access controls)
  * use isolated browser contexts. Share revocation and logout reuse the shared page.
  *
+ * A separate describe block runs one isolated registration flow (new browser
+ * context): register → TOTP → 25 MB custom-password round trip → revoke-all.
+ * That flow requires e2e-test.sh to have enabled auto-approval beforehand.
+ *
  * Prerequisites:
  *   - Server deployed via scripts/dev-reset.sh
- *   - scripts/testing/e2e-test.sh has run (test user exists, approved, MFA configured)
+ *   - scripts/testing/e2e-test.sh has run (test user exists, approved, MFA configured;
+ *     require_approval=false via run_enable_auto_approval)
  *   - Environment variables set by scripts/testing/e2e-playwright.sh
  *
  * Run via: sudo bash scripts/testing/e2e-playwright.sh
@@ -50,6 +55,12 @@ const SHARE_A_PASSWORD = process.env.SHARE_A_PASSWORD!;
 const SHARE_B_PASSWORD = process.env.SHARE_B_PASSWORD!;
 const SHARE_C_PASSWORD = process.env.SHARE_C_PASSWORD!;
 const PLAYWRIGHT_TEMP_DIR = process.env.PLAYWRIGHT_TEMP_DIR!;
+const REG_FLOW_FILE_PATH = process.env.REG_FLOW_FILE_PATH!;
+const REG_FLOW_FILE_SHA256 = process.env.REG_FLOW_FILE_SHA256!;
+const REG_FLOW_FILE_NAME = process.env.REG_FLOW_FILE_NAME!;
+const REG_FLOW_USERNAME = process.env.REG_FLOW_USERNAME!;
+const REG_FLOW_PASSWORD = process.env.REG_FLOW_PASSWORD!;
+const REG_FLOW_CUSTOM_PASSWORD = process.env.REG_FLOW_CUSTOM_PASSWORD!;
 const CLIENT_BIN = '/opt/arkfile/bin/arkfile-client';
 
 // Directories
@@ -98,16 +109,24 @@ async function waitForMfaWindow(context: string): Promise<void> {
 }
 
 /**
- * Generate a TOTP code using arkfile-client CLI.
+ * Generate a TOTP code using arkfile-client CLI for an arbitrary secret.
  * Must be called AFTER waitForMfaWindow().
  */
-function generateMfaCode(context: string): string {
-  const output = execSync(`${CLIENT_BIN} generate-totp --secret ${MFA_SECRET}`, {
+function generateTotpCode(secret: string, context: string): string {
+  const output = execSync(`${CLIENT_BIN} generate-totp --secret ${secret}`, {
     encoding: 'utf-8',
     timeout: 10_000,
   }).trim();
   logStep(context, `Generated TOTP code: ${output}`);
   return output;
+}
+
+/**
+ * Generate a TOTP code for the shared e2e-test.sh MFA secret.
+ * Must be called AFTER waitForMfaWindow().
+ */
+function generateMfaCode(context: string): string {
+  return generateTotpCode(MFA_SECRET, context);
 }
 
 /**
@@ -277,12 +296,10 @@ test.describe.serial('Arkfile Playwright E2E', () => {
   // Account-password upload
   // --------------------------------------------------------------------------
   test('Upload file with account password', async () => {
-    // Idempotency check: skip if already uploaded in a previous run
-    const alreadyExists = await fileExistsInList(sharedPage, TEST_FILE_NAME);
-    if (alreadyExists) {
-      logStep('account-upload', `File ${TEST_FILE_NAME} already in list (idempotent run). Skipping.`);
-      console.log('[OK] Account-password file upload (Skipped - already exists)');
-      return;
+    if (await fileExistsInList(sharedPage, TEST_FILE_NAME)) {
+      throw new Error(
+        `Unexpected state: ${TEST_FILE_NAME} already in file list. Run after a fresh dev-reset + e2e-test.sh.`,
+      );
     }
 
     logStep('account-upload', `Uploading ${TEST_FILE_NAME}...`);
@@ -467,11 +484,10 @@ test.describe.serial('Arkfile Playwright E2E', () => {
   // Custom-password upload
   // --------------------------------------------------------------------------
   test('Upload file with custom password', async () => {
-    const alreadyExists = await fileExistsInList(sharedPage, CUSTOM_FILE_NAME);
-    if (alreadyExists) {
-      logStep('custom-upload', `File ${CUSTOM_FILE_NAME} already in list. Skipping.`);
-      console.log('[OK] Custom-password file upload (Skipped - already exists)');
-      return;
+    if (await fileExistsInList(sharedPage, CUSTOM_FILE_NAME)) {
+      throw new Error(
+        `Unexpected state: ${CUSTOM_FILE_NAME} already in file list. Run after a fresh dev-reset + e2e-test.sh.`,
+      );
     }
 
     logStep('custom-upload', `Uploading ${CUSTOM_FILE_NAME} with custom password...`);
@@ -561,10 +577,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await passwordInputWrong.fill('WrongPassword123!NotCorrect');
     await sharedPage.locator('#password-modal-submit-btn').click();
 
-    await sharedPage.waitForFunction(
-      () => document.body.innerText.toLowerCase().includes('check your password'),
-      { timeout: 60_000 },
-    );
+    await sharedPage.waitForSelector('[data-testid="wrong-custom-password"]', { timeout: 60_000 });
 
     // Dismiss the error toast we just asserted on. Error toasts have
     // duration: 0 (never auto-dismiss), so if we leave it on the page it
@@ -785,17 +798,9 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await new Promise((resolve) => setTimeout(resolve, 65_000));
 
     logStep('share-expiry', 'Attempting download after expiry...');
-    // Server returns 403 at page level for expired shares (before rendering shared.html)
-    // so the password form never appears -- verify the error/expired response directly
+    // Server returns 403.html at page level for expired shares (before rendering shared.html).
     await page.goto(shareCUrl);
-    await page.waitForFunction(
-      () => {
-        const text = document.body.innerText.toLowerCase();
-        return text.includes('expired') || text.includes('forbidden') ||
-               text.includes('error') || text.includes('403');
-      },
-      { timeout: 15_000 },
-    );
+    await page.waitForSelector('[data-testid="share-expired"]', { timeout: 15_000 });
     console.log('[OK] Share C download after expiry correctly rejected');
 
     // Share B max_downloads=2
@@ -833,29 +838,14 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await page.fill('#sharePassword', SHARE_B_PASSWORD);
     await page.click('#shareAccessForm button[type="submit"]');
     // After the 2nd download the server marks the share revoked_reason='exhausted'.
-    // GetShareEnvelope now returns 403 immediately, so #fileDetails never appears.
-    // share-access.ts shows "This share is no longer valid." directly.
-    await page.waitForFunction(
-      () => {
-        const text = document.body.innerText.toLowerCase();
-        return text.includes('error') || text.includes('exceeded') || text.includes('limit') ||
-               text.includes('no longer') || text.includes('invalid') || text.includes('failed') ||
-               text.includes('revoked');
-      },
-      { timeout: 30_000 },
-    );
+    // GetShareEnvelope returns 403; share-access sets data-testid="share-max-downloads".
+    await page.waitForSelector('[data-testid="share-max-downloads"]', { timeout: 30_000 });
     console.log('[OK] Share B download 3 correctly rejected (max_downloads exceeded, 403 at envelope)');
 
     // Non-existent share (43-char base64url format matching real share IDs)
     logStep('share-not-found', 'Testing non-existent share');
     await page.goto(`${SERVER_URL}/shared/xQ7mN9kR2pL5vB8wY1cF3hJ6tA0eG4iK9oU2sD5fW7`);
-    await page.waitForFunction(
-      () => {
-        const text = document.body.innerText.toLowerCase();
-        return text.includes('error') || text.includes('not found') || text.includes('invalid') || text.includes('failed');
-      },
-      { timeout: 30_000 },
-    );
+    await page.waitForSelector('[data-testid="share-not-found"]', { timeout: 30_000 });
     console.log('[OK] Non-existent share correctly shows error');
 
     await anonContext.close();
@@ -884,16 +874,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
 
     await shareAItem.locator('.btn-revoke').click();
 
-    await sharedPage.waitForFunction(
-      (shareId: string) => {
-        const item = document.querySelector(`.share-item[data-share-id="${shareId}"]`);
-        if (!item) return false;
-        const text = item.textContent?.toLowerCase() || '';
-        return text.includes('revoked') || !item.querySelector('.btn-revoke');
-      },
-      shareAId,
-      { timeout: 15_000 },
-    );
+    await expect(shareAItem.locator('[data-testid="share-status-revoked"]')).toBeVisible({ timeout: 15_000 });
 
     console.log('[OK] Share A revoked successfully');
     sharedPage.removeAllListeners('dialog');
@@ -1041,14 +1022,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await sharedPage.fill('#sharePassword', SHARE_A_PASSWORD);
     await sharedPage.click('#shareAccessForm button[type="submit"]');
 
-    await sharedPage.waitForFunction(
-      () => {
-        const text = document.body.innerText.toLowerCase();
-        return text.includes('error') || text.includes('revoked') || text.includes('invalid') ||
-               text.includes('no longer') || text.includes('failed');
-      },
-      { timeout: 30_000 },
-    );
+    await sharedPage.waitForSelector('[data-testid="share-revoked"]', { timeout: 30_000 });
 
     console.log('[OK] Revoked share correctly denied access');
   });
@@ -1164,12 +1138,10 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await sharedPage.waitForSelector('#billing-panel:not(.hidden)', { timeout: 5000 });
     await sharedPage.waitForSelector('.billing-panel-section', { timeout: 10000 });
 
-    const topUpBtn = await sharedPage.$('button:has-text("Top Up Balance")');
-    if (!topUpBtn) {
-      console.log('[SKIP] Top Up Balance button not rendered (payments may be disabled)');
-      await sharedPage.unroute('**/api/billing/invoice');
-      return;
-    }
+    const topUpBtn = sharedPage.locator('button:has-text("Top Up Balance")');
+    await expect(topUpBtn, 'Top Up Balance must be present when billing/payments are enabled in dev-reset').toBeVisible({
+      timeout: 10_000,
+    });
 
     await topUpBtn.click();
     await sharedPage.waitForSelector('#topup-form', { timeout: 5000 });
@@ -1295,4 +1267,181 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     console.log('[OK] Logout verified -- CSRF cookie cleared, localStorage clean, API returns 401');
   });
 
+});
+
+// ============================================================================
+// Isolated registration flow (tranche 3 — separate browser context / Account Key heap)
+// ============================================================================
+
+test.describe.serial('Arkfile Playwright registration flow', () => {
+  test.beforeAll(() => {
+    const required = [
+      'REG_FLOW_FILE_PATH', 'REG_FLOW_FILE_SHA256', 'REG_FLOW_FILE_NAME',
+      'REG_FLOW_USERNAME', 'REG_FLOW_PASSWORD', 'REG_FLOW_CUSTOM_PASSWORD',
+      'PLAYWRIGHT_TEMP_DIR',
+    ];
+    for (const key of required) {
+      if (!process.env[key]) {
+        throw new Error(`Missing required environment variable: ${key}`);
+      }
+    }
+    if (!existsSync(REG_FLOW_FILE_PATH)) {
+      throw new Error(`Registration-flow test file not found: ${REG_FLOW_FILE_PATH}`);
+    }
+    execSync(`mkdir -p "${DOWNLOADS_DIR}"`);
+    console.log('[OK] Registration-flow environment validated');
+    console.log(`[i] Reg user: ${REG_FLOW_USERNAME}`);
+    console.log(`[i] Reg file: ${REG_FLOW_FILE_NAME} (${REG_FLOW_FILE_SHA256.substring(0, 16)}...)`);
+  });
+
+  test('Register, TOTP, 25 MB custom upload, verify, revoke-all', async ({ browser }) => {
+    test.setTimeout(600_000);
+
+    const context = await browser.newContext({
+      baseURL: SERVER_URL,
+      ignoreHTTPSErrors: true,
+      acceptDownloads: true,
+    });
+    const page = await context.newPage();
+    attachConsoleListener(page, 'reg-flow');
+
+    // 1. Register new unique user
+    logStep('reg-flow', `Registering user ${REG_FLOW_USERNAME}...`);
+    await page.goto(SERVER_URL);
+    await page.waitForSelector('#login-btn', { state: 'visible', timeout: 15_000 });
+    await page.click('#get-started-btn');
+    await page.waitForSelector('#register-form:not(.hidden)', { timeout: 15_000 });
+    await page.fill('#register-username', REG_FLOW_USERNAME);
+    await page.fill('#register-password', REG_FLOW_PASSWORD);
+    await page.fill('#register-password-confirm', REG_FLOW_PASSWORD);
+    await page.click('#register-submit-btn');
+
+    // 2. MFA method picker (if shown) then TOTP setup + confirm
+    logStep('reg-flow', 'Waiting for MFA enrollment UI...');
+    await page.waitForSelector('#mfa-pick-totp, #totp-reg-secret', { timeout: 120_000 });
+    if (await page.locator('#mfa-pick-totp').isVisible().catch(() => false)) {
+      await page.click('#mfa-pick-totp');
+    }
+    await page.waitForSelector('#totp-reg-secret', { state: 'visible', timeout: 60_000 });
+    const totpSecret = (await page.locator('#totp-reg-secret').innerText()).trim();
+    expect(totpSecret.length).toBeGreaterThan(10);
+    logStep('reg-flow', `TOTP secret captured (${totpSecret.substring(0, 4)}...)`);
+
+    await page.waitForSelector('#totp-setup-code', { state: 'visible', timeout: 15_000 });
+    await waitForMfaWindow('reg-flow');
+    const totpCode = generateTotpCode(totpSecret, 'reg-flow');
+    await page.fill('#totp-setup-code', totpCode);
+    await page.waitForSelector('#complete-totp-setup:not([disabled])', { timeout: 5_000 });
+    await page.click('#complete-totp-setup');
+
+    // Auto-approval (set by e2e-test.sh run_enable_auto_approval) yields authenticated file section.
+    logStep('reg-flow', 'Waiting for authenticated file section after TOTP...');
+    await page.waitForSelector('#file-section', { state: 'visible', timeout: 120_000 });
+    console.log('[OK] Registration + TOTP complete; file section visible');
+
+    // 3. Custom-password upload of 25 MB fixture
+    logStep('reg-flow', `Uploading ${REG_FLOW_FILE_NAME} (25 MB) with custom password...`);
+    await page.setInputFiles('#fileInput', REG_FLOW_FILE_PATH);
+    await page.click('#useCustomPassword');
+    await page.waitForSelector('#customPasswordSection:not(.hidden)', { timeout: 5_000 });
+    await page.fill('#filePassword', REG_FLOW_CUSTOM_PASSWORD);
+    await page.click('#upload-file-btn');
+
+    // Account Key prompt (no cache yet after registration)
+    const accountPwInput = page.locator('#password-modal-input');
+    await accountPwInput.waitFor({ state: 'visible', timeout: 30_000 });
+    logStep('reg-flow', 'Account Key password modal appeared -- providing account password');
+    await accountPwInput.fill(REG_FLOW_PASSWORD);
+    await page.locator('#password-modal-submit-btn').click();
+
+    logStep('reg-flow', 'Waiting for 25 MB upload success (timeout: 360s)...');
+    await page.waitForFunction(
+      () => document.body.innerText.toLowerCase().includes('uploaded successfully'),
+      { timeout: 360_000 },
+    );
+    logStep('reg-flow', 'Upload success message detected');
+
+    await page.waitForTimeout(3000);
+    let appeared = await fileExistsInList(page, REG_FLOW_FILE_NAME);
+    if (!appeared) {
+      logStep('reg-flow', 'File not in list after upload -- reloading...');
+      await page.reload({ waitUntil: 'networkidle' });
+      await page.waitForSelector('#file-section', { state: 'visible', timeout: 30_000 });
+      // Re-enter account password if reload cleared the heap wrapping key
+      const rePrompt = page.locator('#password-modal-input');
+      if (await rePrompt.isVisible({ timeout: 5_000 }).catch(() => false)) {
+        await rePrompt.fill(REG_FLOW_PASSWORD);
+        await page.locator('#password-modal-submit-btn').click();
+        await page.waitForTimeout(2000);
+      }
+    }
+
+    await page.waitForFunction(
+      (name: string) => {
+        const items = document.querySelectorAll('.file-item .file-info strong');
+        for (const item of items) {
+          if (item.textContent === name) return true;
+        }
+        return false;
+      },
+      REG_FLOW_FILE_NAME,
+      { timeout: 60_000 },
+    );
+    const regFileItem = findFileItem(page, REG_FLOW_FILE_NAME);
+    await expect(regFileItem.locator('.encryption-type')).toContainText('Custom Password');
+    console.log('[OK] Registration-flow 25 MB custom-password upload complete');
+
+    // 4. Download / decrypt / verify SHA-256
+    logStep('reg-flow', 'Downloading and decrypting with custom password...');
+    const downloadPromise = page.waitForEvent('download', { timeout: 360_000 });
+    await clickFileAction(page, REG_FLOW_FILE_NAME, 'Download');
+
+    await page.locator('#password-modal-input').waitFor({ state: 'visible', timeout: 60_000 });
+    // First modal may be Account Key (if cache lost) or custom file password
+    const modalTitle = await page.locator('#password-modal-title').innerText();
+    if (/account key/i.test(modalTitle)) {
+      logStep('reg-flow', 'Account Key required before custom decrypt');
+      await page.locator('#password-modal-input').fill(REG_FLOW_PASSWORD);
+      await page.locator('#password-modal-submit-btn').click();
+      await page.locator('#password-modal-input').waitFor({ state: 'visible', timeout: 60_000 });
+    }
+    logStep('reg-flow', 'Providing custom password for decrypt');
+    await page.locator('#password-modal-input').fill(REG_FLOW_CUSTOM_PASSWORD);
+    await page.locator('#password-modal-submit-btn').click();
+
+    const download = await downloadPromise;
+    const savePath = await saveDownload(download, 'reg_flow_download.bin');
+    const actualHash = computeSha256(savePath);
+    expect(actualHash).toBe(REG_FLOW_FILE_SHA256);
+    console.log(`[OK] Registration-flow download integrity verified (SHA-256: ${actualHash.substring(0, 16)}...)`);
+
+    // 5. Revoke all sessions and assert protected UI requires re-login
+    logStep('reg-flow', 'Opening Security Settings and revoking all sessions...');
+    await page.click('#security-settings-toggle');
+    await page.waitForSelector('#security-settings:not(.hidden)', { timeout: 10_000 });
+    await page.click('#revoke-sessions-btn');
+
+    await page.waitForSelector('.home-container:not(.hidden)', { state: 'visible', timeout: 30_000 });
+    await expect(page.locator('.home-container')).toBeVisible();
+    await expect(page.locator('#app-container')).toBeHidden();
+
+    const apiStatus = await page.evaluate(async () => {
+      try {
+        const resp = await fetch('/api/files', { credentials: 'include' });
+        return resp.status;
+      } catch {
+        return 0;
+      }
+    });
+    expect(apiStatus).toBe(401);
+
+    // Login UI must be required again (not auto-authenticated)
+    await page.click('#login-btn');
+    await page.waitForSelector('#login-form:not(.hidden)', { timeout: 15_000 });
+    await expect(page.locator('#login-username')).toBeVisible();
+    await expect(page.locator('#file-section')).toBeHidden();
+
+    console.log('[OK] Revoke-all forced re-login; protected UI inaccessible');
+    await context.close();
+  });
 });

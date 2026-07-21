@@ -23,14 +23,12 @@ import {
   decryptFEK,
   decryptMetadataField,
 } from '../crypto/metadata-helpers';
-import { AAD_FIELD_FILENAME, AAD_FIELD_SHA256 } from '../crypto/aad';
+import { AAD_FIELD_FILENAME, AAD_FIELD_SHA256, AAD_FIELD_PASSWORD_HINT } from '../crypto/aad';
 import { ShareCreator, type FileInfo } from '../shares/share-creation';
 import { validateSharePassword } from '../crypto/password-validation';
 import { addPasswordToggle } from '../utils/password-toggle';
 
-// ============================================================================
 // Types
-// ============================================================================
 
 /** Mirrors the /api/files/:id/meta response (snake_case). */
 interface FileMetaResponse {
@@ -43,16 +41,15 @@ interface FileMetaResponse {
   encrypted_sha256sum: string;
   sha256sum_nonce: string;
   encrypted_fek: string;
-  password_hint: string;
+  encrypted_password_hint?: string;
+  password_hint_nonce?: string;
   password_type: string;
   size_bytes: number;
   chunk_size: number;
   total_chunks: number;
 }
 
-// ============================================================================
 // Share Password Prompt (modal)
-// ============================================================================
 
 /**
  * Show a modal that asks for a share password and optional expiry.
@@ -233,9 +230,7 @@ function promptForSharePassword(): Promise<{ password: string; expiresMinutes: n
   });
 }
 
-// ============================================================================
 // Share URL Result Modal
-// ============================================================================
 
 function showShareUrlModal(shareUrl: string): void {
   const OVERLAY_ID = 'arkfile-share-result-overlay';
@@ -294,9 +289,7 @@ function escapeAttr(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// ============================================================================
 // Main Entry Point
-// ============================================================================
 
 /**
  * Initiate the share creation flow for a file.
@@ -341,7 +334,21 @@ export async function shareFile(fileId: string, passwordType: string): Promise<v
         return;
       }
     } else {
-      const hintText = meta.password_hint || '';
+      let hintText = '';
+      if (meta.encrypted_password_hint && meta.password_hint_nonce) {
+        try {
+          hintText = await decryptMetadataField(
+            meta.encrypted_password_hint,
+            meta.password_hint_nonce,
+            accountKey,
+            meta.file_id,
+            AAD_FIELD_PASSWORD_HINT,
+            meta.owner_username,
+          );
+        } catch (err) {
+          console.warn('Failed to decrypt password hint:', err);
+        }
+      }
       const promptResult = await showPasswordPrompt({
         title: 'File Password Required',
         message: 'This file is encrypted with a custom password.',

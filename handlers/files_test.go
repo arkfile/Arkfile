@@ -317,9 +317,9 @@ func TestListFiles_NoFiles(t *testing.T) {
 	mockDB.ExpectPing()
 
 	// Mock GetFilesByOwner - returns empty result set
-	filesSQL := `SELECT id, file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, COALESCE\(encrypted_file_sha256sum, ''\), encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes, upload_date FROM file_metadata WHERE owner_username = \? ORDER BY upload_date DESC`
+	filesSQL := `SELECT id, file_id, storage_id, owner_username, COALESCE\(encrypted_password_hint, ''\), COALESCE\(password_hint_nonce, ''\), password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, COALESCE\(encrypted_file_sha256sum, ''\), encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes, upload_date FROM file_metadata WHERE owner_username = \? ORDER BY upload_date DESC`
 	mockDB.ExpectQuery(filesSQL).WithArgs(username).WillReturnRows(
-		sqlmock.NewRows([]string{"id", "file_id", "storage_id", "owner_username", "password_hint", "password_type", "filename_nonce", "encrypted_filename", "sha256sum_nonce", "encrypted_sha256sum", "encrypted_file_sha256sum", "encrypted_fek", "size_bytes", "padded_size", "chunk_count", "chunk_size_bytes", "upload_date"}),
+		sqlmock.NewRows([]string{"id", "file_id", "storage_id", "owner_username", "encrypted_password_hint", "password_hint_nonce", "password_type", "filename_nonce", "encrypted_filename", "sha256sum_nonce", "encrypted_sha256sum", "encrypted_file_sha256sum", "encrypted_fek", "size_bytes", "padded_size", "chunk_count", "chunk_size_bytes", "upload_date"}),
 	)
 
 	// Mock GetUserByUsername for storage info
@@ -359,10 +359,10 @@ func TestListFiles_WithFiles(t *testing.T) {
 
 	mockDB.ExpectPing()
 
-	filesSQL := `SELECT id, file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, COALESCE\(encrypted_file_sha256sum, ''\), encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes, upload_date FROM file_metadata WHERE owner_username = \? ORDER BY upload_date DESC`
-	fileRows := sqlmock.NewRows([]string{"id", "file_id", "storage_id", "owner_username", "password_hint", "password_type", "filename_nonce", "encrypted_filename", "sha256sum_nonce", "encrypted_sha256sum", "encrypted_file_sha256sum", "encrypted_fek", "size_bytes", "padded_size", "chunk_count", "chunk_size_bytes", "upload_date"}).
-		AddRow(int64(1), "file-1", "stor-1", username, "", "account", "nonce1", "encName1", "shaNonce1", "encSha1", "", "encFek1", int64(1024), nil, int64(1), int64(16777216), "2024-01-01 12:00:00").
-		AddRow(int64(2), "file-2", "stor-2", username, "hint", "custom", "nonce2", "encName2", "shaNonce2", "encSha2", "", "encFek2", int64(2048), nil, int64(1), int64(16777216), "2024-01-02 12:00:00")
+	filesSQL := `SELECT id, file_id, storage_id, owner_username, COALESCE\(encrypted_password_hint, ''\), COALESCE\(password_hint_nonce, ''\), password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, COALESCE\(encrypted_file_sha256sum, ''\), encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes, upload_date FROM file_metadata WHERE owner_username = \? ORDER BY upload_date DESC`
+	fileRows := sqlmock.NewRows([]string{"id", "file_id", "storage_id", "owner_username", "encrypted_password_hint", "password_hint_nonce", "password_type", "filename_nonce", "encrypted_filename", "sha256sum_nonce", "encrypted_sha256sum", "encrypted_file_sha256sum", "encrypted_fek", "size_bytes", "padded_size", "chunk_count", "chunk_size_bytes", "upload_date"}).
+		AddRow(int64(1), "file-1", "stor-1", username, "", "", "account", "nonce1", "encName1", "shaNonce1", "encSha1", "", "encFek1", int64(1024), nil, int64(1), int64(16777216), "2024-01-01 12:00:00").
+		AddRow(int64(2), "file-2", "stor-2", username, "encHint", "hintNonce", "custom", "nonce2", "encName2", "shaNonce2", "encSha2", "", "encFek2", int64(2048), nil, int64(1), int64(16777216), "2024-01-02 12:00:00")
 	mockDB.ExpectQuery(filesSQL).WithArgs(username).WillReturnRows(fileRows)
 
 	getUserSQL := `SELECT id, username, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE username = \?`
@@ -406,7 +406,7 @@ func TestListFiles_DBError(t *testing.T) {
 
 	mockDB.ExpectPing()
 
-	filesSQL := `SELECT id, file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, COALESCE\(encrypted_file_sha256sum, ''\), encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes, upload_date FROM file_metadata WHERE owner_username = \? ORDER BY upload_date DESC`
+	filesSQL := `SELECT id, file_id, storage_id, owner_username, COALESCE\(encrypted_password_hint, ''\), COALESCE\(password_hint_nonce, ''\), password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, COALESCE\(encrypted_file_sha256sum, ''\), encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes, upload_date FROM file_metadata WHERE owner_username = \? ORDER BY upload_date DESC`
 	mockDB.ExpectQuery(filesSQL).WithArgs(username).WillReturnError(fmt.Errorf("database connection lost"))
 
 	err := ListFiles(c)
@@ -431,9 +431,9 @@ func TestGetFileMeta_Success(t *testing.T) {
 	c.Set("user", token)
 
 	// Mock GetFileByFileID
-	fileSQL := `SELECT id, file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, COALESCE\(encrypted_file_sha256sum, ''\), encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes, upload_date FROM file_metadata WHERE file_id = \?`
-	fileRows := sqlmock.NewRows([]string{"id", "file_id", "storage_id", "owner_username", "password_hint", "password_type", "filename_nonce", "encrypted_filename", "sha256sum_nonce", "encrypted_sha256sum", "encrypted_file_sha256sum", "encrypted_fek", "size_bytes", "padded_size", "chunk_count", "chunk_size_bytes", "upload_date"}).
-		AddRow(int64(1), fileID, "stor-1", username, "", "account", "nonce1", "encName1", "shaNonce1", "encSha1", "", "encFek1", int64(5000000), nil, int64(1), int64(16777216), "2024-01-01 12:00:00")
+	fileSQL := `SELECT id, file_id, storage_id, owner_username, COALESCE\(encrypted_password_hint, ''\), COALESCE\(password_hint_nonce, ''\), password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, COALESCE\(encrypted_file_sha256sum, ''\), encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes, upload_date FROM file_metadata WHERE file_id = \?`
+	fileRows := sqlmock.NewRows([]string{"id", "file_id", "storage_id", "owner_username", "encrypted_password_hint", "password_hint_nonce", "password_type", "filename_nonce", "encrypted_filename", "sha256sum_nonce", "encrypted_sha256sum", "encrypted_file_sha256sum", "encrypted_fek", "size_bytes", "padded_size", "chunk_count", "chunk_size_bytes", "upload_date"}).
+		AddRow(int64(1), fileID, "stor-1", username, "", "", "account", "nonce1", "encName1", "shaNonce1", "encSha1", "", "encFek1", int64(5000000), nil, int64(1), int64(16777216), "2024-01-01 12:00:00")
 	mockDB.ExpectQuery(fileSQL).WithArgs(fileID).WillReturnRows(fileRows)
 
 	// Mock GetUserByUsername for approval check
@@ -474,9 +474,9 @@ func TestGetFileMeta_NotOwner(t *testing.T) {
 	c.Set("user", token)
 
 	// Mock GetFileByFileID - returns file owned by someone else
-	fileSQL := `SELECT id, file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, COALESCE\(encrypted_file_sha256sum, ''\), encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes, upload_date FROM file_metadata WHERE file_id = \?`
-	fileRows := sqlmock.NewRows([]string{"id", "file_id", "storage_id", "owner_username", "password_hint", "password_type", "filename_nonce", "encrypted_filename", "sha256sum_nonce", "encrypted_sha256sum", "encrypted_file_sha256sum", "encrypted_fek", "size_bytes", "padded_size", "chunk_count", "chunk_size_bytes", "upload_date"}).
-		AddRow(int64(1), fileID, "stor-1", actualOwner, "", "account", "nonce1", "encName1", "shaNonce1", "encSha1", "", "encFek1", int64(1024), nil, int64(1), int64(16777216), "2024-01-01 12:00:00")
+	fileSQL := `SELECT id, file_id, storage_id, owner_username, COALESCE\(encrypted_password_hint, ''\), COALESCE\(password_hint_nonce, ''\), password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, COALESCE\(encrypted_file_sha256sum, ''\), encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes, upload_date FROM file_metadata WHERE file_id = \?`
+	fileRows := sqlmock.NewRows([]string{"id", "file_id", "storage_id", "owner_username", "encrypted_password_hint", "password_hint_nonce", "password_type", "filename_nonce", "encrypted_filename", "sha256sum_nonce", "encrypted_sha256sum", "encrypted_file_sha256sum", "encrypted_fek", "size_bytes", "padded_size", "chunk_count", "chunk_size_bytes", "upload_date"}).
+		AddRow(int64(1), fileID, "stor-1", actualOwner, "", "", "account", "nonce1", "encName1", "shaNonce1", "encSha1", "", "encFek1", int64(1024), nil, int64(1), int64(16777216), "2024-01-01 12:00:00")
 	mockDB.ExpectQuery(fileSQL).WithArgs(fileID).WillReturnRows(fileRows)
 
 	err := GetFileMeta(c)
@@ -502,7 +502,7 @@ func TestGetFileMeta_FileNotFound(t *testing.T) {
 	c.Set("user", token)
 
 	// Mock GetFileByFileID - file not found
-	fileSQL := `SELECT id, file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, COALESCE\(encrypted_file_sha256sum, ''\), encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes, upload_date FROM file_metadata WHERE file_id = \?`
+	fileSQL := `SELECT id, file_id, storage_id, owner_username, COALESCE\(encrypted_password_hint, ''\), COALESCE\(password_hint_nonce, ''\), password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, COALESCE\(encrypted_file_sha256sum, ''\), encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes, upload_date FROM file_metadata WHERE file_id = \?`
 	mockDB.ExpectQuery(fileSQL).WithArgs(fileID).WillReturnError(sql.ErrNoRows)
 
 	err := GetFileMeta(c)
@@ -527,9 +527,9 @@ func TestGetFileMeta_UnapprovedUser(t *testing.T) {
 	c.Set("user", token)
 
 	// Mock GetFileByFileID - file owned by requesting user
-	fileSQL := `SELECT id, file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, COALESCE\(encrypted_file_sha256sum, ''\), encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes, upload_date FROM file_metadata WHERE file_id = \?`
-	fileRows := sqlmock.NewRows([]string{"id", "file_id", "storage_id", "owner_username", "password_hint", "password_type", "filename_nonce", "encrypted_filename", "sha256sum_nonce", "encrypted_sha256sum", "encrypted_file_sha256sum", "encrypted_fek", "size_bytes", "padded_size", "chunk_count", "chunk_size_bytes", "upload_date"}).
-		AddRow(int64(1), fileID, "stor-1", username, "", "account", "nonce1", "encName1", "shaNonce1", "encSha1", "", "encFek1", int64(1024), nil, int64(1), int64(16777216), "2024-01-01 12:00:00")
+	fileSQL := `SELECT id, file_id, storage_id, owner_username, COALESCE\(encrypted_password_hint, ''\), COALESCE\(password_hint_nonce, ''\), password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, COALESCE\(encrypted_file_sha256sum, ''\), encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes, upload_date FROM file_metadata WHERE file_id = \?`
+	fileRows := sqlmock.NewRows([]string{"id", "file_id", "storage_id", "owner_username", "encrypted_password_hint", "password_hint_nonce", "password_type", "filename_nonce", "encrypted_filename", "sha256sum_nonce", "encrypted_sha256sum", "encrypted_file_sha256sum", "encrypted_fek", "size_bytes", "padded_size", "chunk_count", "chunk_size_bytes", "upload_date"}).
+		AddRow(int64(1), fileID, "stor-1", username, "", "", "account", "nonce1", "encName1", "shaNonce1", "encSha1", "", "encFek1", int64(1024), nil, int64(1), int64(16777216), "2024-01-01 12:00:00")
 	mockDB.ExpectQuery(fileSQL).WithArgs(fileID).WillReturnRows(fileRows)
 
 	// Mock GetUserByUsername - user NOT approved
@@ -554,7 +554,7 @@ func TestGetFileMeta_UnapprovedUser(t *testing.T) {
 // - TestDownloadFile_MetadataNotFound: File metadata doesn't exist in 'file_metadata' table (sql.ErrNoRows on owner check).
 // - TestDownloadFile_NotOwner: Authenticated user is not the owner of the file.
 // - TestDownloadFile_DBOwnerQueryError: General DB error when querying for file owner.
-// - TestDownloadFile_DBMetadataQueryError: General DB error when querying for password_hint, password_type, sha256sum.
+// - TestDownloadFile_DBMetadataQueryError: General DB error when querying for encrypted_password_hint, password_hint_nonce, password_type, sha256sum.
 // - TestDownloadFile_StorageGetObjectError: storage.Provider.GetObject() returns an error (e.g., S3 object not found, S3 permissions error).
 // - TestDownloadFile_StorageObjectReadError: io.ReadAll(object) fails after successfully obtaining the object stream.
 // - TestDownloadFile_LogUserActionFailure: (Lower priority) Simulate failure in database.LogUserAction, ensure download still proceeds.

@@ -13,6 +13,7 @@ import { describe, test, expect } from 'bun:test';
 import {
   AAD_FIELD_FILENAME,
   AAD_FIELD_SHA256,
+  AAD_FIELD_PASSWORD_HINT,
   buildChunkAAD,
   buildFEKEnvelopeAAD,
   buildMetadataFieldAAD,
@@ -157,6 +158,14 @@ describe('buildMetadataFieldAAD -- determinism and distinction', () => {
     expect(toHex(fn)).not.toBe(toHex(sh));
   });
 
+  test('AAD_FIELD_PASSWORD_HINT differs from filename and sha256 AADs', () => {
+    const hint = buildMetadataFieldAAD('file-x', AAD_FIELD_PASSWORD_HINT, 'alice');
+    const fn = buildMetadataFieldAAD('file-x', AAD_FIELD_FILENAME, 'alice');
+    const sh = buildMetadataFieldAAD('file-x', AAD_FIELD_SHA256, 'alice');
+    expect(toHex(hint)).not.toBe(toHex(fn));
+    expect(toHex(hint)).not.toBe(toHex(sh));
+  });
+
   test('differs across ownerUsername', () => {
     const a = buildMetadataFieldAAD('file-x', AAD_FIELD_FILENAME, 'alice');
     const b = buildMetadataFieldAAD('file-x', AAD_FIELD_FILENAME, 'bob');
@@ -185,5 +194,9 @@ describe('AAD field-label constants', () => {
 
   test('AAD_FIELD_SHA256 is the exact canonical string', () => {
     expect(AAD_FIELD_SHA256).toBe('encrypted_sha256sum');
+  });
+
+  test('AAD_FIELD_PASSWORD_HINT is the exact canonical string', () => {
+    expect(AAD_FIELD_PASSWORD_HINT).toBe('encrypted_password_hint');
   });
 });

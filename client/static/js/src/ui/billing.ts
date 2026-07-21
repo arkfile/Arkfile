@@ -24,6 +24,7 @@
  */
 
 import { authenticatedFetch, refreshToken, isAuthenticated, validateToken } from '../utils/auth';
+import { formatBytes } from '../utils/format.js';
 
 /** Toggle the billing panel visibility, loading data on open. */
 export async function toggleBillingPanel(): Promise<void> {
@@ -43,7 +44,7 @@ export async function toggleBillingPanel(): Promise<void> {
 
 /** Close any open sibling panel except `keep`. */
 function closeOtherPanels(keep: string): void {
-  for (const id of ['security-settings', 'contact-info-panel', 'billing-panel']) {
+  for (const id of ['security-settings', 'contact-info-panel', 'billing-panel', 'verify-file-panel']) {
     if (id === keep) continue;
     const el = document.getElementById(id);
     if (el && !el.classList.contains('hidden')) {
@@ -56,6 +57,7 @@ interface CurrentUsage {
   total_storage_bytes: number;
   free_baseline_bytes: number;
   billable_bytes: number;
+  effective_storage_limit_bytes?: number;
   rate_microcents_per_gib_per_hour: number;
   rate_human: string;
   current_cost_per_month_microcents: number;
@@ -348,6 +350,12 @@ function renderUsageSection(d: CreditsResponse): HTMLElement {
   appendKV(dl, 'Storage used', formatBytes(cu.total_storage_bytes));
   appendKV(dl, 'Free baseline', formatBytes(cu.free_baseline_bytes));
   appendKV(dl, 'Billable usage', formatBytes(cu.billable_bytes));
+  if (typeof cu.effective_storage_limit_bytes === 'number' && cu.effective_storage_limit_bytes > 0) {
+    appendKV(dl, 'Upload cap', formatBytes(cu.effective_storage_limit_bytes));
+  }
+  if (cu.rate_human) {
+    appendKV(dl, 'Rate', cu.rate_human);
+  }
 
   if (cu.billable_bytes > 0) {
     appendKV(dl, 'Your projected cost', cu.current_cost_per_month_usd_approx + '/month');
@@ -359,6 +367,9 @@ function renderUsageSection(d: CreditsResponse): HTMLElement {
     const runway = d.credits_runway;
     if (runway && typeof runway.estimated_hours_remaining === 'number' && runway.estimated_hours_remaining > 0) {
       appendKV(dl, 'Estimated runway', formatHoursFriendly(runway.estimated_hours_remaining));
+      if (runway.estimated_runs_out_at_approx) {
+        appendKV(dl, 'Estimated run-out', runway.estimated_runs_out_at_approx);
+      }
     } else if (runway?.note && d.balance_usd_microcents < 0) {
       // Negative balance: show the server's note (e.g. "Charges continue
       // to accumulate.") inline as a runway value rather than a separate
@@ -442,18 +453,6 @@ function appendKV(dl: HTMLElement, k: string, v: string): void {
   dd.textContent = v;
   dl.appendChild(dt);
   dl.appendChild(dd);
-}
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  const units = ['KiB', 'MiB', 'GiB', 'TiB'];
-  let v = n / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v.toFixed(2)} ${units[i]}`;
 }
 
 function formatHoursFriendly(hours: number): string {
@@ -583,10 +582,6 @@ export async function resumePendingBillingCheckout(): Promise<boolean> {
   return true;
 }
 
-export async function handleBillingCheckoutReturn(): Promise<boolean> {
-  return resumePendingBillingCheckout();
-}
-
 /** Poll /api/subscriptions/me after returning from bridge checkout. */
 export async function resumePendingSubscriptionCheckout(): Promise<boolean> {
   const params = new URLSearchParams(window.location.search);
@@ -626,10 +621,6 @@ export async function resumePendingSubscriptionCheckout(): Promise<boolean> {
   }
   await loadBilling();
   return true;
-}
-
-export async function handleSubscriptionCheckoutReturn(): Promise<boolean> {
-  return resumePendingSubscriptionCheckout();
 }
 
 type InvoicePollOutcome = 'paid' | 'pending' | 'expired' | 'failed';

@@ -10,11 +10,11 @@ We use OPAQUE for authentication, so that passwords are never sent to the server
 
 We use client-side encryption to ensure that file data is never sent to the server until and unless it is encrypted with a strong password.
 
-We use client-side encryption to encrypt file metadata as well, including the original filename, size and the original sha256 digest of the original file.
+We use client-side encryption to encrypt owner file metadata as well, including the original filename, the original SHA-256 digest of the plaintext file, and (when present) the custom-password hint. Those fields reach the server only as opaque ciphertext and nonces.
 
 We never log IP addresses or any PII of users or visitors to the app/site. (e.g. Visitor IP addresses are not logged and are obfuscated with HMAC to form an EntityID for select areas that need rate-limiting, such as to protect against shared file URL enumeration type attacks.)
 
-The server must know nothing about the nature of the data belonging to clients, nor about their passwords, nor visitor IPs.
+The server must never learn user passwords, plaintext file contents, plaintext filenames, plaintext content digests, or plaintext password hints. The server does intentionally know operational metadata required for storage accounting and billing: pre-padding encrypted stream length (`size_bytes` / upload `total_size`), padded object size, chunk counts and plaintext chunk size, ownership username, and routing fields such as `password_type` and the FEK envelope key-type byte. Padding obscures size from storage backends and outside observers of objects, not from the Arkfile server that receives the declared encrypted length at upload init. See `docs/security.md` for the full classification.
 
 When users (file owners) choose to share files with others (anonymous recipients), they encrypt information about the file along with a file download token and a file encryption key all wrapped up into a share envelope that is uploaded to the server in encrypted form, so that again the server learns nothing of the files or their contents. Anonymous recipients of shared files need only the Share URL and Share Password in order access the share envelope, decrypt metadata about the file, and download and decrypt it client-side. The file sharing aspect of Arkfile does not require or collect any identifying information about the recipients (no account required to access shared files).
 

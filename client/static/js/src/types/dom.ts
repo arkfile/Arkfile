@@ -4,23 +4,11 @@
 
 // Window interface extensions for Arkfile global state
 interface ArkfileSharesModule {
-  ShareCreator?: unknown;
   ShareAccessUI?: unknown;
-  ShareCrypto?: unknown;
-  [key: string]: unknown;
 }
 
 interface ArkfileNamespace {
   shares?: ArkfileSharesModule;
-  encryption?: Record<string, unknown>;
-  auth?: Record<string, unknown>;
-}
-
-interface TOTPFlowData {
-  tempToken: string;
-  username: string;
-  /** Account password carried through for post-auth key derivation (wiped after use) */
-  password?: string;
 }
 
 interface TOTPSetupFlowData {
@@ -30,10 +18,7 @@ interface TOTPSetupFlowData {
 
 declare global {
   interface Window {
-    arkfileApp?: unknown;
     arkfile?: ArkfileNamespace;
-    registrationData?: unknown;
-    totpLoginData?: TOTPFlowData;
     totpSetupData?: TOTPSetupFlowData;
     showTOTPAppsModal?: () => void;
   }

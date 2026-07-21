@@ -9,11 +9,26 @@
  *      implementation used elsewhere in the codebase).
  *   3. Generates a UUID and posts the stream to the SW via postMessage transfer
  *      list. Awaits an ack via MessageChannel.
- *   4. Triggers the download by clicking a hidden anchor pointing at
+ *   4. Triggers the download by navigating a hidden iframe to
  *      /sw-download/<uuid>; the SW intercepts and responds with the streaming
  *      Response so the browser hands the bytes straight to its download manager.
  *   5. On AbortSignal abort, posts {type:'cancel', uuid} to the SW; the SW
  *      cancels the stream and the browser shows the download as interrupted.
+ *
+ * Post-write SHA-256 limits:
+ *   Whole-file digest is computed as plaintext flows to the download manager.
+ *   A mismatch is often detected only after bytes may already be on disk. The
+ *   page cannot revoke an OS download without buffering the entire file first,
+ *   which defeats streaming. Callers must show expected + computed digests and
+ *   must not claim unqualified success on mismatch. Same class of limit as CLI
+ *   computeStreamingSHA256 after write and offline decrypt-blob post-write
+ *   checks. Per-chunk AES-GCM still fails during the stream on chunk tampering.
+ *
+ * Ack timeout vs pre-transfer clone failure:
+ *   Synchronous DataCloneError / transfer rejection during postMessage means
+ *   the generator was not consumed and Blob fallback is safe. Ack timeout means
+ *   the stream may already have been transferred; do not fall back to Blob with
+ *   the same generator.
  *
  * Privacy notes:
  *   - The synthetic /sw-download/<uuid> URL is intercepted by the SW and never

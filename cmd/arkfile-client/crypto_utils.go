@@ -111,10 +111,38 @@ func encryptMetadata(filename, sha256hex string, accountKey []byte, fileID, owne
 	return encFilenameB64, fnNonceB64, encSHA256B64, shaNonceB64, nil
 }
 
-// decryptMetadataField decrypts a single metadata field (filename or
-// SHA-256 digest), verifying the AAD bound to (fileID, fieldLabel,
-// ownerUsername). fieldLabel must be one of crypto.AADFieldFilename or
-// crypto.AADFieldSha256.
+// encryptPasswordHint encrypts an optional custom-password hint with the
+// Account Key under AADFieldPasswordHint. Empty hint returns empty strings
+// (callers must omit both fields from the upload init payload).
+func encryptPasswordHint(hint string, accountKey []byte, fileID, ownerUsername string) (encHintB64, hintNonceB64 string, err error) {
+	if hint == "" {
+		return "", "", nil
+	}
+	if fileID == "" {
+		return "", "", fmt.Errorf("fileID cannot be empty")
+	}
+	if ownerUsername == "" {
+		return "", "", fmt.Errorf("ownerUsername cannot be empty")
+	}
+
+	aad := crypto.BuildMetadataFieldAAD(fileID, crypto.AADFieldPasswordHint, ownerUsername)
+	encRaw, err := crypto.EncryptGCMWithAAD([]byte(hint), accountKey, aad)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to encrypt password hint: %w", err)
+	}
+
+	nonceSize := crypto.AesGcmNonceSize()
+	nonce := encRaw[:nonceSize]
+	ciphertext := encRaw[nonceSize:]
+
+	return base64.StdEncoding.EncodeToString(ciphertext), base64.StdEncoding.EncodeToString(nonce), nil
+}
+
+// decryptMetadataField decrypts a single metadata field (filename,
+// SHA-256 digest, or password hint), verifying the AAD bound to (fileID,
+// fieldLabel, ownerUsername). fieldLabel must be one of
+// crypto.AADFieldFilename, crypto.AADFieldSha256, or
+// crypto.AADFieldPasswordHint.
 func decryptMetadataField(encDataB64, nonceB64 string, accountKey []byte, fileID, fieldLabel, ownerUsername string) (string, error) {
 	if fileID == "" {
 		return "", fmt.Errorf("fileID cannot be empty")

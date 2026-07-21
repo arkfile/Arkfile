@@ -6,29 +6,36 @@
  *   - Retry logic with exponential backoff
  *   - Client-side AES-GCM decryption
  *   - Service Worker streaming (preferred path) for unbounded file sizes
- *   - Incremental Blob fallback for environments where the SW is unavailable
+ *   - Incremental Blob fallback when SW is unavailable or cannot initialize
+ *     before any generator output has been consumed
  *
- * Service Worker streaming (preferred)
- * ------------------------------------
+ * Service Worker streaming (preferred / canonical for large files)
+ * ---------------------------------------------------------------
  * On modern browsers (Chromium, Firefox 100+, Safari 16.4+, Tor Browser 12+),
  * the page hands the decrypted-byte stream to a same-origin Service Worker
  * which responds to a synthetic /sw-download/<uuid> URL with a streaming
  * Response (Content-Disposition: attachment). The browser's download manager
  * then writes the bytes directly to disk with no Blob accumulation.
  *
- * - Peak heap usage: ~16 MiB (one chunk at a time)
- * - File size limit: unbounded (the browser streams to disk like any download)
- * - SHA-256 verification: computed inline as bytes flow past
+ * - Peak heap usage: ~one plaintext chunk at a time
+ * - File size limit: no Arkfile-imposed cap (browser streams to disk)
+ * - SHA-256: computed inline as bytes flow; mismatch may be known only after
+ *   the OS download manager has already saved bytes. Same post-write class of
+ *   limit as CLI computeStreamingSHA256 on the output path and offline
+ *   decrypt-blob. Per-chunk AES-GCM still authenticates each chunk during
+ *   decrypt. Callers must never claim unqualified success on mismatch.
  *
- * Blob fallback
- * -------------
- * If the SW is not available (e.g. very old browsers, private-browsing modes
- * that disable SW registration), fall back to incremental Blob construction.
- * The decrypted plaintext is hashed incrementally so the whole-file SHA-256 is
- * verified at end-of-file, just like the SW path.
+ * Blob fallback (retain; no Arkfile size cap)
+ * -------------------------------------------
+ * Used when the SW is unavailable, or when SW init fails before any generator
+ * consumption (e.g. synchronous DataCloneError on postMessage transfer).
+ * Do NOT fall back after ack timeout or mid-stream failure: the generator may
+ * already be drained and a partial browser download may exist.
  *
- * - Peak heap usage: ~16 MiB (one chunk; data lives in the browser's Blob store)
- * - File size limit: ~2 GB on Chromium, several GB on Firefox/Tor.
+ * - Retains the complete plaintext in browser Blob storage before trigger
+ * - No Arkfile-imposed file size limit; browser memory/storage may still fail
+ * - SHA-256 is verified before triggerBrowserDownloadFromUrl; on mismatch the
+ *   Blob URL must be revoked and download must not be triggered
  *
  * Privacy logging
  * ---------------
@@ -53,6 +60,7 @@ import {
   AAD_FIELD_SHA256,
 } from '../crypto/aad';
 import { decryptMetadataField } from '../crypto/metadata-helpers';
+import { debugLog } from '../utils/debug-log.js';
 
 const LOG_PREFIX_FILE = '[arkfile-download]';
 const LOG_PREFIX_SHARE = '[arkfile-share]';
@@ -74,7 +82,8 @@ export interface ChunkedDownloadMetadata {
   encrypted_sha256sum: string;
   sha256sum_nonce: string;
   encrypted_fek: string;
-  password_hint: string;
+  encrypted_password_hint?: string;
+  password_hint_nonce?: string;
   password_type: string;
   size_bytes: number;
   chunk_size: number;
@@ -110,12 +119,10 @@ export interface DownloadProgressCallback {
 export interface StreamingDownloadOptions {
   /** Authorization token for authenticated downloads */
   authToken?: string;
-  /** Download token for share downloads (static, from envelope). Used as the
-   *  fallback credential and as proof to obtain a short-lived ticket. */
-  downloadToken?: string;
-  /** Optional holder for a short-lived share download ticket. When set, the
-   *  manager sends X-Share-Ticket (preferred over X-Download-Token) and calls
-   *  refresh() on 403 to re-issue transparently. */
+  /** Required for share downloads: short-lived ticket holder. The manager sends
+   *  X-Share-Ticket per request and calls refresh() on 403 to re-issue.
+   *  Static X-Download-Token is not accepted; the envelope download token is
+   *  used only to obtain tickets via the ticket API. */
   shareTicket?: { get: () => Promise<string>; refresh: () => Promise<string> };
   /** Account key for metadata decryption (owner downloads only) */
   accountKey?: Uint8Array;
@@ -135,12 +142,12 @@ export interface StreamingDownloadOptions {
  * On the SW streaming path (preferred), `streamedViaSw` is true and the
  * browser's download manager has been handed the bytes directly. No blobUrl
  * is produced. `hashVerification` reports the outcome of in-flight SHA-256
- * verification.
+ * verification (often post-write relative to disk).
  *
  * On the Blob fallback path, `blobUrl` contains the createObjectURL string.
- * The caller must call triggerBrowserDownloadFromUrl(blobUrl, filename) and
- * URL.revokeObjectURL(blobUrl) after triggering. `hashVerification` reports
- * the outcome of the incremental end-of-file SHA-256 check on this path too.
+ * The caller must check `hashVerification` BEFORE triggerBrowserDownloadFromUrl.
+ * On mismatch, revoke the Blob URL and do not trigger or claim success.
+ * `hashVerification` reports the incremental end-of-file SHA-256 check.
  */
 export interface StreamingDownloadResult {
   success: boolean;
@@ -152,6 +159,8 @@ export interface StreamingDownloadResult {
   streamedViaSw?: boolean | undefined;
   /** SHA-256 verification outcome (both SW and Blob fallback paths). */
   hashVerification?: HashVerification | undefined;
+  /** Computed SHA-256 hex when hashing ran (match or mismatch). */
+  computedSha256Hex?: string | undefined;
   /** Object URL for the assembled Blob; present only on the Blob fallback path. */
   blobUrl?: string | undefined;
 }
@@ -193,7 +202,7 @@ export class StreamingDownloadManager {
   /** Download a file using chunked download with decryption (owner downloads). */
   async downloadFile(fileId: string, fek: Uint8Array): Promise<StreamingDownloadResult> {
     const t0 = Date.now();
-    console.log(`${LOG_PREFIX_FILE} Starting owner download (fileId hash=${shortHash(fileId)})`);
+    debugLog(`${LOG_PREFIX_FILE} Starting owner download (fileId hash=${shortHash(fileId)})`);
 
     try {
       await this.ensureConfig();
@@ -207,7 +216,7 @@ export class StreamingDownloadManager {
       // 1. Fetch download metadata
       const tMeta = Date.now();
       const metadata = await this.fetchMetadata(fileId);
-      console.log(`${LOG_PREFIX_FILE} Metadata fetched in ${Date.now() - tMeta}ms (total_chunks=${metadata.total_chunks}, size_bytes=${metadata.size_bytes}, password_type=${metadata.password_type})`);
+      debugLog(`${LOG_PREFIX_FILE} Metadata fetched in ${Date.now() - tMeta}ms (total_chunks=${metadata.total_chunks}, size_bytes=${metadata.size_bytes}, password_type=${metadata.password_type})`);
 
       // 2. Decrypt filename and sha256sum using ACCOUNT KEY (not FEK).
       // metadata-field AAD requires (file_id, field_label, owner_username).
@@ -226,13 +235,12 @@ export class StreamingDownloadManager {
         metadata.encrypted_sha256sum, metadata.sha256sum_nonce, metadataKey,
         metadata.file_id, AAD_FIELD_SHA256, metadata.owner_username,
       );
-      console.log(`${LOG_PREFIX_FILE} Metadata decrypted in ${Date.now() - tDecMeta}ms`);
+      debugLog(`${LOG_PREFIX_FILE} Metadata decrypted in ${Date.now() - tDecMeta}ms`);
 
       // 3. Stream-decrypt chunks via SW (preferred) or Blob fallback
       const tStream = Date.now();
-      const generator = this.makeFileChunkGenerator(fileId, metadata, fek);
       const streamResult = await this.streamDecryptedChunks(
-        generator,
+        () => this.makeFileChunkGenerator(fileId, metadata, fek),
         metadata.total_chunks,
         metadata.size_bytes,
         filename,
@@ -244,7 +252,7 @@ export class StreamingDownloadManager {
 
       if (this.options.showProgressUI) hideProgress();
 
-      console.log(`${LOG_PREFIX_FILE} Download complete: chunks=${metadata.total_chunks}, bytes_decrypted=${metadata.size_bytes}, total_ms=${Date.now() - t0}, sw_path=${streamResult.streamedViaSw === true}, hash_verification=${streamResult.hashVerification ?? 'n/a'}`);
+      debugLog(`${LOG_PREFIX_FILE} Download complete: chunks=${metadata.total_chunks}, bytes_decrypted=${metadata.size_bytes}, total_ms=${Date.now() - t0}, sw_path=${streamResult.streamedViaSw === true}, hash_verification=${streamResult.hashVerification ?? 'n/a'}`);
 
       return {
         success: true,
@@ -252,6 +260,7 @@ export class StreamingDownloadManager {
         sha256sum,
         ...(streamResult.streamedViaSw !== undefined ? { streamedViaSw: streamResult.streamedViaSw } : {}),
         ...(streamResult.hashVerification !== undefined ? { hashVerification: streamResult.hashVerification } : {}),
+        ...(streamResult.computedSha256Hex !== undefined ? { computedSha256Hex: streamResult.computedSha256Hex } : {}),
         ...(streamResult.blobUrl !== undefined ? { blobUrl: streamResult.blobUrl } : {}),
       };
     } catch (error) {
@@ -282,7 +291,7 @@ export class StreamingDownloadManager {
     shareMetadata?: { filename?: string | undefined; sha256?: string | undefined },
   ): Promise<StreamingDownloadResult> {
     const t0 = Date.now();
-    console.log(`${LOG_PREFIX_SHARE} Starting shared download (shareId hash=${shortHash(shareId)})`);
+    debugLog(`${LOG_PREFIX_SHARE} Starting shared download (shareId hash=${shortHash(shareId)})`);
 
     try {
       await this.ensureConfig();
@@ -295,15 +304,14 @@ export class StreamingDownloadManager {
 
       const tMeta = Date.now();
       const metadata = await this.fetchShareMetadata(shareId);
-      console.log(`${LOG_PREFIX_SHARE} Metadata fetched in ${Date.now() - tMeta}ms (chunk_count=${metadata.chunk_count}, size_bytes=${metadata.size_bytes})`);
+      debugLog(`${LOG_PREFIX_SHARE} Metadata fetched in ${Date.now() - tMeta}ms (chunk_count=${metadata.chunk_count}, size_bytes=${metadata.size_bytes})`);
 
       const filename = shareMetadata?.filename ?? 'shared-file';
       const sha256sum = shareMetadata?.sha256;
 
       const tStream = Date.now();
-      const generator = this.makeShareChunkGenerator(shareId, metadata, fek);
       const streamResult = await this.streamDecryptedChunks(
-        generator,
+        () => this.makeShareChunkGenerator(shareId, metadata, fek),
         metadata.chunk_count,
         metadata.size_bytes,
         filename,
@@ -315,7 +323,7 @@ export class StreamingDownloadManager {
 
       if (this.options.showProgressUI) hideProgress();
 
-      console.log(`${LOG_PREFIX_SHARE} Download complete: chunks=${metadata.chunk_count}, bytes_decrypted=${metadata.size_bytes}, total_ms=${Date.now() - t0}, sw_path=${streamResult.streamedViaSw === true}, hash_verification=${streamResult.hashVerification ?? 'n/a'}`);
+      debugLog(`${LOG_PREFIX_SHARE} Download complete: chunks=${metadata.chunk_count}, bytes_decrypted=${metadata.size_bytes}, total_ms=${Date.now() - t0}, sw_path=${streamResult.streamedViaSw === true}, hash_verification=${streamResult.hashVerification ?? 'n/a'}`);
 
       return {
         success: true,
@@ -323,6 +331,7 @@ export class StreamingDownloadManager {
         ...(sha256sum !== undefined ? { sha256sum } : {}),
         ...(streamResult.streamedViaSw !== undefined ? { streamedViaSw: streamResult.streamedViaSw } : {}),
         ...(streamResult.hashVerification !== undefined ? { hashVerification: streamResult.hashVerification } : {}),
+        ...(streamResult.computedSha256Hex !== undefined ? { computedSha256Hex: streamResult.computedSha256Hex } : {}),
         ...(streamResult.blobUrl !== undefined ? { blobUrl: streamResult.blobUrl } : {}),
       };
     } catch (error) {
@@ -372,7 +381,7 @@ export class StreamingDownloadManager {
         headers,
         this.options.retryConfig,
         (attempt, error, delay) => {
-          console.log(`${LOG_PREFIX_FILE} Chunk ${chunkIndex} retry ${attempt} after ${delay}ms: ${error.message}`);
+          debugLog(`${LOG_PREFIX_FILE} Chunk ${chunkIndex} retry ${attempt} after ${delay}ms: ${error.message}`);
         },
       );
       const fetchMs = Date.now() - tFetch;
@@ -389,7 +398,7 @@ export class StreamingDownloadManager {
 
       const logInterval = Math.max(1, Math.floor(metadata.total_chunks / 10));
       if (chunkIndex < 3 || chunkIndex % logInterval === 0 || chunkIndex === metadata.total_chunks - 1) {
-        console.log(
+        debugLog(
           `${LOG_PREFIX_FILE} Chunk ${chunkIndex + 1}/${metadata.total_chunks}: fetch=${fetchMs}ms, decrypt=${decMs}ms, total_bytes=${this.bytesDownloaded}`,
         );
       }
@@ -452,7 +461,7 @@ export class StreamingDownloadManager {
 
       const logInterval = Math.max(1, Math.floor(metadata.chunk_count / 10));
       if (chunkIndex < 3 || chunkIndex % logInterval === 0 || chunkIndex === metadata.chunk_count - 1) {
-        console.log(
+        debugLog(
           `${LOG_PREFIX_SHARE} Chunk ${chunkIndex + 1}/${metadata.chunk_count}: fetch=${fetchMs}ms, decrypt=${decMs}ms, total_bytes=${this.bytesDownloaded}`,
         );
       }
@@ -480,31 +489,45 @@ export class StreamingDownloadManager {
    * Stream decrypted chunks to the browser's download manager (SW path) or to
    * an in-memory Blob (fallback path).
    *
+   * `chunksFactory` produces a fresh async generator. SW and Blob paths each
+   * call it once so a failed SW transfer that closes the first generator cannot
+   * leave Blob fallback with a drained iterator.
+   *
    * SW path: hands the generator stream to the SW, which serves it as a
    * Content-Disposition: attachment Response. Hashes plaintext as it streams
    * past for SHA-256 verification (when an expected hash is provided).
+   * Whole-file mismatch may be reported only after bytes are on disk.
    *
    * Blob fallback: incrementally builds a Blob via `new Blob([existingBlob, chunk])`
    * to keep data in the browser's internal Blob store off the JS heap, while
-   * hashing each plaintext chunk so the whole-file SHA-256 can be verified at
-   * end-of-file. Returns a blob URL the caller can hand to
-   * triggerBrowserDownloadFromUrl() and a hashVerification outcome.
+   * hashing each plaintext chunk so the whole-file SHA-256 can be verified
+   * before trigger. Returns a blob URL the caller can hand to
+   * triggerBrowserDownloadFromUrl() only after checking hashVerification.
+   *
+   * Fallback eligibility: only when SW init fails before generator consumption
+   * is known to have started (e.g. DataCloneError on postMessage). Ack timeout
+   * and mid-stream errors must not fall back (uncertain / drained state).
    */
   private async streamDecryptedChunks(
-    chunks: AsyncGenerator<Uint8Array>,
+    chunksFactory: () => AsyncGenerator<Uint8Array>,
     totalChunks: number,
     contentLength: number,
     filename: string,
     expectedSha256Hex: string | undefined,
     logPrefix: string,
-  ): Promise<{ streamedViaSw?: boolean; hashVerification?: HashVerification; blobUrl?: string }> {
+  ): Promise<{
+    streamedViaSw?: boolean;
+    hashVerification?: HashVerification;
+    computedSha256Hex?: string;
+    blobUrl?: string;
+  }> {
     if (isSwAvailable()) {
-      console.log(`${logPrefix} Using SW streaming download path`);
+      debugLog(`${logPrefix} Using SW streaming download path`);
       try {
         const swResult = await swStreamDownload({
           contentLength,
           filename,
-          chunks,
+          chunks: chunksFactory(),
           ...(this.options.abortController ? { signal: this.options.abortController.signal } : {}),
           ...(expectedSha256Hex && expectedSha256Hex.length === 64 ? { expectedSha256Hex } : {}),
         });
@@ -513,32 +536,29 @@ export class StreamingDownloadManager {
         // bytes-streamed before returning. The browser's download manager and
         // the SW's stream consumption proceed in parallel with this wait.
         const completion: SwStreamDownloadCompletion = await swResult.completion;
-        console.log(`${logPrefix} SW stream completed: ok=${completion.ok}, bytes_streamed=${completion.bytesStreamed}, hash_verification=${completion.hashVerification}`);
+        debugLog(`${logPrefix} SW stream completed: ok=${completion.ok}, bytes_streamed=${completion.bytesStreamed}, hash_verification=${completion.hashVerification}`);
         if (!completion.ok && completion.error) {
-          throw completion.error;
+          // Mid-stream failure: a partial file may already be in Downloads.
+          const base = completion.error.message || 'Download interrupted';
+          throw new Error(
+            `${base}. A partial file may already be in your downloads folder; delete it if incomplete.`,
+          );
         }
         return {
           streamedViaSw: true,
           hashVerification: completion.hashVerification,
+          ...(completion.computedSha256Hex
+            ? { computedSha256Hex: completion.computedSha256Hex }
+            : {}),
         };
-      } catch (err: any) {
-        const errName = String(err?.name || '');
-        const errMsg = String(err?.message || '');
-
-        // Detect if the error is a stream transfer or capability issue (e.g. DataCloneError in WebKit/Safari)
-        const isDataCloneError = errName === 'DataCloneError' ||
-          errMsg.includes('clone') ||
-          errMsg.includes('duplicate') ||
-          errMsg.includes('transfer') ||
-          errMsg.includes('Service Worker') ||
-          errMsg.includes('ack timeout');
-
-        if (isDataCloneError) {
-          console.warn(`${logPrefix} SW stream transfer failed; gracefully falling back to Blob path. Error: ${errName} - ${errMsg}`);
-          // Proceed to Blob fallback below
+      } catch (err: unknown) {
+        if (isSafeSwToBlobFallback(err)) {
+          console.warn(
+            `${logPrefix} SW stream transfer failed before generator consumption; falling back to Blob path. Error: ${describeErr(err)}`,
+          );
+          // Proceed to Blob fallback with a FRESH generator below.
         } else {
-          // Rethrow any operational error that occurs during active streaming
-          throw err;
+          throw err instanceof Error ? err : new Error(String(err));
         }
       }
     }
@@ -546,39 +566,55 @@ export class StreamingDownloadManager {
     // Blob fallback path
     //
     // Hash the decrypted plaintext incrementally as each chunk arrives so the
-    // whole-file SHA-256 can be verified at end-of-file, mirroring the SW path.
-    // Hashing one chunk at a time adds no extra peak memory (the chunk is already
-    // resident before being appended to the Blob). A mismatch is reported via the
-    // returned hashVerification field, never thrown -- by the time hashing finishes
-    // the bytes are already in the Blob the caller hands to the download manager.
-    console.log(`${logPrefix} Using Blob fallback path (SW unavailable)`);
+    // whole-file SHA-256 can be verified before triggerBrowserDownloadFromUrl.
+    // There is no Arkfile-imposed size cap; the browser may still fail to
+    // allocate or retain the full Blob. Hashing one chunk at a time adds no
+    // extra peak memory. A mismatch is reported via hashVerification — callers
+    // must revoke the URL and must not trigger download or claim success.
+    debugLog(`${logPrefix} Using Blob fallback path (SW unavailable or pre-transfer init failure)`);
+    const chunks = chunksFactory();
     const wantHash = typeof expectedSha256Hex === 'string' && expectedSha256Hex.length === 64;
     const hasher = wantHash ? sha256.create() : null;
     let blob = new Blob([]);
     let chunkIndex = 0;
-    for await (const chunk of chunks) {
-      if (hasher) hasher.update(chunk);
-      // slice(0) gives a concrete ArrayBuffer-backed Uint8Array, satisfying BlobPart typing
-      blob = new Blob([blob, chunk.slice(0)]);
-      chunkIndex++;
-      const pctMilestones = [Math.floor(totalChunks * 0.25), Math.floor(totalChunks * 0.5), Math.floor(totalChunks * 0.75), totalChunks];
-      if (pctMilestones.includes(chunkIndex)) {
-        console.log(`${logPrefix} Blob accumulation milestone: ${chunkIndex}/${totalChunks} chunks appended (~${blob.size} bytes total)`);
+    try {
+      for await (const chunk of chunks) {
+        if (hasher) hasher.update(chunk);
+        // slice(0) gives a concrete ArrayBuffer-backed Uint8Array, satisfying BlobPart typing
+        blob = new Blob([blob, chunk.slice(0)]);
+        chunkIndex++;
+        const pctMilestones = [Math.floor(totalChunks * 0.25), Math.floor(totalChunks * 0.5), Math.floor(totalChunks * 0.75), totalChunks];
+        if (pctMilestones.includes(chunkIndex)) {
+          debugLog(`${logPrefix} Blob accumulation milestone: ${chunkIndex}/${totalChunks} chunks appended (~${blob.size} bytes total)`);
+        }
       }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/quota|memory|allocation|out of memory/i.test(msg)) {
+        throw new Error(
+          'Browser could not allocate or retain the full decrypted file in memory. Retry with Service Worker streaming available, or use the arkfile-client CLI.',
+        );
+      }
+      throw err instanceof Error ? err : new Error(msg);
     }
     const url = URL.createObjectURL(blob);
-    console.log(`${logPrefix} Blob URL created (${blob.size} bytes)`);
+    debugLog(`${logPrefix} Blob URL created (${blob.size} bytes)`);
 
     let hashVerification: HashVerification = 'skipped';
+    let computedSha256Hex: string | undefined;
     if (hasher && expectedSha256Hex) {
-      const computed = bytesToHex(hasher.digest());
-      hashVerification = constantTimeHexEqual(computed, expectedSha256Hex) ? 'match' : 'mismatch';
+      computedSha256Hex = bytesToHex(hasher.digest());
+      hashVerification = constantTimeHexEqual(computedSha256Hex, expectedSha256Hex) ? 'match' : 'mismatch';
       if (hashVerification === 'mismatch') {
         // No digest values, no filename in the log (privacy), matching the SW path.
         console.warn(`${logPrefix} SHA-256 verification FAILED for downloaded file (computed digest does not match expected)`);
       }
     }
-    return { blobUrl: url, hashVerification };
+    return {
+      blobUrl: url,
+      hashVerification,
+      ...(computedSha256Hex !== undefined ? { computedSha256Hex } : {}),
+    };
   }
 
   /** Fetch download metadata for a file */
@@ -619,19 +655,24 @@ export class StreamingDownloadManager {
   }
 
   /**
-   * Build share auth headers, preferring a short-lived X-Share-Ticket when a
-   * ticket holder is configured and falling back to the static X-Download-Token.
+   * Build share auth headers with a short-lived X-Share-Ticket only.
+   * Ticket-provider failure fails closed; never sends X-Download-Token.
    */
   private async applyShareAuthHeader(headers: Record<string, string>): Promise<void> {
-    if (this.options.shareTicket) {
-      try {
-        headers['X-Share-Ticket'] = await this.options.shareTicket.get();
-        return;
-      } catch (err) {
-        console.warn(`${LOG_PREFIX_SHARE} Ticket provider failed, falling back to static token:`, err);
-      }
+    if (!this.options.shareTicket) {
+      throw new Error(
+        'Share download requires a short-lived share ticket. Re-enter the share password and try again.',
+      );
     }
-    if (this.options.downloadToken) headers['X-Download-Token'] = this.options.downloadToken;
+    try {
+      headers['X-Share-Ticket'] = await this.options.shareTicket.get();
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      console.error(`${LOG_PREFIX_SHARE} Ticket provider failed (fail closed):`, err);
+      throw new Error(
+        `Failed to obtain share download ticket: ${detail}. Re-enter the share password and try again.`,
+      );
+    }
   }
 
   /**
@@ -654,7 +695,7 @@ export class StreamingDownloadManager {
 
     let response = await doFetch();
     if (response.status === 403 && this.options.shareTicket) {
-      console.log(`${LOG_PREFIX_SHARE} Chunk ${chunkIndex} got 403; refreshing share ticket and retrying once.`);
+      debugLog(`${LOG_PREFIX_SHARE} Chunk ${chunkIndex} got 403; refreshing share ticket and retrying once.`);
       await this.options.shareTicket.refresh();
       response = await doFetch();
     }
@@ -666,7 +707,8 @@ export class StreamingDownloadManager {
   }
 
   private calculateTotalEncryptedSize(metadata: ChunkedDownloadMetadata): number {
-    return metadata.size_bytes + (metadata.total_chunks * this.aesGcmOverhead);
+    // size_bytes is already the encrypted-stream length (pre-padding).
+    return metadata.size_bytes;
   }
 
   private calculateSpeed(): number {
@@ -724,23 +766,10 @@ export async function downloadFileChunked(
   return manager.downloadFile(fileId, fek);
 }
 
-/** Convenience function to download a shared file with chunked download */
-export async function downloadSharedFileChunked(
-  shareId: string,
-  fek: Uint8Array,
-  downloadToken: string,
-  shareMetadata?: { filename?: string | undefined; sha256?: string | undefined },
-  options: Partial<StreamingDownloadOptions> = {},
-): Promise<StreamingDownloadResult> {
-  const manager = new StreamingDownloadManager('', { downloadToken, ...options });
-  return manager.downloadSharedFile(shareId, fek, shareMetadata);
-}
-
 /**
- * Convenience function to download a shared file using a short-lived download
- * ticket instead of (or in addition to) the static download token. The holder
- * is responsible for issuing and refreshing the ticket; the manager sends
- * X-Share-Ticket per chunk and refreshes on 403.
+ * Download a shared file using a short-lived download ticket only.
+ * The holder issues and refreshes the ticket; the manager sends X-Share-Ticket
+ * per chunk and refreshes on 403. Never sends a static X-Download-Token.
  */
 export async function downloadSharedFileWithTicket(
   shareId: string,
@@ -755,11 +784,13 @@ export async function downloadSharedFileWithTicket(
 
 /**
  * Trigger a browser download from a Blob URL produced by the streaming manager.
- * Used only on the Blob fallback path (when SW is unavailable).
+ * Used only on the Blob fallback path (when SW is unavailable or pre-transfer
+ * init failed). Callers MUST check hashVerification first; on mismatch revoke
+ * the URL without calling this function.
  * Creates an <a download> anchor, clicks it, then revokes the URL after a delay.
  */
 export function triggerBrowserDownloadFromUrl(blobUrl: string, filename: string): void {
-  console.log(`[arkfile-download] Triggering browser download anchor from blob URL (filename_len=${filename.length})`);
+  debugLog(`[arkfile-download] Triggering browser download anchor from blob URL (filename_len=${filename.length})`);
   const a = document.createElement('a');
   a.href = blobUrl;
   a.download = filename;
@@ -768,8 +799,43 @@ export function triggerBrowserDownloadFromUrl(blobUrl: string, filename: string)
   setTimeout(() => {
     if (a.parentNode) document.body.removeChild(a);
     URL.revokeObjectURL(blobUrl);
-    console.log('[arkfile-download] Blob URL revoked');
+    debugLog('[arkfile-download] Blob URL revoked');
   }, 1000);
+}
+
+/**
+ * True when an SW failure is known to have happened before any generator output
+ * was consumed, so Blob fallback with the same generator is safe.
+ *
+ * Ack timeout is excluded: the ReadableStream may already have been transferred
+ * to the Service Worker, so reusing the generator can yield a truncated file.
+ * Mid-stream decrypt/transport errors are also excluded.
+ */
+export function isSafeSwToBlobFallback(err: unknown): boolean {
+  const errName = String((err as { name?: string } | null)?.name || '');
+  const errMsg = String((err as { message?: string } | null)?.message || '');
+
+  if (/ack timeout/i.test(errMsg)) {
+    return false;
+  }
+  // Partial-download messaging from mid-stream failures must not fall back.
+  if (/partial file may already/i.test(errMsg)) {
+    return false;
+  }
+
+  return (
+    errName === 'DataCloneError' ||
+    /clone/i.test(errMsg) ||
+    /duplicate/i.test(errMsg) ||
+    /cannot be transferred/i.test(errMsg) ||
+    (/transfer/i.test(errMsg) && !/after/i.test(errMsg))
+  );
+}
+
+function describeErr(err: unknown): string {
+  const name = String((err as { name?: string } | null)?.name || '');
+  const msg = String((err as { message?: string } | null)?.message || err);
+  return name ? `${name} - ${msg}` : msg;
 }
 
 /** Compute a short non-cryptographic hash of an ID for log correlation (no PII) */

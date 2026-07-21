@@ -10,9 +10,7 @@
 import type { CacheDurationHours } from '../crypto/account-key-cache.js';
 import { addPasswordToggle } from '../utils/password-toggle.js';
 
-// ============================================================================
 // Types
-// ============================================================================
 
 /**
  * Options for the password prompt modal
@@ -46,16 +44,12 @@ export interface PasswordPromptResult {
   rememberDuration?: boolean | undefined;
 }
 
-// ============================================================================
 // Constants
-// ============================================================================
 
 const MODAL_ID = 'arkfile-password-modal';
 const MODAL_OVERLAY_ID = 'arkfile-password-modal-overlay';
 
-// ============================================================================
 // Modal HTML Template
-// ============================================================================
 
 function createModalHTML(options: PasswordPromptOptions): string {
   const submitLabel = options.submitLabel || 'Continue';
@@ -124,9 +118,7 @@ function createModalHTML(options: PasswordPromptOptions): string {
   `;
 }
 
-// ============================================================================
 // Modal CSS (injected once)
-// ============================================================================
 
 const MODAL_STYLES = `
   .password-modal-overlay {
@@ -331,9 +323,7 @@ function injectStyles(): void {
   stylesInjected = true;
 }
 
-// ============================================================================
 // Utility Functions
-// ============================================================================
 
 function escapeHtml(text: string): string {
   const div = document.createElement('div');
@@ -341,9 +331,7 @@ function escapeHtml(text: string): string {
   return div.innerHTML;
 }
 
-// ============================================================================
 // Modal Functions
-// ============================================================================
 
 let currentResolve: ((result: PasswordPromptResult | null) => void) | null = null;
 let currentReject: ((error: Error) => void) | null = null;
@@ -498,9 +486,7 @@ export function isPasswordPromptVisible(): boolean {
   return document.getElementById(MODAL_OVERLAY_ID) !== null;
 }
 
-// ============================================================================
 // Convenience Functions
-// ============================================================================
 
 /**
  * Shows a password prompt for Account Key re-entry (cache expired)
@@ -515,22 +501,6 @@ export function promptForAccountKeyPassword(): Promise<PasswordPromptResult | nu
     defaultDuration: 1,
     submitLabel: 'Continue',
     cancelLabel: 'Cancel',
-  });
-}
-
-/**
- * Shows a password prompt for initial Account Key caching (after login)
- * 
- * @returns Promise that resolves with cache duration preference, or null if cancelled
- */
-export function promptForAccountKeyCaching(): Promise<PasswordPromptResult | null> {
-  return showPasswordPrompt({
-    title: 'Remember Account Key?',
-    message: 'Remember your Account Key for this session? This allows you to encrypt and decrypt files without re-entering your password.',
-    showCacheDuration: true,
-    defaultDuration: 1,
-    submitLabel: 'Remember',
-    cancelLabel: 'Skip',
   });
 }
 
@@ -633,14 +603,3 @@ export function promptForCacheOptIn(): Promise<CacheOptInResult | null> {
   });
 }
 
-// ============================================================================
-// Exports
-// ============================================================================
-
-export const passwordModal = {
-  showPasswordPrompt,
-  hidePasswordPrompt,
-  isPasswordPromptVisible,
-  promptForAccountKeyPassword,
-  promptForAccountKeyCaching,
-};

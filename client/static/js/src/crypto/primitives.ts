@@ -32,9 +32,7 @@ import type {
   Argon2Params,
 } from './types';
 
-// ============================================================================
 // Web Crypto API Availability Check
-// ============================================================================
 
 /**
  * Checks if Web Crypto API is available
@@ -53,9 +51,7 @@ function ensureWebCrypto(): void {
   }
 }
 
-// ============================================================================
 // Random Number Generation
-// ============================================================================
 
 /**
  * Generates cryptographically secure random bytes
@@ -81,9 +77,7 @@ export function generateSalt(): Uint8Array {
   return randomBytes(KEY_SIZES.SALT);
 }
 
-// ============================================================================
 // Hashing
-// ============================================================================
 
 /**
  * Computes SHA-256 hash
@@ -107,9 +101,7 @@ export function hashString(data: string): Uint8Array {
   return hash256(encoder.encode(data));
 }
 
-// ============================================================================
 // Key Derivation (Argon2id)
-// ============================================================================
 
 /**
  * Derives a key using Argon2id
@@ -202,9 +194,7 @@ function validateArgon2Params(params: Argon2Params): void {
   }
 }
 
-// ============================================================================
 // AES-GCM Encryption/Decryption
-// ============================================================================
 
 /**
  * Encrypts data using AES-256-GCM
@@ -358,9 +348,7 @@ export async function decryptAESGCM(
   }
 }
 
-// ============================================================================
 // HKDF (HMAC-based Key Derivation Function)
-// ============================================================================
 
 /**
  * Derives a key using HKDF-SHA256
@@ -415,9 +403,7 @@ export async function deriveKeyHKDF(
   }
 }
 
-// ============================================================================
 // Utility Functions
-// ============================================================================
 
 /**
  * Securely compares two byte arrays in constant time
@@ -539,38 +525,3 @@ async function withTimeout<T>(
   }
 }
 
-// ============================================================================
-// Exports
-// ============================================================================
-
-export const primitives = {
-  // Random generation
-  randomBytes,
-  generateIV,
-  generateSalt,
-  
-  // Hashing
-  hash256,
-  hash512,
-  hashString,
-  
-  // Key derivation
-  deriveKeyArgon2id,
-  deriveKeyHKDF,
-  
-  // Encryption/Decryption
-  encryptAESGCM,
-  decryptAESGCM,
-  
-  // Utilities
-  constantTimeEqual,
-  secureWipe,
-  concatBytes,
-  toBase64,
-  fromBase64,
-  toHex,
-  fromHex,
-  
-  // Availability check
-  isWebCryptoAvailable,
-};

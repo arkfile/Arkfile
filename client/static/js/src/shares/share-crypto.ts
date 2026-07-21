@@ -30,12 +30,9 @@ import {
   DecryptionError,
   wrapError,
 } from '../crypto/errors.js';
-import { validateSharePassword, type PasswordValidationResult } from '../crypto/password-validation.js';
 import { validateAgainstFloor, type ShareKDFParamsEmbedded } from '../crypto/floors.js';
 
-// ============================================================================
 // Types
-// ============================================================================
 
 /**
  * Share encryption metadata
@@ -47,41 +44,7 @@ export interface ShareEncryptionMetadata {
   nonce: string;        // Base64-encoded nonce (12 bytes) - included in encryptedFEK by primitives
 }
 
-/**
- * Share password validation result
- */
-export interface SharePasswordValidation {
-  valid: boolean;
-  result: PasswordValidationResult;
-}
-
-// ============================================================================
-// Share Password Validation
-// ============================================================================
-
-/**
- * Validates a share password meets security requirements
- * 
- * Share passwords should be strong since they protect file access.
- * 
- * @param password - The share password to validate
- * @param userInputs - Optional array of user-specific strings to check against
- * @returns Validation result with feedback
- */
-export async function validateSharePasswordStrength(
-  password: string
-): Promise<SharePasswordValidation> {
-  const result = await validateSharePassword(password);
-  
-  return {
-    valid: result.meets_requirements,
-    result,
-  };
-}
-
-// ============================================================================
 // FEK Encryption for Shares
-// ============================================================================
 
 /**
  * Share Envelope JSON structure (matches Go's crypto.ShareEnvelope)
@@ -230,9 +193,7 @@ export async function encryptFEKForShare(
   }
 }
 
-// ============================================================================
 // FEK Decryption from Shares
-// ============================================================================
 
 /**
  * Result of decrypting a share envelope
@@ -386,9 +347,7 @@ export async function decryptShareEnvelope(
 }
 
 
-// ============================================================================
 // Utility Functions
-// ============================================================================
 
 /**
  * Generates a random File Encryption Key (FEK)
@@ -413,19 +372,11 @@ export function decodeFEK(fekBase64: string): Uint8Array {
   return fromBase64(fekBase64);
 }
 
-// ============================================================================
 // Exports
-// ============================================================================
 
 export const shareCrypto = {
-  // Password validation
-  validateSharePasswordStrength,
-  
-  // FEK encryption/decryption
   encryptFEKForShare,
   decryptShareEnvelope,
-  
-  // Utility functions
   generateFEK,
   encodeFEK,
   decodeFEK,

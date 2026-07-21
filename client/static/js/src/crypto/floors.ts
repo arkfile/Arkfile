@@ -47,9 +47,7 @@ export interface ShareKDFParamsEmbedded {
   dk: number;
 }
 
-// ----------------------------------------------------------------------------
 // Compile-time Floors (Statically embedded from crypto/*.json)
-// ----------------------------------------------------------------------------
 
 export const FLOOR_ARGON2: Argon2Params = {
   memoryCostKiB: 65536,
@@ -82,9 +80,7 @@ export const FLOOR_PASSWORD: PasswordConfig = {
   specialCharacters: "`~!@#$%^&*()-_=+[]{}|;:,.<>? ",
 };
 
-// ----------------------------------------------------------------------------
 // Clamping and Verification Helpers (Option B)
-// ----------------------------------------------------------------------------
 
 /**
  * Resolve KDF params: if server values are missing, invalid, or weaker than our compilation flooring,

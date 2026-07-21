@@ -2,7 +2,7 @@
  * Unit Tests -- Share Crypto
  *
  * Tests for: encryptFEKForShare, decryptShareEnvelope, generateFEK,
- *            encodeFEK, decodeFEK, validateSharePasswordStrength
+ *            encodeFEK, decodeFEK
  *
  * Uses production Argon2id parameters (see crypto/argon2id-params.json).
  * Each encrypt/decrypt round-trip takes ~200-400ms.

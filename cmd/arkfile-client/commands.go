@@ -421,23 +421,30 @@ func uploadOneFile(client *HTTPClient, session *AuthSession, config *ClientConfi
 			return "", fmt.Errorf("failed to encrypt metadata: %w", merr)
 		}
 
+		encHintB64, hintNonceB64, herr := encryptPasswordHint(hint, accountKey, fileID, ownerUsername)
+		if herr != nil {
+			clearBytes(fek)
+			return "", fmt.Errorf("failed to encrypt password hint: %w", herr)
+		}
+
 		returnedFileID, derr := doChunkedUpload(client, session, &ChunkedUploadParams{
-			FilePath:        filePath,
-			FileID:          fileID,
-			OwnerUsername:   ownerUsername,
-			FEK:             fek,
-			KeyTypeByte:     keyTypeByte,
-			EncryptedFEKB64: encryptedFEKB64,
-			EncFilenameB64:  encFilenameB64,
-			FnNonceB64:      fnNonceB64,
-			EncSHA256B64:    encSHA256B64,
-			ShaNonceB64:     shaNonceB64,
-			PasswordType:    finalPasswordType,
-			PasswordHint:    hint,
-			FileSizeBytes:   fileSizeBytes,
-			TotalEncSize:    totalEncSize,
-			ChunkCount:      chunkCount,
-			ChunkSizeBytes:  chunkSizeBytes,
+			FilePath:              filePath,
+			FileID:                fileID,
+			OwnerUsername:         ownerUsername,
+			FEK:                   fek,
+			KeyTypeByte:           keyTypeByte,
+			EncryptedFEKB64:       encryptedFEKB64,
+			EncFilenameB64:        encFilenameB64,
+			FnNonceB64:            fnNonceB64,
+			EncSHA256B64:          encSHA256B64,
+			ShaNonceB64:           shaNonceB64,
+			PasswordType:          finalPasswordType,
+			EncPasswordHintB64:    encHintB64,
+			PasswordHintNonceB64:  hintNonceB64,
+			FileSizeBytes:         fileSizeBytes,
+			TotalEncSize:          totalEncSize,
+			ChunkCount:            chunkCount,
+			ChunkSizeBytes:        chunkSizeBytes,
 		})
 		// Clear FEK as soon as the upload returns (success or failure).
 		clearBytes(fek)
@@ -488,22 +495,23 @@ func isFileIDConflict(err error) bool {
 // every chunk and the FEK envelope. OwnerUsername is bound into the
 // AAD of the metadata fields (filename and SHA-256 digest).
 type ChunkedUploadParams struct {
-	FilePath        string
-	FileID          string
-	OwnerUsername   string
-	FEK             []byte
-	KeyTypeByte     byte
-	EncryptedFEKB64 string
-	EncFilenameB64  string
-	FnNonceB64      string
-	EncSHA256B64    string
-	ShaNonceB64     string
-	PasswordType    string
-	PasswordHint    string
-	FileSizeBytes   int64
-	TotalEncSize    int64
-	ChunkCount      int64
-	ChunkSizeBytes  int64
+	FilePath             string
+	FileID               string
+	OwnerUsername        string
+	FEK                  []byte
+	KeyTypeByte          byte
+	EncryptedFEKB64      string
+	EncFilenameB64       string
+	FnNonceB64           string
+	EncSHA256B64         string
+	ShaNonceB64          string
+	PasswordType         string
+	EncPasswordHintB64   string // empty = omit from init payload
+	PasswordHintNonceB64 string // empty = omit from init payload
+	FileSizeBytes        int64
+	TotalEncSize         int64
+	ChunkCount           int64
+	ChunkSizeBytes       int64
 }
 
 // doChunkedUpload performs the streaming chunked upload to the server.
@@ -526,7 +534,11 @@ func doChunkedUpload(client *HTTPClient, session *AuthSession, params *ChunkedUp
 		"total_size":          params.TotalEncSize,
 		"chunk_size":          int64(chunkSize),
 		"password_type":       params.PasswordType,
-		"password_hint":       params.PasswordHint,
+	}
+	// Empty hint: omit both fields (do not send empty strings).
+	if params.EncPasswordHintB64 != "" && params.PasswordHintNonceB64 != "" {
+		initPayload["encrypted_password_hint"] = params.EncPasswordHintB64
+		initPayload["password_hint_nonce"] = params.PasswordHintNonceB64
 	}
 
 	initResp, err := client.makeRequestWithSession("POST", "/api/uploads/init", initPayload, session)
@@ -735,6 +747,16 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 	case "account", "":
 		kek = accountKey
 	case "custom":
+		if fileMeta.EncryptedPasswordHint != "" && fileMeta.PasswordHintNonce != "" {
+			if hintText, herr := decryptMetadataField(
+				fileMeta.EncryptedPasswordHint, fileMeta.PasswordHintNonce, accountKey,
+				*fileID, crypto.AADFieldPasswordHint, ownerUsername,
+			); herr == nil && hintText != "" {
+				fmt.Printf("Password hint: %s\n", hintText)
+			} else if herr != nil {
+				logVerbose("Warning: failed to decrypt password hint: %v", herr)
+			}
+		}
 		customPass, err := readPassword(fmt.Sprintf("Enter custom password for '%s': ", *outputPath))
 		if err != nil {
 			return fmt.Errorf("failed to read custom password: %w", err)
@@ -1175,12 +1197,29 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 		return fmt.Errorf("failed to decode file metadata: %w", err)
 	}
 
+	// Owner endpoint: owner_username == authenticated user. Fall back to
+	// session.Username if the server response omits it.
+	ownerUsername := fileMeta.OwnerUsername
+	if ownerUsername == "" {
+		ownerUsername = session.Username
+	}
+
 	// Determine source KEK to unwrap the FEK
 	var sourceKEK []byte
 	switch fileMeta.PasswordType {
 	case "account", "":
 		sourceKEK = accountKey
 	case "custom":
+		if fileMeta.EncryptedPasswordHint != "" && fileMeta.PasswordHintNonce != "" {
+			if hintText, herr := decryptMetadataField(
+				fileMeta.EncryptedPasswordHint, fileMeta.PasswordHintNonce, accountKey,
+				*fileID, crypto.AADFieldPasswordHint, ownerUsername,
+			); herr == nil && hintText != "" {
+				fmt.Printf("Password hint: %s\n", hintText)
+			} else if herr != nil {
+				logVerbose("Warning: failed to decrypt password hint: %v", herr)
+			}
+		}
 		customPass, err := readPassword("Enter custom password for this file: ")
 		if err != nil {
 			return fmt.Errorf("failed to read custom password: %w", err)
@@ -1198,12 +1237,6 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 	defer clearBytes(fek)
 
 	// Decrypt plaintext filename and SHA-256 (always encrypted with account key).
-	// Owner endpoint: owner_username == authenticated user. Fall back to
-	// session.Username if the server response omits it.
-	ownerUsername := fileMeta.OwnerUsername
-	if ownerUsername == "" {
-		ownerUsername = session.Username
-	}
 
 	filename := "[unknown]"
 	if fileMeta.EncryptedFilename != "" && fileMeta.FilenameNonce != "" {
