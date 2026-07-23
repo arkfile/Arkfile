@@ -1,8 +1,8 @@
 # Full Cleanup Pass
 
-Status: draft (revised after cross-check against the tree)
+Status: complete (all workstreams done; full e2e suite green)
 Created: 2026-07-21
-Revised: 2026-07-23 (planning-label hygiene + app.ts decomposition complete; bun build/test green)
+Revised: 2026-07-23 (all workstreams complete; developer confirmed full e2e suite green)
 Scope: Cross-stack hygiene after the archived server, CLI, and frontend cleanup audits. Greenfield: delete unused paths; no compatibility shims. Prefer honest naming and one canonical path per operation. This document uses descriptive headings only — do not introduce numbered, lettered, phase, tranche, or tier labels from this plan into source, tests, scripts, or comments.
 
 Prior audits (reference only; do not edit): `docs/wip/archive/server-cleanup.md`, `docs/wip/archive/cli-cleanup.md`, `docs/wip/archive/frontend-cleanup.md`.
@@ -15,11 +15,11 @@ One canonical way per client operation. Fail closed. Delete dead code rather tha
 
 1. Digest and size semantics clarity (correctness and threat-model honesty) — done; e2e green
 2. Dead code, WIP certificate scripts, and other misleading operator/code surfaces — done; e2e green
-3. Deploy/update shared library expansion (ops safety; behavior-preserving extract) — done; bash -n + help smoke verified
-4. Planning-label comment hygiene — done
-5. Frontend `app.ts` decomposition — done; `bun` build + unit tests green
+3. Deploy/update shared library expansion (ops safety; behavior-preserving extract) — done; bash -n + help smoke; e2e green after full pass
+4. Planning-label comment hygiene — done; e2e green
+5. Frontend `app.ts` decomposition — done; `bun` build + unit tests green; e2e green
 
-All plan workstreams complete. Remaining operator proof: local-deploy / local-update (and optionally VPS test-deploy/update); re-run e2e via `dev-reset` when ready on the e2e host.
+All plan workstreams complete. Developer confirmed full e2e suite green after the final planning-label and `app.ts` work. Optional follow-on outside this plan: local-deploy / local-update and VPS test-deploy/update as operator deploy-path exercises.
 
 ## Progress tracker
 
@@ -33,7 +33,7 @@ All plan workstreams complete. Remaining operator proof: local-deploy / local-up
 | Frontend helper consolidation leftovers | [x] | Folded into dead-code pass (formatBytes) |
 | Frontend app.ts decomposition | [x] | Thin `app.ts`; modules under `client/static/js/src/app/`; bun build + unit tests green |
 | Planning-label comment hygiene | [x] | Removed live `docs/wip/` refs from Go/TS/scripts/docs/api; renamed Phase e2e strings; Playwright comments reworded |
-| End-to-end verification (through completed workstreams) | [x] | Developer confirmed full e2e suite green after digest + dead-surfaces. Deploy shared-library: bash -n + help. Planning-label + app.ts: bun build/test. Operator local-deploy/update and full e2e re-run still pending on host. |
+| End-to-end verification (through completed workstreams) | [x] | Developer confirmed full e2e suite green after all workstreams (including deploy shared-library, planning-label hygiene, and `app.ts` decomposition) |
 
 ---
 
@@ -259,8 +259,9 @@ Stripped or rewrote live references that pointed at ephemeral planning documents
 ### Verification log
 
 - 2026-07-23: After digest/size rename and dead-surfaces (share page singleton, WIP cert deletion, billing key collapse, related dead code), developer confirmed e2e suite green. Re-run the full verification block after deploy-common expansion and again after any `app.ts` / planning-label work.
-- 2026-07-23: Deploy/update shared library expansion complete (`bash -n` on all wrappers and shared bodies; `--help` smoke for prod/test deploy and update). Operator deploy/update on a real host not exercised in this pass; re-run e2e after any follow-on code changes as usual.
-- 2026-07-23: Planning-label hygiene + `app.ts` decomposition complete. `bun run build` and `bun test` green. Full host e2e and local-deploy/update still for the operator.
+- 2026-07-23: Deploy/update shared library expansion complete (`bash -n` on all wrappers and shared bodies; `--help` smoke for prod/test deploy and update).
+- 2026-07-23: Planning-label hygiene + `app.ts` decomposition complete. `bun run build` and `bun test` green.
+- 2026-07-23: Developer confirmed full e2e suite green after all plan workstreams (digest/size, dead surfaces, deploy shared library, planning-label hygiene, `app.ts` decomposition). Plan marked complete.
 
 ## Out of scope
 
