@@ -197,7 +197,7 @@ Each chunk includes a 12-byte nonce prefix and 16-byte authentication tag (28 by
 
 #### Backup Export
 
-Export files as self-contained `.arkbackup` bundles for offline decryption. See `docs/wip/arkbackup-export.md` for the full bundle format specification.
+Export files as self-contained `.arkbackup` bundles for offline decryption. The bundle begins with magic bytes ARKB and a version field, followed by length-prefixed JSON metadata and the encrypted ciphertext stream matching the stored object.
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
@@ -327,7 +327,7 @@ The admin can export any user's file as an `.arkbackup` bundle for disaster reco
 
 #### Storage Management (Multi-Backend)
 
-These endpoints manage multi-provider storage redundancy. All operations are admin-only. In single-provider mode (no secondary configured), status endpoints still work and report the single provider. See `docs/wip/multi-backend-v3.md` for the full design document.
+These endpoints manage multi-provider storage redundancy. All operations are admin-only. In single-provider mode (no secondary configured), status endpoints still work and report the single provider.
 
 **Provider Status and Sync**
 

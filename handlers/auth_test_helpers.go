@@ -58,6 +58,5 @@ func setupTestEnv(t *testing.T, method, path string, body io.Reader) (echo.Conte
 
 // NOTE: TestOPAQUEProvider was removed from this file.
 // The OPAQUE handlers call auth package functions directly via CGO (no interface).
-// To unit-test OPAQUE handlers, an OPAQUEOperations interface would need to be
-// introduced in the auth package first. See docs/wip/fix-go-unit-tests2.md
-// "Deferred: OPAQUE Handler Unit Tests" section for details.
+// Unit-testing those handlers would require introducing an OPAQUEOperations
+// interface in the auth package first.

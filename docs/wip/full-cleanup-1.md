@@ -2,7 +2,7 @@
 
 Status: draft (revised after cross-check against the tree)
 Created: 2026-07-21
-Revised: 2026-07-23 (deploy/update shared library expansion complete; syntax/help verified)
+Revised: 2026-07-23 (planning-label hygiene + app.ts decomposition complete; bun build/test green)
 Scope: Cross-stack hygiene after the archived server, CLI, and frontend cleanup audits. Greenfield: delete unused paths; no compatibility shims. Prefer honest naming and one canonical path per operation. This document uses descriptive headings only — do not introduce numbered, lettered, phase, tranche, or tier labels from this plan into source, tests, scripts, or comments.
 
 Prior audits (reference only; do not edit): `docs/wip/archive/server-cleanup.md`, `docs/wip/archive/cli-cleanup.md`, `docs/wip/archive/frontend-cleanup.md`.
@@ -16,8 +16,10 @@ One canonical way per client operation. Fail closed. Delete dead code rather tha
 1. Digest and size semantics clarity (correctness and threat-model honesty) — done; e2e green
 2. Dead code, WIP certificate scripts, and other misleading operator/code surfaces — done; e2e green
 3. Deploy/update shared library expansion (ops safety; behavior-preserving extract) — done; bash -n + help smoke verified
+4. Planning-label comment hygiene — done
+5. Frontend `app.ts` decomposition — done; `bun` build + unit tests green
 
-Defer frontend `app.ts` decomposition and broad planning-label renames; next recommended focus is planning-label hygiene or `app.ts` decomposition.
+All plan workstreams complete. Remaining operator proof: local-deploy / local-update (and optionally VPS test-deploy/update); re-run e2e via `dev-reset` when ready on the e2e host.
 
 ## Progress tracker
 
@@ -29,9 +31,9 @@ Defer frontend `app.ts` decomposition and broad planning-label renames; next rec
 | Dual surfaces review | [x] | Dropped duplicate `GET /api/public/shares/:id` HTML page; keep `/shared/:id` + API subpaths; billing JSON uses `users_currently_overdrawn` only; e2e green |
 | Deploy/update shared library expansion | [x] | Thin prod/test wrappers; shared `vps-first-deploy.sh` / `vps-update.sh`; deploy-common build/backup/static helpers; local wired onto same helpers; invocation paths unchanged |
 | Frontend helper consolidation leftovers | [x] | Folded into dead-code pass (formatBytes) |
-| Frontend app.ts decomposition | [ ] | Logical modules; thin entrypoint; after contracts stabilize |
-| Planning-label comment hygiene | [ ] | Production source + e2e + Playwright |
-| End-to-end verification (through completed workstreams) | [x] | Developer confirmed full e2e suite green after digest + dead-surfaces (including share page / billing / cert doc changes). Re-run after each remaining workstream. |
+| Frontend app.ts decomposition | [x] | Thin `app.ts`; modules under `client/static/js/src/app/`; bun build + unit tests green |
+| Planning-label comment hygiene | [x] | Removed live `docs/wip/` refs from Go/TS/scripts/docs/api; renamed Phase e2e strings; Playwright comments reworded |
+| End-to-end verification (through completed workstreams) | [x] | Developer confirmed full e2e suite green after digest + dead-surfaces. Deploy shared-library: bash -n + help. Planning-label + app.ts: bun build/test. Operator local-deploy/update and full e2e re-run still pending on host. |
 
 ---
 
@@ -162,24 +164,25 @@ Runtime crypto and download/decrypt of file bytes do **not** depend on the strea
 
 ## Frontend: decompose app.ts
 
-Goal: thin entrypoint; one concern per module. Behavior unchanged; Playwright and bun tests must stay green. Prefer after digest/size and dead-surface work so contracts are stable.
+Completed 2026-07-23.
 
-### Suggested layout
+Thin entrypoint `client/static/js/src/app.ts` plus modules under `client/static/js/src/app/`:
 
 | Module | Responsibility |
 |--------|----------------|
-| `app.ts` | Trusted Types policy, construct app, DOMContentLoaded, shared.html ShareAccessUI bridge |
-| Bootstrap module | `initialize`, `/readyz`, Service Worker register, billing checkout param capture, home versus app routing |
-| Home listeners | Home CTA wiring into auth forms |
-| Auth listeners | Login, register, logout, pending-approval wiring; password toggles |
-| Shell listeners | Billing, security, contact, verify-file, lock key, revoke-all toggles |
-| Upload listeners | Upload button and file input label |
-| TOTP listeners | TOTP setup UI listeners and verify handler |
-| Navigation helpers | Show home/app, navigate helpers, initial auth, load files/shares |
+| `app.ts` | Trusted Types registration, `ArkFileApp` shell, DOMContentLoaded, shared.html ShareAccessUI bridge |
+| `app/bootstrap.ts` | `/readyz`, Service Worker register, billing checkout param capture, home versus app routing, initial auth |
+| `app/home-listeners.ts` | Home CTA wiring into auth forms |
+| `app/auth-listeners.ts` | Login, register, logout, pending-approval wiring; password toggles |
+| `app/shell-listeners.ts` | Billing, security, contact, verify-file, lock key, revoke-all |
+| `app/upload-listeners.ts` | Upload button and file input label |
+| `app/totp-listeners.ts` | TOTP setup UI listeners and verify handler |
+| `app/navigation.ts` | Show home/app helpers |
+| `app/app-listeners.ts` | Single `attached` guard wrapping listener setup |
+| `app/shell.ts` | `AppShell` interface |
+| `app/trusted-types.ts` | CSP Trusted Types policy |
 
-Keep the single `appListenersAttached` guard semantics when splitting listener setup. Prefer moving listeners next to existing domain modules (`auth/`, `ui/`, `files/`) when a group already has a home; use an `app/` (or equivalent) package only for orchestration that does not belong elsewhere.
-
-Do not name new files or symbols after planning labels from this or any other WIP document.
+Behavior unchanged; `bun run build` and `bun test` green.
 
 ---
 
@@ -231,15 +234,9 @@ Completed 2026-07-23.
 
 ## Planning-label comment hygiene
 
-Strip or rewrite references in live code and tests that point at ephemeral planning documents or use planning-era scenario names:
+Completed 2026-07-23.
 
-- Path references such as `docs/wip/general-enhancements.md` (and similar) in uploads, upload client, and CLI — replace with in-situ behavior descriptions
-- `docs/wip/storage-credits-v2.md` in `billing/types.go` — describe the billing package role or point at `docs/security.md`
-- Comments citing archived export or unit-test WIP paths
-- e2e scenario names that still say "Phase …" — rename to descriptive scenario titles
-- Playwright comments that say "tranche …" or frame checks as "Legacy localStorage" migration story — keep useful regression guards; reword without planning or migration labels
-
-Archived WIP documents under `docs/wip/archive/` remain untouched.
+Stripped or rewrote live references that pointed at ephemeral planning documents or used planning-era scenario names in production source, tests, e2e, Playwright, and `docs/api.md`. Archived WIP documents under `docs/wip/archive/` remain untouched.
 
 ---
 
@@ -263,6 +260,7 @@ Archived WIP documents under `docs/wip/archive/` remain untouched.
 
 - 2026-07-23: After digest/size rename and dead-surfaces (share page singleton, WIP cert deletion, billing key collapse, related dead code), developer confirmed e2e suite green. Re-run the full verification block after deploy-common expansion and again after any `app.ts` / planning-label work.
 - 2026-07-23: Deploy/update shared library expansion complete (`bash -n` on all wrappers and shared bodies; `--help` smoke for prod/test deploy and update). Operator deploy/update on a real host not exercised in this pass; re-run e2e after any follow-on code changes as usual.
+- 2026-07-23: Planning-label hygiene + `app.ts` decomposition complete. `bun run build` and `bun test` green. Full host e2e and local-deploy/update still for the operator.
 
 ## Out of scope
 

@@ -1622,10 +1622,8 @@ run_files_standard() {
         record_test "Extra file C upload (1MB)" "FAIL"
     fi
     rm -f "$extra_file_c"
-    # Exercises the new sequential multi-file upload path introduced in
-    # docs/wip/general-enhancements.md item 10. File sizes span the
-# MB PlaintextChunkSize boundary to exercise both full-chunk and
-    # partial-last-chunk paths.
+    # Exercises sequential multi-file upload. File sizes span the plaintext
+    # chunk-size boundary to cover both full-chunk and partial-last-chunk paths.
     scenario "Multi-file batch upload (3 x 16-18 MB)"
     local batch_file_a="$TEST_DATA_DIR/batch_a.bin"
     local batch_file_b="$TEST_DATA_DIR/batch_b.bin"
@@ -1730,11 +1728,11 @@ run_shares() {
     local SHARE_C_ID=""
 
     if [ -z "$UPLOADED_FILE_ID" ]; then
-        error "Missing file ID from Phase 8"
-        record_test "Phase 8 file data available" "FAIL"
+        error "Missing uploaded file ID from files_standard group"
+        record_test "Prior upload file ID available for shares" "FAIL"
     fi
-    record_test "Phase 8 file data available" "PASS"
-    info "Using file from Phase 8: File ID=$UPLOADED_FILE_ID"
+    record_test "Prior upload file ID available for shares" "PASS"
+    info "Using uploaded file for shares: File ID=$UPLOADED_FILE_ID"
     scenario "Create share without limits"
 
     local create_a_output create_a_exit_code
@@ -2861,7 +2859,7 @@ run_storage_replication() {
     fi
     scenario "Copy single file to secondary storage"
     if [ -z "$EXTRA_FILE_C_ID" ]; then
-        error "EXTRA_FILE_C_ID not set (Phase 8.15 did not complete)"
+        error "EXTRA_FILE_C_ID not set (extra 1MB upload in files_standard did not complete)"
         record_test "Multi-backend: copy-file single file" "FAIL"
     fi
 

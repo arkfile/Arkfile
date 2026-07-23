@@ -3,7 +3,7 @@
 # Arkfile Local/LAN Deployment Script
 # First-time constructive deployment for local machines and LANs
 # Uses self-signed TLS, admin bootstrap flow, no Caddy
-# See docs/wip/local-deploy.md for full design document
+# Constructive local/LAN deploy: self-signed TLS, admin bootstrap, no Caddy.
 
 set -e
 

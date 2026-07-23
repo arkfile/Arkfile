@@ -1,662 +1,49 @@
 /**
- * Main application entry point
- * Coordinates all modules and handles initial setup
- * Updated for new home page with proper event listeners
+ * Thin application entry point: Trusted Types, shell construction,
+ * DOMContentLoaded, and shared.html ShareAccessUI bridge.
  */
 
-import { validateToken, isAuthenticated, clearAllSessionData, startAutoRefresh, stopAutoRefresh, refreshToken, ServiceUnavailableError } from './utils/auth';
-import { lockAccountKey, registerAccountKeyCleanupHandlers } from './crypto/account-key-cache';
-import { initSitewideFooters } from './ui/footer';
-import { showError, showSuccess } from './ui/messages';
-import { showFileSection, showAuthSection, toggleAuthForm } from './ui/sections';
-import { loadFiles, displayFiles } from './files/list';
-import { setupLoginForm, login, logout } from './auth/login';
-import { setupRegisterForm, register } from './auth/register';
-import { registerSwDownload } from './files/sw-streaming-download';
-import { addPasswordTogglesInContainer } from './utils/password-toggle';
+import { showError } from './ui/messages';
+import { loadFiles } from './files/list';
+import { registerTrustedTypesPolicy } from './app/trusted-types';
+import { isHomePage as detectHomePage, showHome as revealHome, showApp as revealApp } from './app/navigation';
+import { setupAppListenersOnce, type ListenerAttachState } from './app/app-listeners';
+import { bootstrapApplication } from './app/bootstrap';
+import type { AppShell } from './app/shell';
 
-// Register CSP Trusted Types global default policy to securely handle innerHTML sinks
-if (typeof window !== 'undefined' && (window as any).trustedTypes && (window as any).trustedTypes.createPolicy) {
-  try {
-    (window as any).trustedTypes.createPolicy('default', {
-      createHTML: (string: string) => {
-        // Safe pass-through of application static templates and escaped markup
-        return string;
-      },
-      createScriptURL: (url: string) => {
-        // Only the same-origin streaming-download Service Worker is permitted.
-        if (url === '/sw-download.js') {
-          return url;
-        }
-        throw new TypeError(`Blocked TrustedScriptURL for disallowed URL: ${url}`);
-      }
-    });
-  } catch (err) {
-    console.warn('Trusted Types policy registration failed or was already created:', err);
-  }
-}
+registerTrustedTypesPolicy();
 
-class ArkFileApp {
+class ArkFileApp implements AppShell {
   private initialized = false;
-  private appListenersAttached = false;
-
-  /**
-   * Check if the backend is ready to serve traffic.
-   * Calls the /readyz endpoint which verifies rqlite + storage connectivity.
-   */
-  private async checkServiceReady(): Promise<boolean> {
-    try {
-      const response = await fetch('/readyz');
-      return response.ok;
-    } catch {
-      return false;
-    }
-  }
+  private readonly listenerState: ListenerAttachState = { attached: false };
 
   public async initialize(): Promise<void> {
     if (this.initialized) return;
-
-    try {
-      // Register cleanup handlers for account key cache
-      registerAccountKeyCleanupHandlers();
-
-      // Check if backend is ready before proceeding
-      const ready = await this.checkServiceReady();
-      if (!ready) {
-        showError('Service is starting up. Please refresh the page in a moment.');
-        return;
-      }
-
-      // Register the streaming-download Service Worker (best-effort).
-      // Required for downloading files larger than ~2 GB on Chromium-based
-      // browsers without hitting the blob-URL ceiling. Falls back to the
-      // in-page Blob path automatically if registration fails.
-      registerSwDownload().then((ok) => {
-        if (ok) {
-          console.log('[arkfile] SW streaming download ready');
-        } else {
-          console.warn('[arkfile] SW streaming unavailable; large file downloads (>2 GB) may fail on Chromium');
-        }
-      }).catch((err) => {
-        console.warn('[arkfile] SW registration error:', err);
-      });
-
-      const {
-        hasBillingCheckoutReturnParams,
-        captureBillingCheckoutParams,
-        resumePendingBillingCheckout,
-      } = await import('./ui/billing');
-
-      // Preserve checkout return params before auth routing strips or ignores them.
-      if (hasBillingCheckoutReturnParams()) {
-        captureBillingCheckoutParams();
-      }
-
-      // Check if we're on the home page or app page
-      if (this.isHomePage()) {
-        this.setupHomePageListeners();
-        
-        // Check if user is already authenticated
-        if (isAuthenticated()) {
-          const tokenValid = await validateToken();
-          if (tokenValid) {
-            // User is logged in, show app directly
-            this.showApp();
-            showFileSection();
-            startAutoRefresh();
-            await this.loadUserFiles();
-            await resumePendingBillingCheckout();
-            const { resumePendingSubscriptionCheckout } = await import('./ui/billing');
-            await resumePendingSubscriptionCheckout();
-          } else {
-            await refreshToken();
-            if (await validateToken()) {
-              this.showApp();
-              showFileSection();
-              startAutoRefresh();
-              await this.loadUserFiles();
-              await resumePendingBillingCheckout();
-              const { resumePendingSubscriptionCheckout } = await import('./ui/billing');
-              await resumePendingSubscriptionCheckout();
-            }
-          }
-        } else if (captureBillingCheckoutParams()) {
-          await refreshToken();
-          if (await validateToken()) {
-            this.showApp();
-            showFileSection();
-            startAutoRefresh();
-            await this.loadUserFiles();
-            await resumePendingBillingCheckout();
-            const { resumePendingSubscriptionCheckout } = await import('./ui/billing');
-            await resumePendingSubscriptionCheckout();
-          }
-        }
-      } else {
-        // We're in the app interface
-        this.setupAppListeners();
-        await this.handleInitialAuth();
-      }
-      
+    const completed = await bootstrapApplication(this);
+    if (completed) {
       this.initialized = true;
-      console.log('ArkFile TypeScript application initialized');
-
-      // Populate sitewide footers (non-blocking, best-effort)
-      void initSitewideFooters();
-      
-    } catch (error) {
-      console.error('Failed to initialize ArkFile application:', error);
-      showError('Application failed to initialize. Please refresh the page.');
     }
   }
 
-  private isHomePage(): boolean {
-    // Check if we're showing the home page (hero section visible)
-    const heroSection = document.querySelector('.hero-section');
-    return heroSection !== null && !heroSection.classList.contains('hidden');
+  public isHomePage(): boolean {
+    return detectHomePage();
   }
 
-  private setupHomePageListeners(): void {
-    // Get Started button - shows registration form
-    const getStartedBtn = document.getElementById('get-started-btn');
-    if (getStartedBtn) {
-      getStartedBtn.addEventListener('click', () => {
-        this.showApp();
-        showAuthSection();
-        toggleAuthForm(); // Switch to register form
-      });
-    }
-
-    // Login button - shows login form
-    const loginBtn = document.getElementById('login-btn');
-    if (loginBtn) {
-      loginBtn.addEventListener('click', () => {
-        this.showApp();
-        showAuthSection();
-        // Login form is shown by default
-        setupLoginForm();
-      });
-    }
+  public showHome(): void {
+    revealHome();
   }
 
-  private setupAppListeners(): void {
-    // Guard: register all event listeners exactly once to prevent handler stacking.
-    // showApp() calls this method on every navigation, and addEventListener
-    // stacks duplicate handlers (it does not replace them). Without this guard,
-    // buttons fire N times after N navigations, breaking OPAQUE auth.
-    if (this.appListenersAttached) return;
-    this.appListenersAttached = true;
-
-    // Set up login form (Enter key handlers)
-    setupLoginForm();
-    
-    // Navigation between login and register
-    const showRegisterLink = document.getElementById('show-register-link');
-    if (showRegisterLink) {
-      showRegisterLink.addEventListener('click', (e) => {
-        e.preventDefault();
-        toggleAuthForm();
-      });
-    }
-
-    const showLoginLink = document.getElementById('show-login-link');
-    if (showLoginLink) {
-      showLoginLink.addEventListener('click', (e) => {
-        e.preventDefault();
-        toggleAuthForm();
-        // Re-setup login form when switching to it
-        setupLoginForm();
-      });
-    }
-
-    // Back to home links
-    const backToHomeLink = document.getElementById('back-to-home-link');
-    if (backToHomeLink) {
-      backToHomeLink.addEventListener('click', (e) => {
-        e.preventDefault();
-        this.showHome();
-      });
-    }
-
-    const backToHomeFromRegisterLink = document.getElementById('back-to-home-from-register-link');
-    if (backToHomeFromRegisterLink) {
-      backToHomeFromRegisterLink.addEventListener('click', (e) => {
-        e.preventDefault();
-        this.showHome();
-      });
-    }
-
-    // Login button click handler (the button is type="button", not type="submit",
-    // so the form submit event does not fire on click -- this is the only handler)
-    const loginSubmitBtn = document.getElementById('login-submit-btn');
-    if (loginSubmitBtn) {
-      loginSubmitBtn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        await login();
-      });
-    }
-
-    // Setup registration form
-    setupRegisterForm();
-    
-    // Register form submission
-    const registerSubmitBtn = document.getElementById('register-submit-btn');
-    if (registerSubmitBtn) {
-      registerSubmitBtn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        await register();
-      });
-    }
-
-    // Logout functionality
-    const logoutLink = document.getElementById('logout-link');
-    if (logoutLink) {
-      logoutLink.addEventListener('click', async (e) => {
-        e.preventDefault();
-        stopAutoRefresh();
-        await logout();
-        this.showHome(); // Return to home page after logout
-      });
-    }
-
-    // Pending approval logout button
-    const pendingLogoutBtn = document.getElementById('pending-logout-btn');
-    if (pendingLogoutBtn) {
-      pendingLogoutBtn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        stopAutoRefresh();
-        await logout();
-        this.showHome();
-      });
-    }
-
-    // Pending approval section: contact info buttons
-    const pendingCiAddMethodBtn = document.getElementById('pending-ci-add-method-btn');
-    if (pendingCiAddMethodBtn) {
-      pendingCiAddMethodBtn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        const { addPendingContactMethodRow } = await import('./ui/contact-info');
-        addPendingContactMethodRow();
-      });
-    }
-
-    const pendingCiSaveBtn = document.getElementById('pending-ci-save-btn');
-    if (pendingCiSaveBtn) {
-      pendingCiSaveBtn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        const { savePendingContactInfo } = await import('./ui/contact-info');
-        await savePendingContactInfo();
-      });
-    }
-
-    const pendingCiDeleteBtn = document.getElementById('pending-ci-delete-btn');
-    if (pendingCiDeleteBtn) {
-      pendingCiDeleteBtn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        const { deletePendingContactInfo } = await import('./ui/contact-info');
-        await deletePendingContactInfo();
-      });
-    }
-
-    // Billing panel toggle (storage credits / usage metering).
-    const billingToggle = document.getElementById('billing-toggle');
-    if (billingToggle) {
-      billingToggle.addEventListener('click', async (e) => {
-        e.preventDefault();
-        const { toggleBillingPanel } = await import('./ui/billing');
-        await toggleBillingPanel();
-      });
-    }
-
-    // Verify File tool
-    void import('./files/verify-file.js').then(({ wireVerifyFilePanel, toggleVerifyFilePanel }) => {
-      wireVerifyFilePanel();
-      const verifyToggle = document.getElementById('verify-file-toggle');
-      if (verifyToggle) {
-        verifyToggle.addEventListener('click', (e) => {
-          e.preventDefault();
-          toggleVerifyFilePanel();
-        });
-      }
-    });
-
-    // Security settings toggle
-    const securityToggle = document.getElementById('security-settings-toggle');
-    if (securityToggle) {
-      void import('./auth/mfa-settings.js').then(({ wireMFASettingsPanel }) => {
-        wireMFASettingsPanel();
-      });
-      securityToggle.addEventListener('click', async (e) => {
-        e.preventDefault();
-        // Mutual exclusion (incl. download-integrity-panel) is handled inside
-        // toggleSecuritySettings when opening.
-        const { toggleSecuritySettings } = await import('./ui/sections');
-        toggleSecuritySettings();
-      });
-    }
-
-    // Contact info toggle
-    const contactToggle = document.getElementById('contact-info-toggle');
-    if (contactToggle) {
-      contactToggle.addEventListener('click', async (e) => {
-        e.preventDefault();
-        // Mutual exclusion handled inside toggleContactInfoPanel when opening.
-        const { toggleContactInfoPanel } = await import('./ui/contact-info');
-        await toggleContactInfoPanel();
-      });
-    }
-
-    // Contact info save button
-    const saveContactBtn = document.getElementById('save-contact-info-btn');
-    if (saveContactBtn) {
-      saveContactBtn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        const { saveContactInfo } = await import('./ui/contact-info');
-        await saveContactInfo();
-      });
-    }
-
-    // Contact info delete button
-    const deleteContactBtn = document.getElementById('delete-contact-info-btn');
-    if (deleteContactBtn) {
-      deleteContactBtn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        const { deleteContactInfo } = await import('./ui/contact-info');
-        await deleteContactInfo();
-      });
-    }
-
-    // Add contact method button
-    const addContactBtn = document.getElementById('add-contact-method-btn');
-    if (addContactBtn) {
-      addContactBtn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        const { addContactMethodRow } = await import('./ui/contact-info');
-        addContactMethodRow();
-      });
-    }
-
-    // Lock encryption key
-    const lockKeyBtn = document.getElementById('lock-key-btn');
-    if (lockKeyBtn) {
-      lockKeyBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        lockAccountKey();
-        showSuccess('Encryption key locked. You will need to re-enter your password for the next file operation.');
-      });
-    }
-
-    // Revoke all sessions
-    const revokeButton = document.getElementById('revoke-sessions-btn');
-    if (revokeButton) {
-      revokeButton.addEventListener('click', async (e) => {
-        e.preventDefault();
-        const { revokeAllSessions } = await import('./utils/auth');
-        const success = await revokeAllSessions();
-        if (success) {
-          showSuccess('All sessions have been revoked. Please log in again.');
-          clearAllSessionData();
-          this.showHome(); // Return to home page
-        } else {
-          showError('Failed to revoke sessions.');
-        }
-      });
-    }
-
-    // File upload functionality
-    const uploadFileBtn = document.getElementById('upload-file-btn');
-    if (uploadFileBtn) {
-      uploadFileBtn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        const { handleFileUpload } = await import('./files/upload');
-        await handleFileUpload();
-      });
-    }
-
-    // File input label update (custom styled file picker)
-    const fileInput = document.getElementById('fileInput') as HTMLInputElement | null;
-    const fileInputLabel = document.getElementById('fileInputLabel');
-    const fileInputName = document.getElementById('fileInputName');
-    if (fileInput && fileInputLabel && fileInputName) {
-      fileInput.addEventListener('change', () => {
-        if (fileInput.files && fileInput.files.length > 0) {
-          // Show the single filename when one file is selected; show a count
-          // when multiple are selected. The actual files are read directly
-          // off fileInput.files at upload time, so we don't need to store them.
-          if (fileInput.files.length === 1) {
-            fileInputName.textContent = fileInput.files[0].name;
-          } else {
-            fileInputName.textContent = `${fileInput.files.length} files selected`;
-          }
-          fileInputLabel.classList.add('has-file');
-        } else {
-          fileInputName.textContent = '';
-          fileInputLabel.classList.remove('has-file');
-        }
-      });
-    }
-
-    // Password type toggle
-    this.setupPasswordTypeToggle();
-    this.setupPasswordToggles();
-
-    // TOTP setup functionality
-    this.setupTOTPListeners();
+  public showApp(): void {
+    revealApp(() => this.setupAppListeners());
   }
 
-  private setupPasswordToggles(): void {
-    const authSection = document.getElementById('auth-section');
-    if (authSection) {
-      addPasswordTogglesInContainer(authSection);
-    }
-
-    const uploadSection = document.querySelector('.upload-section');
-    if (uploadSection instanceof HTMLElement) {
-      addPasswordTogglesInContainer(uploadSection);
-    }
+  public setupAppListeners(): void {
+    setupAppListenersOnce(this, this.listenerState);
   }
 
-  private setupPasswordTypeToggle(): void {
-    const passwordTypeRadios = document.querySelectorAll('input[name="passwordType"]');
-    const customPasswordSection = document.getElementById('customPasswordSection');
-    const filePassword = document.getElementById('filePassword') as HTMLInputElement;
-    
-    passwordTypeRadios.forEach(radio => {
-      radio.addEventListener('change', (e) => {
-        const target = e.target as HTMLInputElement;
-        const useCustomPassword = target.value === 'custom';
-        
-        if (customPasswordSection) {
-          customPasswordSection.classList.toggle('hidden', !useCustomPassword);
-        }
-        
-        if (!useCustomPassword && filePassword) {
-          filePassword.value = '';
-        }
-      });
-    });
-  }
-
-  private setupTOTPListeners(): void {
-    // Regenerate TOTP setup code button
-    const generateTotpBtn = document.getElementById('generate-totp-btn');
-    if (generateTotpBtn) {
-      generateTotpBtn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        const { generateAndDisplayTOTPSetup } = await import('./auth/totp');
-        await generateAndDisplayTOTPSetup();
-      });
-    }
-
-    // Copy TOTP secret button
-    const copyTotpSecretBtn = document.getElementById('copy-totp-secret-btn') as HTMLButtonElement | null;
-    if (copyTotpSecretBtn) {
-      copyTotpSecretBtn.addEventListener('click', () => {
-        const secretEl = document.getElementById('manual-entry-code');
-        const secret = secretEl?.textContent?.trim() ?? '';
-        if (!secret) return;
-        navigator.clipboard.writeText(secret).then(() => {
-          const original = copyTotpSecretBtn.textContent;
-          copyTotpSecretBtn.textContent = 'copied!';
-          setTimeout(() => {
-            copyTotpSecretBtn.textContent = original;
-          }, 2000);
-        }).catch(() => {
-          // Clipboard API unavailable -- silently ignore; user can still select manually
-        });
-      });
-    }
-
-    // TOTP verify code input: enable button when 6 digits entered
-    const totpVerifyCode = document.getElementById('totp-verify-code') as HTMLInputElement | null;
-    const verifyTotpBtn = document.getElementById('verify-totp-btn') as HTMLButtonElement | null;
-    if (totpVerifyCode && verifyTotpBtn) {
-      totpVerifyCode.addEventListener('input', () => {
-        totpVerifyCode.value = totpVerifyCode.value.replace(/[^0-9]/g, '');
-        verifyTotpBtn.disabled = totpVerifyCode.value.length !== 6;
-      });
-      totpVerifyCode.addEventListener('keypress', async (e) => {
-        if (e.key === 'Enter' && totpVerifyCode.value.length === 6) {
-          const { completeTOTPSetup } = await import('./auth/totp');
-          await this.handleTOTPVerify(totpVerifyCode.value, completeTOTPSetup);
-        }
-      });
-    }
-
-    // Verify & Complete Registration button
-    if (verifyTotpBtn) {
-      verifyTotpBtn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        const code = (document.getElementById('totp-verify-code') as HTMLInputElement)?.value || '';
-        const { completeTOTPSetup } = await import('./auth/totp');
-        await this.handleTOTPVerify(code, completeTOTPSetup);
-      });
-    }
-
-    // Cancel registration (returns to login form)
-    const cancelRegistrationBtn = document.getElementById('cancel-registration-btn');
-    if (cancelRegistrationBtn) {
-      cancelRegistrationBtn.addEventListener('click', () => {
-        showAuthSection();
-        toggleAuthForm();
-      });
-    }
-
-    // Download backup codes (from TOTP setup static form)
-    const downloadBackupCodesBtn = document.getElementById('download-backup-codes-btn');
-    if (downloadBackupCodesBtn) {
-      downloadBackupCodesBtn.addEventListener('click', async () => {
-        const { downloadBackupCodes } = await import('./auth/totp');
-        downloadBackupCodes();
-      });
-    }
-  }
-
-  private async handleTOTPVerify(code: string, completeTOTPSetup: (code: string) => Promise<Record<string, any> | null>): Promise<void> {
-    if (code.length !== 6) return;
-    const verifyResult = await completeTOTPSetup(code);
-    if (verifyResult) {
-      // Full-access tokens are in HttpOnly cookies set by the server.
-      // MFA setup completion navigation is handled by totp-setup / register flows.
-      const { hideProgress } = await import('./ui/progress');
-      hideProgress();
-    }
-  }
-
-  private showHome(): void {
-    // Hide app container and show home page
-    const homeContainer = document.querySelector('.home-container');
-    const appContainer = document.getElementById('app-container');
-    
-    if (homeContainer) {
-      homeContainer.classList.remove('hidden');
-    }
-    if (appContainer) {
-      appContainer.classList.add('hidden');
-    }
-  }
-
-  private showApp(): void {
-    // Hide home page and show app container
-    const homeContainer = document.querySelector('.home-container');
-    const appContainer = document.getElementById('app-container');
-    
-    if (homeContainer) {
-      homeContainer.classList.add('hidden');
-    }
-    if (appContainer) {
-      appContainer.classList.remove('hidden');
-    }
-    
-    // Always set up app listeners when showing the app
-    this.setupAppListeners();
-  }
-
-  private async handleInitialAuth(): Promise<void> {
-    if (isAuthenticated()) {
-      try {
-        // Validate the stored token
-        const tokenValid = await validateToken();
-        
-        if (tokenValid) {
-          // Check if user is approved
-          const { getCurrentUser } = await import('./utils/auth.js');
-          const currentUser = await getCurrentUser();
-          if (currentUser && !currentUser.is_approved) {
-            const { showPendingApprovalSection } = await import('./ui/sections.js');
-            showPendingApprovalSection();
-          } else {
-            // Token is valid and approved, show file section and load files
-            showFileSection();
-            startAutoRefresh();
-            await this.loadUserFiles();
-            const { resumePendingBillingCheckout } = await import('./ui/billing');
-            await resumePendingBillingCheckout();
-            const { resumePendingSubscriptionCheckout } = await import('./ui/billing');
-            await resumePendingSubscriptionCheckout();
-          }
-        } else {
-          const refreshed = await refreshToken();
-          if (refreshed && (await validateToken())) {
-            const { getCurrentUser } = await import('./utils/auth.js');
-            const currentUser = await getCurrentUser();
-            if (currentUser && !currentUser.is_approved) {
-              const { showPendingApprovalSection } = await import('./ui/sections.js');
-              showPendingApprovalSection();
-            } else {
-              showFileSection();
-              startAutoRefresh();
-              await this.loadUserFiles();
-              const { resumePendingBillingCheckout } = await import('./ui/billing');
-              await resumePendingBillingCheckout();
-              const { resumePendingSubscriptionCheckout } = await import('./ui/billing');
-              await resumePendingSubscriptionCheckout();
-            }
-          } else {
-            console.warn('Stored token is invalid, clearing and showing auth');
-            clearAllSessionData();
-            showAuthSection();
-            showError('Your session has expired (30 minutes). Please log in again.');
-          }
-        }
-      } catch (error) {
-        // Network error or other issue
-        console.error('Error validating token:', error);
-        clearAllSessionData();
-        showAuthSection();
-      }
-    } else {
-      // No token, show auth section
-      showAuthSection();
-    }
-  }
-
-  private async loadUserFiles(): Promise<void> {
+  public async loadUserFiles(): Promise<void> {
     try {
-      const response = await loadFiles();
-      // Files will be displayed by the loadFiles function
-      
-      // Also load shares
+      await loadFiles();
       await this.loadUserShares();
     } catch (error) {
       console.error('Error loading user files:', error);
@@ -670,40 +57,32 @@ class ArkFileApp {
       await initializeShareList();
     } catch (error) {
       console.error('Error loading user shares:', error);
-      // Don't show error to user - shares are optional
     }
   }
 
-
-  // Public method to show app from home page
   public navigateToApp(): void {
     this.showApp();
   }
 
-  // Public method to return to home page
   public navigateToHome(): void {
     this.showHome();
   }
 }
 
-// Global app instance
 const app = new ArkFileApp();
 
-// Initialize app when DOM is loaded
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
-    app.initialize();
+    void app.initialize();
   });
 } else {
-  // DOM already loaded
-  app.initialize();
+  void app.initialize();
 }
 
-// Expose ShareAccessUI for shared.html bootstrap (shared-init.js).
 if (typeof window !== 'undefined') {
   window.arkfile = window.arkfile || {};
 
-  import('./shares/share-access').then(module => {
+  import('./shares/share-access').then((module) => {
     window.arkfile!.shares = {
       ...(window.arkfile!.shares || {}),
       ShareAccessUI: module.ShareAccessUI,

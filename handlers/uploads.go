@@ -40,8 +40,7 @@ var (
 // client can otherwise open arbitrary numbers of init'd-but-never-completed
 // sessions, occupying storage they have not yet finalized and starving
 // themselves of the ability to upload anything new. The cap is per-user, so
-// it never affects unrelated users. See docs/wip/general-enhancements.md
-// item 4.
+// it never affects unrelated users.
 const maxInProgressUploadSessionsPerUser = 4
 
 // Max allocation defense-in-depth ceiling for appended padding chunk-obscuring bytes.
@@ -206,8 +205,7 @@ func CreateUploadSession(c echo.Context) error {
 	// they cannot interfere with other users. The cleanup marks expired
 	// in-progress sessions as 'abandoned' so they no longer count toward the
 	// cap. The count is taken inside the same transaction as the subsequent
-	// INSERT, so we cannot race past the cap. See docs/wip/general-enhancements.md
-	// item 4.
+	// INSERT, so we cannot race past the cap.
 	if _, err := tx.Exec(
 		`UPDATE upload_sessions
 		    SET status = 'abandoned', updated_at = CURRENT_TIMESTAMP
@@ -232,8 +230,7 @@ func CreateUploadSession(c echo.Context) error {
 		logging.InfoLogger.Printf("User %s blocked at upload session cap (%d in-progress, max %d)",
 			username, inProgressCount, maxInProgressUploadSessionsPerUser)
 		// Stable error code 'too_many_in_progress_uploads' lets clients switch
-		// on a code rather than parsing English. Aligned with the standing
-		// pattern in docs/wip/general-enhancements.md item 9.
+		// on a code rather than parsing English.
 		return JSONErrorCodeData(c, http.StatusTooManyRequests,
 			"too_many_in_progress_uploads",
 			fmt.Sprintf("You have %d upload(s) already in progress (max %d). Cancel one or wait for it to complete or expire.", inProgressCount, maxInProgressUploadSessionsPerUser),

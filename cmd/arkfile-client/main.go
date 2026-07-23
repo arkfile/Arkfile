@@ -1377,11 +1377,9 @@ func loadAuthSession(filePath string) (*AuthSession, error) {
 	return &session, nil
 }
 
-// =====================================================================
-// JWT refresh + 401-refresh-retry helpers (used by long-running batch
-// operations like multi-file upload). See docs/wip/general-enhancements.md
-// items 10 and 11.
-// =====================================================================
+// JWT refresh + 401-refresh-retry helpers used by long-running batch
+// operations such as multi-file upload. Distinguishes fatal auth failures
+// from per-file errors so a batch can continue or abort cleanly.
 
 // jwtRefreshThreshold is how close to expiry the access token may be
 // before we proactively refresh it between files in a batch. Default JWT

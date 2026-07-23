@@ -1,9 +1,9 @@
 // Package billing implements Arkfile's storage-usage meter and credits ledger.
 //
-// It is the single, definitive implementation of docs/wip/storage-credits-v2.md.
 // All balances and amounts are denominated in microcents (1 USD = 100 cents =
 // 100,000,000 microcents). Balances are signed: a user who overdraws their
-// balance simply goes negative; there is no separate deficit column.
+// balance simply goes negative; there is no separate deficit column. See
+// docs/security.md for what metering metadata the server intentionally learns.
 //
 // Public surface:
 //

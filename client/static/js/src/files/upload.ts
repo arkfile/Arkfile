@@ -211,8 +211,8 @@ export class FileIDConflictError extends Error {
  * Decides whether an error should abort an entire batch (fatal) or be
  * recorded against a single file and skipped past (non-fatal).
  *
- * This is the seed of the standing pattern described in
- * docs/wip/general-enhancements.md item 11.
+ * Fatal errors abort the whole batch; non-fatal errors are recorded against
+ * one file so the remaining files can still proceed.
  */
 export function isFatalUploadError(err: unknown): boolean {
   if (err instanceof AuthExpiredError) return true;
@@ -873,8 +873,9 @@ export interface BatchUploadOptions extends Omit<UploadOptions, 'onProgress'> {
  * server cap exceeded). Files after a fatal abort are recorded as
  * skipped[].
  *
- * Sequential by design -- never parallel. See AGENTS.md (mobile/3GB-RAM
- * use case) and docs/wip/general-enhancements.md item 10.
+ * Sequential by design -- never parallel -- so a constrained device (for
+ * example a phone with about 3 GB of RAM) can encrypt and upload large files
+ * without holding multiple concurrent streams.
  */
 export async function uploadFiles(
   files: File[],

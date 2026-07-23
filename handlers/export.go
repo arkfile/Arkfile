@@ -1,6 +1,7 @@
 // export.go - Handlers for .arkbackup bundle export
 // Streams encrypted file data from S3 as self-contained bundles for offline decryption.
-// See docs/wip/arkbackup-export.md for the bundle format specification.
+// Bundle layout: magic ARKB, version, JSON metadata length + metadata, then
+// encrypted ciphertext matching the on-server object (see docs/api.md Backup Export).
 
 package handlers
 

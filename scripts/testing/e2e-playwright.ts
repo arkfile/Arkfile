@@ -1238,8 +1238,8 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     );
     expect(hasCsrfCookie).toBe(false);
 
-    // Legacy localStorage checks (always false after our migration; kept as
-    // regression guards to catch any accidental re-introduction of token storage).
+    // Regression guards: session tokens must not be stored in localStorage
+    // (auth uses HttpOnly cookies). Fail if either key reappears.
     const hasToken = await sharedPage.evaluate(() =>
       localStorage.getItem('token') !== null
     );
@@ -1281,7 +1281,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
 });
 
 // ============================================================================
-// Isolated registration flow (tranche 3 — separate browser context / Account Key heap)
+// Isolated registration flow (separate browser context / Account Key heap)
 // ============================================================================
 
 test.describe.serial('Arkfile Playwright registration flow', () => {

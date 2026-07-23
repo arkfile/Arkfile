@@ -50,7 +50,7 @@ func TestLogout_Success(t *testing.T) {
 	assert.Contains(t, resp["message"], "Logged out")
 
 	// Verify session cookies were cleared (clearSessionCookies sets MaxAge=-1 + expired Expires).
-	// We check for the new __Host-arkfile-* cookie names (Phase B).
+	// Expect the __Host-arkfile-* cookie names used by the live session cookie helpers.
 	cookies := rec.Result().Cookies()
 	clearedNames := map[string]bool{}
 	for _, cookie := range cookies {
