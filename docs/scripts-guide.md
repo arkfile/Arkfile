@@ -15,8 +15,12 @@ For new users, start with these main entry points:
 scripts/
 ├── complete-setup-test.sh            # Complete setup with testing
 ├── dev-reset.sh                      # Development environment reset
-├── prod-deploy.sh                    # Production VPS first-time deployment
-├── prod-update.sh                    # Production VPS code update (preserves data)
+├── prod-deploy.sh                    # Production VPS first-time deployment (thin wrapper)
+├── prod-update.sh                    # Production VPS code update (thin wrapper; preserves data)
+├── test-deploy.sh                    # Test VPS first-time deployment (thin wrapper)
+├── test-update.sh                    # Test VPS code update (thin wrapper; preserves data)
+├── local-deploy.sh                   # Local/LAN first-time deployment
+├── local-update.sh                   # Local/LAN code update (preserves data)
 ├── setup/                            # Setup and deployment scripts
 │   ├── 00-setup-foundation.sh        # Foundation setup (users, dirs, keys)
 │   ├── 01-setup-users.sh             # Create arkfile system user
@@ -30,6 +34,9 @@ scripts/
 │   ├── build-libopaque-wasm.sh       # Build libopaque WASM module
 │   ├── build.sh                      # Build application binary
 │   ├── deploy.sh                     # Deploy to production
+│   ├── deploy-common.sh              # Shared helpers for deploy/update scripts
+│   ├── vps-first-deploy.sh           # Shared VPS first-deploy body (sourced by prod/test wrappers)
+│   ├── vps-update.sh                 # Shared VPS update body (sourced by prod/test wrappers)
 │   └── uninstall.sh                  # Remove system installation
 ├── testing/                          # Testing and validation scripts
 │   ├── alpine-build-test.sh          # Alpine Linux compatibility testing

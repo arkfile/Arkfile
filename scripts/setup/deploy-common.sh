@@ -12,8 +12,15 @@
 #
 # and (for scripts that render the Caddyfile) SCRIPT_DIR pointing at scripts/.
 #
+# Color variables (RED/GREEN/YELLOW/BLUE/CYAN/NC) must be set by the caller.
+# SECRETS_ENV must be set for read_secrets_env_value and update scripts.
+#
 # It does NOT redefine ARKFILE_DIR / ARKFILE_USER / ARKFILE_GROUP; callers
 # own those so that local vs test vs prod defaults stay where they are.
+#
+# Also provides shared build wipe/run/verify helpers and update backup/static
+# sync used by VPS and local update/deploy paths. VPS-specific first-deploy
+# and update bodies live in setup/vps-first-deploy.sh and setup/vps-update.sh.
 
 # Colored status output. The six deploy/update scripts share this exact body.
 print_status() {
@@ -121,4 +128,172 @@ validate_storage_backend() {
 read_secrets_env_value() {
     local key="$1"
     grep "^${key}=" "$SECRETS_ENV" 2>/dev/null | head -1 | cut -d'=' -f2-
+}
+
+# Clear TypeScript / service-worker build caches so the next build regenerates bundles.
+clear_frontend_build_caches() {
+    rm -f client/static/js/.buildcache
+    rm -rf client/static/js/dist/*
+    rm -f client/static/js/sw-download.js client/static/js/sw-download.js.map
+}
+
+# Wipe binary/static/schema build outputs. When SKIP_C_LIBS=true, preserve C libs under BUILD_CLIBS.
+wipe_build_artifacts_preserving_c_libs_if_skipping() {
+    if [ ! -d "$BUILD_ROOT" ]; then
+        return 0
+    fi
+    if [ "$SKIP_C_LIBS" = "true" ]; then
+        rm -rf "$BUILD_BIN" "$BUILD_CLIENT" "$BUILD_DATABASE" "$BUILD_SYSTEMD" "$BUILD_WEBROOT" 2>/dev/null || true
+        rm -f "$BUILD_ROOT/version.json" 2>/dev/null || true
+    else
+        rm -rf "$BUILD_ROOT"
+    fi
+}
+
+# First-time deploy: default to rebuilding C libs unless they already exist (unless --force-rebuild-all).
+decide_skip_c_libs_for_first_deploy() {
+    SKIP_C_LIBS=false
+    if [ "$FORCE_REBUILD_ALL" = "true" ]; then
+        print_status "INFO" "--force-rebuild-all: deleting entire build directory"
+        rm -rf "$BUILD_ROOT"
+    elif c_libs_exist; then
+        SKIP_C_LIBS=true
+        print_status "INFO" "Found existing C libraries, will skip rebuild"
+    fi
+}
+
+# Update path: prefer reusing existing C libs; rebuild when forced or missing.
+decide_skip_c_libs_for_update() {
+    SKIP_C_LIBS=true
+    if [ "$FORCE_REBUILD_ALL" = "true" ]; then
+        print_status "INFO" "--force-rebuild-all: will rebuild C libraries and WASM"
+        SKIP_C_LIBS=false
+        if [ -d "$BUILD_ROOT" ]; then
+            rm -rf "$BUILD_ROOT"
+        fi
+    elif c_libs_exist; then
+        print_status "INFO" "Existing C libraries found, skipping C rebuild (use --force-rebuild-all to override)"
+    else
+        print_status "WARNING" "C libraries not found, will build them"
+        SKIP_C_LIBS=false
+    fi
+}
+
+# Run scripts/setup/build.sh as the original user. Remaining args are forwarded after --build-only
+# (pass --production for VPS builds; omit for local).
+run_application_build() {
+    local version="$1"
+    shift
+    export VERSION="$version"
+    export SKIP_C_LIBS="$SKIP_C_LIBS"
+    fix_go_ownership
+    if ! run_as_user ./scripts/setup/build.sh --build-only "$@"; then
+        print_status "ERROR" "Build failed"
+        exit 1
+    fi
+    fix_go_ownership
+}
+
+# Verify critical outputs under BUILD_* after a successful build.
+verify_build_tree_artifacts() {
+    [ -f "$BUILD_BIN/arkfile" ] || { print_status "ERROR" "arkfile binary missing after build"; exit 1; }
+    [ -f "$BUILD_BIN/arkfile-client" ] || { print_status "ERROR" "arkfile-client binary missing after build"; exit 1; }
+    [ -f "$BUILD_BIN/arkfile-admin" ] || { print_status "ERROR" "arkfile-admin binary missing after build"; exit 1; }
+    [ -f "$BUILD_CLIENT/static/js/dist/app.js" ] || { print_status "ERROR" "TypeScript bundle missing after build"; exit 1; }
+    [ -f "$BUILD_CLIENT/static/js/libopaque.js" ] || { print_status "ERROR" "libopaque.js missing after build"; exit 1; }
+}
+
+# Verify critical files under ARKFILE_DIR after deploy.sh (or equivalent install).
+verify_deployed_app_artifacts() {
+    [ -x "$ARKFILE_DIR/bin/arkfile" ] || { print_status "ERROR" "arkfile binary missing"; exit 1; }
+    [ -x "$ARKFILE_DIR/bin/arkfile-client" ] || { print_status "ERROR" "arkfile-client binary missing"; exit 1; }
+    [ -x "$ARKFILE_DIR/bin/arkfile-admin" ] || { print_status "ERROR" "arkfile-admin binary missing"; exit 1; }
+    [ -f "$ARKFILE_DIR/client/static/js/dist/app.js" ] || { print_status "ERROR" "TypeScript bundle missing"; exit 1; }
+    [ -f "$ARKFILE_DIR/client/static/js/libopaque.js" ] || { print_status "ERROR" "libopaque.js missing"; exit 1; }
+}
+
+# Backup live binaries (and rqlite data if running), prune to 3 backups, install rollback trap.
+# Arg 1: space-separated systemd units to stop/start on rollback (e.g. "arkfile" or "caddy arkfile").
+backup_binaries_before_overwrite() {
+    local rollback_services="${1:-arkfile}"
+
+    if [ ! -x "$ARKFILE_DIR/bin/arkfile" ]; then
+        return 0
+    fi
+
+    BACKUP_DIR="$ARKFILE_DIR/backups/bin-$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$BACKUP_DIR"
+    cp "$ARKFILE_DIR/bin/arkfile" "$ARKFILE_DIR/bin/arkfile-client" "$ARKFILE_DIR/bin/arkfile-admin" "$BACKUP_DIR/" 2>/dev/null || true
+
+    if systemctl is-active --quiet rqlite 2>/dev/null; then
+        print_status "INFO" "Backing up rqlite physical database..."
+        systemctl stop rqlite || { print_status "WARNING" "Failed to stop rqlite for backup; continuing anyway"; }
+        if [ -d "$ARKFILE_DIR/var/lib/rqlite" ]; then
+            cp -r "$ARKFILE_DIR/var/lib/rqlite" "$BACKUP_DIR/"
+        fi
+        systemctl start rqlite || { print_status "ERROR" "Failed to restart rqlite after backup"; exit 1; }
+        print_status "SUCCESS" "rqlite physical database backed up"
+    fi
+
+    chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/backups"
+    print_status "SUCCESS" "Current version backed up to $BACKUP_DIR"
+
+    # Globals so the EXIT trap can see them after this function returns.
+    BACKUP_ROLLBACK_SERVICES="$rollback_services"
+
+    rollback_on_failure() {
+        local exit_code=$?
+        if [ $exit_code -ne 0 ]; then
+            print_status "ERROR" "Update failed with exit code $exit_code! Triggering automatic rollback to previous version..."
+            # shellcheck disable=SC2086
+            systemctl stop $BACKUP_ROLLBACK_SERVICES 2>/dev/null || true
+            if [ -d "$BACKUP_DIR" ]; then
+                cp "$BACKUP_DIR"/arkfile* "$ARKFILE_DIR/bin/" 2>/dev/null || true
+                chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/bin"
+                if [ -d "$BACKUP_DIR/rqlite" ]; then
+                    systemctl stop rqlite 2>/dev/null || true
+                    rm -rf "$ARKFILE_DIR/var/lib/rqlite" 2>/dev/null || true
+                    cp -r "$BACKUP_DIR/rqlite" "$ARKFILE_DIR/var/lib/rqlite"
+                    chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/var/lib/rqlite"
+                    systemctl start rqlite 2>/dev/null || true
+                fi
+            fi
+            # shellcheck disable=SC2086
+            systemctl start $BACKUP_ROLLBACK_SERVICES 2>/dev/null || true
+            print_status "SUCCESS" "Rollback complete"
+            exit "$exit_code"
+        fi
+    }
+    trap 'rollback_on_failure' EXIT
+
+    local backup_count
+    backup_count=$(ls -1d "$ARKFILE_DIR/backups/bin-"* 2>/dev/null | wc -l)
+    if [ "$backup_count" -gt 3 ]; then
+        ls -1d "$ARKFILE_DIR/backups/bin-"* 2>/dev/null | head -n -3 | xargs rm -rf
+        print_status "INFO" "Pruned old backups (kept 3 most recent)"
+    fi
+}
+
+install_binaries_from_build() {
+    print_status "INFO" "Deploying Go binaries..."
+    install -m 755 -o "$ARKFILE_USER" -g "$ARKFILE_GROUP" "$BUILD_BIN/arkfile"        "$ARKFILE_DIR/bin/arkfile"
+    install -m 755 -o "$ARKFILE_USER" -g "$ARKFILE_GROUP" "$BUILD_BIN/arkfile-client" "$ARKFILE_DIR/bin/arkfile-client"
+    install -m 755 -o "$ARKFILE_USER" -g "$ARKFILE_GROUP" "$BUILD_BIN/arkfile-admin"  "$ARKFILE_DIR/bin/arkfile-admin"
+    print_status "SUCCESS" "Binaries deployed"
+}
+
+sync_static_assets_from_build() {
+    print_status "INFO" "Deploying static assets (with directory cleanup for stale assets)..."
+    rm -rf "$ARKFILE_DIR/client/static/js/dist" 2>/dev/null || true
+    cp -r "$BUILD_CLIENT/static/." "$ARKFILE_DIR/client/static/"
+    chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/client"
+    print_status "SUCCESS" "Static assets deployed"
+}
+
+sync_database_schema_from_build() {
+    print_status "INFO" "Deploying updated database schema..."
+    if [ -d "$BUILD_ROOT/database" ]; then
+        cp -r "$BUILD_ROOT/database/." "$ARKFILE_DIR/database/"
+        chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/database"
+    fi
 }

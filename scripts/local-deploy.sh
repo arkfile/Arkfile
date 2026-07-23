@@ -106,16 +106,7 @@ if [ -z "$ADMIN_USERNAME" ]; then
     exit 1
 fi
 
-# Username validation is provided by deploy-common.sh (validate_username).
-
-if ! validate_username "$ADMIN_USERNAME"; then
-    echo ""
-    echo "Username requirements: 10-50 characters, lowercase letters/numbers/underscore/hyphen/period/comma"
-    echo "Cannot start or end with special characters, no consecutive special characters"
-    exit 1
-fi
-
-# Source shared build configuration
+# Source shared build configuration and helpers before username validation
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/setup/build-config.sh"
 
@@ -141,6 +132,13 @@ ORIGINAL_GID="${SUDO_GID:-$(id -g)}"
 # validate_username, validate_storage_backend, read_secrets_env_value).
 # Color vars above and ARKFILE_DIR must be set before this is sourced.
 source "$SCRIPT_DIR/setup/deploy-common.sh"
+
+if ! validate_username "$ADMIN_USERNAME"; then
+    echo ""
+    echo "Username requirements: 10-50 characters, lowercase letters/numbers/underscore/hyphen/period/comma"
+    echo "Cannot start or end with special characters, no consecutive special characters"
+    exit 1
+fi
 
 # Helper: fix Go file ownership (verbose wrapper)
 fix_go_ownership() {
@@ -481,58 +479,24 @@ echo "============================="
 
 fix_go_ownership
 
-# Check C libraries
-SKIP_C_LIBS=false
-if [ "$FORCE_REBUILD_ALL" = "true" ]; then
-    print_status "INFO" "--force-rebuild-all: Deleting entire build directory"
-    rm -rf "$BUILD_ROOT"
-    print_status "SUCCESS" "Build directory deleted"
-elif c_libs_exist; then
-    SKIP_C_LIBS=true
-    print_status "INFO" "Found existing C libraries, will skip rebuild"
-    print_status "INFO" "Use --force-rebuild-all to force C library rebuild"
-fi
+decide_skip_c_libs_for_first_deploy
 
 # Do NOT set LIBOPAQUE_DEFINES (no WASM trace logging for local deployment)
 unset LIBOPAQUE_DEFINES
 print_status "INFO" "WASM trace logging disabled (production build)"
 
-# Force fresh TypeScript rebuild
 print_status "INFO" "Forcing fresh TypeScript rebuild..."
-rm -f client/static/js/.buildcache
-rm -rf client/static/js/dist/*
-# Also remove the streaming-download SW build artifact (top-level), so it
-# is regenerated fresh from src/sw-download.ts on every run.
-rm -f client/static/js/sw-download.js client/static/js/sw-download.js.map
+clear_frontend_build_caches
 
-# Clean build artifacts (preserve C libraries)
 print_status "INFO" "Cleaning build artifacts..."
-if [ -d "$BUILD_ROOT" ]; then
-    if [ "$SKIP_C_LIBS" = "true" ]; then
-        print_status "INFO" "Preserving C libraries in $BUILD_CLIBS"
-        rm -rf "$BUILD_BIN" "$BUILD_CLIENT" "$BUILD_DATABASE" "$BUILD_SYSTEMD" "$BUILD_WEBROOT" 2>/dev/null || true
-        rm -f "$BUILD_ROOT/version.json" 2>/dev/null || true
-        print_status "SUCCESS" "Build artifacts cleaned (C libraries preserved)"
-    else
-        rm -rf "$BUILD_ROOT"
-        print_status "SUCCESS" "Build artifacts cleaned (including C libraries)"
-    fi
+wipe_build_artifacts_preserving_c_libs_if_skipping
+if [ "$SKIP_C_LIBS" = "true" ]; then
+    print_status "SUCCESS" "Build artifacts cleaned (C libraries preserved)"
+else
+    print_status "SUCCESS" "Build artifacts cleaned (including C libraries)"
 fi
 
-# Set version and build
-FALLBACK_VERSION="local-$(date +%Y%m%d-%H%M%S)"
-export VERSION="$FALLBACK_VERSION"
-export SKIP_C_LIBS="$SKIP_C_LIBS"
-
-fix_go_ownership
-
-# Run build as original user
-if ! run_as_user ./scripts/setup/build.sh --build-only; then
-    print_status "ERROR" "Build failed"
-    exit 1
-fi
-
-fix_go_ownership
+run_application_build "local-$(date +%Y%m%d-%H%M%S)"
 print_status "SUCCESS" "Application build complete"
 echo ""
 
@@ -547,36 +511,8 @@ fi
 
 # Verify critical files
 print_status "INFO" "Verifying critical files..."
-
-if [ ! -f "$ARKFILE_DIR/client/static/js/libopaque.js" ]; then
-    print_status "ERROR" "libopaque.js missing from $ARKFILE_DIR"
-    exit 1
-fi
-print_status "SUCCESS" "libopaque.js verified"
-
-if [ ! -f "$ARKFILE_DIR/client/static/js/dist/app.js" ]; then
-    print_status "ERROR" "TypeScript bundle missing from $ARKFILE_DIR"
-    exit 1
-fi
-print_status "SUCCESS" "TypeScript bundle verified"
-
-if [ ! -x "$ARKFILE_DIR/bin/arkfile" ]; then
-    print_status "ERROR" "arkfile binary missing or not executable"
-    exit 1
-fi
-print_status "SUCCESS" "arkfile binary verified"
-
-if [ ! -x "$ARKFILE_DIR/bin/arkfile-client" ]; then
-    print_status "ERROR" "arkfile-client binary missing or not executable"
-    exit 1
-fi
-print_status "SUCCESS" "arkfile-client binary verified"
-
-if [ ! -x "$ARKFILE_DIR/bin/arkfile-admin" ]; then
-    print_status "ERROR" "arkfile-admin binary missing or not executable"
-    exit 1
-fi
-print_status "SUCCESS" "arkfile-admin binary verified"
+verify_deployed_app_artifacts
+print_status "SUCCESS" "Critical deploy artifacts verified"
 
 print_status "SUCCESS" "All critical files in place"
 echo ""

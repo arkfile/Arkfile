@@ -2,7 +2,7 @@
 
 Status: draft (revised after cross-check against the tree)
 Created: 2026-07-21
-Revised: 2026-07-23
+Revised: 2026-07-23 (deploy/update shared library expansion complete; syntax/help verified)
 Scope: Cross-stack hygiene after the archived server, CLI, and frontend cleanup audits. Greenfield: delete unused paths; no compatibility shims. Prefer honest naming and one canonical path per operation. This document uses descriptive headings only — do not introduce numbered, lettered, phase, tranche, or tier labels from this plan into source, tests, scripts, or comments.
 
 Prior audits (reference only; do not edit): `docs/wip/archive/server-cleanup.md`, `docs/wip/archive/cli-cleanup.md`, `docs/wip/archive/frontend-cleanup.md`.
@@ -13,25 +13,25 @@ One canonical way per client operation. Fail closed. Delete dead code rather tha
 
 ## Recommended focus order
 
-1. Digest and size semantics clarity (correctness and threat-model honesty) — done
-2. Dead code, WIP certificate scripts, and other misleading operator/code surfaces — done
-3. Deploy/update shared library expansion (ops safety; behavior-preserving extract) — next
+1. Digest and size semantics clarity (correctness and threat-model honesty) — done; e2e green
+2. Dead code, WIP certificate scripts, and other misleading operator/code surfaces — done; e2e green
+3. Deploy/update shared library expansion (ops safety; behavior-preserving extract) — done; bash -n + help smoke verified
 
-Defer frontend `app.ts` decomposition and broad planning-label renames until after deploy-common or in parallel with low-risk hygiene.
+Defer frontend `app.ts` decomposition and broad planning-label renames; next recommended focus is planning-label hygiene or `app.ts` decomposition.
 
 ## Progress tracker
 
 | Workstream | Status | Notes |
 |------------|--------|-------|
-| Digest and size semantics clarity | [x] | Renamed stream digest column/API; omitted from metadata; security.md updated; dead `upload_sessions.encrypted_hash` removed |
-| Dead code and legacy wrappers | [x] | Removed GetEntityID; e2e aliases; TS formatFileSize alias; share-access duplicate formatBytes; credits adjustment; billing overdrawn canonical name; billing_projection silence import; compat comments reworded; e2e output redaction removed earlier |
-| WIP certificate scripts removal | [x] | Deleted renew/validate scripts; updated setup.md, scripts-guide.md, 04-setup-tls-certs.sh |
-| Dual surfaces review | [x] | Dropped duplicate `GET /api/public/shares/:id` HTML page; keep `/shared/:id` + API subpaths; billing JSON uses `users_currently_overdrawn` only |
-| Deploy/update shared library expansion | [ ] | Grow deploy-common; thin prod/test/local wrappers; no silent profile drift |
+| Digest and size semantics clarity | [x] | Renamed stream digest column/API; omitted from metadata; security.md updated; dead `upload_sessions.encrypted_hash` removed; e2e green |
+| Dead code and legacy wrappers | [x] | Removed GetEntityID; e2e aliases; TS formatFileSize alias; share-access duplicate formatBytes; credits adjustment; billing overdrawn canonical name; billing_projection silence import; compat comments reworded; e2e output redaction removed earlier; e2e green |
+| WIP certificate scripts removal | [x] | Deleted renew/validate scripts; updated setup.md, scripts-guide.md, 04-setup-tls-certs.sh; e2e green |
+| Dual surfaces review | [x] | Dropped duplicate `GET /api/public/shares/:id` HTML page; keep `/shared/:id` + API subpaths; billing JSON uses `users_currently_overdrawn` only; e2e green |
+| Deploy/update shared library expansion | [x] | Thin prod/test wrappers; shared `vps-first-deploy.sh` / `vps-update.sh`; deploy-common build/backup/static helpers; local wired onto same helpers; invocation paths unchanged |
 | Frontend helper consolidation leftovers | [x] | Folded into dead-code pass (formatBytes) |
 | Frontend app.ts decomposition | [ ] | Logical modules; thin entrypoint; after contracts stabilize |
 | Planning-label comment hygiene | [ ] | Production source + e2e + Playwright |
-| End-to-end verification | [ ] | Full suite after changes |
+| End-to-end verification (through completed workstreams) | [x] | Developer confirmed full e2e suite green after digest + dead-surfaces (including share page / billing / cert doc changes). Re-run after each remaining workstream. |
 
 ---
 
@@ -60,7 +60,7 @@ Findings from re-checking this draft against the codebase. Treat these as part o
 
 ### Deploy common
 
-- `deploy-common.sh` is still small (~124 lines). Prod/test deploy scripts are ~1165 lines each and near-duplicates; update scripts similarly. Expansion is warranted; treat as behavior-preserving extract with explicit “no silent prod/test divergence” checks.
+- Deploy/update shared library expansion is done: thin prod/test wrappers, shared `vps-first-deploy.sh` / `vps-update.sh`, and expanded `deploy-common.sh` (build wipe/run/verify, backup/rollback, static/schema sync) with local wired onto the same helpers.
 
 ### Test impact gap (important)
 
@@ -202,24 +202,30 @@ Actions:
 
 ## Expand shared deploy and update library
 
-`scripts/setup/deploy-common.sh` already holds `print_status`, `run_as_user`, stop helpers, ownership checks, and username/storage validation. Prod and test deploy scripts (near-duplicates, ~1165 lines each) and update scripts still duplicate large bodies of logic.
+Completed 2026-07-23.
 
-### Target
+### Layout
 
-Grow `deploy-common.sh` (or split into `deploy-common.sh` plus a VPS-specific common file if size warrants) so that:
+- `scripts/setup/deploy-common.sh` — shared print/run/stop/ownership/validation helpers, plus build wipe/run/verify, backup-before-overwrite with rollback trap, binary/static/schema sync.
+- `scripts/setup/vps-first-deploy.sh` — parameterized VPS first-time deploy body (sourced by prod/test wrappers).
+- `scripts/setup/vps-update.sh` — parameterized VPS update body (sourced by prod/test wrappers).
+- Thin wrappers keep only profile differences: `prod-deploy.sh` / `test-deploy.sh` (~48 lines), `prod-update.sh` / `test-update.sh` (~39 lines).
+- `local-deploy.sh` / `local-update.sh` reuse the common build and update helpers; local retains LAN IP, self-signed TLS, and no-Caddy paths. Fixed `validate_username` being called before `deploy-common.sh` was sourced.
 
-- Shared: firewall, Caddy user and directories, application build, artifact deploy and verify, backup-before-overwrite, static sync, version stamp, and secrets.env domain/storage detection used by updates.
-- Thin wrappers keep only profile differences:
-  - **prod-deploy / test-deploy**: domain defaults, VERSION prefix, DB username, storage ID suffix, secrets.env labels, help text.
-  - **local-deploy**: LAN IP, self-signed TLS, interactive storage prompts, no Caddy.
-  - **update scripts**: same profile reads from existing `secrets.env` / caddy-env; no data wipe.
+### Profile differences preserved
 
-### Rules
+- VERSION prefix (`prod` / `test`), rqlite username, Seaweed access key / bucket / provider ID, Caddyfile template, banners and help text.
+- `ARKFILE_ENV=production` for both VPS profiles (unchanged from prior scripts).
+- Seaweed identity `name` remains `arkfile` for both profiles.
+- Test existing-deployment hint now points at `scripts/test-update.sh` (was a stale “future test-update.sh” string).
+- Local builds still omit `--production`; VPS builds still pass it.
+
+### Rules (still apply)
 
 - Callers still set `ARKFILE_DIR`, user, and group before sourcing (existing contract).
 - No silent behavior change between prod and test beyond today's intentional differences.
-- After refactor, the diff between prod and test wrappers should be small and reviewable.
-- Update AGENTS.md only if script invocation paths change (prefer they do not).
+- Diff between prod and test wrappers is small and reviewable.
+- AGENTS.md invocation paths unchanged (`scripts/prod-deploy.sh`, etc.).
 
 ---
 
@@ -252,6 +258,11 @@ Archived WIP documents under `docs/wip/archive/` remain untouched.
 - `cd client/static/js && bun test`
 - Developer: `sudo bash scripts/dev-reset.sh`, then `bash scripts/testing/e2e-test.sh`, then `sudo bash scripts/testing/e2e-playwright.sh`
 - Spot-check: upload → list → download verify uses the plaintext content digest; complete-response and metadata stream-hash field names are consistent and honestly typed; `docs/security.md` lists all three digests; deploy wrappers still call through common helpers; WIP cert scripts and doc refs are gone
+
+### Verification log
+
+- 2026-07-23: After digest/size rename and dead-surfaces (share page singleton, WIP cert deletion, billing key collapse, related dead code), developer confirmed e2e suite green. Re-run the full verification block after deploy-common expansion and again after any `app.ts` / planning-label work.
+- 2026-07-23: Deploy/update shared library expansion complete (`bash -n` on all wrappers and shared bodies; `--help` smoke for prod/test deploy and update). Operator deploy/update on a real host not exercised in this pass; re-run e2e after any follow-on code changes as usual.
 
 ## Out of scope
 
