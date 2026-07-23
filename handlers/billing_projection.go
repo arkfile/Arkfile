@@ -7,7 +7,6 @@ import (
 
 	"github.com/arkfile/Arkfile/billing"
 	"github.com/arkfile/Arkfile/config"
-	"github.com/arkfile/Arkfile/database"
 	"github.com/arkfile/Arkfile/models"
 )
 
@@ -269,7 +268,3 @@ func SetProcessPaymentFunc(fn func(db *sql.DB, username string, amountUSDMicroce
 func SetSettlePaymentInvoiceFunc(fn func(db *sql.DB, invoice *models.PaymentInvoice, paymentType string) (*models.CreditTransaction, error)) {
 	SettlePaymentInvoiceFunc = fn
 }
-
-// silence the unused-import linter when database isn't yet used (it is
-// referenced through the *sql.DB parameter; this assertion documents intent).
-var _ = database.DB

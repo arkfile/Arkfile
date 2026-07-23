@@ -380,18 +380,15 @@ AWS_S3_BUCKET_NAME=your-s3-bucket
 
 **Development Certificates:**
 ```bash
-# Generate self-signed certificates
+# Generate self-signed certificates (local/LAN)
 sudo ./scripts/setup/04-setup-tls-certs.sh
-
-# Validate certificates
-./scripts/maintenance/validate-certificates.sh
 ```
 
 **Production Certificates:**
+Production VPS deployments use Caddy with Let's Encrypt (DNS-01 via deSEC) from `scripts/prod-deploy.sh` / `scripts/prod-update.sh`. Do not use the local self-signed TLS setup scripts for public domains.
 ```bash
-# Set domain for production
-export ARKFILE_DOMAIN=yourdomain.com
-sudo -E ./scripts/setup/04-setup-tls-certs.sh
+# Example first-time production deploy (see AGENTS.md)
+sudo bash scripts/prod-deploy.sh --domain yourdomain.com --desec-token <token> --admin-username <name>
 ```
 
 ### Certificate Architecture
@@ -414,22 +411,11 @@ sudo -E ./scripts/setup/04-setup-tls-certs.sh
 
 ### Certificate Management
 
-**Certificate Renewal:**
+Local self-signed certificates are created by `scripts/setup/04-setup-tls-certs.sh`. Production TLS renewal is handled by Caddy + Let's Encrypt (configured by the deploy/update scripts), not by separate maintenance scripts.
+
+To inspect a local certificate:
 ```bash
-# Automatic renewal (checks expiration)
-./scripts/maintenance/renew-certificates.sh
-
-# Force renewal of all certificates
-./scripts/maintenance/renew-certificates.sh --force
-```
-
-**Certificate Validation:**
-```bash
-# Comprehensive validation
-./scripts/maintenance/validate-certificates.sh
-
-# Detailed certificate information
-./scripts/maintenance/validate-certificates.sh --details
+openssl x509 -in /opt/arkfile/etc/keys/tls/arkfile/server.crt -noout -dates -subject
 ```
 
 ## Administrative Validation
@@ -555,9 +541,6 @@ sudo journalctl -u arkfile --since "24 hours ago"
 # System updates
 sudo apt update && sudo apt upgrade
 
-# Certificate validation
-./scripts/maintenance/validate-certificates.sh
-
 # Check for dependency updates
 ./scripts/maintenance/check-updates.sh
 ```
@@ -630,9 +613,6 @@ sudo -u arkfile ls -la /opt/arkfile/var/lib/rqlite/
 
 **TLS Certificate Issues:**
 ```bash
-# Validate certificates
-./scripts/maintenance/validate-certificates.sh
-
 # Check certificate expiration
 openssl x509 -in /opt/arkfile/etc/keys/tls/arkfile/server.crt -noout -dates
 

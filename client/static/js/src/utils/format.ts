@@ -18,8 +18,3 @@ export function formatBytes(bytes: number): string {
   const value = bytes / Math.pow(k, i);
   return `${parseFloat(value.toFixed(2))} ${sizes[i]}`;
 }
-
-/** Alias used by share-list and similar UI. */
-export function formatFileSize(bytes: number): string {
-  return formatBytes(bytes);
-}

@@ -616,14 +616,14 @@ func TimingProtectionMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 // These are the anonymous (no-auth) share-access paths where a fast response
 // would leak whether a share ID exists, enabling share-URL enumeration at line
 // rate. The protected prefixes MUST stay in sync with the public share route
-// group registered in route_config.go (publicShareGroup at /api/public/shares
-// and the /shared/:id page route). The previous prefix list checked /api/share/
-// which never matched the real /api/public/shares/... routes, silently dropping
-// timing protection on the envelope/metadata/chunk endpoints.
+// group registered in route_config.go (/api/public/shares/* API plus /shared/:id
+// page). The previous prefix list checked /api/share/ which never matched the
+// real /api/public/shares/... routes, silently dropping timing protection on
+// the envelope/metadata/chunk endpoints.
 func requiresTimingProtection(path string) bool {
 	protectedPrefixes := []string{
 		"/api/public/shares/", // Public share envelope/metadata/chunk endpoints (no auth)
-		"/shared/",             // Share access page (no auth)
+		"/shared/",            // Share access page (no auth)
 	}
 
 	for _, prefix := range protectedPrefixes {

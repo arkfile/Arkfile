@@ -98,7 +98,7 @@ func TestEntityIDGeneration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			entityID := service.GetEntityID(tt.ip)
+			entityID := service.GetCompositeEntityID(EntityIDInput{IP: tt.ip})
 
 			// Verify entity ID is not empty
 			if entityID == "" {
@@ -106,7 +106,7 @@ func TestEntityIDGeneration(t *testing.T) {
 			}
 
 			// Verify entity ID is consistent for same IP
-			entityID2 := service.GetEntityID(tt.ip)
+			entityID2 := service.GetCompositeEntityID(EntityIDInput{IP: tt.ip})
 			if entityID != entityID2 {
 				t.Errorf("Entity ID should be consistent for same IP: %s != %s", entityID, entityID2)
 			}
@@ -127,9 +127,9 @@ func TestEntityIDUniqueness(t *testing.T) {
 	ip2 := net.ParseIP("192.168.1.101")
 	ip3 := net.ParseIP("10.0.0.1")
 
-	entityID1 := service.GetEntityID(ip1)
-	entityID2 := service.GetEntityID(ip2)
-	entityID3 := service.GetEntityID(ip3)
+	entityID1 := service.GetCompositeEntityID(EntityIDInput{IP: ip1})
+	entityID2 := service.GetCompositeEntityID(EntityIDInput{IP: ip2})
+	entityID3 := service.GetCompositeEntityID(EntityIDInput{IP: ip3})
 
 	// All entity IDs should be different
 	if entityID1 == entityID2 {
@@ -181,8 +181,8 @@ func TestEntityIDMasterKeyImpact(t *testing.T) {
 
 	testIP := net.ParseIP("192.168.1.100")
 
-	entityID1 := service1.GetEntityID(testIP)
-	entityID2 := service2.GetEntityID(testIP)
+	entityID1 := service1.GetCompositeEntityID(EntityIDInput{IP: testIP})
+	entityID2 := service2.GetCompositeEntityID(EntityIDInput{IP: testIP})
 
 	// Since they have different master keys, entity IDs should be different
 	if entityID1 == entityID2 {
@@ -194,7 +194,7 @@ func TestEntityIDAnonymity(t *testing.T) {
 	service := createTestService(t)
 
 	testIP := net.ParseIP("192.168.1.100")
-	entityID := service.GetEntityID(testIP)
+	entityID := service.GetCompositeEntityID(EntityIDInput{IP: testIP})
 
 	// Verify entity ID doesn't contain the original IP (full string or dotted fragments).
 	ipString := testIP.String()
@@ -214,10 +214,10 @@ func TestEntityIDConsistencyAcrossTimeWindows(t *testing.T) {
 	testIP := net.ParseIP("192.168.1.100")
 
 	// Get entity ID for current time window
-	entityID1 := service.GetEntityID(testIP)
+	entityID1 := service.GetCompositeEntityID(EntityIDInput{IP: testIP})
 
 	// Entity ID should be the same when called multiple times in same time window
-	entityID2 := service.GetEntityID(testIP)
+	entityID2 := service.GetCompositeEntityID(EntityIDInput{IP: testIP})
 
 	if entityID1 != entityID2 {
 		t.Errorf("Entity ID should be consistent within same time window: %s != %s", entityID1, entityID2)
@@ -239,7 +239,7 @@ func TestEntityIDServiceInitialization(t *testing.T) {
 
 	// Test that it can generate entity IDs
 	testIP := net.ParseIP("192.168.1.100")
-	entityID := service.GetEntityID(testIP)
+	entityID := service.GetCompositeEntityID(EntityIDInput{IP: testIP})
 	if entityID == "" {
 		t.Errorf("Service should generate non-empty entity ID")
 	}
@@ -261,7 +261,7 @@ func TestEntityIDCorrelationResistance(t *testing.T) {
 			// Fallback to manual IP construction
 			ip = net.IPv4(192, 168, 1, byte(i))
 		}
-		entityID := service.GetEntityID(ip)
+		entityID := service.GetCompositeEntityID(EntityIDInput{IP: ip})
 		entityIDs = append(entityIDs, entityID)
 	}
 
@@ -288,10 +288,10 @@ func TestEntityIDValidation(t *testing.T) {
 	invalidIDs := []string{
 		"",
 		"123",
-		"1234567890abcdef",                                                    // old 16-char width, now invalid
-		"1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdefg",  // 64 chars but invalid hex
-		"1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdeg",   // invalid hex char
-		"12345678-90abcdef1234567890abcdef1234567890abcdef1234567890abcdef",  // contains dash
+		"1234567890abcdef", // old 16-char width, now invalid
+		"1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdefg", // 64 chars but invalid hex
+		"1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdeg",  // invalid hex char
+		"12345678-90abcdef1234567890abcdef1234567890abcdef1234567890abcdef", // contains dash
 	}
 
 	for _, id := range validIDs {
@@ -369,7 +369,7 @@ func BenchmarkEntityIDGeneration(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		service.GetEntityID(testIP)
+		service.GetCompositeEntityID(EntityIDInput{IP: testIP})
 	}
 }
 
@@ -391,7 +391,7 @@ func BenchmarkEntityIDGenerationDifferentIPs(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		service.GetEntityID(ips[i%1000])
+		service.GetCompositeEntityID(EntityIDInput{IP: ips[i%1000]})
 	}
 }
 

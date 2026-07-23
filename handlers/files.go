@@ -101,20 +101,19 @@ func GetFileMeta(c echo.Context) error {
 	logging.InfoLogger.Printf("File metadata requested: file_id %s (size: %d bytes, chunks: %d)", fileID, file.SizeBytes, totalChunks)
 
 	resp := map[string]interface{}{
-		"file_id":               file.FileID,
-		"owner_username":        file.OwnerUsername, // needed for metadata AAD reconstruction
-		"encrypted_filename":    file.EncryptedFilename,
-		"filename_nonce":        file.FilenameNonce,
-		"encrypted_sha256sum":   file.EncryptedSha256sum,
-		"sha256sum_nonce":       file.Sha256sumNonce,
-		"encrypted_fek":         file.EncryptedFEK,
-		"password_type":         file.PasswordType,
-		"size_bytes":            file.SizeBytes,
-		"chunk_size":            chunkSize,
-		"total_chunks":          totalChunks,
-		"chunk_count":           totalChunks,
-		"chunk_size_bytes":      chunkSize,
-		"encrypted_file_sha256": file.EncryptedFileSha256sum.Valid && file.EncryptedFileSha256sum.String != "",
+		"file_id":             file.FileID,
+		"owner_username":      file.OwnerUsername, // needed for metadata AAD reconstruction
+		"encrypted_filename":  file.EncryptedFilename,
+		"filename_nonce":      file.FilenameNonce,
+		"encrypted_sha256sum": file.EncryptedSha256sum,
+		"sha256sum_nonce":     file.Sha256sumNonce,
+		"encrypted_fek":       file.EncryptedFEK,
+		"password_type":       file.PasswordType,
+		"size_bytes":          file.SizeBytes,
+		"chunk_size":          chunkSize,
+		"total_chunks":        totalChunks,
+		"chunk_count":         totalChunks,
+		"chunk_size_bytes":    chunkSize,
 	}
 	if file.EncryptedPasswordHint != "" && file.PasswordHintNonce != "" {
 		resp["encrypted_password_hint"] = file.EncryptedPasswordHint

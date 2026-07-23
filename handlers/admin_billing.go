@@ -138,8 +138,7 @@ func AdminGetBillingSweepSummary(c echo.Context) error {
 	return JSONResponse(c, http.StatusOK, "Sweep summary retrieved", map[string]interface{}{
 		"days":                      days,
 		"per_day":                   out,
-		"users_currently_negative":  negativeCount,
-		"users_currently_overdrawn": negativeCount, // duplicate alias for the CLI
+		"users_currently_overdrawn": negativeCount,
 	})
 }
 

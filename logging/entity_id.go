@@ -178,13 +178,6 @@ func acceptLanguageBucket(header string) string {
 	return first
 }
 
-// GetEntityID returns a privacy-preserving entity identifier for the given IP address.
-// This is the legacy method that uses IP-only input. Prefer GetCompositeEntityID
-// for new code to get better disambiguation behind shared IPs.
-func (e *EntityIDService) GetEntityID(ip net.IP) string {
-	return e.GetCompositeEntityID(EntityIDInput{IP: ip})
-}
-
 // GetCurrentTimeWindow returns the current time window identifier (YYYY-MM-DD format)
 func (e *EntityIDService) GetCurrentTimeWindow() string {
 	return time.Now().UTC().Format("2006-01-02")

@@ -231,19 +231,21 @@ File sharing is split into two namespaces:
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| GET | `/api/public/shares/:id` | Share access page | Public |
+| GET | `/shared/:id` | Share access page (pretty URL) | Public |
 | GET | `/api/public/shares/:id/envelope` | Get share envelope (encrypted FEK + metadata) | Public |
-| GET | `/api/public/shares/:id/metadata` | Get metadata for chunked download | Download Token |
-| GET | `/api/public/shares/:id/chunks/:chunkIndex` | Download a specific encrypted chunk | Download Token |
+| POST | `/api/public/shares/:id/ticket` | Exchange download token for short-lived share ticket | Public |
+| GET | `/api/public/shares/:id/metadata` | Get metadata for chunked download | Share ticket |
+| GET | `/api/public/shares/:id/chunks/:chunkIndex` | Download a specific encrypted chunk | Share ticket |
 
 **Share Download Flow:**
-1. Get share envelope from `/api/public/shares/:id/envelope`
+1. Open `/shared/:id` (or use CLI) and fetch the share envelope from `/api/public/shares/:id/envelope`
 2. Decrypt envelope with share password to obtain FEK and Download Token
-3. Fetch metadata using Download Token in `X-Download-Token` header
-4. Download each chunk sequentially using the Download Token
-5. Decrypt each chunk using AES-GCM with the FEK
+3. Exchange the Download Token for a short-lived share ticket via `/api/public/shares/:id/ticket`
+4. Fetch metadata using the share ticket
+5. Download each chunk sequentially using the share ticket
+6. Decrypt each chunk using AES-GCM with the FEK
 
-The Download Token is cryptographically bound to the share via AAD (Additional Authenticated Data), preventing token reuse across different shares.
+The Download Token is cryptographically bound to the share via AAD (Additional Authenticated Data), preventing token reuse across different shares. Chunk requests use a short-lived share ticket rather than the static download token.
 
 ---
 

@@ -122,20 +122,20 @@ type HTTPClient struct {
 
 // Response represents a generic API response
 type Response struct {
-	Success             bool                   `json:"success"`
-	Message             string                 `json:"message"`
-	Data                map[string]interface{} `json:"data"`
-	Error               string                 `json:"error"`
-	TempToken           string                 `json:"temp_token"`
-	SessionKey          string                 `json:"session_key"`
-	RequiresMFA         bool                   `json:"requires_mfa"`
-	Token               string                 `json:"token"`
-	RefreshToken        string                 `json:"refresh_token"`
-	ExpiresAt           time.Time              `json:"expires_at"`
-	SessionID           string                 `json:"session_id"`
-	FileID              string                 `json:"file_id"`
-	StorageID           string                 `json:"storage_id"`
-	EncryptedFileSHA256 string                 `json:"encrypted_file_sha256"`
+	Success               bool                   `json:"success"`
+	Message               string                 `json:"message"`
+	Data                  map[string]interface{} `json:"data"`
+	Error                 string                 `json:"error"`
+	TempToken             string                 `json:"temp_token"`
+	SessionKey            string                 `json:"session_key"`
+	RequiresMFA           bool                   `json:"requires_mfa"`
+	Token                 string                 `json:"token"`
+	RefreshToken          string                 `json:"refresh_token"`
+	ExpiresAt             time.Time              `json:"expires_at"`
+	SessionID             string                 `json:"session_id"`
+	FileID                string                 `json:"file_id"`
+	StorageID             string                 `json:"storage_id"`
+	EncryptedStreamSHA256 string                 `json:"encrypted_stream_sha256"`
 }
 
 // ServerFileInfo represents file metadata from server response.
@@ -462,8 +462,8 @@ func (c *HTTPClient) makeRequest(method, endpoint string, payload interface{}, t
 		if val, ok := apiResp.Data["storage_id"].(string); ok {
 			apiResp.StorageID = val
 		}
-		if val, ok := apiResp.Data["encrypted_file_sha256"].(string); ok {
-			apiResp.EncryptedFileSHA256 = val
+		if val, ok := apiResp.Data["encrypted_stream_sha256"].(string); ok {
+			apiResp.EncryptedStreamSHA256 = val
 		}
 		if val, ok := apiResp.Data["expires_at"].(string); ok {
 			if t, err := time.Parse(time.RFC3339, val); err == nil {

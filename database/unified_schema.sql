@@ -34,9 +34,9 @@ CREATE TABLE IF NOT EXISTS file_metadata (
     filename_nonce TEXT NOT NULL,               -- base64-encoded 12-byte nonce for filename encryption
     encrypted_filename TEXT NOT NULL,           -- base64-encoded AES-GCM encrypted filename
     sha256sum_nonce TEXT NOT NULL,              -- base64-encoded 12-byte nonce for sha256 encryption  
-    encrypted_sha256sum TEXT NOT NULL,          -- base64-encoded AES-GCM encrypted sha256 hash
-    encrypted_file_sha256sum CHAR(64),          -- sha256sum of the final encrypted file in storage (pre-padding)
-    stored_blob_sha256sum CHAR(64),             -- sha256sum of the complete S3 object (encrypted data + padding)
+    encrypted_sha256sum TEXT NOT NULL,          -- base64-encoded AES-GCM ciphertext of plaintext-file SHA-256 (AAD label "encrypted_sha256sum")
+    encrypted_stream_sha256sum CHAR(64),        -- plaintext hex SHA-256 of client-encrypted stream before server padding (server-computed)
+    stored_blob_sha256sum CHAR(64),             -- plaintext hex SHA-256 of complete S3 object (encrypted stream + padding)
     encrypted_fek TEXT NOT NULL,                -- base64-encoded AES-GCM encrypted FEK envelope (AAD-bound to file_id + key_type)
     size_bytes BIGINT NOT NULL DEFAULT 0,
     padded_size BIGINT,                         -- Size with padding for privacy/security
@@ -241,7 +241,6 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
     storage_id VARCHAR(36),
     padded_size BIGINT,
     status TEXT NOT NULL DEFAULT 'in_progress',
-    encrypted_hash CHAR(64),
     encrypted_fek TEXT NOT NULL,                -- AAD-bound FEK envelope; never optional
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -409,14 +408,14 @@ CREATE TABLE IF NOT EXISTS user_credits (
 );
 
 -- Credit transactions audit log. Amounts denominated in microcents; both fields signed.
--- transaction_type values: 'usage' (daily storage sweep), 'gift' (admin gift), 'adjustment' (admin set), 'payment' (BTCPay top-up).
+-- transaction_type values: 'usage' (daily storage sweep), 'gift' (admin gift), 'payment' (BTCPay top-up).
 CREATE TABLE IF NOT EXISTS credit_transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     transaction_id TEXT UNIQUE DEFAULT NULL,          -- External transaction ID MUST be unique to prevent double-spend gifts / duplicate charges
     username TEXT NOT NULL,
     amount_usd_microcents BIGINT NOT NULL,            -- Positive for credits, negative for debits
     balance_after_usd_microcents BIGINT NOT NULL,     -- Balance after this transaction (signed)
-    transaction_type TEXT NOT NULL CHECK (transaction_type IN ('usage', 'gift', 'adjustment', 'payment')), -- Constrain transaction_type via CHECK constraint
+    transaction_type TEXT NOT NULL CHECK (transaction_type IN ('usage', 'gift', 'payment')), -- Constrain transaction_type via CHECK constraint
     reason TEXT,                                      -- Human-readable reason
     admin_username TEXT,                              -- NULL for system-generated rows (e.g. usage sweeps)
     metadata TEXT,                                    -- JSON for additional details

@@ -295,7 +295,7 @@ export function setupRegisterForm(): void {
 }
 
 /**
- * Export utility function for compatibility
+ * Form-bound entry point used by app listeners (reads fields from the DOM).
  */
 export async function register(): Promise<void> {
   const usernameInput = document.getElementById('register-username') as HTMLInputElement;

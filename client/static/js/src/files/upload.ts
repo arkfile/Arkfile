@@ -105,8 +105,8 @@ export interface UploadResult {
   fileId: string;
   /** Storage ID (for verification) */
   storageId: string;
-  /** SHA256 hash of encrypted file (server-calculated) */
-  encryptedFileSha256: string;
+  /** SHA-256 of pre-padding encrypted stream (server-calculated plaintext hex) */
+  encryptedStreamSha256: string;
   /** Storage usage info */
   storage: {
     totalBytes: number;
@@ -778,7 +778,7 @@ export async function uploadFile(
       message: string;
       file_id: string;
       storage_id: string;
-      encrypted_file_sha256: string;
+      encrypted_stream_sha256: string;
       storage: {
         total_bytes: number;
         limit_bytes: number;
@@ -800,7 +800,7 @@ export async function uploadFile(
     return {
       fileId: result.file_id,
       storageId: result.storage_id,
-      encryptedFileSha256: result.encrypted_file_sha256,
+      encryptedStreamSha256: result.encrypted_stream_sha256,
       storage: {
         totalBytes: result.storage.total_bytes,
         limitBytes: result.storage.limit_bytes,

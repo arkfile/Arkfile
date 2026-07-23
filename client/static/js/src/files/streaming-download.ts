@@ -90,7 +90,6 @@ export interface ChunkedDownloadMetadata {
   total_chunks: number;
   chunk_count: number;
   chunk_size_bytes: number;
-  encrypted_file_sha256: boolean;
 }
 
 /** Hash verification outcome (mirrors sw-streaming-download). */

@@ -224,7 +224,7 @@ function makeCompleteResponse(fileId: string): string {
     message: 'ok',
     file_id: fileId,
     storage_id: 'store-' + fileId,
-    encrypted_file_sha256: 'abc',
+    encrypted_stream_sha256: 'abc',
     storage: { total_bytes: 100, limit_bytes: 10000, available_bytes: 9900 },
   });
 }

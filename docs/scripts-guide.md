@@ -44,7 +44,6 @@ scripts/
 │   ├── check-updates.sh              # Check for dependency updates
 │   ├── emergency-procedures.sh       # Emergency response procedures
 │   ├── health-check.sh               # System health monitoring
-│   ├── renew-certificates.sh         # Renew TLS certificates
 │   ├── rotate-user-secret-master.sh  # user-secret master rotation runbook wrapper
 │   ├── rotate-envelope-master.sh     # envelope master key rotation runbook wrapper
 │   ├── rotate-opaque-keys.sh         # Rotate OPAQUE server keys
@@ -52,7 +51,6 @@ scripts/
 │   ├── security-cleanup.sh           # Security cleanup utilities
 │   ├── update-dependencies.sh        # Update system dependencies
 │   ├── update-go-deps.sh             # Update Go modules
-│   ├── validate-certificates.sh      # Validate TLS certificates
 │   └── validate-deployment.sh        # Validate deployment
 └── wip/                              # Work-in-progress scripts
 ```
@@ -320,11 +318,6 @@ Exports `MFA_SECRET` and test file paths to `scripts/testing/e2e-playwright.ts`.
 - **Flags**: `--acknowledge-no-contact-info` when the user has no saved contact info on file
 - **Effect**: Deletes MFA credentials, backup codes, and usage logs; force-logouts all sessions; user must complete MFA setup on next login. Contact info is preserved.
 
-#### `renew-certificates.sh`
-**Purpose**: Renew TLS certificates  
-**Usage**: `./scripts/maintenance/renew-certificates.sh`  
-**Renews**: TLS certificates before expiration
-
 #### `check-updates.sh`
 **Purpose**: Check for system updates  
 **Usage**: `./scripts/maintenance/check-updates.sh`  
@@ -344,11 +337,6 @@ Exports `MFA_SECRET` and test file paths to `scripts/testing/e2e-playwright.ts`.
 **Purpose**: Validate deployment integrity  
 **Usage**: `./scripts/maintenance/validate-deployment.sh [--production]`  
 **Validates**: Configuration, services, security
-
-#### `validate-certificates.sh`
-**Purpose**: Validate TLS certificates  
-**Usage**: `./scripts/maintenance/validate-certificates.sh`  
-**Validates**: Certificate validity, chains, expiration
 
 #### `admin-validation-guide.sh`
 **Purpose**: Interactive admin validation  

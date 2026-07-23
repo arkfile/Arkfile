@@ -466,7 +466,7 @@ func printPriceSummary(d map[string]interface{}) {
 
 // printSweepSummary renders the per-day sweep activity table.
 func printSweepSummary(d map[string]interface{}, days int) {
-	negativeCount := int(safeFloat64(d, "users_currently_negative"))
+	negativeCount := int(safeFloat64(d, "users_currently_overdrawn"))
 	fmt.Printf("Sweep summary (last %d days):\n", days)
 	fmt.Printf("  Users currently with negative balance: %d\n\n", negativeCount)
 

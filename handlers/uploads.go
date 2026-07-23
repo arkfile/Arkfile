@@ -785,15 +785,15 @@ func CompleteUpload(c echo.Context) error {
 	// int64 or float64 depending on value magnitude. Type switches convert
 	// them cleanly — no NullFloat64 workarounds.
 	var (
-		ownerUsername   string
-		fileID          sql.NullString
-		storageID       sql.NullString
-		storageUploadID sql.NullString
-		status          string
-		totalChunks     int
-		encPasswordHint sql.NullString
+		ownerUsername     string
+		fileID            sql.NullString
+		storageID         sql.NullString
+		storageUploadID   sql.NullString
+		status            string
+		totalChunks       int
+		encPasswordHint   sql.NullString
 		passwordHintNonce sql.NullString
-		passwordType    sql.NullString
+		passwordType      sql.NullString
 	)
 
 	// interface{} scans for numeric fields (rqlite may return int64 or float64)
@@ -1011,10 +1011,10 @@ func CompleteUpload(c echo.Context) error {
 	// Create the final file metadata record with chunk info for resumable downloads.
 	// size_bytes = declaredSize (the encrypted ciphertext size, used for chunk byte-range calculations on download).
 	// padded_size = paddedSize (the actual S3 object size, includes crypto-random padding appended to the last chunk).
-	// encrypted_file_sha256sum = hash of encrypted data only (pre-padding).
+	// encrypted_stream_sha256sum = hash of encrypted data only (pre-padding).
 	// stored_blob_sha256sum = hash of all bytes stored in S3 (encrypted data + padding).
 	_, err = tx.Exec(`
-		INSERT INTO file_metadata (file_id, storage_id, owner_username, encrypted_password_hint, password_hint_nonce, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, encrypted_file_sha256sum, stored_blob_sha256sum, encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes)
+		INSERT INTO file_metadata (file_id, storage_id, owner_username, encrypted_password_hint, password_hint_nonce, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, encrypted_stream_sha256sum, stored_blob_sha256sum, encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		fileID.String, storageID.String, username, encPasswordHint.String, passwordHintNonce.String, passwordType.String, filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, serverCalculatedHash, storedBlobHash, encryptedFek, declaredSize, paddedSize, chunkCount, chunkSizeBytes,
 	)
@@ -1064,10 +1064,10 @@ func CompleteUpload(c echo.Context) error {
 	replicateToSecondary(fileID.String, storageID.String, paddedSize)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"message":               "File uploaded successfully",
-		"file_id":               fileID.String,
-		"storage_id":            storageID.String,
-		"encrypted_file_sha256": serverCalculatedHash,
+		"message":                 "File uploaded successfully",
+		"file_id":                 fileID.String,
+		"storage_id":              storageID.String,
+		"encrypted_stream_sha256": serverCalculatedHash,
 		"storage": map[string]interface{}{
 			"total_bytes":     user.TotalStorageBytes,
 			"limit_bytes":     user.StorageLimitBytes,

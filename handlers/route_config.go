@@ -164,22 +164,20 @@ func RegisterRoutes() {
 	mfaProtectedGroup.GET("/api/shares", ListShares)                      // List user's shares
 	mfaProtectedGroup.POST("/api/shares/:id/revoke", RevokeShare)         // Revoke a share
 
-	// Anonymous share access (no authentication required) - separate namespace with rate limiting
-	// Using /api/public/shares to avoid conflicts with authenticated /api/shares routes
+	// Anonymous share API (no authentication). Page HTML is only at /shared/:id below.
+	// Using /api/public/shares to avoid conflicts with authenticated /api/shares routes.
 	publicShareGroup := Echo.Group("/api/public/shares")
-	publicShareGroup.Use(ShareEnumerationMiddleware) // Entity-global enumeration protection FIRST
-	publicShareGroup.Use(ShareRateLimitMiddleware)   // Then per-share-ID rate limiting (fail fast for abusers)
-	publicShareGroup.Use(TimingProtectionMiddleware) // Then timing protection (for valid requests)
-	publicShareGroup.GET("/:id", GetSharedFile)      // Share access page
-
-	// Share page (serves shared.html for /shared/:id URLs - no authentication required).
-	// To prevent URL enumeration sweeps and timing-attack mapping on this legacy path,
-	// we protect it with the exact same middleware group.
-	Echo.GET("/shared/:id", ShareEnumerationMiddleware(ShareRateLimitMiddleware(TimingProtectionMiddleware(GetSharedFile))))
+	publicShareGroup.Use(ShareEnumerationMiddleware)                    // Entity-global enumeration protection FIRST
+	publicShareGroup.Use(ShareRateLimitMiddleware)                      // Then per-share-ID rate limiting (fail fast for abusers)
+	publicShareGroup.Use(TimingProtectionMiddleware)                    // Then timing protection (for valid requests)
 	publicShareGroup.GET("/:id/envelope", GetShareEnvelope)             // Get share envelope for client-side decryption
 	publicShareGroup.POST("/:id/ticket", IssueShareDownloadTicket)      // Exchange static download token for short-lived ticket
 	publicShareGroup.GET("/:id/metadata", GetShareDownloadMetadata)     // Get metadata for shared file download
 	publicShareGroup.GET("/:id/chunks/:chunkIndex", DownloadShareChunk) // Download chunk of shared file
+
+	// Pretty share URL: serves shared.html for /shared/:id (no authentication).
+	// Same enumeration / rate-limit / timing middleware as the public share API.
+	Echo.GET("/shared/:id", ShareEnumerationMiddleware(ShareRateLimitMiddleware(TimingProtectionMiddleware(GetSharedFile))))
 
 	// File export token - requires TOTP (creates short-lived download token)
 	mfaProtectedGroup.POST("/api/files/:fileId/export-token", CreateExportToken)

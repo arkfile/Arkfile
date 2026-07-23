@@ -22,41 +22,37 @@ import (
 //	  BuildMetadataFieldAAD with AADFieldSha256), so substituting metadata
 //	  between files, fields, or users fails at client decrypt time.
 //
-//	EncryptedFileSha256sum
-//	  Despite the "Encrypted" prefix in the column/field name, this value
-//	  is NOT ciphertext. It is a plaintext SHA-256 computed on the server
-//	  as a running hash over the already-client-side-encrypted data stream
-//	  (pre-padding) as chunks arrive during upload. The server holds it
-//	  in plaintext by construction. Used by the client as an
-//	  anti-equivocation record: at upload completion the server reports
-//	  this value; the client can later re-download, re-hash the
-//	  ciphertext it receives, and confirm the server is still reporting
-//	  the same value. NOT in AAD scope because it is not encrypted. The
-//	  name is kept for historical reasons; see the plan doc for details.
+//	EncryptedStreamSha256sum
+//	  Plaintext hex SHA-256 computed on the server as a running hash over
+//	  the already-client-side-encrypted data stream (pre-padding) as chunks
+//	  arrive during upload. Not ciphertext and not Account-Key protected.
+//	  Returned on upload-complete as encrypted_stream_sha256; omitted from
+//	  owner file-metadata JSON. NOT in AAD scope. The AAD label
+//	  "encrypted_sha256sum" refers only to EncryptedSha256sum above.
 //
 //	(See also stored_blob_sha256sum on file_metadata — SHA-256 of all
 //	 bytes written to S3 including crypto-random padding, used for
 //	 server-side at-rest integrity checks during download. Plaintext,
 //	 server-computed, not surfaced on this struct.)
 type File struct {
-	ID                     int64          `json:"id"`
-	FileID                 string         `json:"file_id"`    // UUID v4 for file identification
-	StorageID              string         `json:"storage_id"` // UUID v4 for storage backend
-	OwnerUsername          string         `json:"owner_username"`
-	EncryptedPasswordHint  string         `json:"encrypted_password_hint,omitempty"`
-	PasswordHintNonce      string         `json:"password_hint_nonce,omitempty"`
-	PasswordType           string         `json:"password_type"`
-	FilenameNonce          string         // Now stored as base64 strings directly
-	EncryptedFilename      string         // Now stored as base64 strings directly
-	Sha256sumNonce         string         // base64 nonce for EncryptedSha256sum (plaintext-file hash)
-	EncryptedSha256sum     string         // base64 ciphertext of SHA-256 of plaintext file; client-encrypted, AAD-bound
-	EncryptedFileSha256sum sql.NullString `json:"-"` // PLAINTEXT server-computed hash of encrypted stream; name is historical, not ciphertext
-	EncryptedFEK           string         // Now stored as base64 strings directly
+	ID                       int64          `json:"id"`
+	FileID                   string         `json:"file_id"`    // UUID v4 for file identification
+	StorageID                string         `json:"storage_id"` // UUID v4 for storage backend
+	OwnerUsername            string         `json:"owner_username"`
+	EncryptedPasswordHint    string         `json:"encrypted_password_hint,omitempty"`
+	PasswordHintNonce        string         `json:"password_hint_nonce,omitempty"`
+	PasswordType             string         `json:"password_type"`
+	FilenameNonce            string         // Now stored as base64 strings directly
+	EncryptedFilename        string         // Now stored as base64 strings directly
+	Sha256sumNonce           string         // base64 nonce for EncryptedSha256sum (plaintext-file hash)
+	EncryptedSha256sum       string         // base64 ciphertext of SHA-256 of plaintext file; client-encrypted, AAD-bound
+	EncryptedStreamSha256sum sql.NullString `json:"-"` // plaintext server-computed hash of pre-padding encrypted stream
+	EncryptedFEK             string         // Now stored as base64 strings directly
 
-	SizeBytes      int64         `json:"size_bytes"`       // Original file size
-	PaddedSize     sql.NullInt64 `json:"padded_size"`      // Size with padding for privacy/security
-	ChunkCount     int64         `json:"chunk_count"`      // Number of 16MB chunks for chunked downloads
-	ChunkSizeBytes int64         `json:"chunk_size_bytes"` // Size of each chunk (16MB default)
+	SizeBytes      int64         `json:"size_bytes"`       // Pre-padding encrypted stream length (not plaintext file size)
+	PaddedSize     sql.NullInt64 `json:"padded_size"`      // Full S3 object length including padding
+	ChunkCount     int64         `json:"chunk_count"`      // Number of chunks for chunked downloads
+	ChunkSizeBytes int64         `json:"chunk_size_bytes"` // Plaintext chunk size (last chunk may be smaller)
 	UploadDate     time.Time     `json:"upload_date"`
 }
 
@@ -104,7 +100,7 @@ func CalculateChunkCount(sizeBytes int64, plaintextChunkSizeBytes int64) int64 {
 // GetFileByFileID retrieves a file record by file_id
 func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 	file := &File{}
-	var encryptedFileSha256sum string
+	var encryptedStreamSha256sum string
 	var sizeBytes interface{}      // Use interface{} to handle both int64 and float64
 	var paddedSize interface{}     // Use interface{} to handle RQLite float64 returns
 	var chunkCount interface{}     // Use interface{} to handle both int64 and float64
@@ -114,7 +110,7 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 	err := db.QueryRow(`
 		SELECT id, file_id, storage_id, owner_username, COALESCE(encrypted_password_hint, ''), COALESCE(password_hint_nonce, ''), password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum,
-			   COALESCE(encrypted_file_sha256sum, ''), encrypted_fek, size_bytes, padded_size,
+			   COALESCE(encrypted_stream_sha256sum, ''), encrypted_fek, size_bytes, padded_size,
 			   chunk_count, chunk_size_bytes, upload_date
 		FROM file_metadata WHERE file_id = ?`,
 		fileID,
@@ -123,7 +119,7 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 		&file.EncryptedPasswordHint, &file.PasswordHintNonce, &file.PasswordType,
 		&file.FilenameNonce, &file.EncryptedFilename,
 		&file.Sha256sumNonce, &file.EncryptedSha256sum,
-		&encryptedFileSha256sum, &file.EncryptedFEK,
+		&encryptedStreamSha256sum, &file.EncryptedFEK,
 		&sizeBytes, &paddedSize,
 		&chunkCount, &chunkSizeBytes, &uploadDateStr,
 	)
@@ -195,14 +191,14 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 		}
 	}
 
-	// Handle the nullable encrypted_file_sha256sum field
-	if encryptedFileSha256sum != "" {
-		file.EncryptedFileSha256sum = sql.NullString{
-			String: encryptedFileSha256sum,
+	// Handle the nullable encrypted_stream_sha256sum field
+	if encryptedStreamSha256sum != "" {
+		file.EncryptedStreamSha256sum = sql.NullString{
+			String: encryptedStreamSha256sum,
 			Valid:  true,
 		}
 	} else {
-		file.EncryptedFileSha256sum = sql.NullString{
+		file.EncryptedStreamSha256sum = sql.NullString{
 			String: "",
 			Valid:  false,
 		}
@@ -214,7 +210,7 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 // GetFileByStorageID retrieves a file record by storage_id
 func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 	file := &File{}
-	var encryptedFileSha256sum string
+	var encryptedStreamSha256sum string
 	var sizeBytes interface{}      // Use interface{} to handle both int64 and float64
 	var paddedSize interface{}     // Use interface{} to handle RQLite float64 returns
 	var chunkCount interface{}     // Use interface{} to handle both int64 and float64
@@ -224,7 +220,7 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 	err := db.QueryRow(`
 		SELECT id, file_id, storage_id, owner_username, COALESCE(encrypted_password_hint, ''), COALESCE(password_hint_nonce, ''), password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum,
-			   COALESCE(encrypted_file_sha256sum, ''), encrypted_fek, size_bytes, padded_size,
+			   COALESCE(encrypted_stream_sha256sum, ''), encrypted_fek, size_bytes, padded_size,
 			   chunk_count, chunk_size_bytes, upload_date
 		FROM file_metadata WHERE storage_id = ?`,
 		storageID,
@@ -233,7 +229,7 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 		&file.EncryptedPasswordHint, &file.PasswordHintNonce, &file.PasswordType,
 		&file.FilenameNonce, &file.EncryptedFilename,
 		&file.Sha256sumNonce, &file.EncryptedSha256sum,
-		&encryptedFileSha256sum, &file.EncryptedFEK,
+		&encryptedStreamSha256sum, &file.EncryptedFEK,
 		&sizeBytes, &paddedSize,
 		&chunkCount, &chunkSizeBytes, &uploadDateStr,
 	)
@@ -305,14 +301,14 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 		}
 	}
 
-	// Handle the nullable encrypted_file_sha256sum field
-	if encryptedFileSha256sum != "" {
-		file.EncryptedFileSha256sum = sql.NullString{
-			String: encryptedFileSha256sum,
+	// Handle the nullable encrypted_stream_sha256sum field
+	if encryptedStreamSha256sum != "" {
+		file.EncryptedStreamSha256sum = sql.NullString{
+			String: encryptedStreamSha256sum,
 			Valid:  true,
 		}
 	} else {
-		file.EncryptedFileSha256sum = sql.NullString{
+		file.EncryptedStreamSha256sum = sql.NullString{
 			String: "",
 			Valid:  false,
 		}
@@ -330,7 +326,7 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 	query := `
 		SELECT id, file_id, storage_id, owner_username, COALESCE(encrypted_password_hint, ''), COALESCE(password_hint_nonce, ''), password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, 
-			   COALESCE(encrypted_file_sha256sum, ''), encrypted_fek, size_bytes, padded_size,
+			   COALESCE(encrypted_stream_sha256sum, ''), encrypted_fek, size_bytes, padded_size,
 			   chunk_count, chunk_size_bytes, upload_date 
 		FROM file_metadata WHERE owner_username = ? ORDER BY upload_date DESC`
 
@@ -343,7 +339,7 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 	var files []*File
 	for rows.Next() {
 		file := &File{}
-		var encryptedFileSha256sum string
+		var encryptedStreamSha256sum string
 		var sizeBytes interface{}
 		var paddedSize interface{}
 		var chunkCount interface{}
@@ -355,7 +351,7 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 			&file.EncryptedPasswordHint, &file.PasswordHintNonce, &file.PasswordType,
 			&file.FilenameNonce, &file.EncryptedFilename,
 			&file.Sha256sumNonce, &file.EncryptedSha256sum,
-			&encryptedFileSha256sum, &file.EncryptedFEK,
+			&encryptedStreamSha256sum, &file.EncryptedFEK,
 			&sizeBytes, &paddedSize,
 			&chunkCount, &chunkSizeBytes, &uploadDateStr,
 		)
@@ -420,9 +416,9 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 			// Skip if parsing fails - no logging needed in this bulk operation
 		}
 
-		// Handle nullable encrypted_file_sha256sum
-		if encryptedFileSha256sum != "" {
-			file.EncryptedFileSha256sum = sql.NullString{String: encryptedFileSha256sum, Valid: true}
+		// Handle nullable encrypted_stream_sha256sum
+		if encryptedStreamSha256sum != "" {
+			file.EncryptedStreamSha256sum = sql.NullString{String: encryptedStreamSha256sum, Valid: true}
 		}
 
 		files = append(files, file)

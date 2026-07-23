@@ -79,7 +79,6 @@ function makeShareMeta(
     total_chunks: chunkCount,
     chunk_count: chunkCount,
     chunk_size_bytes: chunkSizeBytes,
-    encrypted_file_sha256: false,
   };
 }
 
@@ -399,7 +398,6 @@ describe('StreamingDownloadManager - owner download path', () => {
           total_chunks: 1,
           chunk_count: 1,
           chunk_size_bytes: plaintext.length,
-          encrypted_file_sha256: false,
         }), { status: 200 });
       }
       if (url.includes('/chunks/0')) {

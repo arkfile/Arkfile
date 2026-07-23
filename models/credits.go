@@ -40,15 +40,13 @@ type CreditTransaction struct {
 
 // Transaction types written by this package and the billing meter.
 //
-//   - usage:      written by the daily storage settlement sweep (system).
-//   - gift:       written by an admin via billing.GiftCredits.
-//   - adjustment: reserved for future use (currently unused; replaced by `gift`).
-//   - payment:    written by billing.ProcessPayment for BTCPay top-ups.
+//   - usage:   written by the daily storage settlement sweep (system).
+//   - gift:    written by an admin via billing.GiftCredits.
+//   - payment: written by billing.ProcessPayment for BTCPay top-ups.
 const (
-	TransactionTypeUsage      = "usage"
-	TransactionTypeGift       = "gift"
-	TransactionTypeAdjustment = "adjustment"
-	TransactionTypePayment    = "payment"
+	TransactionTypeUsage   = "usage"
+	TransactionTypeGift    = "gift"
+	TransactionTypePayment = "payment"
 )
 
 // MicrocentsPerUSD is the canonical conversion factor.

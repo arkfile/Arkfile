@@ -25,6 +25,7 @@
 import { shareCrypto } from './share-crypto';
 import { showError, showSuccess } from '../ui/messages';
 import { isSwAvailable } from '../files/sw-streaming-download';
+import { formatBytes } from '../utils/format.js';
 import {
   downloadSharedFileWithTicket,
   triggerBrowserDownloadFromUrl,
@@ -301,7 +302,7 @@ export class ShareAccessUI {
     if (form) form.classList.add('hidden');
     if (details) details.classList.remove('hidden');
     if (nameDisplay) nameDisplay.textContent = filename;
-    if (sizeDisplay) sizeDisplay.textContent = this.formatBytes(size);
+    if (sizeDisplay) sizeDisplay.textContent = formatBytes(size);
 
     // Surface expected digest from share envelope when available.
     const digestRow = document.getElementById('shareExpectedDigestRow');
@@ -473,13 +474,5 @@ export class ShareAccessUI {
         statusDiv.className = 'error-message';
       }
     }
-  }
-
-  private formatBytes(bytes: number): string {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
 }

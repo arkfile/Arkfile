@@ -156,7 +156,7 @@ func TestTransactionTypeConstants(t *testing.T) {
 	if TransactionTypeGift != "gift" {
 		t.Errorf("TransactionTypeGift = %q, want \"gift\"", TransactionTypeGift)
 	}
-	if TransactionTypeAdjustment != "adjustment" {
-		t.Errorf("TransactionTypeAdjustment = %q, want \"adjustment\"", TransactionTypeAdjustment)
+	if TransactionTypePayment != "payment" {
+		t.Errorf("TransactionTypePayment = %q, want \"payment\"", TransactionTypePayment)
 	}
 }

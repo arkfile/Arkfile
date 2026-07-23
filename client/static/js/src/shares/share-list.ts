@@ -10,7 +10,7 @@ import { showError, showSuccess } from '../ui/messages.js';
 import { getCachedAccountKey } from '../crypto/file-encryption.js';
 import { decryptMetadataField } from '../crypto/metadata-helpers.js';
 import { AAD_FIELD_FILENAME, AAD_FIELD_SHA256 } from '../crypto/aad.js';
-import { formatFileSize } from '../utils/format.js';
+import { formatBytes } from '../utils/format.js';
 
 // Types
 
@@ -204,7 +204,7 @@ export class ShareListUI {
     const createdText = `Created: ${new Date(share.created_at).toLocaleString()}`;
     
     const sizeText = share.size !== null
-      ? `Size: ${formatFileSize(share.size)}`
+      ? `Size: ${formatBytes(share.size)}`
       : '';
 
     const filenameDisplay = share.filename_local 

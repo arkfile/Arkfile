@@ -424,8 +424,8 @@ echo "  Validity: ${VALIDITY_DAYS} days"
 renewal_days=$((VALIDITY_DAYS - 30))
 renewal_date=$(date -d "+${renewal_days} days" '+%Y-%m-%d' 2>/dev/null || echo "N/A")
 echo "  Renewal needed before: ${renewal_date}"
-echo "  Renew:   ./scripts/maintenance/renew-certificates.sh"
-echo "  Monitor: ./scripts/maintenance/validate-certificates.sh"
+echo "  Local TLS: re-run scripts/setup/04-setup-tls-certs.sh when certificates expire"
+echo "  Production TLS: managed by Caddy + Let's Encrypt via prod-deploy/prod-update"
 echo ""
 echo -e "${GREEN}[OK] TLS certificates ready for production use!${NC}"
 

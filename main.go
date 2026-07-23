@@ -495,6 +495,10 @@ func runSchemaMigrations() {
 			description: "Add stored_blob_sha256sum to file_metadata",
 			sql:         "ALTER TABLE file_metadata ADD COLUMN stored_blob_sha256sum CHAR(64)",
 		},
+		{
+			description: "Rename file_metadata.encrypted_file_sha256sum to encrypted_stream_sha256sum",
+			sql:         "ALTER TABLE file_metadata RENAME COLUMN encrypted_file_sha256sum TO encrypted_stream_sha256sum",
+		},
 		// Storage credits / billing meter (v2): rename _cents columns to _microcents.
 		// These run once on first startup after upgrading; safe no-op on subsequent runs
 		// and on fresh installs (where the unified schema already declares _microcents).
@@ -560,7 +564,7 @@ func migrateCreditTransactionsPaymentType() {
 			username TEXT NOT NULL,
 			amount_usd_microcents BIGINT NOT NULL,
 			balance_after_usd_microcents BIGINT NOT NULL,
-			transaction_type TEXT NOT NULL CHECK (transaction_type IN ('usage', 'gift', 'adjustment', 'payment')),
+			transaction_type TEXT NOT NULL CHECK (transaction_type IN ('usage', 'gift', 'payment')),
 			reason TEXT,
 			admin_username TEXT,
 			metadata TEXT,

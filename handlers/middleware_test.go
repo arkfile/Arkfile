@@ -421,11 +421,11 @@ func TestCSRFMiddleware_ValidTokens_Passes(t *testing.T) {
 // fast 404/200 leaks share-ID existence at line rate.
 func TestRequiresTimingProtection_PublicShareRoutes(t *testing.T) {
 	protected := []string{
-		"/api/public/shares/abc123",
 		"/api/public/shares/abc123/envelope",
 		"/api/public/shares/abc123/metadata",
 		"/api/public/shares/abc123/chunks/0",
 		"/api/public/shares/abc123/chunks/42",
+		"/api/public/shares/abc123/ticket",
 		"/shared/abc123",
 	}
 	for _, p := range protected {

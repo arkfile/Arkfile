@@ -41,7 +41,7 @@ func openPaymentsTestDB(t *testing.T) *sql.DB {
 			username TEXT NOT NULL,
 			amount_usd_microcents BIGINT NOT NULL,
 			balance_after_usd_microcents BIGINT NOT NULL,
-			transaction_type TEXT NOT NULL CHECK (transaction_type IN ('usage', 'gift', 'adjustment', 'payment')),
+			transaction_type TEXT NOT NULL CHECK (transaction_type IN ('usage', 'gift', 'payment')),
 			reason TEXT,
 			admin_username TEXT,
 			metadata TEXT,

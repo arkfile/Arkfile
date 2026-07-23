@@ -82,9 +82,6 @@ BACKUP_CODE_PRIMARY_FILE="$TEST_DATA_DIR/backup-code-primary"
 BACKUP_CODE_REENROLL_FILE="$TEST_DATA_DIR/backup-code-reenroll"
 MFA_ADMIN_RESET_DONE_FILE="$TEST_DATA_DIR/mfa-admin-reset-done"
 LOG_FILE="$TEST_DATA_DIR/e2e-test.log"
-# Legacy aliases (same files)
-TOTP_SECRET_FILE="$MFA_SECRET_FILE"
-BACKUP_CODE_FILE="$BACKUP_CODE_PRIMARY_FILE"
 
 # Initialize log file
 : > "$LOG_FILE"
@@ -106,18 +103,6 @@ warning() { echo -e "${YELLOW}[!] $1${NC}"; echo "[WARN] $1" >> "$LOG_FILE"; }
 info()    { echo -e "${CYAN}[i] $1${NC}"; echo "[INFO] $1" >> "$LOG_FILE"; }
 scenario() { echo -e "\n${BLUE}$1${NC}"; echo -e "\n=== $1 ===" >> "$LOG_FILE"; }
 group()    { echo -e "\n${CYAN}# $1${NC}\n"; echo -e "\n# $1" >> "$LOG_FILE"; }
-
-redact_sensitive_output() {
-    sed -E \
-        -e 's/(TOTP_SECRET:)[[:space:]]*[^[:space:]]+/\1 [REDACTED]/g' \
-        -e 's/(BACKUP_CODE_[0-9]+:)[[:space:]]*[^[:space:]]+/\1 [REDACTED]/g' \
-        -e 's/("(access_token|refresh_token|temp_token|totp_secret|secret)"[[:space:]]*:[[:space:]]*")[^"]*"/\1[REDACTED]"/g' \
-        -e 's/(Authorization:[[:space:]]*Bearer[[:space:]]+)[^[:space:]]+/\1[REDACTED]/g'
-}
-
-print_sanitized() {
-    printf '%s\n' "$1" | redact_sensitive_output
-}
 
 write_secret_file() {
     local file_path="$1"
@@ -170,10 +155,10 @@ admin_login_with_totp() {
         
     if [ $code -eq 0 ] && echo "$out" | grep -q "Admin login successful"; then
         record_test "$test_name" "PASS"
-        print_sanitized "$out"
+        printf '%s\n' "$out"
     else
         error "$test_name failed with output:"
-        print_sanitized "$out"
+        printf '%s\n' "$out"
         record_test "$test_name" "FAIL"
     fi
 }
@@ -200,10 +185,10 @@ user_login_with_totp() {
 
     if [ $code -eq 0 ] && echo "$out" | grep -q "Login successful"; then
         record_test "$test_name" "PASS"
-        print_sanitized "$out"
+        printf '%s\n' "$out"
     else
         error "$test_name failed with output:"
-        print_sanitized "$out"
+        printf '%s\n' "$out"
         record_test "$test_name" "FAIL"
     fi
 }
@@ -229,10 +214,10 @@ user_login_with_backup_code() {
 
     if [ $code -eq 0 ] && echo "$out" | grep -q "Login successful"; then
         record_test "$test_name" "PASS"
-        print_sanitized "$out"
+        printf '%s\n' "$out"
     else
         error "$test_name failed with output:"
-        print_sanitized "$out"
+        printf '%s\n' "$out"
         record_test "$test_name" "FAIL"
     fi
 }
@@ -251,10 +236,10 @@ user_login_defer_mfa() {
 
     if [ $code -eq 0 ] && echo "$out" | grep -q "MFA challenge pending"; then
         record_test "$test_name" "PASS"
-        print_sanitized "$out"
+        printf '%s\n' "$out"
     else
         error "$test_name failed with output:"
-        print_sanitized "$out"
+        printf '%s\n' "$out"
         record_test "$test_name" "FAIL"
     fi
 }
@@ -277,7 +262,7 @@ user_mfa_reenroll_via_backup() {
 
     if [ $code -ne 0 ] || ! echo "$out" | grep -q "MFA Reset Complete"; then
         error "$test_name failed with output:"
-        print_sanitized "$out"
+        printf '%s\n' "$out"
         record_test "$test_name" "FAIL"
         return 1
     fi
@@ -312,7 +297,7 @@ user_mfa_reenroll_via_backup() {
     record_test "Backup code capture after re-enrollment" "PASS"
 
     record_test "$test_name" "PASS"
-    print_sanitized "$out"
+    printf '%s\n' "$out"
 }
 
 user_mfa_verify_after_reset() {
@@ -339,13 +324,13 @@ user_mfa_verify_after_reset() {
 
     if [ $code_rc -ne 0 ] || ! echo "$out" | grep -q "MFA setup complete"; then
         error "$test_name failed with output:"
-        print_sanitized "$out"
+        printf '%s\n' "$out"
         record_test "$test_name" "FAIL"
         return 1
     fi
 
     record_test "$test_name" "PASS"
-    print_sanitized "$out"
+    printf '%s\n' "$out"
 }
 
 user_mfa_enroll_after_deferred_login() {
@@ -358,7 +343,7 @@ user_mfa_enroll_after_deferred_login() {
 
     if [ $setup_exit_code -ne 0 ]; then
         error "Failed to initiate MFA setup after admin reset:"
-        print_sanitized "$setup_output"
+        printf '%s\n' "$setup_output"
         record_test "$test_name (setup initiation)" "FAIL"
         return 1
     fi
@@ -367,7 +352,7 @@ user_mfa_enroll_after_deferred_login() {
     secret=$(echo "$setup_output" | grep "TOTP_SECRET:" | cut -d':' -f2 | tr -d ' ')
     if [ -z "$secret" ]; then
         error "Failed to extract TOTP secret after admin reset:"
-        print_sanitized "$setup_output"
+        printf '%s\n' "$setup_output"
         record_test "$test_name (setup initiation)" "FAIL"
         return 1
     fi
@@ -398,13 +383,13 @@ user_mfa_enroll_after_deferred_login() {
 
     if [ $verify_exit_code -ne 0 ] || ! echo "$verify_output" | grep -q "MFA setup complete"; then
         error "MFA verification after admin reset failed:"
-        print_sanitized "$verify_output"
+        printf '%s\n' "$verify_output"
         record_test "$test_name (verify)" "FAIL"
         return 1
     fi
 
     record_test "$test_name (verify)" "PASS"
-    print_sanitized "$verify_output"
+    printf '%s\n' "$verify_output"
 }
 
 logout_user_session() {
@@ -537,7 +522,7 @@ safe_exec() {
     temp_exit_code=$?
     set -e
 
-    print_sanitized "$temp_output" >> "$LOG_FILE"
+    printf '%s\n' "$temp_output" >> "$LOG_FILE"
     echo "[EXIT] Code: $temp_exit_code" >> "$LOG_FILE"
     echo "----------------------------------------" >> "$LOG_FILE"
 
@@ -798,7 +783,7 @@ run_user_onboarding_mfa_enrollment() {
 
     if [ $setup_exit_code -ne 0 ]; then
         error "Failed to initiate TOTP setup (exit code: $setup_exit_code):"
-        print_sanitized "$setup_output"
+        printf '%s\n' "$setup_output"
         record_test "TOTP setup initiation" "FAIL"
     fi
 
@@ -808,7 +793,7 @@ run_user_onboarding_mfa_enrollment() {
 
     if [ -z "$secret" ]; then
         error "Failed to extract TOTP secret from output:"
-        print_sanitized "$setup_output"
+        printf '%s\n' "$setup_output"
         record_test "TOTP setup initiation" "FAIL"
     fi
 
@@ -858,10 +843,10 @@ run_user_onboarding_mfa_enrollment() {
 
     if [ $verify_exit_code -eq 0 ] && echo "$verify_output" | grep -q "MFA setup complete"; then
         record_test "TOTP verification" "PASS"
-        print_sanitized "$verify_output"
+        printf '%s\n' "$verify_output"
     else
         error "TOTP verification failed:"
-        print_sanitized "$verify_output"
+        printf '%s\n' "$verify_output"
         record_test "TOTP verification" "FAIL"
     fi
 

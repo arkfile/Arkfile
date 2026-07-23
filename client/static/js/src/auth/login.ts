@@ -603,7 +603,7 @@ export function setupLoginForm(): void {
   });
 }
 
-// Export utility functions for compatibility
+// Form-bound entry points used by app listeners (read credentials from the DOM).
 export async function login(): Promise<void> {
   const usernameInput = document.getElementById('login-username') as HTMLInputElement;
   const passwordInput = document.getElementById('login-password') as HTMLInputElement;

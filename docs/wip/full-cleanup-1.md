@@ -1,7 +1,8 @@
 # Full Cleanup Pass
 
-Status: draft
+Status: draft (revised after cross-check against the tree)
 Created: 2026-07-21
+Revised: 2026-07-23
 Scope: Cross-stack hygiene after the archived server, CLI, and frontend cleanup audits. Greenfield: delete unused paths; no compatibility shims. Prefer honest naming and one canonical path per operation. This document uses descriptive headings only — do not introduce numbered, lettered, phase, tranche, or tier labels from this plan into source, tests, scripts, or comments.
 
 Prior audits (reference only; do not edit): `docs/wip/archive/server-cleanup.md`, `docs/wip/archive/cli-cleanup.md`, `docs/wip/archive/frontend-cleanup.md`.
@@ -10,19 +11,60 @@ Prior audits (reference only; do not edit): `docs/wip/archive/server-cleanup.md`
 
 One canonical way per client operation. Fail closed. Delete dead code rather than deprecate. Comments describe behavior in situ — no references to WIP planning paths, item indexes, or ephemeral planning labels in production source or e2e names. After each workstream: `sudo bash scripts/dev-reset.sh`, then `bash scripts/testing/e2e-test.sh`, optionally `sudo bash scripts/testing/e2e-playwright.sh`, plus `go test ./...` (AGENTS.md CGO flags) and `cd client/static/js && bun test` when frontend changes.
 
+## Recommended focus order
+
+1. Digest and size semantics clarity (correctness and threat-model honesty) — done
+2. Dead code, WIP certificate scripts, and other misleading operator/code surfaces — done
+3. Deploy/update shared library expansion (ops safety; behavior-preserving extract) — next
+
+Defer frontend `app.ts` decomposition and broad planning-label renames until after deploy-common or in parallel with low-risk hygiene.
+
 ## Progress tracker
 
 | Workstream | Status | Notes |
 |------------|--------|-------|
-| Digest and size semantics clarity | [ ] | Docs/comments/API naming; optional greenfield column rename |
-| Dead code and legacy wrappers | [ ] | GetEntityID, e2e aliases, unused schema, format aliases |
-| Frontend app.ts decomposition | [ ] | Logical modules; thin entrypoint |
-| Frontend helper consolidation leftovers | [ ] | share-access formatBytes; formatFileSize alias; compat comments |
-| WIP certificate scripts removal | [ ] | Delete renew/validate WIP scripts; update any refs |
-| Deploy/update shared library expansion | [ ] | Grow deploy-common; thin prod/test/local wrappers |
+| Digest and size semantics clarity | [x] | Renamed stream digest column/API; omitted from metadata; security.md updated; dead `upload_sessions.encrypted_hash` removed |
+| Dead code and legacy wrappers | [x] | Removed GetEntityID; e2e aliases; TS formatFileSize alias; share-access duplicate formatBytes; credits adjustment; billing overdrawn canonical name; billing_projection silence import; compat comments reworded; e2e output redaction removed earlier |
+| WIP certificate scripts removal | [x] | Deleted renew/validate scripts; updated setup.md, scripts-guide.md, 04-setup-tls-certs.sh |
+| Dual surfaces review | [x] | Dropped duplicate `GET /api/public/shares/:id` HTML page; keep `/shared/:id` + API subpaths; billing JSON uses `users_currently_overdrawn` only |
+| Deploy/update shared library expansion | [ ] | Grow deploy-common; thin prod/test/local wrappers; no silent profile drift |
+| Frontend helper consolidation leftovers | [x] | Folded into dead-code pass (formatBytes) |
+| Frontend app.ts decomposition | [ ] | Logical modules; thin entrypoint; after contracts stabilize |
 | Planning-label comment hygiene | [ ] | Production source + e2e + Playwright |
-| Dual surfaces review | [ ] | Pretty share URL vs public API; credits adjustment type; billing aliases |
 | End-to-end verification | [ ] | Full suite after changes |
+
+---
+
+## Review corrections (2026-07-23)
+
+Findings from re-checking this draft against the codebase. Treat these as part of the plan, not footnotes.
+
+### Digests and sizes
+
+- `models/file.go` already documents the three digests reasonably well. The real leftovers there are: the anti-equivocation claim, the “see the plan doc” reference, and the wrong `SizeBytes` comment (`// Original file size`). Do not rewrite the whole comment block for its own sake.
+- Anti-equivocation is weaker than “clients do not implement it.” Upload-complete returns the hex; file metadata returns only a boolean presence flag under the same JSON name `encrypted_file_sha256`. Clients cannot later re-download and compare against a server-held hex via the metadata API even if they wanted to. TS upload returns the hex on `UploadResult` but nothing verifies it; CLI parses it into a struct field and does not use it afterward. Prefer deleting the claim unless deliberately designing a verify path with an honestly named hex field.
+- `docs/security.md` classifies opaque owner metadata and size fields, but does **not** yet classify the plaintext encrypted-stream digest or the padded blob digest. “Match security.md” means update security.md as part of this workstream, not only code comments.
+- Schema comment on `file_metadata.encrypted_file_sha256sum` (“final encrypted file in storage (pre-padding)”) is itself misleading; fix in the same pass as any rename.
+- Do **not** rename the AAD label string `"encrypted_sha256sum"` — that binds the plaintext content digest metadata field.
+
+### Dead code and dual surfaces
+
+- Billing duplicate is not only “alias for CLI”: sweep summary emits both `users_currently_negative` and `users_currently_overdrawn`; overdrawn list emits only the latter; CLI reads the latter. Collapse to one canonical name across all admin billing payloads and update the CLI together.
+- Share dual entry is real: both `/shared/:id` and `/api/public/shares/:id` call `GetSharedFile` (HTML page). Route comments already call `/shared/:id` a “legacy path”; reword to intentional pretty-URL dual entry, consistent with keeping both.
+- `TransactionTypeAdjustment` / `"adjustment"` is constant-plus-constant-test only; safe to remove if unused in schema constraints.
+- `GetEntityID` is production-API surface used only from tests; production request path uses `GetCompositeEntityIDForRequest`.
+
+### WIP certificate scripts
+
+- Deletion must update live operator docs, not only incidental greps: `docs/setup.md`, `docs/scripts-guide.md`, and the echo text in `scripts/setup/04-setup-tls-certs.sh` still advertise renew/validate. Do not leave broken operator instructions.
+
+### Deploy common
+
+- `deploy-common.sh` is still small (~124 lines). Prod/test deploy scripts are ~1165 lines each and near-duplicates; update scripts similarly. Expansion is warranted; treat as behavior-preserving extract with explicit “no silent prod/test divergence” checks.
+
+### Test impact gap (important)
+
+The original draft said “coordinate … tests and e2e” for the column/API rename but did **not** inventory concrete unit, bun, or e2e touch points. That inventory is now under Digests (test and client impact). Most stream-hash JSON assertions are absent from e2e today; Go sqlmock strings and TS fixture types are the primary break points for a rename/API split.
 
 ---
 
@@ -37,42 +79,69 @@ There are three distinct file digests. Do not conflate them in names, comments, 
 - Client computes and encrypts under the Account Key; AAD binds `(file_id, "encrypted_sha256sum", owner_username)`
 - Server stores opaque ciphertext only
 - Used for owner list/download verification, share envelope `sha256`, and client-side digest-cache dedup
+- AAD label `"encrypted_sha256sum"` is a wire-format constant — do not rename it when renaming DB/API fields for the stream digest
 
-### Encrypted-stream digest (misnamed today)
+### Encrypted-stream digest
 
-- Column: `encrypted_file_sha256sum` / Go `EncryptedFileSha256sum`
+- Column: `encrypted_stream_sha256sum` / Go `EncryptedStreamSha256sum` (renamed from `encrypted_file_sha256sum`)
 - Meaning: plaintext hex SHA-256 of the concatenated client-encrypted chunk bytes **before** server padding
 - Server computes during upload; this is **not** Account-Key ciphertext of a digest
-- Upload-complete API returns hex as `encrypted_file_sha256`; file-metadata API currently returns a boolean under the same JSON name (overload to fix)
-- Comments describe an anti-equivocation use that clients do not implement today — either wire a clear verify path or stop claiming it in comments
+- Upload-complete API returns hex as `encrypted_stream_sha256`
+- Owner file-metadata JSON **omits** the stream digest (no boolean overload)
+- Anti-equivocation verify is not implemented; do not claim it in comments until a real path exists
 
 ### Padded blob digest
 
 - Column: `stored_blob_sha256sum`
 - Meaning: SHA-256 of all bytes written to S3 (encrypted stream plus padding)
 - Server-only; used for replication and at-rest integrity checks
+- Not currently surfaced on the `File` JSON struct; keep server-only unless a deliberate admin/ops API is added
 
 ### Related digests and dead schema
 
 - Per-chunk transport: `X-Chunk-Hash` / `upload_chunks.chunk_hash` (hash of one encrypted chunk body)
 - Share envelope `sha256`: copy of the plaintext content digest after the owner decrypts owner metadata
 - `download_token_hash`: hash of the share download token, not file content
-- Dead column: `upload_sessions.encrypted_hash` — present in schema, never written or read by application code; remove
+- Dead column removed: `upload_sessions.encrypted_hash`
 
 ### Size fields
 
 - `size_bytes` / upload `total_size`: pre-padding encrypted stream length (billing and chunk math)
 - `padded_size`: full S3 object length
-- Inferable plaintext length for non-empty files: `size_bytes - (28 × chunk_count)` where 28 is per-chunk AES-GCM overhead
-- Fix the stale comment on `File.SizeBytes` that says original file size — that is wrong
+- Inferable plaintext length for non-empty files: `size_bytes - (28 × chunk_count)` where 28 is per-chunk AES-GCM overhead; empty files use one chunk by convention (see `docs/security.md`)
 
-### Actions for digests and sizes
+### Decisions locked (implemented)
 
-- Rewrite in-situ comments in `models/file.go`, `handlers/uploads.go`, and client types so the three digests and size semantics match `docs/security.md` and AGENTS.md. Remove "see the plan doc" and historical hand-waving.
-- Resolve the API overload for `encrypted_file_sha256` (hex versus boolean) with distinct, honest field names.
-- Decide a greenfield rename for `encrypted_file_sha256sum` to a name that cannot be read as "ciphertext of a digest" (for example `ciphertext_stream_sha256` or `encrypted_stream_sha256sum`). Coordinate schema, Go, complete response, tests, and e2e. Do **not** rename the AAD label `"encrypted_sha256sum"` — that binds the plaintext content digest metadata field.
-- Drop dead `upload_sessions.encrypted_hash` from `unified_schema.sql` and test helpers.
-- Either wire client anti-equivocation against the encrypted-stream digest or delete the unused claim from comments.
+- DB/Go: `encrypted_file_sha256sum` → `encrypted_stream_sha256sum` (`EncryptedStreamSha256sum`); startup RENAME COLUMN migration added
+- Complete JSON: `encrypted_file_sha256` → `encrypted_stream_sha256` (hex)
+- Metadata JSON: omit stream digest entirely
+- AAD label `"encrypted_sha256sum"` unchanged
+- `upload_sessions.encrypted_hash` removed from schema and payment test helpers
+- `docs/security.md` classifies the three digests; anti-equivocation claims removed from live comments
+
+### Digests: what breaks where (blast radius)
+
+Runtime crypto and download/decrypt of file bytes do **not** depend on the stream-hash JSON name. Owner verify and share envelope integrity use the **plaintext content digest** (`encrypted_sha256sum` ciphertext), not the stream hash.
+
+| Layer | Touch points (done) |
+|-------|---------------------|
+| Schema / DB | `unified_schema.sql` column + comment; `main.go` RENAME migration; INSERT/SELECT in uploads and models |
+| Server JSON | Complete-upload `encrypted_stream_sha256`; metadata omits stream hash |
+| Go models | `EncryptedStreamSha256sum` |
+| CLI | `cmd/arkfile-client` complete-response parse |
+| Browser | `upload.ts` complete field; metadata type no longer includes stream hash |
+| Docs | `docs/security.md` |
+| Dead schema | `upload_sessions.encrypted_hash` removed |
+
+### Digests: test and client impact
+
+| Suite | Required update |
+|-------|-----------------|
+| Go unit (`handlers/files_test.go`) | sqlmock column names → `encrypted_stream_sha256sum` |
+| Go unit (`handlers/payments_test_helpers.go`) | Dropped `encrypted_hash` |
+| bun (`upload-batch.test.ts`) | Complete fixture → `encrypted_stream_sha256` |
+| bun (`streaming-download.test.ts`) | Removed metadata stream-hash field |
+| e2e / Playwright | No prior stream-hash assertions; run full suite after `dev-reset.sh` |
 
 ---
 
@@ -80,20 +149,20 @@ There are three distinct file digests. Do not conflate them in names, comments, 
 
 | Item | Location | Action |
 |------|----------|--------|
-| `GetEntityID` IP-only wrapper | `logging/entity_id.go` | Delete from production API, or keep a test-only helper with no "legacy" production surface |
+| `GetEntityID` IP-only wrapper | `logging/entity_id.go` | Delete from production API, or keep a test-only helper with no “legacy” production surface; update `logging/entity_id_test.go` |
 | Unused e2e aliases | `scripts/testing/e2e-test.sh` (`TOTP_SECRET_FILE`, `BACKUP_CODE_FILE`) | Delete |
 | `formatFileSize` alias | `client/static/js/src/utils/format.ts` | Use `formatBytes` at the call site; delete the alias |
 | Private duplicate `formatBytes` | `client/static/js/src/shares/share-access.ts` | Import shared `formatBytes` |
 | "for compatibility" export comments | `auth/login.ts`, `auth/register.ts` | Keep wrappers if used; reword comments to describe actual role |
-| Credits `adjustment` type | `models/credits.go` | Remove if unused in schema/API; otherwise document as live |
-| Billing JSON duplicate alias | `users_currently_overdrawn` | Keep one name; update CLI |
+| Credits `adjustment` type | `models/credits.go` | Remove constant + credits_test assertion if still unused in schema/API |
+| Billing JSON duplicate keys | `users_currently_negative` vs `users_currently_overdrawn` | Pick one canonical name across sweep summary, overdrawn list, credits payloads; update `arkfile-admin` |
 | Unused-import silence | `handlers/billing_projection.go` (`var _ = database.DB`) | Remove if the import is truly unused |
 
 ---
 
 ## Frontend: decompose app.ts
 
-Goal: thin entrypoint; one concern per module. Behavior unchanged; Playwright and bun tests must stay green.
+Goal: thin entrypoint; one concern per module. Behavior unchanged; Playwright and bun tests must stay green. Prefer after digest/size and dead-surface work so contracts are stable.
 
 ### Suggested layout
 
@@ -125,14 +194,15 @@ Both are marked WIP and are not part of the supported deploy/update path (Caddy 
 
 Actions:
 
-- Grep for references; remove from docs or help text if any.
+- Remove live operator references (not optional): `docs/setup.md`, `docs/scripts-guide.md`, and echo/help text in `scripts/setup/04-setup-tls-certs.sh`.
+- Grep for any remaining references; remove from docs or help text.
 - Do not replace with stubs. If operator TLS renewal documentation is needed later, write a finished doc against the real Caddy/deSEC flow — out of scope unless required for production preparation.
 
 ---
 
 ## Expand shared deploy and update library
 
-`scripts/setup/deploy-common.sh` already holds `print_status`, `run_as_user`, stop helpers, ownership checks, and username/storage validation. Prod and test deploy scripts (near-duplicates) and update scripts still duplicate large bodies of logic.
+`scripts/setup/deploy-common.sh` already holds `print_status`, `run_as_user`, stop helpers, ownership checks, and username/storage validation. Prod and test deploy scripts (near-duplicates, ~1165 lines each) and update scripts still duplicate large bodies of logic.
 
 ### Target
 
@@ -169,12 +239,11 @@ Archived WIP documents under `docs/wip/archive/` remain untouched.
 
 ## Dual surfaces review
 
-| Surface | Options |
-|---------|---------|
-| `/shared/:id` versus `/api/public/shares/:id` both serving share page access | Keep both if HTML UX needs pretty URLs; document as intentional dual entry, not "legacy" |
-| Share chunk credentials | Already ticket-only; confirm no leftover comments claiming static `X-Download-Token` chunk auth |
-| Admin billing duplicate JSON keys | Collapse to one canonical name |
-
+| Surface | Decision |
+|---------|----------|
+| Share HTML page | Single path: `GET /shared/:id` via `GetSharedFile`. Removed duplicate `GET /api/public/shares/:id` page registration. |
+| Share API | Keep `/api/public/shares/:id/{envelope,ticket,metadata,chunks}` only |
+| Admin billing overdrawn count | Canonical JSON key `users_currently_overdrawn` (sweep summary, overdrawn list, credits summary, CLI) |
 ---
 
 ## Verification
@@ -182,11 +251,12 @@ Archived WIP documents under `docs/wip/archive/` remain untouched.
 - `source scripts/setup/build-config.sh && export CGO_ENABLED=1 CGO_CFLAGS="$(cli_fido_cgo_cflags)" CGO_LDFLAGS="$(cli_fido_cgo_ldflags "$PWD")" && go test ./...`
 - `cd client/static/js && bun test`
 - Developer: `sudo bash scripts/dev-reset.sh`, then `bash scripts/testing/e2e-test.sh`, then `sudo bash scripts/testing/e2e-playwright.sh`
-- Spot-check: upload → list → download verify uses the plaintext content digest; complete-response stream-hash field names are consistent; deploy wrappers still call through common helpers
+- Spot-check: upload → list → download verify uses the plaintext content digest; complete-response and metadata stream-hash field names are consistent and honestly typed; `docs/security.md` lists all three digests; deploy wrappers still call through common helpers; WIP cert scripts and doc refs are gone
 
 ## Out of scope
 
 - New product features (subscriptions UI, post-quantum crypto, and similar)
 - Editing archived cleanup docs
-- Rewriting Caddy/deSEC certificate automation beyond deleting the WIP maintenance scripts
+- Rewriting Caddy/deSEC certificate automation beyond deleting the WIP maintenance scripts and fixing docs that pointed at them
 - Full e2e coverage of every admin command (track separately if needed)
+- Implementing encrypted-stream anti-equivocation verify unless product explicitly chooses it in this pass
