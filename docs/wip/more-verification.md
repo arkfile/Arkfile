@@ -121,3 +121,41 @@ This is heavier than Gobra but produces stronger guarantees for isolated compone
 - https://github.com/viperproject/gobra
 - https://github.com/NyxFoundation/speca
 - https://ar5iv.labs.arxiv.org/html/2212.02626
+
+---
+
+Consider also this X post:
+
+"""
+If you’re not a computer scientist, skip this post.
+
+The biggest impediment to formal verification of systems code is currently this: we have at least three extant formal semantics for C, no viable formal semantics for Rust, and no other viable systems languages. (Yes, I am ignoring C++.)
+
+If we want to formally verify systems code at all, never mind at scale, we need either a new systems language with a formal semantics, or we need a formal semantics for Rust and a reasonable feeling that the semantics reflects the actual implementation of the language and can be maintained going forward as the language evolves.
+
+Unfortunately, as good as Rust is, and it is very good by historical standards, it is a complicated language, and there is a strong suspicion that the type system is not actually sound. It is also probably too large a language for which to build a formally verified compiler given the current state of the art (though that might change), and it is not clear that the official compiler would not rapidly evolve away from a version of the language that a formally verified compiler implemented.
+
+Even given a formally verified compiler and a semantics, neither of which exist, the current proof assistant landscape, tools like Rocq and Lean, are hardly ideal for this sort of work, even given AI assistance.
+
+So, we are in a position in which we know that there is a substantial gap between what we need in order to move forward to formally verified systems software, and the tooling that we have currently. 
+
+This is a hard problem. It is also one that needs a solution, or more likely, a set of solutions.
+
+(One irony of the current situation is that most experiments in formally verified systems software still reuse one of CompCert’s intermediate representations as a target. And thus, C is still being perpetuated, even in high assurance programming work.)
+"""
+
+- Perry E. Metzger @perrymetzger on X - Jun 17, 2026
+
+---
+
+# Initial Response from ChatGPT 5.6 Sol
+
+Metzger’s central point applies here: whole-program formal verification of Arkfile across Go, TypeScript/Web Crypto, C/CGO, browsers, compilers, and deployment infrastructure is not presently realistic. The productive response is to formally specify small, security-critical abstractions while testing whether implementations conform to them. The new WIP document has useful ideas, but it overstates the practicality of Gobra and Dafny, and compiling verified Dafny into Go would introduce another implementation path contrary to Arkfile’s “one canonical path” principle. Differential testing against age, RFC 8188, or secretbox is also inappropriate because Arkfile’s envelope and chunk formats are not implementations of those protocols.
+
+The highest-value formal addition would be a small TLA+ specification of Arkfile’s stateful server behavior: upload initialization, chunk acceptance, completion, quota accounting, file deletion, share creation, ticket issuance, expiry, download limits, revocation, and concurrent requests. Model checking can establish invariants such as “an incomplete upload never becomes downloadable,” “storage cannot be credited twice,” “a share cannot issue new tickets after revocation,” and “every successful download consumes limits exactly as specified.” This directly supplements example-based tests because it explores operation orderings and concurrency combinations that E2E tests are unlikely to enumerate. Selected model-generated traces could then become API tests, connecting the specification to the implementation.
+
+In parallel, I would build one cross-client cryptographic conformance corpus covering chunk encryption, FEK envelopes, metadata AAD, share envelopes, padding, backup formats, malformed inputs, truncation, reordered or duplicated chunks, wrong key-type bytes, and boundary sizes. Every vector should be consumed by both Go and TypeScript, with fixed keys, nonces, salts, and expected bytes. Add Go native fuzz targets and fast-check properties around all untrusted decoders and state transitions, including the C/CGO OPAQUE boundary. This is more valuable than merely proving round trips, because two implementations can share the same mistake; byte-level expected vectors and deliberate corruption establish an independent contract.
+
+Finally, add explicit privacy and resource-invariant testing. Instrument test deployments with unique plaintext canaries and assert that passwords, filenames, plaintext digests, hints, and file fragments never appear in HTTP server observations, logs, database fields, temporary files, or stored objects. Separately, run large synthetic streams while measuring peak browser-worker and CLI memory, asserting memory remains bounded independently of file size and that interruption leaves no usable partial plaintext. A Tamarin or ProVerif model could later formalize Arkfile’s composition of OPAQUE sessions, key-context separation, FEK wrapping, share envelopes, tickets, replay, revocation, and compromise assumptions, but I would pursue that after the executable conformance corpus and TLA+ state model: those two additions offer the strongest near-term guarantees without pretending to verify the entire language and compiler stack.
+
+---
