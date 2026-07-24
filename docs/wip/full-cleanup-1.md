@@ -3,21 +3,21 @@
 Status: complete (all workstreams done; full e2e suite green)
 Created: 2026-07-21
 Revised: 2026-07-23 (all workstreams complete; developer confirmed full e2e suite green)
-Scope: Cross-stack hygiene after the archived server, CLI, and frontend cleanup audits. Greenfield: delete unused paths; no compatibility shims. Prefer honest naming and one canonical path per operation. This document uses descriptive headings only — do not introduce numbered, lettered, phase, tranche, or tier labels from this plan into source, tests, scripts, or comments.
+Scope: Cross-stack hygiene after the archived server, CLI, and frontend cleanup audits. Greenfield: delete unused paths; no compatibility shims. Prefer honest naming and one canonical path per operation. This document uses descriptive headings only -- do not introduce numbered, lettered, phase, tranche, or tier labels from this plan into source, tests, scripts, or comments.
 
 Prior audits (reference only; do not edit): `docs/wip/archive/server-cleanup.md`, `docs/wip/archive/cli-cleanup.md`, `docs/wip/archive/frontend-cleanup.md`.
 
 ## Principles
 
-One canonical way per client operation. Fail closed. Delete dead code rather than deprecate. Comments describe behavior in situ — no references to WIP planning paths, item indexes, or ephemeral planning labels in production source or e2e names. After each workstream: `sudo bash scripts/dev-reset.sh`, then `bash scripts/testing/e2e-test.sh`, optionally `sudo bash scripts/testing/e2e-playwright.sh`, plus `go test ./...` (AGENTS.md CGO flags) and `cd client/static/js && bun test` when frontend changes.
+One canonical way per client operation. Fail closed. Delete dead code rather than deprecate. Comments describe behavior in situ -- no references to WIP planning paths, item indexes, or ephemeral planning labels in production source or e2e names. After each workstream: `sudo bash scripts/dev-reset.sh`, then `bash scripts/testing/e2e-test.sh`, optionally `sudo bash scripts/testing/e2e-playwright.sh`, plus `go test ./...` (AGENTS.md CGO flags) and `cd client/static/js && bun test` when frontend changes.
 
 ## Recommended focus order
 
-1. Digest and size semantics clarity (correctness and threat-model honesty) — done; e2e green
-2. Dead code, WIP certificate scripts, and other misleading operator/code surfaces — done; e2e green
-3. Deploy/update shared library expansion (ops safety; behavior-preserving extract) — done; bash -n + help smoke; e2e green after full pass
-4. Planning-label comment hygiene — done; e2e green
-5. Frontend `app.ts` decomposition — done; `bun` build + unit tests green; e2e green
+1. Digest and size semantics clarity (correctness and threat-model honesty) -- done; e2e green
+2. Dead code, WIP certificate scripts, and other misleading operator/code surfaces -- done; e2e green
+3. Deploy/update shared library expansion (ops safety; behavior-preserving extract) -- done; bash -n + help smoke; e2e green after full pass
+4. Planning-label comment hygiene -- done; e2e green
+5. Frontend `app.ts` decomposition -- done; `bun` build + unit tests green; e2e green
 
 All plan workstreams complete. Developer confirmed full e2e suite green after the final planning-label and `app.ts` work. Optional follow-on outside this plan: local-deploy / local-update and VPS test-deploy/update as operator deploy-path exercises.
 
@@ -47,7 +47,7 @@ Findings from re-checking this draft against the codebase. Treat these as part o
 - Anti-equivocation is weaker than “clients do not implement it.” Upload-complete returns the hex; file metadata returns only a boolean presence flag under the same JSON name `encrypted_file_sha256`. Clients cannot later re-download and compare against a server-held hex via the metadata API even if they wanted to. TS upload returns the hex on `UploadResult` but nothing verifies it; CLI parses it into a struct field and does not use it afterward. Prefer deleting the claim unless deliberately designing a verify path with an honestly named hex field.
 - `docs/security.md` classifies opaque owner metadata and size fields, but does **not** yet classify the plaintext encrypted-stream digest or the padded blob digest. “Match security.md” means update security.md as part of this workstream, not only code comments.
 - Schema comment on `file_metadata.encrypted_file_sha256sum` (“final encrypted file in storage (pre-padding)”) is itself misleading; fix in the same pass as any rename.
-- Do **not** rename the AAD label string `"encrypted_sha256sum"` — that binds the plaintext content digest metadata field.
+- Do **not** rename the AAD label string `"encrypted_sha256sum"` -- that binds the plaintext content digest metadata field.
 
 ### Dead code and dual surfaces
 
@@ -81,7 +81,7 @@ There are three distinct file digests. Do not conflate them in names, comments, 
 - Client computes and encrypts under the Account Key; AAD binds `(file_id, "encrypted_sha256sum", owner_username)`
 - Server stores opaque ciphertext only
 - Used for owner list/download verification, share envelope `sha256`, and client-side digest-cache dedup
-- AAD label `"encrypted_sha256sum"` is a wire-format constant — do not rename it when renaming DB/API fields for the stream digest
+- AAD label `"encrypted_sha256sum"` is a wire-format constant -- do not rename it when renaming DB/API fields for the stream digest
 
 ### Encrypted-stream digest
 
@@ -199,7 +199,7 @@ Actions:
 
 - Remove live operator references (not optional): `docs/setup.md`, `docs/scripts-guide.md`, and echo/help text in `scripts/setup/04-setup-tls-certs.sh`.
 - Grep for any remaining references; remove from docs or help text.
-- Do not replace with stubs. If operator TLS renewal documentation is needed later, write a finished doc against the real Caddy/deSEC flow — out of scope unless required for production preparation.
+- Do not replace with stubs. If operator TLS renewal documentation is needed later, write a finished doc against the real Caddy/deSEC flow -- out of scope unless required for production preparation.
 
 ---
 
@@ -209,9 +209,9 @@ Completed 2026-07-23.
 
 ### Layout
 
-- `scripts/setup/deploy-common.sh` — shared print/run/stop/ownership/validation helpers, plus build wipe/run/verify, backup-before-overwrite with rollback trap, binary/static/schema sync.
-- `scripts/setup/vps-first-deploy.sh` — parameterized VPS first-time deploy body (sourced by prod/test wrappers).
-- `scripts/setup/vps-update.sh` — parameterized VPS update body (sourced by prod/test wrappers).
+- `scripts/setup/deploy-common.sh` -- shared print/run/stop/ownership/validation helpers, plus build wipe/run/verify, backup-before-overwrite with rollback trap, binary/static/schema sync.
+- `scripts/setup/vps-first-deploy.sh` -- parameterized VPS first-time deploy body (sourced by prod/test wrappers).
+- `scripts/setup/vps-update.sh` -- parameterized VPS update body (sourced by prod/test wrappers).
 - Thin wrappers keep only profile differences: `prod-deploy.sh` / `test-deploy.sh` (~48 lines), `prod-update.sh` / `test-update.sh` (~39 lines).
 - `local-deploy.sh` / `local-update.sh` reuse the common build and update helpers; local retains LAN IP, self-signed TLS, and no-Caddy paths. Fixed `validate_username` being called before `deploy-common.sh` was sourced.
 

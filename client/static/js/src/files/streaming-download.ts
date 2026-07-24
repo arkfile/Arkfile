@@ -40,7 +40,7 @@
  * Privacy logging
  * ---------------
  * Logs use prefixes [arkfile-download] / [arkfile-share]. Logs do NOT include
- * filenames, keys, hash digest values, or any potentially private data — only
+ * filenames, keys, hash digest values, or any potentially private data -- only
  * stages, chunk counts, byte counts, durations, and status codes.
  */
 
@@ -568,7 +568,7 @@ export class StreamingDownloadManager {
     // whole-file SHA-256 can be verified before triggerBrowserDownloadFromUrl.
     // There is no Arkfile-imposed size cap; the browser may still fail to
     // allocate or retain the full Blob. Hashing one chunk at a time adds no
-    // extra peak memory. A mismatch is reported via hashVerification — callers
+    // extra peak memory. A mismatch is reported via hashVerification -- callers
     // must revoke the URL and must not trigger download or claim success.
     debugLog(`${logPrefix} Using Blob fallback path (SW unavailable or pre-transfer init failure)`);
     const chunks = chunksFactory();

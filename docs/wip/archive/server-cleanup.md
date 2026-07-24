@@ -2,7 +2,7 @@
 
 This plan follows a server-side audit against the Function Review Sanity Checks in AGENTS.md: every handler and helper should be required, correctly implemented, well placed, reachable, privacy-preserving, and free of stubs, deprecated paths, duplicated logic, and leftover "AI slop" (placeholder implementations, fake fallbacks, WIP-planning comments, and redundant branches that exist only because something was never finished). Arkfile is greenfield; test.arkfile.net will be fully redeployed, so we do not keep backwards compatibility for code that is unused, unreachable, or actively misleading (fabricated health metrics, fake admin contacts, revocation that leaves sessions alive, legacy env overrides, and similar). The audit was cross-checked against scripts/testing/e2e-test.sh and scripts/testing/e2e-playwright.sh so we keep what E2E actually exercises and delete or fix what it does not. Where E2E currently hedges (accepting one of several HTTP codes, error strings, or pass-with-warning outcomes), we tighten tests and fix server or client behavior so there is one canonical expected result. We also add coverage for gaps E2E missed: isolated revoke endpoints, refresh after unapproval, real health output, admin contacts contract, and correct preflight probes. The goal is a coherent server surface that matches the privacy-first design, honest operator tooling, and tests that prove it before first production deployment.
 
-Status: complete (implementation) — run dev-reset + e2e locally to verify (done)
+Status: complete (implementation) -- run dev-reset + e2e locally to verify (done)
 Created: 2026-07-16 ; Complete: 2026-07-17
 Scope: Greenfield server refactor, CLI alignment, frontend contract cleanup, E2E tightening. No backwards compatibility for unused or stubbed paths.
 
@@ -311,12 +311,12 @@ User revocation unification and refresh token approval gate first (security corr
 ## Verification checklist (final)
 
 - [ ] `sudo bash scripts/dev-reset.sh`
-- [ ] `bash scripts/testing/e2e-test.sh` — all PASS, zero SKIP unless documented
-- [ ] `sudo bash scripts/testing/e2e-playwright.sh` — all PASS
-- [ ] `go test ./handlers/... ./monitoring/... ./logging/...` — pass
-- [ ] Manual: `arkfile-admin health-check --detailed` — no disk section
-- [ ] Manual: `curl -s /api/admin-contacts | jq` — no fake defaults on dev instance
-- [ ] Grep server handlers for `default-admin`, `admin@example.com`, WIP-planning comment patterns, `for now`, `Backward compatibility` — zero inappropriate hits
+- [ ] `bash scripts/testing/e2e-test.sh` -- all PASS, zero SKIP unless documented
+- [ ] `sudo bash scripts/testing/e2e-playwright.sh` -- all PASS
+- [ ] `go test ./handlers/... ./monitoring/... ./logging/...` -- pass
+- [ ] Manual: `arkfile-admin health-check --detailed` -- no disk section
+- [ ] Manual: `curl -s /api/admin-contacts | jq` -- no fake defaults on dev instance
+- [ ] Grep server handlers for `default-admin`, `admin@example.com`, WIP-planning comment patterns, `for now`, `Backward compatibility` -- zero inappropriate hits
 
 ---
 
@@ -342,4 +342,4 @@ CLI `formatFileSize` and section divider cleanup in `cmd/arkfile-client`. Full t
 - `POST /api/admin/users/:username/revoke` in isolation (e2e uses `unapprove-user` which hits `UpdateUser` plus `force-logout`)
 - `POST /api/admin/dev-test/users/cleanup`
 - `GET /api/admin/dev-test/mfa/decrypt-check/:username`
-- `monitoring` package HTTP handlers (`HealthHandler`, etc.) — superseded by `main.go` probes
+- `monitoring` package HTTP handlers (`HealthHandler`, etc.) -- superseded by `main.go` probes

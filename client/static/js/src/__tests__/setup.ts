@@ -1,5 +1,5 @@
 /**
- * Test Setup — Bun Test Environment
+ * Test Setup -- Bun Test Environment
  *
  * Provides browser-API mocks (sessionStorage, window) so that
  * crypto modules can be unit-tested outside a real browser.
@@ -46,7 +46,7 @@ if (typeof globalThis.sessionStorage === 'undefined') {
 }
 
 // ============================================================================
-// window mock (minimal — just enough for addEventListener / setTimeout)
+// window mock (minimal -- just enough for addEventListener / setTimeout)
 // ============================================================================
 
 if (typeof globalThis.window === 'undefined') {
@@ -70,7 +70,7 @@ if (typeof globalThis.window === 'undefined') {
 }
 
 // ============================================================================
-// Reset helper — call in beforeEach to get a clean slate
+// Reset helper -- call in beforeEach to get a clean slate
 // ============================================================================
 
 export function resetMocks(): void {

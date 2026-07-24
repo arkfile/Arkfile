@@ -30,7 +30,7 @@ import (
 //	  owner file-metadata JSON. NOT in AAD scope. The AAD label
 //	  "encrypted_sha256sum" refers only to EncryptedSha256sum above.
 //
-//	(See also stored_blob_sha256sum on file_metadata — SHA-256 of all
+//	(See also stored_blob_sha256sum on file_metadata -- SHA-256 of all
 //	 bytes written to S3 including crypto-random padding, used for
 //	 server-side at-rest integrity checks during download. Plaintext,
 //	 server-computed, not surfaced on this struct.)

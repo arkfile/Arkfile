@@ -26,7 +26,7 @@ import {
 
 /**
  * Fake iframe for testing. The page wrapper triggers the SW-intercepted
- * download by appending a hidden iframe whose `src` is the synthetic URL —
+ * download by appending a hidden iframe whose `src` is the synthetic URL --
  * this is the StreamSaver.js pattern that works reliably across Chromium and
  * Firefox-derived browsers (the previous `<a download>` + `a.click()` variant
  * silently no-op'd in Brave).

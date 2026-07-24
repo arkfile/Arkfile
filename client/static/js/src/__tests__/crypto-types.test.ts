@@ -1,7 +1,7 @@
 /**
  * Crypto Type Guards Unit Tests
  * 
- * Tests for crypto/types.ts — type guard functions for cryptographic
+ * Tests for crypto/types.ts -- type guard functions for cryptographic
  * key types and Result discriminated unions.
  */
 
@@ -218,7 +218,7 @@ describe('isSuccess', () => {
     expect(isSuccess(result)).toBe(false);
   });
 
-  test('narrows type — value is accessible after check', () => {
+  test('narrows type -- value is accessible after check', () => {
     const result: Result<number> = { success: true, value: 42 };
     if (isSuccess(result)) {
       expect(result.value).toBe(42);
@@ -240,7 +240,7 @@ describe('isFailure', () => {
     expect(isFailure(result)).toBe(false);
   });
 
-  test('narrows type — error is accessible after check', () => {
+  test('narrows type -- error is accessible after check', () => {
     const result: Result<number> = { success: false, error: new Error('oops') };
     if (isFailure(result)) {
       expect(result.error.message).toBe('oops');

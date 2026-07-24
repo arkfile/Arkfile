@@ -368,7 +368,7 @@ func emitBackupCodes(codes []string, cfg SetupConfig) {
 
 // PickLoginMethod resolves which enrolled factor to use at login.
 // methods must come from ParseMFAMethods on the OPAQUE finalize payload (mfa_methods).
-// An empty list is an error — clients must not invent a default factor.
+// An empty list is an error -- clients must not invent a default factor.
 func PickLoginMethod(nonInteractive bool, methods []map[string]string, methodFlag Method, credentialIDFlag string) (Method, string, error) {
 	if len(methods) == 0 {
 		return "", "", fmt.Errorf("server response missing enrolled MFA methods")

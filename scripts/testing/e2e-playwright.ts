@@ -556,7 +556,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     const customFileItem = findFileItem(sharedPage, CUSTOM_FILE_NAME);
     await expect(customFileItem).toBeVisible({ timeout: 60_000 });
 
-    // Correct custom password — fill in the themed password modal
+    // Correct custom password -- fill in the themed password modal
     logStep('custom-download', 'Testing download with correct custom password...');
 
     const downloadPromise = sharedPage.waitForEvent('download', { timeout: 120_000 });
@@ -1358,7 +1358,7 @@ test.describe.serial('Arkfile Playwright registration flow', () => {
     }
 
     // Auto-approval (set by e2e-test.sh run_enable_auto_approval) yields authenticated file section.
-    // Unapproved users land on pending-approval instead — fail clearly if that happens.
+    // Unapproved users land on pending-approval instead -- fail clearly if that happens.
     logStep('reg-flow', 'Waiting for authenticated file section after TOTP...');
     const postTotp = await Promise.race([
       page.waitForSelector('#file-section', { state: 'visible', timeout: 120_000 }).then(() => 'file' as const),

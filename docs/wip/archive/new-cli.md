@@ -511,51 +511,51 @@ verify SHA-256 match (should already be verified by share download command)
 1. ~~Add `digestCache map[string]string` field to `Agent` struct~~ DONE
 2. ~~Add `store_digest_cache`, `get_digest_cache`, `add_digest`, `remove_digest` methods~~ DONE
 3. ~~Update `handleClear` to also zero and nil `digestCache`~~ DONE
-4. ~~Add corresponding `AgentClient` methods~~ DONE — `StoreDigestCache`, `GetDigestCache`, `AddDigest`, `RemoveDigest` all implemented
-5. ~~`decrypt_owner_envelope` removed~~ DONE — not present in agent.go
+4. ~~Add corresponding `AgentClient` methods~~ DONE -- `StoreDigestCache`, `GetDigestCache`, `AddDigest`, `RemoveDigest` all implemented
+5. ~~`decrypt_owner_envelope` removed~~ DONE -- not present in agent.go
 6. Agent handles: `store_account_key`, `get_account_key`, `store_digest_cache`, `get_digest_cache`, `add_digest`, `remove_digest`, `clear`, `stop`, `ping`
 
 ### Phase B: Merge Crypto into arkfile-client [COMPLETE ✓ 2026-02-26]
 
 All crypto operations implemented in `cmd/arkfile-client/crypto_utils.go`:
-- ~~`encryptChunk` / `decryptChunk`~~ DONE — per-chunk AES-GCM with envelope header on chunk 0
-- ~~`encryptMetadata` / `decryptMetadataField`~~ DONE — filename + SHA-256 encrypted with account key
-- ~~`wrapFEK` / `unwrapFEK`~~ DONE — FEK envelope with 2-byte header, uses `crypto.EncryptGCM`/`DecryptGCM`
-- ~~`computeStreamingSHA256`~~ DONE — streaming SHA-256 using chunked reads
-- ~~`calculateTotalEncryptedSize`~~ DONE — deterministic from plaintext size + chunk params
-- ~~`generateFEK`~~ DONE — 32 random bytes via `crypto/rand`
-- ~~`isSeekableFile`~~ DONE — rejects stdin/pipes with clear error
+- ~~`encryptChunk` / `decryptChunk`~~ DONE -- per-chunk AES-GCM with envelope header on chunk 0
+- ~~`encryptMetadata` / `decryptMetadataField`~~ DONE -- filename + SHA-256 encrypted with account key
+- ~~`wrapFEK` / `unwrapFEK`~~ DONE -- FEK envelope with 2-byte header, uses `crypto.EncryptGCM`/`DecryptGCM`
+- ~~`computeStreamingSHA256`~~ DONE -- streaming SHA-256 using chunked reads
+- ~~`calculateTotalEncryptedSize`~~ DONE -- deterministic from plaintext size + chunk params
+- ~~`generateFEK`~~ DONE -- 32 random bytes via `crypto/rand`
+- ~~`isSeekableFile`~~ DONE -- rejects stdin/pipes with clear error
 - All values sourced from `crypto` package accessors (no hardcoded constants)
 - Share operations use `crypto.CreateShareEnvelope`, `crypto.ParseShareEnvelope`, `crypto.EncryptGCMWithAAD`, `crypto.DecryptGCMWithAAD`, `crypto.CreateAAD`, `crypto.DeriveShareKey`, `crypto.GenerateShareSalt`
 
 ### Phase C: Streaming Upload Command [COMPLETE ✓ 2026-02-26]
 
 `handleUploadCommand` in `commands.go`:
-- ~~Accepts plaintext file~~ DONE — `--file` flag, no `.enc` required
-- ~~Two-pass: SHA-256 then encrypt+upload~~ DONE — `computeStreamingSHA256` then `doChunkedUpload`
-- ~~Dedup check against agent digest cache~~ DONE — `performDedupCheck` with server-side verification
-- ~~`--password-type account|custom`~~ DONE — derives custom KEK via `crypto.DeriveCustomPasswordKey`
-- ~~`--force` flag~~ DONE — skips dedup check
-- ~~Seekable file check~~ DONE — `isSeekableFile` rejects stdin/pipes
-- ~~Post-upload digest cache update~~ DONE — `agentClient.AddDigest`
+- ~~Accepts plaintext file~~ DONE -- `--file` flag, no `.enc` required
+- ~~Two-pass: SHA-256 then encrypt+upload~~ DONE -- `computeStreamingSHA256` then `doChunkedUpload`
+- ~~Dedup check against agent digest cache~~ DONE -- `performDedupCheck` with server-side verification
+- ~~`--password-type account|custom`~~ DONE -- derives custom KEK via `crypto.DeriveCustomPasswordKey`
+- ~~`--force` flag~~ DONE -- skips dedup check
+- ~~Seekable file check~~ DONE -- `isSeekableFile` rejects stdin/pipes
+- ~~Post-upload digest cache update~~ DONE -- `agentClient.AddDigest`
 - `doChunkedUpload` implements chunked streaming: init → stream encrypt+upload → finalize
 
 ### Phase D: Streaming Download Command [COMPLETE ✓ 2026-02-26]
 
 `handleDownloadCommand` in `commands.go`:
-- ~~Output is plaintext~~ DONE — directly writes decrypted chunks to output file
-- ~~Decrypt FEK from metadata (strip envelope header)~~ DONE — `unwrapFEK` strips 2-byte header
-- ~~Stream download chunks -> decrypt each -> write plaintext~~ DONE — `doChunkedDownload`
-- ~~Verify SHA-256 after completion~~ DONE — compares against decrypted metadata SHA-256
-- ~~Auto-decrypt filename for output path~~ DONE — uses account key to decrypt filename
-- ~~Custom password support~~ DONE — prompts for custom password if `PasswordType == "custom"`
+- ~~Output is plaintext~~ DONE -- directly writes decrypted chunks to output file
+- ~~Decrypt FEK from metadata (strip envelope header)~~ DONE -- `unwrapFEK` strips 2-byte header
+- ~~Stream download chunks -> decrypt each -> write plaintext~~ DONE -- `doChunkedDownload`
+- ~~Verify SHA-256 after completion~~ DONE -- compares against decrypted metadata SHA-256
+- ~~Auto-decrypt filename for output path~~ DONE -- uses account key to decrypt filename
+- ~~Custom password support~~ DONE -- prompts for custom password if `PasswordType == "custom"`
 - No `.metadata.json` sidecar files
 
 ### Phase E: Share Commands [COMPLETE ✓ 2026-02-26]
 
 `handleShareCreate` in `commands.go`:
-- ~~Only needs `--file-id`~~ DONE — fetches metadata, unwraps FEK, builds envelope internally
-- ~~Prompts for share password~~ DONE — `readPasswordWithStrengthCheck`
+- ~~Only needs `--file-id`~~ DONE -- fetches metadata, unwraps FEK, builds envelope internally
+- ~~Prompts for share password~~ DONE -- `readPasswordWithStrengthCheck`
 - Builds `ShareEnvelope` JSON, encrypts with `crypto.EncryptGCMWithAAD` (AAD = shareID+fileID)
 - Generates random shareID (32 bytes base64url), download token, share salt
 - `--expires` and `--max-downloads` flags supported
@@ -571,8 +571,8 @@ All crypto operations implemented in `cmd/arkfile-client/crypto_utils.go`:
 
 `handleLoginCommand` in `main.go`:
 - ~~After login, fetches `/api/files`~~ DONE
-- ~~Decrypts each `encrypted_sha256sum` with account key~~ DONE — `populateDigestCache()` helper
-- ~~Stores map in agent via `store_digest_cache`~~ DONE — `agentClient.StoreDigestCache(cache)`
+- ~~Decrypts each `encrypted_sha256sum` with account key~~ DONE -- `populateDigestCache()` helper
+- ~~Stores map in agent via `store_digest_cache`~~ DONE -- `agentClient.StoreDigestCache(cache)`
 - Empty file list handled gracefully (no-op)
 
 ### Phase G: Remove cryptocli and Dead Code [COMPLETE ✓ 2026-02-26]
@@ -596,7 +596,7 @@ All crypto operations implemented in `cmd/arkfile-client/crypto_utils.go`:
    - `HealthCheck` -- depends on `database.DB` and `auth.GetOPAQUEServer()` (server-side, not client)
    - `OPAQUEStatus` -- prints static text
    - Do NOT port these to `arkfile-client`. They are deleted with no replacement.
-5. ~~Update `dev-reset.sh` / `build.sh` build scripts to not build cryptocli~~ No cryptocli references found in those scripts — already clean
+5. ~~Update `dev-reset.sh` / `build.sh` build scripts to not build cryptocli~~ No cryptocli references found in those scripts -- already clean
 6. Update any documentation referencing cryptocli
 
 ### Phase H: TS Browser Dedup [COMPLETE ✓ 2026-02-26]
@@ -604,7 +604,7 @@ All crypto operations implemented in `cmd/arkfile-client/crypto_utils.go`:
 1. ~~After login, fetch file list and decrypt sha256 values~~ DONE
    - `client/static/js/src/auth/login.ts`: after account key is cached, fetches `/api/files`, decrypts each `encrypted_sha256sum` via `populateDigestCache()`
 2. ~~Cache in `sessionStorage`~~ DONE
-   - New module `client/static/js/src/utils/digest-cache.ts` — sessionStorage-backed map of `fileId → plaintextSHA256Hex`
+   - New module `client/static/js/src/utils/digest-cache.ts` -- sessionStorage-backed map of `fileId → plaintextSHA256Hex`
    - Functions: `populateDigestCache`, `checkDuplicate`, `addDigest`, `removeDigest`, `clearDigestCache`
    - Privacy: plaintext SHA-256 values never sent to server; decrypted client-side only
 3. ~~Before upload, check cache for duplicate~~ DONE
@@ -661,7 +661,7 @@ All crypto operations implemented in `cmd/arkfile-client/crypto_utils.go`:
 - `cmd/arkfile-client/crypto_ops.go` -- helper functions wrapping crypto package calls for upload/download/share operations (keeps main.go manageable)
 - `cmd/arkfile-client/dedup.go` -- dedup check logic
 
-### TS Changes (Phase H — COMPLETE ✓ 2026-02-26)
+### TS Changes (Phase H -- COMPLETE ✓ 2026-02-26)
 - `client/static/js/src/files/upload.ts` -- dedup check added before upload; digest added after upload ✓
 - `client/static/js/src/auth/login.ts` -- populates digest cache after login; clears on logout ✓
 - `client/static/js/src/utils/digest-cache.ts` -- new module for sessionStorage digest cache ✓ (CREATED)
@@ -811,7 +811,7 @@ All decisions below were confirmed by project owner and are final for this refac
 | 4 | Auth requirement | User MUST be logged in before upload; reject with clear error if no active session |
 | 5 | HTTP timeout | Default 120s, configurable via `--timeout` flag (min 10s, max 600s) |
 | 6 | Test file generation | `generate-test-file` MUST use streaming writes; max 10 GB |
-| 7 | `EncryptStreamGCM`/`DecryptStreamGCM` | Dead code — delete in Phase G alongside other whole-file crypto |
+| 7 | `EncryptStreamGCM`/`DecryptStreamGCM` | Dead code -- delete in Phase G alongside other whole-file crypto |
 | 8 | Pipeline architecture | Channel-based (goroutines + channels) from the start, not refactored in later |
 | 9 | `list-files` decryption | Auto-decrypts filenames and metadata using account key; `--raw` flag for encrypted values |
 | 10 | Implementation order | Whatever order makes most sense for agents; everything ASAP, test after full completion |
@@ -825,24 +825,24 @@ All decisions below were confirmed by project owner and are final for this refac
 ### Source Code (to be modified)
 | File | Type | Notes |
 |---|---|---|
-| `cmd/arkfile-client/main.go` | **MAJOR REWRITE** | Core client — all upload/download/share commands rewritten |
+| `cmd/arkfile-client/main.go` | **MAJOR REWRITE** | Core client -- all upload/download/share commands rewritten |
 | `cmd/arkfile-client/agent.go` | **MODIFY** | Add digest cache support |
-| `client/static/js/package.json` | **MODIFY** | Has `"name": "arkfile-client"` — cosmetic, low priority |
+| `client/static/js/package.json` | **MODIFY** | Has `"name": "arkfile-client"` -- cosmetic, low priority |
 | `client/static/js/bun.lock` | Auto-generated | Will update when package.json changes |
 
 ### Scripts (to be modified)
 | File | Notes |
 |---|---|
 | `scripts/setup/build.sh` | Remove cryptocli build, keep arkfile-client build |
-| `scripts/testing/e2e-test.sh` | **DO NOT TOUCH** until full refactor done — heavy arkfile-client usage throughout |
-| `.gitignore` | Already has `/arkfile-client` entry — fine |
+| `scripts/testing/e2e-test.sh` | **DO NOT TOUCH** until full refactor done -- heavy arkfile-client usage throughout |
+| `.gitignore` | Already has `/arkfile-client` entry -- fine |
 
 ### Docs (to be updated after code work)
 | File | Notes |
 |---|---|
-| `docs/AGENTS.md` | Mentions `arkfile-client` and `cryptocli` workflow — update |
-| `docs/wip/new-cli.md` | Our planning doc — already current |
-| `docs/wip/chunking-ts-fixes.md` | References old workflow — update when done |
+| `docs/AGENTS.md` | Mentions `arkfile-client` and `cryptocli` workflow -- update |
+| `docs/wip/new-cli.md` | Our planning doc -- already current |
+| `docs/wip/chunking-ts-fixes.md` | References old workflow -- update when done |
 
 ---
 
@@ -851,7 +851,7 @@ All decisions below were confirmed by project owner and are final for this refac
 ### Source Code (to be DELETED, only at the very END of this refactor, with explicit user permission only)
 | File | Action |
 |---|---|
-| `cmd/cryptocli/main.go` | **DELETE** — all functionality absorbed into arkfile-client |
+| `cmd/cryptocli/main.go` | **DELETE** -- all functionality absorbed into arkfile-client |
 | `cmd/cryptocli/commands/commands.go` | **DELETE** |
 
 ### Scripts (to be modified)
@@ -865,37 +865,37 @@ All decisions below were confirmed by project owner and are final for this refac
 ### Docs (to be updated)
 | File | Notes |
 |---|---|
-| `docs/AGENTS.md` | "using the `cryptocli` tool on the command-line" — update |
-| `docs/wip/chunking-ts-fixes.md` | Heavy cryptocli references — update when refactor complete |
+| `docs/AGENTS.md` | "using the `cryptocli` tool on the command-line" -- update |
+| `docs/wip/chunking-ts-fixes.md` | Heavy cryptocli references -- update when refactor complete |
 
 ## Summary: Files That MUST Change for This Refactor
 
 ### Phase 1: Code Changes [COMPLETE ✓ 2026-02-26]
-1. `cmd/arkfile-client/main.go` — rewritten ✓ (login with digest cache population, all commands)
-2. `cmd/arkfile-client/agent.go` — updated ✓ (digest cache field + all methods)
-3. `cmd/arkfile-client/crypto_utils.go` — created ✓ (all crypto helpers, no hardcoded values)
-4. `cmd/arkfile-client/dedup.go` — created ✓ (full dedup workflow with server-side verification)
-5. `cmd/arkfile-client/commands.go` — created ✓ (upload, download, list-files, share, generate-test-file)
+1. `cmd/arkfile-client/main.go` -- rewritten ✓ (login with digest cache population, all commands)
+2. `cmd/arkfile-client/agent.go` -- updated ✓ (digest cache field + all methods)
+3. `cmd/arkfile-client/crypto_utils.go` -- created ✓ (all crypto helpers, no hardcoded values)
+4. `cmd/arkfile-client/dedup.go` -- created ✓ (full dedup workflow with server-side verification)
+5. `cmd/arkfile-client/commands.go` -- created ✓ (upload, download, list-files, share, generate-test-file)
 
 ### Phase 2: Build/Deploy Changes [COMPLETE ✓ 2026-02-26]
-5. `scripts/setup/build.sh` — verified: no cryptocli references ✓
-6. `scripts/setup/uninstall.sh` — verified: no cryptocli references ✓
-7. `scripts/complete-setup-test.sh` — verified: no cryptocli references ✓
-Note: `scripts/testing/e2e-test.sh` still has cryptocli references — intentionally deferred to Phase I
+5. `scripts/setup/build.sh` -- verified: no cryptocli references ✓
+6. `scripts/setup/uninstall.sh` -- verified: no cryptocli references ✓
+7. `scripts/complete-setup-test.sh` -- verified: no cryptocli references ✓
+Note: `scripts/testing/e2e-test.sh` still has cryptocli references -- intentionally deferred to Phase I
 
 ### Phase 3: TS Changes (COMPLETE ✓)
-- `client/static/js/src/utils/digest-cache.ts` — CREATED ✓
-- `client/static/js/src/auth/login.ts` — UPDATED ✓ (populate + clear digest cache)
-- `client/static/js/src/files/upload.ts` — UPDATED ✓ (dedup check + post-upload addDigest)
+- `client/static/js/src/utils/digest-cache.ts` -- CREATED ✓
+- `client/static/js/src/auth/login.ts` -- UPDATED ✓ (populate + clear digest cache)
+- `client/static/js/src/files/upload.ts` -- UPDATED ✓ (dedup check + post-upload addDigest)
 
 ### Phase 4: Go Dead Code Removal (COMPLETE ✓)
-- `crypto/file_operations.go` — `EncryptFileWorkflow`, `DecryptFileWorkflow`, `DecryptFileFromPath`, `EncryptFileToPath` DELETED ✓
-- `crypto/gcm.go` — `EncryptStreamGCM`, `DecryptStreamGCM` DELETED ✓
-- `crypto/file_operations_test.go` — dead tests removed, signatures fixed, all tests pass ✓
+- `crypto/file_operations.go` -- `EncryptFileWorkflow`, `DecryptFileWorkflow`, `DecryptFileFromPath`, `EncryptFileToPath` DELETED ✓
+- `crypto/gcm.go` -- `EncryptStreamGCM`, `DecryptStreamGCM` DELETED ✓
+- `crypto/file_operations_test.go` -- dead tests removed, signatures fixed, all tests pass ✓
 
 ### Phase 5: Doc Updates (AFTER code is working)
-8. `docs/AGENTS.md` — update tool descriptions
-9. `docs/wip/chunking-ts-fixes.md` — update to reflect completion
+8. `docs/AGENTS.md` -- update tool descriptions
+9. `docs/wip/chunking-ts-fixes.md` -- update to reflect completion
 
 **IMPORTANT: Do not delete any existing cryptocli code files until we have confirmed all required functionality has been ported over to or merge into the new, updated arkfile-client side. You must get EXPLICIT permission from the user before deleting those files!**
 

@@ -1,5 +1,5 @@
 /**
- * Unit Tests — File Encryption (Salt Derivation + Key Derivation)
+ * Unit Tests -- File Encryption (Salt Derivation + Key Derivation)
  *
  * Tests for: deriveSaltFromUsername, deriveFileEncryptionKey
  * These are the core functions that enable offline decryption and

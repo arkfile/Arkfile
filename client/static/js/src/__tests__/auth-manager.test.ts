@@ -30,7 +30,7 @@ import {
 beforeEach(() => {
   // Clear cached user state between tests.
   // The CSRF cookie is not set in the bun test environment (no document.cookie),
-  // so isAuthenticated() always returns false in tests — which is correct.
+  // so isAuthenticated() always returns false in tests -- which is correct.
   AuthManager.clearAllSessionData();
 });
 

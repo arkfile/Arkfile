@@ -1,4 +1,4 @@
-# Slice D — Sharing
+# Slice D -- Sharing
 
 Driving prompt: `docs/wip/idsrp.md` §7 (sharing), §11 (metadata leakage via shares), parts of §8 (authz on share endpoints).
 Master tracker: `docs/wip/review/00-plan.md` §4 Slice D.
@@ -7,10 +7,10 @@ Master tracker: `docs/wip/review/00-plan.md` §4 Slice D.
 
 ### `idsrp.md` sections covered
 
-- **§7 File Sharing Review** — full coverage.
-- **§11 Metadata Privacy** — covered as it relates to share endpoints and share envelopes. Owner-facing metadata privacy was covered in Slice B.
-- **§8 Backend Authorization** — only the share endpoints' authz, IDOR, and revocation semantics. Full endpoint table production is deferred to Slice E.
-- **§14 Logging hygiene** — only for share endpoints. The general logging audit lives in Slice E.
+- **§7 File Sharing Review** -- full coverage.
+- **§11 Metadata Privacy** -- covered as it relates to share endpoints and share envelopes. Owner-facing metadata privacy was covered in Slice B.
+- **§8 Backend Authorization** -- only the share endpoints' authz, IDOR, and revocation semantics. Full endpoint table production is deferred to Slice E.
+- **§14 Logging hygiene** -- only for share endpoints. The general logging audit lives in Slice E.
 
 ### Deferred
 
@@ -42,9 +42,9 @@ Master tracker: `docs/wip/review/00-plan.md` §4 Slice D.
 ### Out-of-scope notes
 
 - Recipient PKI / public-key directory sharing: N/A by design (see §4).
-- Folder/hierarchy sharing: N/A — Arkfile is flat per-user.
-- Share invitation emails / notifications: N/A — sharing is link+password.
-- Multi-tenant separation: N/A — single tenant.
+- Folder/hierarchy sharing: N/A -- Arkfile is flat per-user.
+- Share invitation emails / notifications: N/A -- sharing is link+password.
+- Multi-tenant separation: N/A -- single tenant.
 
 ---
 
@@ -159,7 +159,7 @@ via SW or Blob fallback.
 
 - **The server cannot decrypt envelopes**: salt + ciphertext are sufficient to *attempt* offline brute force, but require Argon2id work per guess. Confidentiality of the file rests entirely on share-password strength and Argon2id memory hardness.
 - **Bearer token, not capability**: anyone who learns the download token gets unlimited (modulo `max_accesses`) chunk downloads. The token is hashed at rest but used as a plaintext bearer over HTTPS.
-- **Revocation is "future fetch only"**: a recipient who has unlocked the envelope and read all chunks cannot be "unlocked" — they hold the FEK forever. The product copy and `confirm()` text in `share-list.ts` say "immediately prevent anyone from accessing" — that overstates the guarantee. See **D-13**.
+- **Revocation is "future fetch only"**: a recipient who has unlocked the envelope and read all chunks cannot be "unlocked" -- they hold the FEK forever. The product copy and `confirm()` text in `share-list.ts` say "immediately prevent anyone from accessing" -- that overstates the guarantee. See **D-13**.
 - **Anonymous-recipient privacy**: matches the AGENTS.md "no IP, no PII" posture. EntityID HMAC is the only persistent identifier. Caveat: anonymous EntityID rotates daily, which is also the upper bound on rate-limit memory of an attacker. See **D-11**.
 
 ---
@@ -219,13 +219,13 @@ A bandwidth-amplification variant: a colluding recipient can re-download chunks 
 
 Apply the `MaxAccesses` check and `access_count` accounting on every chunk request, not just chunk 0. The race-y "we don't want to block in-progress downloads" comment is solvable with a *per-token-instance* download session (issue a server-side download session ID on the first chunk request and require it on subsequent chunk requests; one session = one count). Alternatively, count by downloader-EntityID within a short rolling window so that one slow legitimate downloader does not count as N.
 
-Document explicitly in the API doc that `max_accesses` counts **download starts**, not completions, if that semantic is intentional — but right now even that is broken because chunks 1..N can be fetched without any chunk-0 increment occurring (a malicious client can skip chunk 0 entirely if they already have a token).
+Document explicitly in the API doc that `max_accesses` counts **download starts**, not completions, if that semantic is intentional -- but right now even that is broken because chunks 1..N can be fetched without any chunk-0 increment occurring (a malicious client can skip chunk 0 entirely if they already have a token).
 
 #### Suggested tests
 
 - Integration test: create a `max_accesses=1` share; recipient calls chunks 1..N without chunk 0; verify the server enforces the limit (currently it does not).
 - Integration test: create a `max_accesses=1` share; recipient calls chunk 0 then chunks 1..N many times; verify total downloads counted = 1, not N.
-- Integration test: two concurrent recipients with the same token, both hitting chunk 0 — see also **D-02**.
+- Integration test: two concurrent recipients with the same token, both hitting chunk 0 -- see also **D-02**.
 
 #### Cross-refs
 
@@ -334,17 +334,17 @@ The error from `database.DB.Exec(...)` is ignored.
 
 #### Impact
 
-- Surprising statefulness — a "view" mutates the database.
+- Surprising statefulness -- a "view" mutates the database.
 - Ignored error from `Exec` may leave the system in a half-revoked state and the operator unaware.
 - A user repeatedly polling their share list incurs DB write load proportional to how many of their shares just expired.
 
 #### Recommendation
 
-Move expiry/exhaustion auto-revoke into either (a) a periodic background sweeper task (preferred — there is already a billing sweeper pattern in `billing/sweep.go` that this could mirror), or (b) the read-time logic computes `is_active` purely from current state without persisting it. Persistence belongs to a write operation or scheduled job.
+Move expiry/exhaustion auto-revoke into either (a) a periodic background sweeper task (preferred -- there is already a billing sweeper pattern in `billing/sweep.go` that this could mirror), or (b) the read-time logic computes `is_active` purely from current state without persisting it. Persistence belongs to a write operation or scheduled job.
 
 #### Suggested tests
 
-- Unit test: confirm `ListShares` does not write to the DB. (Currently this test would fail — that is the point.)
+- Unit test: confirm `ListShares` does not write to the DB. (Currently this test would fail -- that is the point.)
 
 ---
 
@@ -377,7 +377,7 @@ There is no length cap, no allow-list, no sanitization. An owner can put PII ("R
 
 - Owner revokes share with `reason = "Caught you, John Smith of 123 Elm St"`. The recipient sees this in their error UI.
 - Owner revokes with `reason = "https://attacker.example/?id=<recipient_marker>"`. Recipient sees a clickable-looking URL in their error page.
-- Owner revokes with `reason = "<img src=x onerror=...>"`. Whether this fires depends on how `share-access.ts` renders the error — it uses `.textContent` for the standard "no longer valid" path (`share-access.ts:131-141`), so direct XSS is mitigated *currently*. But that depends on every downstream renderer using textContent — a fragile invariant.
+- Owner revokes with `reason = "<img src=x onerror=...>"`. Whether this fires depends on how `share-access.ts` renders the error -- it uses `.textContent` for the standard "no longer valid" path (`share-access.ts:131-141`), so direct XSS is mitigated *currently*. But that depends on every downstream renderer using textContent -- a fragile invariant.
 
 #### Impact
 
@@ -410,10 +410,10 @@ There is no length cap, no allow-list, no sanitization. An owner can put PII ("R
 The HTML share page handler `GetSharedFile` is registered at two distinct URLs with different middleware stacks:
 
 ```go
-// handlers/route_config.go:128 — older entrypoint
+// handlers/route_config.go:128 -- older entrypoint
 Echo.GET("/shared/:id", ShareEnumerationMiddleware(GetSharedFile))
 
-// handlers/route_config.go:132-139 — newer namespace
+// handlers/route_config.go:132-139 -- newer namespace
 publicShareGroup := Echo.Group("/api/public/shares")
 publicShareGroup.Use(ShareEnumerationMiddleware)
 publicShareGroup.Use(ShareRateLimitMiddleware)
@@ -425,7 +425,7 @@ The `/shared/:id` path lacks both `ShareRateLimitMiddleware` and `TimingProtecti
 
 #### Impact
 
-- **Rate-limit bypass**: an attacker who tripped `ShareRateLimitMiddleware` on `/api/public/shares/:id` can switch to `/shared/:id` and continue probing the same share ID without per-share rate limiting. Only the entity-global enumeration guard still fires (and only on 404, not on 200 — so probing valid shares costs nothing).
+- **Rate-limit bypass**: an attacker who tripped `ShareRateLimitMiddleware` on `/api/public/shares/:id` can switch to `/shared/:id` and continue probing the same share ID without per-share rate limiting. Only the entity-global enumeration guard still fires (and only on 404, not on 200 -- so probing valid shares costs nothing).
 - **Timing oracle**: without `TimingProtectionMiddleware`, response time differs between "share exists in DB" and "share not found". An attacker can race-fingerprint via the timing diff even when the response body is identical (both serve a 200 with the same static HTML for the happy path).
 
 #### Recommendation
@@ -471,18 +471,18 @@ Two concurrent failed attempts can both read `failed_count=N` and both write `fa
 
 #### Impact
 
-- Slower, weaker progressive rate limiting under concurrent attack — favors the attacker.
+- Slower, weaker progressive rate limiting under concurrent attack -- favors the attacker.
 - Same pattern exists in `recordAuthFailedAttempt` for login/register/TOTP rate limits (`handlers/rate_limiting.go:546-600`). Slice A's TOTP findings should cross-reference this; for this slice the share-bruteforce angle is in scope.
 
 #### Recommendation
 
-Use an atomic conditional UPSERT or `UPDATE ... SET failed_count = failed_count + 1` with a server-side computed `next_allowed_attempt = CURRENT_TIMESTAMP + <penalty(failed_count)>` — but rqlite/SQLite cannot compute the penalty inline because it is a function of the post-increment failure count. The two-step approach can be made safe by wrapping in a transaction or by relying on the `RowsAffected()` semantics with an `INSERT ... ON CONFLICT DO UPDATE SET failed_count = failed_count + 1`, then reading back the new count in the same transaction.
+Use an atomic conditional UPSERT or `UPDATE ... SET failed_count = failed_count + 1` with a server-side computed `next_allowed_attempt = CURRENT_TIMESTAMP + <penalty(failed_count)>` -- but rqlite/SQLite cannot compute the penalty inline because it is a function of the post-increment failure count. The two-step approach can be made safe by wrapping in a transaction or by relying on the `RowsAffected()` semantics with an `INSERT ... ON CONFLICT DO UPDATE SET failed_count = failed_count + 1`, then reading back the new count in the same transaction.
 
 A simpler form: a single atomic increment, followed by a SELECT inside the same transaction to compute the penalty.
 
 #### Suggested tests
 
-- Concurrency test: 20 parallel `recordFailedAttempt` calls — assert final `failed_count == 20`.
+- Concurrency test: 20 parallel `recordFailedAttempt` calls -- assert final `failed_count == 20`.
 
 ---
 
@@ -526,9 +526,9 @@ Add a periodic sweeper (mirroring `billing/sweep.go`) that deletes rows where `l
 
 #### Description
 
-`getOrCreateAuthRateLimitEntry` synthesizes a `share_id = "auth_" + endpointType + "_" + entityID` and writes it into the `share_access_attempts.share_id` column. The WHERE clause then matches `share_id = "auth_login_<E>" AND entity_id = <E>` — the entity_id is encoded twice. The Scan also maps `share_id` -> `entry.EndpointType` (a typed-string field), so the field is misleadingly named.
+`getOrCreateAuthRateLimitEntry` synthesizes a `share_id = "auth_" + endpointType + "_" + entityID` and writes it into the `share_access_attempts.share_id` column. The WHERE clause then matches `share_id = "auth_login_<E>" AND entity_id = <E>` -- the entity_id is encoded twice. The Scan also maps `share_id` -> `entry.EndpointType` (a typed-string field), so the field is misleadingly named.
 
-This is functional but fragile, and it pollutes the share-rate-limit table with auth-rate-limit rows that cannot be told apart from real shares without prefix inspection. It also means the **share enumeration guard counting unique share IDs sees these synthetic auth entries** if the same entity hits multiple auth endpoints — but it doesn't because the guard is keyed on share-handler 404s only, not auth failures. Still, the design is brittle.
+This is functional but fragile, and it pollutes the share-rate-limit table with auth-rate-limit rows that cannot be told apart from real shares without prefix inspection. It also means the **share enumeration guard counting unique share IDs sees these synthetic auth entries** if the same entity hits multiple auth endpoints -- but it doesn't because the guard is keyed on share-handler 404s only, not auth failures. Still, the design is brittle.
 
 #### Recommendation
 
@@ -536,7 +536,7 @@ Move auth rate limits to a separate table (`auth_attempts` with columns `endpoin
 
 #### Cross-refs
 
-- Slice A — the same pattern is what the OPAQUE / TOTP / login rate-limit code uses. Slice A may already have flagged this. (This Slice D notes it because it directly bleeds into share-handler analysis.)
+- Slice A -- the same pattern is what the OPAQUE / TOTP / login rate-limit code uses. Slice A may already have flagged this. (This Slice D notes it because it directly bleeds into share-handler analysis.)
 
 ---
 
@@ -575,7 +575,7 @@ Both `Origin` and `Host` are attacker-controllable when the request comes from a
 
 #### Attack scenario
 
-If a deployment runs without `BASE_URL` set (the documented production path uses `BASE_URL`, but local/test deployments do not — see comment at line 144 "Fallback for local/dev deployments where BASE_URL is not configured"), an attacker who induces the legitimate user to issue a share creation with a crafted `Origin` header receives a `share_url` rooted at `https://attacker.example/shared/<id>`. The owner copies it into their UI and may share it externally believing it's the real URL.
+If a deployment runs without `BASE_URL` set (the documented production path uses `BASE_URL`, but local/test deployments do not -- see comment at line 144 "Fallback for local/dev deployments where BASE_URL is not configured"), an attacker who induces the legitimate user to issue a share creation with a crafted `Origin` header receives a `share_url` rooted at `https://attacker.example/shared/<id>`. The owner copies it into their UI and may share it externally believing it's the real URL.
 
 For the request to come with an attacker-chosen `Origin`, the attacker generally needs script execution in the owner's browser already (which is a higher bar than the finding requires). However, in self-XSS or content-injection scenarios that don't yet have full DOM control, this is a useful amplification.
 
@@ -617,12 +617,12 @@ Compounding this:
 
 - **The Argon2id parameters are fetched from the server unauthenticated and unauthenticated-to-the-share** (cross-ref Slice B `B-19`). A malicious or compromised server (or one whose `argon2id-params.json` was tampered with at deploy time) can serve weak params at create time, recipient time, or both. The salt is stored but the *params used* are not. A recipient on a compromised network or a maliciously-modified frontend cannot detect param downgrade.
 
-- **Server-stored salt + ciphertext + public params is sufficient for the server operator (or anyone with read access to `file_share_keys`) to attack every share offline at leisure**. The threat model in `idsrp.md` §2 includes "Malicious or compromised server operator" — for sharing, this adversary can mount unlimited offline brute force on every share that has ever existed.
+- **Server-stored salt + ciphertext + public params is sufficient for the server operator (or anyone with read access to `file_share_keys`) to attack every share offline at leisure**. The threat model in `idsrp.md` §2 includes "Malicious or compromised server operator" -- for sharing, this adversary can mount unlimited offline brute force on every share that has ever existed.
 
 #### Evidence
 
 ```go
-// crypto/share_kdf.go:67-77 — server-side derivation reads params from the same global
+// crypto/share_kdf.go:67-77 -- server-side derivation reads params from the same global
 key := argon2.IDKey([]byte(password), salt,
     ShareKDFParams.Iterations,
     ShareKDFParams.Memory,
@@ -632,7 +632,7 @@ key := argon2.IDKey([]byte(password), salt,
 ```
 
 ```ts
-// share-crypto.ts:176, 301 — params fetched from server, no integrity binding
+// share-crypto.ts:176, 301 -- params fetched from server, no integrity binding
 const argon2Params = await getArgon2Params();
 // ...
 const keyDerivation = await deriveKeyArgon2id({
@@ -649,7 +649,7 @@ GET /api/config/argon2  -- public endpoint (route_config.go:54)
 1. Server operator (or someone with DB read) takes a backup of `file_share_keys`. They now have `(share_id, salt, encrypted_envelope)` for every share.
 2. They run an Argon2id-accelerated GPU cluster against likely share-password dictionaries. For every share whose password is in their wordlist, they recover the share key, decrypt the envelope, extract the FEK + download token + filename + sha256.
 3. They use the download token (or replay it as an anonymous recipient) to fetch and decrypt every chunk of the corresponding file.
-4. This is silent — the share owner never sees an `access_count` increment because the operator can bypass the access-count check (see **D-01** / **D-02**) and there is no logging visible to the owner.
+4. This is silent -- the share owner never sees an `access_count` increment because the operator can bypass the access-count check (see **D-01** / **D-02**) and there is no logging visible to the owner.
 
 A weaker variant: an attacker who is not the operator but who knows or guesses share IDs probes `/api/public/shares/:id/envelope` once per share to retrieve `(salt, encrypted_envelope)`, then attacks offline. The per-share rate limiter cannot help once the envelope is downloaded.
 
@@ -664,15 +664,15 @@ A weaker variant: an attacker who is not the operator but who knows or guesses s
 In priority order:
 
 1. **Document the threat model honestly**: in `docs/security.md` and user-facing share creation UX, state that a malicious server operator can mount offline brute force on shares, and that share password strength is the only defense. This matches AGENTS.md "honesty and transparency".
-2. **Bind Argon2id parameters into the envelope's AAD**: include the params (memory, iterations, parallelism, keylen) in the AAD or store them alongside the salt in `file_share_keys`. This prevents silent parameter downgrade — a recipient using mismatched params will fail decryption rather than succeed at an attacker-chosen weak point.
+2. **Bind Argon2id parameters into the envelope's AAD**: include the params (memory, iterations, parallelism, keylen) in the AAD or store them alongside the salt in `file_share_keys`. This prevents silent parameter downgrade -- a recipient using mismatched params will fail decryption rather than succeed at an attacker-chosen weak point.
 3. **Consider an integrity-bound `/api/config/argon2` response**: signed by a server long-term key whose public half is bundled with the frontend. This makes server-side parameter manipulation noisy. (Heavier lift; deferrable.)
-4. **Raise the minimum share-password entropy floor in `crypto/password-requirements.json`** (Slice B item) — share passwords get the same treatment as account passwords, but they are the *only* line of defense, so the floor should be higher.
+4. **Raise the minimum share-password entropy floor in `crypto/password-requirements.json`** (Slice B item) -- share passwords get the same treatment as account passwords, but they are the *only* line of defense, so the floor should be higher.
 
 #### Cross-refs
 
 - **B-01 / B-03 / B-19** (server-controlled crypto params).
 - **B-06** (server-applied padding cross-cuts file-side).
-- **A-?** (offline cracking resistance question 1 in `idsrp.md` §19 — this finding feeds the answer for shares specifically).
+- **A-?** (offline cracking resistance question 1 in `idsrp.md` §19 -- this finding feeds the answer for shares specifically).
 
 #### Suggested tests
 
@@ -698,7 +698,7 @@ This has two consequences for shares:
 
 2. **UA / Accept-Language cycling**: Different `User-Agent` or `Accept-Language` strings yield different EntityIDs for the *same* IP. A scraper that cycles 100 UA strings has 100x the rate-limit budget against any given share password.
 
-The enumeration window is 10 minutes and 32 unique 404s in that window triggers a 1-hour block — but the attacker can use 32 UA strings to get 32 *different* EntityIDs and 32 separate counters, defeating that bound.
+The enumeration window is 10 minutes and 32 unique 404s in that window triggers a 1-hour block -- but the attacker can use 32 UA strings to get 32 *different* EntityIDs and 32 separate counters, defeating that bound.
 
 #### Evidence
 
@@ -756,7 +756,7 @@ These are operationally heavy changes; at minimum, **document the bypass** in `d
 
 The share envelope JSON has fields `fek`, `download_token`, `filename`, `size_bytes`, `sha256`. It does **not** include:
 
-- A version byte / format identifier — so the format cannot evolve without breaking deployed shares.
+- A version byte / format identifier -- so the format cannot evolve without breaking deployed shares.
 - The Argon2id parameters used to derive the key (memory, iterations, parallelism, output length).
 - The AEAD algorithm identifier.
 - The AAD construction scheme.
@@ -765,9 +765,9 @@ The AAD itself is the raw byte concatenation `shareID + fileID` with no separato
 
 Two consequences:
 
-1. **Parameter downgrade is invisible**: re-use of the salt with a different set of Argon2id parameters at decrypt time fails generically as a "wrong password" — there is no way for the recipient to detect that the server (or a tampered frontend bundle) has lowered the work factor. See **D-10**.
+1. **Parameter downgrade is invisible**: re-use of the salt with a different set of Argon2id parameters at decrypt time fails generically as a "wrong password" -- there is no way for the recipient to detect that the server (or a tampered frontend bundle) has lowered the work factor. See **D-10**.
 
-2. **AAD ambiguity is mitigated only by fixed-length share IDs**: `isValidShareID` (`handlers/file_shares.go:962`) requires exactly 43 chars, so the concatenation `share_id||file_id` is unambiguous in *practice* — but the construction is a footgun. If `file_id` ever changes format (e.g. variable length, or a UUID), or if `share_id` validation is relaxed (e.g. to allow legacy formats), an AAD collision becomes possible: `share=AAA, file=BBB` vs `share=AAAB, file=BB` produce identical AAD strings.
+2. **AAD ambiguity is mitigated only by fixed-length share IDs**: `isValidShareID` (`handlers/file_shares.go:962`) requires exactly 43 chars, so the concatenation `share_id||file_id` is unambiguous in *practice* -- but the construction is a footgun. If `file_id` ever changes format (e.g. variable length, or a UUID), or if `share_id` validation is relaxed (e.g. to allow legacy formats), an AAD collision becomes possible: `share=AAA, file=BBB` vs `share=AAAB, file=BB` produce identical AAD strings.
 
 #### Evidence
 
@@ -784,7 +784,7 @@ const aad = new TextEncoder().encode(shareId + fileId);
 ```
 
 ```go
-// crypto/share_kdf.go:108-114 — no version field
+// crypto/share_kdf.go:108-114 -- no version field
 type ShareEnvelope struct {
     FEK           string `json:"fek"`
     DownloadToken string `json:"download_token"`
@@ -798,11 +798,11 @@ type ShareEnvelope struct {
 
 - Add a `v` field to the JSON envelope (e.g. `"v": 1`) and reject unknown versions on parse.
 - Construct AAD with length-prefixed or delimiter-protected components, e.g. `len32(share_id_bytes) || share_id_bytes || len32(file_id_bytes) || file_id_bytes`. Apply on both Go and TS sides; covered by an existing-format compat test that confirms current shares still decrypt.
-- Include Argon2id params either inside the envelope JSON (so re-fetching from server is unnecessary) or in the AAD (so silent downgrade fails decryption). The former is simpler — store the params alongside the salt and treat the server-fetched params as a *hint* validated against the envelope.
+- Include Argon2id params either inside the envelope JSON (so re-fetching from server is unnecessary) or in the AAD (so silent downgrade fails decryption). The former is simpler -- store the params alongside the salt and treat the server-fetched params as a *hint* validated against the envelope.
 
 #### Suggested tests
 
-- Negative test: AAD constructed with `share=AB, file=C` cannot decrypt envelope encrypted with `share=A, file=BC`. (Currently it can, if the IDs were variable-length — happens not to be exploitable today because of the 43-char constraint.)
+- Negative test: AAD constructed with `share=AB, file=C` cannot decrypt envelope encrypted with `share=A, file=BC`. (Currently it can, if the IDs were variable-length -- happens not to be exploitable today because of the 43-char constraint.)
 - Negative test: envelope encrypted with `Argon2id m=128MB, t=3` cannot be decrypted with `Argon2id m=64KB, t=1` even if same salt and password.
 
 #### Cross-refs
@@ -836,7 +836,7 @@ This is materially false. A recipient who has already unlocked the envelope poss
 - The download token.
 - The decrypted file metadata.
 
-Revocation prevents **future** server-side chunk fetches under that share — but if the recipient has already downloaded all chunks, they hold the plaintext file forever. There is no cryptographic guarantee about already-fetched material because file keys are not rotated on revoke (which would require re-uploading the file, which the design correctly avoids).
+Revocation prevents **future** server-side chunk fetches under that share -- but if the recipient has already downloaded all chunks, they hold the plaintext file forever. There is no cryptographic guarantee about already-fetched material because file keys are not rotated on revoke (which would require re-uploading the file, which the design correctly avoids).
 
 This is the standard limitation of password-derived share envelopes, but the UX text claims otherwise.
 
@@ -846,7 +846,7 @@ Change the `confirm()` text to something honest, e.g.:
 
 > "Revoke this share?
 >
-> This stops the server from serving file chunks under this share link from now on. People who already downloaded the file or already obtained the download key keep what they have — revocation cannot recover files that have already left the server.
+> This stops the server from serving file chunks under this share link from now on. People who already downloaded the file or already obtained the download key keep what they have -- revocation cannot recover files that have already left the server.
 >
 > This action cannot be undone."
 
@@ -890,7 +890,7 @@ Apply the same correction in any documentation that describes revocation.
 
 If a deployment runs without `BASE_URL` and a request reaches `ListShares` with `Origin: ">malicious</input><script>...</script>`, the script would land in the owner's own DOM. This is **self-XSS** (the attacker must already control the request's `Origin` header, which usually requires script execution in the owner's browser).
 
-Additionally, `share.filename_local` is interpolated at line 214-216 → 247 via `${filenameDisplay}` directly into the HTML template. `filename_local` is the recipient-decrypted-style metadata, but in `share-list.ts` it is the *owner's own* filename. Owner-controlled, viewed by the owner — self-XSS at worst.
+Additionally, `share.filename_local` is interpolated at line 214-216 → 247 via `${filenameDisplay}` directly into the HTML template. `filename_local` is the recipient-decrypted-style metadata, but in `share-list.ts` it is the *owner's own* filename. Owner-controlled, viewed by the owner -- self-XSS at worst.
 
 #### Evidence
 
@@ -919,7 +919,7 @@ No `escapeHtml(...)` calls anywhere in the render path.
 #### Cross-refs
 
 - **D-09** (Origin-header trust is the upstream of the malicious `share_url`).
-- **Slice F** — full CSP review.
+- **Slice F** -- full CSP review.
 
 #### Suggested tests
 
@@ -957,7 +957,7 @@ Per-access logs joined on `(file_id, entity_id)` reconstruct the **access graph*
 
 - See which anonymous recipients (by stable-per-day EntityID) accessed which file.
 - Combine with the owner-side `database.LogUserAction(username, "created_share", ...)` (line 160) to map files to owners to access patterns.
-- File IDs themselves are server-internal but are joinable across logs — they are a stable identifier for the underlying object.
+- File IDs themselves are server-internal but are joinable across logs -- they are a stable identifier for the underlying object.
 
 EntityID is HMAC-protected and rotates daily, which is the privacy-preserving choice, but the *combination* of `entity_id + file_id` still allows access-pattern analysis within a 24-hour window for any individual file.
 
@@ -1023,8 +1023,8 @@ The `share_id[:8]` truncation is good. The `file_id` should also be truncated or
 
 `DownloadShareChunk` validates the token in two steps:
 
-1. `hashDownloadToken(downloadToken)` — base64-decodes the supplied token, returns an error if decode fails (line 932).
-2. `constantTimeCompare(computedHash, share.DownloadTokenHash)` — base64-decodes both hashes; if either decode fails, returns false (`constantTimeCompare:949-951`).
+1. `hashDownloadToken(downloadToken)` -- base64-decodes the supplied token, returns an error if decode fails (line 932).
+2. `constantTimeCompare(computedHash, share.DownloadTokenHash)` -- base64-decodes both hashes; if either decode fails, returns false (`constantTimeCompare:949-951`).
 
 For an invalid base64 token, step 1 returns an error and a different code path (`logging.WarningLogger.Printf("Invalid download token format: ...")` line 764) than for a valid-format-but-wrong token (`logging.WarningLogger.Printf("Invalid download token: ...")` line 770). The wire response is the same 403, but:
 
@@ -1083,7 +1083,7 @@ The current deployment (`systemd/arkfile.service`) appears single-instance, so t
 
 #### Description
 
-For *anonymous* requests (the entire share-recipient flow), the EntityID is `HMAC(daily_key, "anon:" + IP + "|" + UserAgent + "|" + AcceptLanguage)`. There is no cookie, no client-side persistent identifier — an attacker can switch IPs (VPN/Tor/residential proxy network), UA, or Accept-Language to mint a fresh EntityID at will.
+For *anonymous* requests (the entire share-recipient flow), the EntityID is `HMAC(daily_key, "anon:" + IP + "|" + UserAgent + "|" + AcceptLanguage)`. There is no cookie, no client-side persistent identifier -- an attacker can switch IPs (VPN/Tor/residential proxy network), UA, or Accept-Language to mint a fresh EntityID at will.
 
 This is the privacy-preserving choice and aligns with AGENTS.md "no IP, no PII". But it means **all share-access rate limiting and enumeration tracking can be defeated by a sufficiently funded attacker**. The Tor adversary, residential-proxy adversary, and CG-NAT-mobile adversary all defeat these controls trivially.
 
@@ -1116,7 +1116,7 @@ This is the privacy-preserving choice and aligns with AGENTS.md "no IP, no PII".
 
 `GetSharedFile` (the HTML-page handler) checks `expires_at` (line 390) but **not** `revoked_at`. A revoked share still returns 200 with the static `shared.html`. The page then fetches `/api/public/shares/:id/envelope`, which **does** check `revoked_at` and returns 403, after which `share-access.ts` shows "This share is no longer valid" (line 132).
 
-Functionally this is fine — the recipient eventually sees the right message — but two issues:
+Functionally this is fine -- the recipient eventually sees the right message -- but two issues:
 
 1. **Wasted round-trip**: the page loads, runs JS, fires a second request to learn the share is dead. A direct 410/404 at the page level would be faster.
 2. **Confused state for cached pages**: a recipient who loaded `/shared/:id` before revocation and revisits after revocation will see the password form rendered, type their password, and get a wrong-feeling error.
@@ -1141,7 +1141,7 @@ Add the `revoked_at` check to `GetSharedFile`, mirroring `GetShareEnvelope`. Ret
 
 #### Description
 
-`/api/public/shares/:id/metadata` returns `file_id`, `size_bytes`, `chunk_count`, `chunk_size_bytes` to any anonymous caller — no download token, no share password verification, only rate limiting.
+`/api/public/shares/:id/metadata` returns `file_id`, `size_bytes`, `chunk_count`, `chunk_size_bytes` to any anonymous caller -- no download token, no share password verification, only rate limiting.
 
 This means anyone who knows or guesses a valid share ID learns:
 
@@ -1182,9 +1182,9 @@ if request.ExpiresAfterMinutes > 0 {
 }
 ```
 
-No upper bound. A malicious or buggy client can set `ExpiresAfterMinutes = math.MaxInt`, causing `time.Duration * time.Minute` to overflow. Behavior under overflow: `time.Now().Add(huge_negative_duration_after_overflow)` produces a timestamp in the distant past, which would make the share appear *already expired* (the opposite of the attacker's likely intent — so this is self-DoS, not exploitable).
+No upper bound. A malicious or buggy client can set `ExpiresAfterMinutes = math.MaxInt`, causing `time.Duration * time.Minute` to overflow. Behavior under overflow: `time.Now().Add(huge_negative_duration_after_overflow)` produces a timestamp in the distant past, which would make the share appear *already expired* (the opposite of the attacker's likely intent -- so this is self-DoS, not exploitable).
 
-More practically: a client can set `ExpiresAfterMinutes = 525_600 * 100` (100 years) and the share is effectively permanent. This may be fine by design — but the e2e test at line 32 uses `43200` (30 days), suggesting the team has *some* idea of intended limits.
+More practically: a client can set `ExpiresAfterMinutes = 525_600 * 100` (100 years) and the share is effectively permanent. This may be fine by design -- but the e2e test at line 32 uses `43200` (30 days), suggesting the team has *some* idea of intended limits.
 
 #### Recommendation
 
@@ -1207,13 +1207,13 @@ More practically: a client can set `ExpiresAfterMinutes = 525_600 * 100` (100 ye
 
 #### Description
 
-`CreateFileShare` accepts a client-supplied `share_id`, validates it against `isValidShareID` (43-char base64url), and inserts as-is. The Go server function `generateShareID` (`handlers/file_shares.go:915-925`) exists but is not invoked by any handler I can find — it appears to be dead code.
+`CreateFileShare` accepts a client-supplied `share_id`, validates it against `isValidShareID` (43-char base64url), and inserts as-is. The Go server function `generateShareID` (`handlers/file_shares.go:915-925`) exists but is not invoked by any handler I can find -- it appears to be dead code.
 
 The client generates the share ID with `randomBytes(32)` (`share-creation.ts:97`), giving 256 bits of CSPRNG entropy. **This is fine if the client honors its contract.** A malicious or compromised client can:
 
 - Pick a low-entropy share_id (e.g. all-A's after format-validating). The server only checks length and character set, not entropy.
 - Pre-claim share IDs (race condition: claim and squat).
-- Pick a share_id that collides with an existing one — the server returns 409 and the legitimate creator's share is unaffected, so this is at most a DoS / annoyance.
+- Pick a share_id that collides with an existing one -- the server returns 409 and the legitimate creator's share is unaffected, so this is at most a DoS / annoyance.
 
 #### Impact
 
@@ -1223,13 +1223,13 @@ The client generates the share ID with `randomBytes(32)` (`share-creation.ts:97`
 #### Recommendation
 
 - Either:
-  - **Server-generates the share_id** (use `generateShareID`, ignore client input) — eliminates the entropy-honesty assumption.
-  - Or **validate client share_id entropy** (count distinct chars, reject obvious low-entropy patterns) — weaker but cheaper.
+  - **Server-generates the share_id** (use `generateShareID`, ignore client input) -- eliminates the entropy-honesty assumption.
+  - Or **validate client share_id entropy** (count distinct chars, reject obvious low-entropy patterns) -- weaker but cheaper.
 - Remove the unused `generateShareID` function from `handlers/file_shares.go` (or document why it remains).
 
 #### Cross-refs
 
-- AGENTS.md "Greenfield App" — dead/deprecated functions should be flagged.
+- AGENTS.md "Greenfield App" -- dead/deprecated functions should be flagged.
 
 ---
 
@@ -1285,7 +1285,7 @@ Plaintext `username` and full `file_id` in the InfoLogger output. AGENTS.md requ
 
 #### Recommendation
 
-Replace `owner=%s` with `owner_entity=%s` using the EntityID for the user. `database.LogUserAction` (audit-log table) is a separate concern — it is the canonical owner action log and can keep `username`; but the InfoLogger line is duplicate and is the log most likely to end up in a third-party log aggregator.
+Replace `owner=%s` with `owner_entity=%s` using the EntityID for the user. `database.LogUserAction` (audit-log table) is a separate concern -- it is the canonical owner action log and can keep `username`; but the InfoLogger line is duplicate and is the log most likely to end up in a third-party log aggregator.
 
 #### Cross-refs
 
@@ -1304,9 +1304,9 @@ Replace `owner=%s` with `owner_entity=%s` using the EntityID for the user. `data
 
 #### Description
 
-The share envelope embeds owner-supplied `filename`, `size_bytes`, `sha256`. These are inside the AEAD so only the recipient sees them — but **the owner controls them and the recipient cannot independently verify them**.
+The share envelope embeds owner-supplied `filename`, `size_bytes`, `sha256`. These are inside the AEAD so only the recipient sees them -- but **the owner controls them and the recipient cannot independently verify them**.
 
-- `sha256` is verified by the recipient after download (good — tampering is detectable).
+- `sha256` is verified by the recipient after download (good -- tampering is detectable).
 - `filename` and `size_bytes` are not verified. The owner can put arbitrary strings into `filename`, including tracking markers ("download-id-abc123.pdf"), social-engineering text, or unicode tricks.
 
 This is largely an inherent property of share envelopes and not a "vulnerability" per se. Worth documenting.
@@ -1328,10 +1328,10 @@ This is largely an inherent property of share envelopes and not a "vulnerability
 
 #### Description
 
-The anonymous share endpoints accept GET requests with no auth and no CSRF token. This is correct for the design — they are bearer-token-authenticated by the `X-Download-Token` header on chunk fetches and unauthenticated for envelope/metadata. But:
+The anonymous share endpoints accept GET requests with no auth and no CSRF token. This is correct for the design -- they are bearer-token-authenticated by the `X-Download-Token` header on chunk fetches and unauthenticated for envelope/metadata. But:
 
 - Envelope/metadata responses are JSON, and could be embedded cross-origin via `<script src="...">` if the response started with executable content (it does not, so this is theoretical).
-- Bearer token in a custom header (`X-Download-Token`) is not sent by browsers cross-origin without CORS preflight, so cross-origin exfiltration of chunks is gated by the CORS policy — which is set elsewhere (Caddyfile, Slice F).
+- Bearer token in a custom header (`X-Download-Token`) is not sent by browsers cross-origin without CORS preflight, so cross-origin exfiltration of chunks is gated by the CORS policy -- which is set elsewhere (Caddyfile, Slice F).
 
 No action required at this slice; **Slice F should verify the CORS policy** for `/api/public/shares/*` is restrictive (`Access-Control-Allow-Origin` matches the deployment origin only) and that `X-Download-Token` is not a "simple header" that bypasses preflight.
 
@@ -1412,7 +1412,7 @@ No action required at this slice; **Slice F should verify the CORS policy** for 
 | Server-controlled recipient public keys / key substitution attack | **N/A** | No recipient keys exist. |
 | Share invitation messages / authenticated invitations | **N/A** | Sharing is URL+password; no invitation/notification path. |
 | Folder-share recursion / descendant permissions | **N/A** | Arkfile is flat per-user; sharing is per-file only. |
-| Re-sharing / nested share trees | **N/A** | A recipient who has decrypted an envelope holds the FEK and download token. They can pass the URL+password to a third party (out of band) — but the system has no "re-share" primitive and revocation semantics (D-13) cover this. |
+| Re-sharing / nested share trees | **N/A** | A recipient who has decrypted an envelope holds the FEK and download token. They can pass the URL+password to a third party (out of band) -- but the system has no "re-share" primitive and revocation semantics (D-13) cover this. |
 | Sharing creates correct access to descendants when moving files in/out of shared folders | **N/A** | No folders. |
 | Confused-deputy between owner, sender, recipient, viewer roles | **N/A** | Roles collapse: owner = sender; recipient = viewer. No deputy. |
 | Tenant separation in sharing | **N/A** | Single tenant. |
@@ -1422,8 +1422,8 @@ No action required at this slice; **Slice F should verify the CORS policy** for 
 ## 5. Open Questions / Blocked-on-Developer Items
 
 1. **Is the `max_accesses` semantic specified anywhere?** D-01 and D-02 are findings under the assumption that the intended semantic is "exactly this many *completed* downloads, total". If the intended semantic is "this many download *starts* (any chunk-0 fetch)", D-02 still stands and D-01 partially stands (chunks 1..N still bypass).
-2. **Is `BASE_URL` mandatory in production deployments?** D-09 assumes the fallback path is reachable in production. Confirm whether `prod-deploy.sh` makes `BASE_URL` mandatory (would require checking the script, but per `.clinerules` we cannot read `.env` / `/opt/arkfile/etc/**` to validate the running config — please confirm).
-3. **Is the daily EntityID rotation period configurable?** D-11 / D-19 — confirm that 24 h is the operationally chosen value and whether a longer window is feasible for rate-limit purposes only.
+2. **Is `BASE_URL` mandatory in production deployments?** D-09 assumes the fallback path is reachable in production. Confirm whether `prod-deploy.sh` makes `BASE_URL` mandatory (would require checking the script, but per `.clinerules` we cannot read `.env` / `/opt/arkfile/etc/**` to validate the running config -- please confirm).
+3. **Is the daily EntityID rotation period configurable?** D-11 / D-19 -- confirm that 24 h is the operationally chosen value and whether a longer window is feasible for rate-limit purposes only.
 4. **Is the dead `generateShareID` function intentional (left in for the CLI client) or stray?** D-23.
 5. **Is per-share-creation rate limiting enforced anywhere (e.g. account-level quota / spam-share guard)?** Not visible in this slice.
 
@@ -1439,7 +1439,7 @@ Prioritized:
 4. **Free-form `revoked_reason` leak** (D-04). No test asserts that anonymous recipients see only generic revocation messages.
 5. **Negative test: invalid-base64 vs valid-base64-wrong-hash download tokens** (D-17). No timing test exists.
 6. **Parameter-downgrade test** (D-10 / D-12). Once Argon2id params are bound to the envelope, a negative test should confirm tampered server params cannot trick a recipient into a weak KDF.
-7. **`access_count` race test** (D-02) — see #1.
+7. **`access_count` race test** (D-02) -- see #1.
 8. **Multi-instance enumeration coherence test** (D-18). Future, when multi-instance is supported.
 9. **Anonymous-side log-hygiene test** (D-15, D-25). Assert that share access logs do not contain plaintext username, full file_id, or PII-equivalent identifiers.
 10. **Property-based test for AAD construction**: for any (share_id, file_id) pair, the resulting AAD is unique (currently relies on fixed-length share_id, which is a brittle invariant).
@@ -1448,9 +1448,9 @@ Prioritized:
 
 ## 7. Hardening / Non-Vulnerability Recommendations
 
-1. **Bind Argon2id params to the share envelope** (D-10, D-12) — single highest-value hardening change in this slice.
+1. **Bind Argon2id params to the share envelope** (D-10, D-12) -- single highest-value hardening change in this slice.
 2. **Atomic conditional UPDATE pattern** for `access_count` and `failed_count` (D-02, D-06). Apply throughout, not just for shares.
-3. **Replace `fmt.Sprintf("%+v")` username extraction in `logging/entity_id.go`** with a small interface in a shared types package. Currently this works but is one rename away from a silent break in EntityID consistency — and could conceivably cause cross-user EntityID collisions if a username happens to contain a "Username:" substring. Slice E item; flagged here because it bleeds into share-rate-limit correctness.
+3. **Replace `fmt.Sprintf("%+v")` username extraction in `logging/entity_id.go`** with a small interface in a shared types package. Currently this works but is one rename away from a silent break in EntityID consistency -- and could conceivably cause cross-user EntityID collisions if a username happens to contain a "Username:" substring. Slice E item; flagged here because it bleeds into share-rate-limit correctness.
 4. **Add a `v` version byte to the share envelope JSON** (D-12). Cheap, future-proofing.
 5. **Move share-list rendering off `innerHTML` to DOM-builder APIs** (D-14). Trivial refactor; eliminates the entire class of template-literal XSS risk in this surface.
 6. **Sweeper for `share_access_attempts`** (D-07). Reuse the `billing/sweep.go` pattern.
@@ -1465,7 +1465,7 @@ Prioritized:
 
 | Severity | Count | IDs |
 |---|---:|---|
-| Critical | 0 | — |
+| Critical | 0 | -- |
 | High | 2 | D-01, D-10 |
 | Medium | 9 | D-02, D-03, D-04, D-05, D-06, D-09, D-11, D-12, D-13 |
 | Low | 10 | D-07, D-08, D-14, D-15, D-16, D-17, D-18, D-19, D-20, D-21 |
@@ -1474,11 +1474,11 @@ Prioritized:
 
 ### Top risks (rank order)
 
-1. **D-10** — Stolen envelope = offline brute force; server operator can attack every share. Compounded by D-12 (no param binding).
-2. **D-01** — `max_accesses` bypassable by skipping chunk 0; one-shot semantics broken.
-3. **D-04** — Free-form `revoked_reason` leaks owner-controlled string to anonymous recipients; privacy/PII vector.
-4. **D-02** — Race on `access_count` allows parallel double-spend on `max_accesses=1`.
-5. **D-09** — Origin-header trust + non-mandatory `BASE_URL` = share-URL phishing primitive in misconfigured deployments.
+1. **D-10** -- Stolen envelope = offline brute force; server operator can attack every share. Compounded by D-12 (no param binding).
+2. **D-01** -- `max_accesses` bypassable by skipping chunk 0; one-shot semantics broken.
+3. **D-04** -- Free-form `revoked_reason` leaks owner-controlled string to anonymous recipients; privacy/PII vector.
+4. **D-02** -- Race on `access_count` allows parallel double-spend on `max_accesses=1`.
+5. **D-09** -- Origin-header trust + non-mandatory `BASE_URL` = share-URL phishing primitive in misconfigured deployments.
 
 ### Cross-slice impact
 

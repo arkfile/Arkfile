@@ -65,7 +65,7 @@ ARKFILE_GROUP="arkfile"
 
 # Preserve original user context for Go operations
 # NB: $USER here is the shell login user (the sudo caller), NOT the arkfile
-# service user — deliberately matches the prod/test/local deploy pattern.
+# service user -- deliberately matches the prod/test/local deploy pattern.
 ORIGINAL_USER="${SUDO_USER:-$USER}"
 ORIGINAL_UID="${SUDO_UID:-$(id -u)}"
 ORIGINAL_GID="${SUDO_GID:-$(id -g)}"

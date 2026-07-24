@@ -27,7 +27,7 @@ var readPasswordInteractive = func(fd int) ([]byte, error) {
 }
 
 // ReadPassword reads a password from the controlling terminal with echo off.
-// Use for interactive prompts. Does not read from stdin pipes — that keeps
+// Use for interactive prompts. Does not read from stdin pipes -- that keeps
 // stdin free for other data (for example bootstrap --token-stdin).
 // Returns a byte slice the caller must zero after use.
 func ReadPassword(prompt string, timeout time.Duration) ([]byte, error) {

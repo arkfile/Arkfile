@@ -321,7 +321,7 @@ func handleLoginCommand(client *HTTPClient, config *AdminConfig, args []string) 
 		usernameFlag   = fs.String("username", config.Username, "Admin username for login")
 		saveSession    = fs.Bool("save-session", true, "Save session for future use")
 		totpCode       = fs.String("totp-code", "", "TOTP code for non-interactive login")
-		totpSecret     = fs.String("totp-secret", "", "TOTP secret — CLI generates the code internally (for scripted/test use)")
+		totpSecret     = fs.String("totp-secret", "", "TOTP secret -- CLI generates the code internally (for scripted/test use)")
 		backupCode     = fs.String("backup-code", "", "10-character backup code for one-shot emergency login")
 		mfaMethod      = fs.String("mfa-method", "", "Second factor method for login: totp or webauthn")
 		credentialID   = fs.String("credential-id", "", "WebAuthn credential id when multiple security keys are enrolled")
@@ -339,7 +339,7 @@ FLAGS:
     --save-session      Save session for future use (default: true)
     --password-stdin    Read admin password from stdin (for scripts/tests)
     --totp-code CODE    TOTP code for non-interactive login
-    --totp-secret SEC   TOTP secret — CLI generates code internally (for scripted/test use)
+    --totp-secret SEC   TOTP secret -- CLI generates code internally (for scripted/test use)
     --backup-code CODE  10-character backup code for emergency login
     --mfa-method METHOD Second factor for login: totp or webauthn
     --credential-id ID  WebAuthn credential id when choosing a specific key

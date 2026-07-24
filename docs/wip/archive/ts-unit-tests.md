@@ -63,14 +63,14 @@ These modules have **zero** unit tests. They are DOM/fetch/WASM-dependent and be
 
 ### Inline Mocks in Individual Test Files
 
-- **`auth-manager.test.ts`** — carries its own `localStorage` mock (Map-backed `MockLocalStorage` class, installed on `globalThis` before imports)
-- **`password-validation.test.ts`** — carries its own `fetch` mock (intercepts requests for `password-requirements.json`, returns production config values)
+- **`auth-manager.test.ts`** -- carries its own `localStorage` mock (Map-backed `MockLocalStorage` class, installed on `globalThis` before imports)
+- **`password-validation.test.ts`** -- carries its own `fetch` mock (intercepts requests for `password-requirements.json`, returns production config values)
 
 ### Future Unit Test Infrastructure Improvements
 
-- **Consider reducing Argon2 params for tests** — share-crypto tests are slow (~5s each) due to Argon2id; could mock `getArgon2Params()` to return lighter params in test environment
-- **Consider centralizing `localStorage` mock in setup.ts** — currently only auth-manager.test.ts needs it, but if more tests require it, moving to setup.ts would reduce duplication
-- **Consider centralizing `fetch` mock** — currently `password-validation.test.ts` and `aes-gcm.test.ts` both implement custom inline fetch intercepts. Moving this to a flexible mock in `setup.ts` would clean up individual test files.
+- **Consider reducing Argon2 params for tests** -- share-crypto tests are slow (~5s each) due to Argon2id; could mock `getArgon2Params()` to return lighter params in test environment
+- **Consider centralizing `localStorage` mock in setup.ts** -- currently only auth-manager.test.ts needs it, but if more tests require it, moving to setup.ts would reduce duplication
+- **Consider centralizing `fetch` mock** -- currently `password-validation.test.ts` and `aes-gcm.test.ts` both implement custom inline fetch intercepts. Moving this to a flexible mock in `setup.ts` would clean up individual test files.
 
 ---
 

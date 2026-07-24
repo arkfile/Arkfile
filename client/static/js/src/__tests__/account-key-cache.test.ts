@@ -1,5 +1,5 @@
 /**
- * Unit Tests — Account Key Cache
+ * Unit Tests -- Account Key Cache
  *
  * Tests for: cacheAccountKey, getCachedAccountKey, clearCachedAccountKey,
  * clearAllCachedAccountKeys, isAccountKeyCached, lockAccountKey,
@@ -43,7 +43,7 @@ function makeKey(): Uint8Array {
 }
 
 // ============================================================================
-// Setup — clean slate before each test
+// Setup -- clean slate before each test
 // ============================================================================
 
 beforeEach(() => {

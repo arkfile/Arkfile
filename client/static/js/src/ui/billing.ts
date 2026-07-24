@@ -167,7 +167,7 @@ function renderSubscriptionSection(d: CreditsResponse): HTMLElement {
   const sub = d.subscription;
   if (sub?.status) {
     const p = document.createElement('p');
-    p.textContent = `${sub.plan_name || sub.plan_id} (${sub.price_usd ? '$' + sub.price_usd + '/mo' : ''}) — ${sub.status}`;
+    p.textContent = `${sub.plan_name || sub.plan_id} (${sub.price_usd ? '$' + sub.price_usd + '/mo' : ''}) -- ${sub.status}`;
     wrap.appendChild(p);
     if (sub.current_period_end) {
       const renew = document.createElement('p');
@@ -206,7 +206,7 @@ async function loadAvailablePlans(host: HTMLElement): Promise<void> {
     for (const plan of plans) {
       const card = document.createElement('div');
       card.className = 'billing-plan-card';
-      card.innerHTML = `<strong>${escapeHtml(plan.name)}</strong> — $${(plan.price_usd_cents / 100).toFixed(2)}/mo — ${formatBytes(plan.storage_limit_bytes)}`;
+      card.innerHTML = `<strong>${escapeHtml(plan.name)}</strong> -- $${(plan.price_usd_cents / 100).toFixed(2)}/mo -- ${formatBytes(plan.storage_limit_bytes)}`;
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'btn';

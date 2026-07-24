@@ -514,7 +514,7 @@ export interface CacheOptInResult {
 
 /**
  * Shows a lightweight opt-in dialog for Account Key caching after login.
- * Unlike showPasswordPrompt, this does NOT ask for a password — the caller
+ * Unlike showPasswordPrompt, this does NOT ask for a password -- the caller
  * already has the password from the login flow.
  *
  * @returns Promise resolving to the chosen duration, or null if user skipped

@@ -43,8 +43,8 @@ interface PendingStream {
   /**
    * Set to true after the first matching fetch consumes the stream. Subsequent
    * fetches for the same UUID return an empty 200 response (not a 404) so
-   * Chromium-style download managers — which fire more than one fetch for
-   * the same SW URL on a single user click (probe + download commit) — do
+   * Chromium-style download managers -- which fire more than one fetch for
+   * the same SW URL on a single user click (probe + download commit) -- do
    * not abort the download with "File wasn't available on site."
    */
   consumed: boolean;

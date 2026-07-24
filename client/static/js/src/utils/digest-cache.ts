@@ -1,5 +1,5 @@
 /**
- * Digest Cache — Client-Side Deduplication
+ * Digest Cache -- Client-Side Deduplication
  *
  * Maintains a sessionStorage map of fileId -> plaintextSHA256 hex digest.
  * Used to detect duplicate uploads before sending any data to the server.
@@ -38,7 +38,7 @@ function writeCache(cache: Record<string, string>): void {
   try {
     sessionStorage.setItem(CACHE_KEY, JSON.stringify(cache));
   } catch {
-    // sessionStorage full or unavailable — silently skip
+    // sessionStorage full or unavailable -- silently skip
     console.warn('digest-cache: unable to write to sessionStorage');
   }
 }

@@ -2,7 +2,7 @@
 
 This plan applies the same audit methodology as `docs/wip/archive/server-cleanup.md` and `docs/wip/archive/cli-cleanup.md` to the TypeScript browser client under `client/static/js/src/`. Every exported function, class method, and UI flow handler is reviewed against the Function Review Sanity Checks in `AGENTS.md`: required, correctly implemented, well placed, reachable, privacy-preserving, and free of stubs, deprecated paths, duplicated logic, and leftover placeholder code. Arkfile is greenfield; delete unused or misleading frontend paths rather than maintain compatibility shims. The audit is cross-checked against `scripts/testing/e2e-playwright.sh` (primary frontend proof), `scripts/testing/e2e-test.sh` (CLI/API baseline the browser should mirror), and `bun test` in `client/static/js/`. Where Playwright hedges (`includes(...)` with many alternatives, idempotent SKIP, pass-without-assertion), tighten tests and fix frontend behavior so there is one canonical expected result. Cross-client parity with `arkfile-client` is explicit: AGENTS.md requires one way to encrypt/upload, download/decrypt, and share per client type, with matching structure where practical.
 
-Status: verified complete (2026-07-21) — unit tests, `e2e-test.sh`, and `e2e-playwright.sh` all passed (Playwright 18/18)
+Status: verified complete (2026-07-21) -- unit tests, `e2e-test.sh`, and `e2e-playwright.sh` all passed (Playwright 18/18)
 Created: 2026-07-18
 Audited: 2026-07-20
 Priorities updated: 2026-07-21
@@ -58,15 +58,15 @@ These priorities take precedence over the rest of this plan. They reflect audit 
 
 **Implemented** (chunk accounting, integrity UX, Verify File, uncapped Blob fallback retained). Large downloads must work on constrained devices (e.g. 3 GB RAM, 6 GB file) without holding the whole plaintext in page memory. The Service Worker streaming path is the canonical browser mechanism; Blob fallback remains for SW-unavailable environments without an Arkfile size cap. Chunk accounting uses `ceil(size_bytes / (chunk_size_bytes + 28))` via `models.CalculateChunkCount`, with completion/meta preferring the validated session/DB count.
 
-Integrity semantics must be honest about browser limits. Whole-file SHA-256 can be computed inline during SW streaming with bounded memory, but a mismatch is often detected only after bytes may already be saved by the OS download manager — the app cannot "un-download" without buffering the entire file first, which defeats streaming. Per-chunk AES-GCM still authenticates each chunk during decrypt. The UX model is: always show the expected SHA-256 at download completion (from decrypted metadata or share envelope); when inline verification ran, show match/mismatch alongside it; never show a clean success message when inline verification reports mismatch; on SW and other post-write paths, show tips explaining that users who need certainty should compare the expected digest using Verify File or an offline tool and delete the file if it differs.
+Integrity semantics must be honest about browser limits. Whole-file SHA-256 can be computed inline during SW streaming with bounded memory, but a mismatch is often detected only after bytes may already be saved by the OS download manager -- the app cannot "un-download" without buffering the entire file first, which defeats streaming. Per-chunk AES-GCM still authenticates each chunk during decrypt. The UX model is: always show the expected SHA-256 at download completion (from decrypted metadata or share envelope); when inline verification ran, show match/mismatch alongside it; never show a clean success message when inline verification reports mismatch; on SW and other post-write paths, show tips explaining that users who need certainty should compare the expected digest using Verify File or an offline tool and delete the file if it differs.
 
-Add a new **Verify this file** tool to the frontend, reachable at any time (not only immediately after download). The user picks a local file via the file picker; the app hashes it in chunks using the same streaming pattern as upload (`file.slice()` + incremental SHA-256, peak memory ~one chunk). The user supplies or pastes an expected hex digest (or the tool pre-fills it when launched from a download completion panel). Show match/mismatch without loading the whole file into JS heap. Works fully offline once the expected digest is known. Surface contextual hints, tips, and popups at appropriate moments — e.g. before or during a large SW download (explain streaming limits), and on the download completion panel (expected digest, optional inline result, link/button to Verify File).
+Add a new **Verify this file** tool to the frontend, reachable at any time (not only immediately after download). The user picks a local file via the file picker; the app hashes it in chunks using the same streaming pattern as upload (`file.slice()` + incremental SHA-256, peak memory ~one chunk). The user supplies or pastes an expected hex digest (or the tool pre-fills it when launched from a download completion panel). Show match/mismatch without loading the whole file into JS heap. Works fully offline once the expected digest is known. Surface contextual hints, tips, and popups at appropriate moments -- e.g. before or during a large SW download (explain streaming limits), and on the download completion panel (expected digest, optional inline result, link/button to Verify File).
 
 Blob fallback remains available without an application-level file-size cap because it is needed when Service Worker streaming is unavailable or cannot initialize. Prefer SW streaming whenever available; warn that Blob fallback buffers the complete plaintext and may fail under browser resource limits for large files. Check `hashVerification` before `triggerBrowserDownloadFromUrl`, revoke the Blob URL on mismatch, and do not claim success. Document SW vs Blob vs CLI post-write verification limits in `sw-streaming-download.ts`, `streaming-download.ts`, `download.ts`, and `share-access.ts`.
 
 ### Document server-visible operational metadata (docs only; no behavior change)
 
-The server knowing or computing pre-padded file size — encrypted declared length, inferable plaintext size from chunk count and fixed per-chunk overhead, `size_bytes`, and `padded_size` — is **intentional**. Arkfile must account for storage and bill users accurately; hiding exact size from the server would break billing, quotas, chunk download, padding removal, export, and replication. Padding obscures size from the storage backend and outside observers, not from the Arkfile server that receives the pre-padding length at upload init.
+The server knowing or computing pre-padded file size -- encrypted declared length, inferable plaintext size from chunk count and fixed per-chunk overhead, `size_bytes`, and `padded_size` -- is **intentional**. Arkfile must account for storage and bill users accurately; hiding exact size from the server would break billing, quotas, chunk download, padding removal, export, and replication. Padding obscures size from the storage backend and outside observers, not from the Arkfile server that receives the pre-padding length at upload init.
 
 Do **not** change upload/download wire behavior for size. Instead, document accepted visibility consistently in `AGENTS.md`, `docs/security.md`, handler comments (e.g. `handlers/uploads.go`), and this plan. Classify server-visible fields as required operational data vs encrypted owner metadata (filename, content digest, encrypted password hint). Optionally document `password_type` and FEK envelope key-type visibility in the same pass; that is a separate disclosure from billable size and needs no protocol change unless product decides otherwise later.
 
@@ -76,7 +76,7 @@ Do **not** change upload/download wire behavior for size. Instead, document acce
 
 Work proceeds in three tranches. Do not expand Playwright beyond the single approved flow in tranche 3 unless product explicitly reopens scope.
 
-### Tranche 1 — privacy, download integrity, documentation
+### Tranche 1 -- privacy, download integrity, documentation
 
 | Workstream | Scope |
 |------------|-------|
@@ -85,7 +85,7 @@ Work proceeds in three tranches. Do not expand Playwright beyond the single appr
 | Download integrity UX + Verify File tool | SW canonical large-file path; unrestricted but clearly described Blob fallback; completion digest UX; standalone verify tool |
 | Server-visible operational metadata | Docs only (`AGENTS.md`, `docs/security.md`, handler comments); no wire change |
 
-### Tranche 2 — session lifecycle, share cleanup, existing E2E hardening
+### Tranche 2 -- session lifecycle, share cleanup, existing E2E hardening
 
 | Workstream | Scope |
 |------------|-------|
@@ -96,7 +96,7 @@ Work proceeds in three tranches. Do not expand Playwright beyond the single appr
 | Playwright hedging removal | Fix existing shared-page suite only (upload SKIP, share OR-hedges, billing top-up SKIP-pass) |
 | Privacy logging gate | Gate debug/info; verify `build:prod` artifact |
 
-### Tranche 3 — consolidation, billing parity, one Playwright flow
+### Tranche 3 -- consolidation, billing parity, one Playwright flow
 
 | Workstream | Scope |
 |------------|-------|
@@ -104,7 +104,7 @@ Work proceeds in three tranches. Do not expand Playwright beyond the single appr
 | `app.ts` decomposition | Mechanical split after behavior stable |
 | Hygiene pass | Remove `===` dividers, WIP refs in comments, emoji in logs |
 | Frontend billing display parity | Render `rate_human`, friendly runway, and `estimated_runs_out_at_approx` to match `arkfile-client billing show` |
-| **Playwright: one registration flow** | **Only new browser E2E addition for this project** — see **Playwright scope** below |
+| **Playwright: one registration flow** | **Only new browser E2E addition for this project** -- see **Playwright scope** below |
 
 ---
 
@@ -119,22 +119,22 @@ Work proceeds in three tranches. Do not expand Playwright beyond the single appr
 | Runtime exports surveyed | ~271 (source scan; approximate) |
 | Exports with zero external importers | Provisional count; individually listed candidates reverified |
 | Largest modules | `upload.ts` (~1,288), `billing.ts` (~880), `totp.ts` (~871), `streaming-download.ts` (~807), `account-key-cache.ts` (~756), `app.ts` (~748) |
-| Playwright E2E coverage | Existing shared-page suite + billing + contact-info; tranche-3 isolated registration → TOTP → 25 MB custom-password round trip → revoke-all — verified 2026-07-21 (18/18) |
+| Playwright E2E coverage | Existing shared-page suite + billing + contact-info; tranche-3 isolated registration → TOTP → 25 MB custom-password round trip → revoke-all -- verified 2026-07-21 (18/18) |
 | `bun test` focus | Crypto, streaming download, upload batch helpers, auth cookie model; minimal UI/integration |
 
 **Highest-impact findings (post-audit, prioritized)**
 
-- **Shared frontend/CLI privacy defect: custom password hints are plaintext end-to-end** — Both clients send `password_hint`; the server stores and returns it. Encrypt with Account Key in both clients and remove the plaintext contract. Primary priority: encrypted password hints.
-- **Chunk counts are calculated inconsistently** — Upload init correctly divides encrypted stream length by `plaintext chunk size + 28`, while upload completion and owner metadata divide encrypted length by plaintext chunk size. Exact-boundary files can gain an invalid extra chunk, and empty owner files can report zero chunks. The representative 6 GB file is an exact 16 MiB multiple and must be a boundary test.
-- **Frontend download integrity UX is misleading** — Blob callers ignore `hashVerification`; SW path can show success before warning on mismatch. SW streaming is required for a chunk-bounded memory guarantee on large files; users need expected digest at completion, honest inline results, contextual tips, and a standalone Verify File tool.
-- **Frontend Blob fallback fully buffers plaintext and is not the preferred large-file path** — Retain it without an Arkfile file-size cap for SW-unavailable environments, clearly warn about proportional browser resource use, and handle browser allocation failures honestly. SW remains canonical for reliable multi-GB downloads on constrained devices.
-- **Server-visible file size is intentional operational metadata** — Pre-padded encrypted length and inferable plaintext size support billing and storage accounting. Document across codebase; do not change wire behavior.
-- **Frontend account-key cache claims a production session binding that does not exist** — HttpOnly-cookie callers pass no token, so `token_hash` is empty and checks are skipped. Clearing session data removes ciphertext and makes the cache unusable, but does not consistently wipe the in-heap wrapping key. Rate Medium–High, not equivalent to the hint/Blob defects.
-- **Share auth cleanup is needed, but the live UI does not downgrade** — `applyShareAuthHeader` contains static-token fallback code, yet `share-access.ts` → `downloadSharedFileWithTicket` passes only `shareTicket`; ticket failure sends no auth header. Static-token support is reachable through the dead wrapper/generic manager and remains accepted by the server.
-- **Stale window globals and over-exposed globals** — `registrationData` and `totpLoginData` are never set; `window.arkfile` exposes whole modules though `shared-init.js` only needs `ShareAccessUI`; `window.arkfileApp` is also set with no repository reader.
-- **`fetchAdminContacts` returns stale state after any failed refresh** — Non-OK responses and exceptions preserve previous usernames/contact/configured values.
-- **Playwright hedges on existing suite** — Idempotent upload SKIP in account-password and custom-password upload tests; OR-hedges in share-control and revoke tests; billing top-up SKIP-pass. **Approved Playwright expansion (tranche 3 only):** one isolated flow — register new user, TOTP setup/confirm, custom-password upload of a **25 MB** file, download/decrypt/verify SHA-256, revoke-all via `#revoke-sessions-btn`. All other browser E2E gaps (export click, WebAuthn, MFA settings, subscription, admin-contacts footer, reregistration, dedicated Verify File E2E, custom-password share recipient) remain deferred to `e2e-test.sh`, unit tests, or manual proof for now.
-- **Dead exports, hygiene, and logging remain** — Confirmed candidates are listed below. Production minification does not remove console calls; debug/info logs should be gated or dropped while security warnings/errors remain.
+- **Shared frontend/CLI privacy defect: custom password hints are plaintext end-to-end** -- Both clients send `password_hint`; the server stores and returns it. Encrypt with Account Key in both clients and remove the plaintext contract. Primary priority: encrypted password hints.
+- **Chunk counts are calculated inconsistently** -- Upload init correctly divides encrypted stream length by `plaintext chunk size + 28`, while upload completion and owner metadata divide encrypted length by plaintext chunk size. Exact-boundary files can gain an invalid extra chunk, and empty owner files can report zero chunks. The representative 6 GB file is an exact 16 MiB multiple and must be a boundary test.
+- **Frontend download integrity UX is misleading** -- Blob callers ignore `hashVerification`; SW path can show success before warning on mismatch. SW streaming is required for a chunk-bounded memory guarantee on large files; users need expected digest at completion, honest inline results, contextual tips, and a standalone Verify File tool.
+- **Frontend Blob fallback fully buffers plaintext and is not the preferred large-file path** -- Retain it without an Arkfile file-size cap for SW-unavailable environments, clearly warn about proportional browser resource use, and handle browser allocation failures honestly. SW remains canonical for reliable multi-GB downloads on constrained devices.
+- **Server-visible file size is intentional operational metadata** -- Pre-padded encrypted length and inferable plaintext size support billing and storage accounting. Document across codebase; do not change wire behavior.
+- **Frontend account-key cache claims a production session binding that does not exist** -- HttpOnly-cookie callers pass no token, so `token_hash` is empty and checks are skipped. Clearing session data removes ciphertext and makes the cache unusable, but does not consistently wipe the in-heap wrapping key. Rate Medium–High, not equivalent to the hint/Blob defects.
+- **Share auth cleanup is needed, but the live UI does not downgrade** -- `applyShareAuthHeader` contains static-token fallback code, yet `share-access.ts` → `downloadSharedFileWithTicket` passes only `shareTicket`; ticket failure sends no auth header. Static-token support is reachable through the dead wrapper/generic manager and remains accepted by the server.
+- **Stale window globals and over-exposed globals** -- `registrationData` and `totpLoginData` are never set; `window.arkfile` exposes whole modules though `shared-init.js` only needs `ShareAccessUI`; `window.arkfileApp` is also set with no repository reader.
+- **`fetchAdminContacts` returns stale state after any failed refresh** -- Non-OK responses and exceptions preserve previous usernames/contact/configured values.
+- **Playwright hedges on existing suite** -- Idempotent upload SKIP in account-password and custom-password upload tests; OR-hedges in share-control and revoke tests; billing top-up SKIP-pass. **Approved Playwright expansion (tranche 3 only):** one isolated flow -- register new user, TOTP setup/confirm, custom-password upload of a **25 MB** file, download/decrypt/verify SHA-256, revoke-all via `#revoke-sessions-btn`. All other browser E2E gaps (export click, WebAuthn, MFA settings, subscription, admin-contacts footer, reregistration, dedicated Verify File E2E, custom-password share recipient) remain deferred to `e2e-test.sh`, unit tests, or manual proof for now.
+- **Dead exports, hygiene, and logging remain** -- Confirmed candidates are listed below. Production minification does not remove console calls; debug/info logs should be gated or dropped while security warnings/errors remain.
 
 ---
 
@@ -152,7 +152,7 @@ Work proceeds in three tranches. Do not expand Playwright beyond the single appr
 | Stale globals + dead exports | Medium | Remove/unexport; narrow browser global surface |
 | Admin contacts stale cache | Medium | Clear on every failed refresh; unit test; optional footer assert deferred from Playwright |
 | Playwright hedges (existing suite) | Medium | Tranche 2: stable error identity; remove SKIP/OR hedges on shared-page tests |
-| Playwright registration flow | Medium | Tranche 3: one isolated test only — register, TOTP, 25 MB custom upload, verify, revoke-all |
+| Playwright registration flow | Medium | Tranche 3: one isolated test only -- register, TOTP, 25 MB custom upload, verify, revoke-all |
 | Frontend billing display parity | Medium | Tranche 3: show `rate_human` and run-out fields matching CLI human output |
 | Hygiene + production logging | Low | Tranche 3: dividers/WIP refs/emoji; tranche 2–3: gate debug/info while preserving warnings/errors |
 
@@ -180,7 +180,7 @@ Does the module send sensitive plaintext metadata to the network, server storage
 
 ## One canonical path audit
 
-### Upload — CONFIRMED single path
+### Upload -- CONFIRMED single path
 
 | Layer | File | Role |
 |-------|------|------|
@@ -249,7 +249,7 @@ Do not change upload init, chunk download, padding, billing, or quota wire behav
 
 | Location | Change |
 |----------|--------|
-| `AGENTS.md` | Nuance "server must know nothing about the nature of the data" — no passwords, no plaintext filenames, no file contents; billable storage size is known by design |
+| `AGENTS.md` | Nuance "server must know nothing about the nature of the data" -- no passwords, no plaintext filenames, no file contents; billable storage size is known by design |
 | `docs/security.md` | New or expanded section: server-visible operational metadata vs encrypted owner metadata |
 | `handlers/uploads.go` (and related) | Align comments with billing/accounting intent (partially present today) |
 | This plan | Record decision in **Document server-visible operational metadata** above |
@@ -270,7 +270,7 @@ Define one shared formula and empty-file rule across upload init, completion, fi
 
 Acceptance: every layer reports and requests the same number of chunks; no request reaches padding bytes; exact-boundary and empty files upload, owner-download, share-download, decrypt, and verify successfully; size and progress displays do not double-count encryption overhead.
 
-### Owner download — CONFIRMED single path; integrity UX OPEN
+### Owner download -- CONFIRMED single path; integrity UX OPEN
 
 | Layer | File | Role |
 |-------|------|------|
@@ -279,9 +279,9 @@ Acceptance: every layer reports and requests the same number of chunks; no reque
 | SW integration | `sw-streaming-download.ts`, `sw-download.ts` | Canonical large-file path |
 | Verify File (new) | TBD module + UI entry | Anytime local file vs expected digest; chunk-bounded hashing |
 
-**Answers:** One owner UI path exists, but `download.ts` and `StreamingDownloadManager` currently fetch metadata separately; remove the duplicate request when touching orchestration. SW path streams with roughly chunk-bounded page-side memory and can compute whole-file SHA-256 inline during the stream, but a mismatch may be detected only after the OS download manager has already saved bytes — document this limit and surface expected digest + tips at completion. Blob fallback builds `new Blob([blob, chunk])` for the entire file with no size bound; retain it without adding an Arkfile cap, explain its proportional resource use, and handle browser allocation failure honestly. `download.ts` warns on SW mismatch but still calls `showSuccess` first; Blob path triggers download and success without checking `hashVerification`. Add completion UI: expected SHA-256 (copyable), inline verification result when available, link to Verify File tool. Existing Playwright fixtures remain 50–100 KB on the shared dev user; the tranche-3 registration flow uses a **25 MB** custom-password file as the only larger browser fixture and does not prove the 6 GB boundary.
+**Answers:** One owner UI path exists, but `download.ts` and `StreamingDownloadManager` currently fetch metadata separately; remove the duplicate request when touching orchestration. SW path streams with roughly chunk-bounded page-side memory and can compute whole-file SHA-256 inline during the stream, but a mismatch may be detected only after the OS download manager has already saved bytes -- document this limit and surface expected digest + tips at completion. Blob fallback builds `new Blob([blob, chunk])` for the entire file with no size bound; retain it without adding an Arkfile cap, explain its proportional resource use, and handle browser allocation failure honestly. `download.ts` warns on SW mismatch but still calls `showSuccess` first; Blob path triggers download and success without checking `hashVerification`. Add completion UI: expected SHA-256 (copyable), inline verification result when available, link to Verify File tool. Existing Playwright fixtures remain 50–100 KB on the shared dev user; the tranche-3 registration flow uses a **25 MB** custom-password file as the only larger browser fixture and does not prove the 6 GB boundary.
 
-### Share (owner + recipient) — CONFIRMED; delete dead wrapper
+### Share (owner + recipient) -- CONFIRMED; delete dead wrapper
 
 | Flow | Files | Verdict |
 |------|-------|---------|
@@ -325,7 +325,7 @@ At download finalization, always display the expected SHA-256 hex (owner: decryp
 
 - **Before / during large SW download:** brief note that the file streams to the download folder with chunk-bounded memory; whole-file digest is checked as data flows but a problem may be detected only after the file is saved.
 - **After SW completion with match:** success plus expected digest for the user's records.
-- **After SW completion with mismatch:** integrity failure panel — expected digest, computed digest if available, instruction to delete the downloaded file, button to open Verify File with expected digest pre-filled.
+- **After SW completion with mismatch:** integrity failure panel -- expected digest, computed digest if available, instruction to delete the downloaded file, button to open Verify File with expected digest pre-filled.
 - **After Blob completion:** success only if inline verification passed or was skipped with explicit reason; retain the expected digest in the completion panel.
 
 #### Verify this file tool (new; anytime)
@@ -586,7 +586,7 @@ Fixtures today: account-password file **100 KB** (`102400` bytes); custom-passwo
 
 ### One approved additive flow (tranche 3 only)
 
-Add **one** new test (isolated browser context / page — not the shared Account Key cache page):
+Add **one** new test (isolated browser context / page -- not the shared Account Key cache page):
 
 | Step | Requirement |
 |------|-------------|
@@ -702,41 +702,41 @@ Work silent correctness and privacy before cosmetic cleanup. Tranche numbers mat
 
 ### Tranche 1
 
-- **Encrypt custom password hints** — remove the plaintext frontend/CLI/server/schema contract; re-encrypt per file-ID attempt; add cross-client and sentinel privacy proof.
-- **Canonical chunk accounting** — one encrypted-span formula and empty-file rule across init, completion, metadata and clients; exact-boundary and 6 GB vectors.
-- **Download integrity UX + Verify File tool** — expected digest at completion; inline result when available; tips/popups for SW post-write limits; standalone verify tool; Blob mismatch blocking; retain uncapped Blob fallback with honest resource warnings; SW canonical for constrained-device large files.
-- **Document server-visible operational metadata** — AGENTS.md, security.md, handler comments; billable size intentional; no wire change.
+- **Encrypt custom password hints** -- remove the plaintext frontend/CLI/server/schema contract; re-encrypt per file-ID attempt; add cross-client and sentinel privacy proof.
+- **Canonical chunk accounting** -- one encrypted-span formula and empty-file rule across init, completion, metadata and clients; exact-boundary and 6 GB vectors.
+- **Download integrity UX + Verify File tool** -- expected digest at completion; inline result when available; tips/popups for SW post-write limits; standalone verify tool; Blob mismatch blocking; retain uncapped Blob fallback with honest resource warnings; SW canonical for constrained-device large files.
+- **Document server-visible operational metadata** -- AGENTS.md, security.md, handler comments; billable size intentional; no wire change.
 
 ### Tranche 2
 
-- **Account key cache lifecycle** — unify key teardown, correct security claims, decide whether a server session epoch is warranted.
-- **Delete confirmed dead exports and static share paths** — `downloadSharedFileChunked`, token stubs, stale globals; coordinate server removal of static credential acceptance.
-- **Admin contacts failed-refresh clear** — unit test; no Playwright footer assert in scope.
-- **Error identity standardization** — unlock Playwright tightening without brittle copy-only asserts.
-- **Playwright hedging removal** — existing shared-page suite only; deterministic fixtures post-dev-reset.
-- **Privacy logging gate** — preserve security warnings/errors; verify `build:prod` artifact.
+- **Account key cache lifecycle** -- unify key teardown, correct security claims, decide whether a server session epoch is warranted.
+- **Delete confirmed dead exports and static share paths** -- `downloadSharedFileChunked`, token stubs, stale globals; coordinate server removal of static credential acceptance.
+- **Admin contacts failed-refresh clear** -- unit test; no Playwright footer assert in scope.
+- **Error identity standardization** -- unlock Playwright tightening without brittle copy-only asserts.
+- **Playwright hedging removal** -- existing shared-page suite only; deterministic fixtures post-dev-reset.
+- **Privacy logging gate** -- preserve security warnings/errors; verify `build:prod` artifact.
 
 ### Tranche 3
 
-- **Frontend billing display parity** — PAYG upload cap, `rate_human`, runway, and `estimated_runs_out_at_approx` in billing panel matching CLI human output.
-- **Playwright: one registration flow** — isolated context; register → TOTP → 25 MB custom upload → download/verify → revoke-all; dedicated shell fixture vars.
-- **Duplicate formatters** — low-risk consolidation.
-- **`app.ts` decomposition** — mechanical, after behavior stable.
-- **Hygiene pass** — dividers, WIP refs, legacy comments, emoji in logs.
+- **Frontend billing display parity** -- PAYG upload cap, `rate_human`, runway, and `estimated_runs_out_at_approx` in billing panel matching CLI human output.
+- **Playwright: one registration flow** -- isolated context; register → TOTP → 25 MB custom upload → download/verify → revoke-all; dedicated shell fixture vars.
+- **Duplicate formatters** -- low-risk consolidation.
+- **`app.ts` decomposition** -- mechanical, after behavior stable.
+- **Hygiene pass** -- dividers, WIP refs, legacy comments, emoji in logs.
 
 ### Throughout all tranches
 
-- **Unit tests** — alongside each fix (not a final batch).
+- **Unit tests** -- alongside each fix (not a final batch).
 
 ---
 
 ## Verification checklist (final)
 
 - [ ] `sudo bash scripts/dev-reset.sh`
-- [ ] `bash scripts/testing/e2e-test.sh` — all PASS (includes custom-hint sentinel privacy assert)
-- [ ] `sudo bash scripts/testing/e2e-playwright.sh` — all PASS, zero undocumented SKIP (includes tranche-3 registration flow)
-- [x] `cd client/static/js && bun test` — all PASS (395 tests, 2026-07-21)
-- [x] `cd client/static/js && bun run lint` — type-check clean (2026-07-21)
+- [ ] `bash scripts/testing/e2e-test.sh` -- all PASS (includes custom-hint sentinel privacy assert)
+- [ ] `sudo bash scripts/testing/e2e-playwright.sh` -- all PASS, zero undocumented SKIP (includes tranche-3 registration flow)
+- [x] `cd client/static/js && bun test` -- all PASS (395 tests, 2026-07-21)
+- [x] `cd client/static/js && bun run lint` -- type-check clean (2026-07-21)
 - [x] Exact-boundary chunk vectors pass for 0, 1, chunk size ±1, exact multi-chunk sizes, and 6 GB; owner and share paths agree (`models/file_chunk_count_test.go`)
 - [ ] Manual: 6 GB file upload/download on constrained tab uses SW streaming; Blob fallback remains available without an app cap and clearly warns about full buffering
 - [ ] Manual: shared file anonymous download with ticket refresh after forced 403
@@ -751,7 +751,7 @@ Work silent correctness and privacy before cosmetic cleanup. Tranche numbers mat
 - [x] SW mismatch never shows unqualified success; completion UI shows expected digest, inline result when available, and Verify File guidance
 - [x] `AGENTS.md` and `docs/security.md` document intentional server-visible billable size; no doc claims size is hidden from the server
 - [x] Account key ciphertext and wrapping key are cleared after logout / revoke-all / inactivity as designed
-- [x] Grep production `client/static/js/src` for decorative `===`/`---` dividers and WIP comment refs — cleaned; test files may still use section dividers
+- [x] Grep production `client/static/js/src` for decorative `===`/`---` dividers and WIP comment refs -- cleaned; test files may still use section dividers
 - [x] Hot-path download/upload/streaming logs gated via `debugLog` + `ARKFILE_DEBUG_LOG=false` on `build:prod`
 - [ ] Production bundle inspection confirms debug/info logs stripped or gated while security warnings/errors remain
 - [ ] `app.ts` mechanical decomposition deferred to a follow-up
@@ -788,7 +788,7 @@ Work silent correctness and privacy before cosmetic cleanup. Tranche numbers mat
 | Pending approval | `sections.ts` `showPendingApprovalSection` | Keep; no standalone Playwright |
 | SW large download (6 GB) | `sw-streaming-download.ts` | Manual; 25 MB in tranche-3 registration flow |
 | Reregistration | `login.ts` re-register path | Keep; `e2e-test.sh` |
-| `downloadSharedFileChunked` | `streaming-download.ts` | **Confirmed dead — delete** |
+| `downloadSharedFileChunked` | `streaming-download.ts` | **Confirmed dead -- delete** |
 | Admin contacts footer | `footer.ts` | Unit test; no Playwright |
 | Custom-password share recipient | share of custom-password file | `e2e-test.sh` |
 | Verify File tool | new verify module | Unit tests tranche 1; no Playwright |
@@ -813,7 +813,7 @@ Vendored `libopaque.js` rebuild pipeline (see supply-chain review). Caddy/CSP/sy
 | Share ticket-only (deferred) | Live UI already fails ticket-only; remove dead static-token wrapper/generic support and server fallback |
 | E2E hedging removal pattern | Tranche 2: `e2e-playwright.ts` upload SKIP, share-control OR hedges, billing SKIP |
 | Frontend billing display parity | Tranche 3: match CLI human `billing show` fields (`rate_human`, run-out timestamp) |
-| Playwright registration flow | Tranche 3: one test — register, TOTP, 25 MB custom upload, verify, revoke-all |
+| Playwright registration flow | Tranche 3: one test -- register, TOTP, 25 MB custom upload, verify, revoke-all |
 | CLI error message consistency | Align via stable error identities |
 | Duplicate formatters | Same consolidation discipline as `handlers/format.go` / `cli/format` |
 | Agent digest privacy | Browser uses `digest-cache.ts`; intentional divergence documented |
@@ -828,13 +828,13 @@ Audit date: 2026-07-20. Method: named/dynamic import graph across `client/static
 
 | Symbol | File | Playwright | Action |
 |--------|------|------------|--------|
-| `handleFileUpload` | `upload.ts` | Y | Keep — sole upload UI entry |
+| `handleFileUpload` | `upload.ts` | Y | Keep -- sole upload UI entry |
 | `uploadFiles` / `uploadFile` | `upload.ts` | Y / tests | Keep; consider unexporting `uploadFile` |
-| `downloadFile` | `download.ts` | Y | Keep — sole owner download entry; download completion digest UX |
-| `verifyLocalFileDigest` (or similar) | new verify module | N | **Add** — anytime Verify File tool; chunk-bounded |
+| `downloadFile` | `download.ts` | Y | Keep -- sole owner download entry; download completion digest UX |
+| `verifyLocalFileDigest` (or similar) | new verify module | N | **Add** -- anytime Verify File tool; chunk-bounded |
 | `computeStreamingSHA256` (shared) | extract from `upload.ts` | P (upload) | **Extract** for upload + verify tool + tests |
 | `downloadFileChunked` | `streaming-download.ts` | Y | Keep |
-| `downloadSharedFileWithTicket` | `streaming-download.ts` | Y | Keep — sole anonymous share download |
+| `downloadSharedFileWithTicket` | `streaming-download.ts` | Y | Keep -- sole anonymous share download |
 | `StreamingDownloadManager` | `streaming-download.ts` | P (unit) | Keep; tests construct directly |
 | `shareFile` / `ShareCreator` | `share.ts` / `share-creation.ts` | Y | Keep |
 | `shareCrypto.*` | `share-crypto.ts` | Y / unit | Keep |
@@ -871,22 +871,22 @@ Audit date: 2026-07-20. Method: named/dynamic import graph across `client/static
 | `window.arkfile.encryption` / `.auth` | `app.ts` | N | **Stop exposing** |
 | `window.arkfileApp` | `app.ts` / types | N | **Remove exposure unless external consumer documented** |
 | `showToast` / `clearAllMessages` / unused modal closers | messages/modals | N | **Reverify and delete/unexport** |
-| Same-file-only class exports | register/share-list/UI managers | — | **Unexport** in hygiene pass |
+| Same-file-only class exports | register/share-list/UI managers | -- | **Unexport** in hygiene pass |
 
 ### Window globals lifecycle
 
 | Global | Set | Read | Cleared | Verdict |
 |--------|-----|------|---------|---------|
 | `window.totpSetupData` | `totp-setup.ts` | Setup completion | Success/error; `clearAllSessionData` | Live |
-| `window.totpLoginData` | Never | `app.ts` `handleTOTPVerify` | Deletes in totp/auth | Stale — remove |
-| `window.registrationData` | Never | None | `clearAllSessionData` | Dead — remove |
-| `window.arkfile.shares` | `app.ts` spread | `shared-init.js` needs `ShareAccessUI` | — | Over-exposed |
-| `window.arkfile.encryption` / `.auth` | `app.ts` | No readers | — | Dead exposure |
-| `window.arkfileApp` | `app.ts` | No repository reader | — | Dead exposure unless externally required |
+| `window.totpLoginData` | Never | `app.ts` `handleTOTPVerify` | Deletes in totp/auth | Stale -- remove |
+| `window.registrationData` | Never | None | `clearAllSessionData` | Dead -- remove |
+| `window.arkfile.shares` | `app.ts` spread | `shared-init.js` needs `ShareAccessUI` | -- | Over-exposed |
+| `window.arkfile.encryption` / `.auth` | `app.ts` | No readers | -- | Dead exposure |
+| `window.arkfileApp` | `app.ts` | No repository reader | -- | Dead exposure unless externally required |
 
 ### Playwright E2E map (summary)
 
-Use test titles in `scripts/testing/e2e-playwright.ts` when referring to coverage in code or reviews — not ordinal labels.
+Use test titles in `scripts/testing/e2e-playwright.ts` when referring to coverage in code or reviews -- not ordinal labels.
 
 | Test (as named in `e2e-playwright.ts`) | Exercises | Hedge? |
 |----------------------------------------|-----------|--------|
@@ -907,7 +907,7 @@ Use test titles in `scripts/testing/e2e-playwright.ts` when referring to coverag
 | Billing top-up modal creates invoice and embeds checkout iframe | billing top-up modal | Top-up **SKIP-pass** |
 | External-tab checkout return opens billing panel and confirms paid invoice | billing checkout return | No |
 | Logout and post-logout security checks | cookies/sessionStorage | Soft re-login skip |
-| Register, TOTP, 25 MB custom upload, verify, revoke-all | `register.ts`, `totp-setup.ts`, `upload.ts`, `download.ts`, `auth.ts` | No — isolated describe; TOTP uses normalized manual-entry secret; revoke waits for toast/integrity panel clear |
+| Register, TOTP, 25 MB custom upload, verify, revoke-all | `register.ts`, `totp-setup.ts`, `upload.ts`, `download.ts`, `auth.ts` | No -- isolated describe; TOTP uses normalized manual-entry secret; revoke waits for toast/integrity panel clear |
 
 ---
 
@@ -915,9 +915,9 @@ Use test titles in `scripts/testing/e2e-playwright.ts` when referring to coverag
 
 Implementation and post-fix hardening verified on a local `dev-reset` instance:
 
-- `go test ./...` (CGO/FIDO flags per AGENTS.md) and `cd client/static/js && bun test` / `bun run lint` — green during implementation.
-- `bash scripts/testing/e2e-test.sh` — passed (including encrypted-hint sentinel and ticket-issuance invalid-token rate limiting; no `X-Download-Token` on chunks).
-- `sudo bash scripts/testing/e2e-playwright.sh` — **18 passed (5.2m)**. Registration-flow fixes applied during verification: strip spaces from TOTP `manual_entry` before `generate-totp`; hide `#download-integrity-panel` via shared nav-panel mutual exclusion before revoke-all.
+- `go test ./...` (CGO/FIDO flags per AGENTS.md) and `cd client/static/js && bun test` / `bun run lint` -- green during implementation.
+- `bash scripts/testing/e2e-test.sh` -- passed (including encrypted-hint sentinel and ticket-issuance invalid-token rate limiting; no `X-Download-Token` on chunks).
+- `sudo bash scripts/testing/e2e-playwright.sh` -- **18 passed (5.2m)**. Registration-flow fixes applied during verification: strip spaces from TOTP `manual_entry` before `generate-totp`; hide `#download-integrity-panel` via shared nav-panel mutual exclusion before revoke-all.
 
 Remaining deferred (explicitly out of this project's Playwright scope): mechanical `app.ts` split; dedicated Verify File / 6 GB SW browser E2E; export-click, WebAuthn, MFA settings, subscription, admin-contacts footer, and custom-password share recipient browser coverage (covered by CLI e2e, unit tests, or manual proof as noted above).
 

@@ -99,7 +99,7 @@ func settleOneUser(db *sql.DB, rate *Rate, now time.Time, username string, drain
 	defer tx.Rollback()
 
 	// Step 1: ensure a user_credits row exists (create at zero balance if not).
-	// rqlite float64 scan — same pattern as meter.go.
+	// rqlite float64 scan -- same pattern as meter.go.
 	// Query MUST run inside the transaction (`tx`) rather than `db` to prevent dirty reads or concurrent race conditions.
 	var currentBalanceF float64
 	err = tx.QueryRow(

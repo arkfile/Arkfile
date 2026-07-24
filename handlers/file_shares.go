@@ -270,7 +270,7 @@ func GetShareEnvelope(c echo.Context) error {
 	}
 
 	// Get file size (plaintext metadata like filename/sha256 is inside the encrypted
-	// ShareEnvelope, decrypted client-side with the share password — no need to send
+	// ShareEnvelope, decrypted client-side with the share password -- no need to send
 	// server-side encrypted metadata that share recipients cannot decrypt)
 	// Note: rqlite returns numbers as float64, so we scan into float64 and convert
 	var sizeF sql.NullFloat64
@@ -612,7 +612,7 @@ func ListShares(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
-	// Query shares (owner already has file metadata via /api/files endpoints —
+	// Query shares (owner already has file metadata via /api/files endpoints --
 	// no need to duplicate encrypted metadata here)
 	rows, err := database.DB.Query(`
 		SELECT sk.share_id, sk.file_id, sk.created_at, sk.expires_at,

@@ -42,7 +42,7 @@ const BLOB_BUFFER_WARNING =
   'Service Worker streaming is unavailable. This download will buffer the complete decrypted file in the browser before saving. Large files may fail under browser memory or storage limits. Prefer a browser with Service Worker support, or use the arkfile-client CLI.';
 
 const PARTIAL_DOWNLOAD_TIP =
-  'Download was interrupted after streaming began. A partial file may already be in your downloads folder — delete it if incomplete, then try again.';
+  'Download was interrupted after streaming began. A partial file may already be in your downloads folder -- delete it if incomplete, then try again.';
 
 const SW_MISMATCH_TIP =
   'SHA-256 verification failed after the file was streamed to disk. Delete the downloaded file. Use Verify File with the expected digest below, or re-download.';

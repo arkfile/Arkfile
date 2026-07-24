@@ -150,18 +150,18 @@ describe('SW fetch handler - regression test for double-fetch (File-wasnt-availa
     const body = new Uint8Array(await first.arrayBuffer());
     expect(Array.from(body)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
 
-    // SECOND fetch for the SAME UUID — this is what Brave's DM does on a
+    // SECOND fetch for the SAME UUID -- this is what Brave's DM does on a
     // single user click.  Must return 200 (empty body), NOT 404.
     const second = await dispatchFetch(uuid);
     expect(second.status).toBe(200);
-    // Empty body — NOT a 404 with the "stream not found" message.
+    // Empty body -- NOT a 404 with the "stream not found" message.
     const secondBody = new Uint8Array(await second.arrayBuffer());
     expect(secondBody.length).toBe(0);
     // No Content-Disposition header on the empty response (it's a side-channel
     // probe acknowledgement, not a real download).
     expect(second.headers.get('Content-Disposition')).toBeNull();
 
-    // THIRD fetch for the SAME UUID — should also be empty 200 (still in
+    // THIRD fetch for the SAME UUID -- should also be empty 200 (still in
     // post-consumption grace window).
     const third = await dispatchFetch(uuid);
     expect(third.status).toBe(200);

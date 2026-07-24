@@ -467,7 +467,7 @@ func uploadOneFile(client *HTTPClient, session *AuthSession, config *ClientConfi
 		// Detect file_id_conflict (stable server error code).
 		if isFileIDConflict(derr) {
 			lastErr = derr
-			logVerbose("Attempt %d/%d: file_id_conflict — regenerating", attempt, maxFileIDAttempts)
+			logVerbose("Attempt %d/%d: file_id_conflict -- regenerating", attempt, maxFileIDAttempts)
 			continue
 		}
 
@@ -1819,7 +1819,7 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 		return fmt.Errorf("--share-id is required")
 	}
 
-	// Step 1: Fetch share envelope (no auth required — public endpoint)
+	// Step 1: Fetch share envelope (no auth required -- public endpoint)
 	// GET /api/public/shares/:id/envelope -> {share_id, file_id, salt, encrypted_envelope, size_bytes}
 	envelopeURL := client.baseURL + "/api/public/shares/" + *shareID + "/envelope"
 	envelopeReq, err := http.NewRequest("GET", envelopeURL, nil)

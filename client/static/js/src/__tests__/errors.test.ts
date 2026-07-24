@@ -1,5 +1,5 @@
 /**
- * Unit Tests — Crypto Error Hierarchy
+ * Unit Tests -- Crypto Error Hierarchy
  *
  * Tests for: CryptoError, all subclasses, wrapError, isCryptoError,
  * getUserFriendlyMessage

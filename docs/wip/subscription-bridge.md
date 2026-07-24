@@ -1,4 +1,4 @@
-# Subscription Bridge — Standalone Service Specification (v1)
+# Subscription Bridge -- Standalone Service Specification (v1)
 
 Arkfile mirror of the canonical SubscriptionBridge specification at [`5c4539154c7286d3d5dfcd7bc40ec20957ac0504`](https://github.com/arkfile/SubscriptionBridge/commit/5c4539154c7286d3d5dfcd7bc40ec20957ac0504).
 
@@ -77,7 +77,7 @@ A deployment has exactly one consumer application. Its pairing-root set, callbac
 
 **Residual risk**
 
-Card subscribers have processor-side financial identity. An operator with access to both databases can correlate `checkout_id` → username via the consumer's `subscription_checkouts` table. Mitigate with separate credentials and minimal staff — do not pretend the join is impossible.
+Card subscribers have processor-side financial identity. An operator with access to both databases can correlate `checkout_id` → username via the consumer's `subscription_checkouts` table. Mitigate with separate credentials and minimal staff -- do not pretend the join is impossible.
 
 **Clock skew and token lifetime**
 
@@ -119,7 +119,7 @@ The token wire representation is canonical: exactly one `.` separator; an unpadd
 - Require exactly `checkout_id`, `plan_id`, `return_url`, `iat`, and `exp`; reject unknown fields and enforce the lifetime rules in section 4.
 - Require `plan_id` to be valid UTF-8, nonempty after Unicode whitespace trimming, and at most 128 bytes in its UTF-8 representation.
 - Require a normalized HTTPS `return_url`, except explicit loopback development URLs.
-- **No username field** — it and every other consumer identity field must be rejected.
+- **No username field** -- it and every other consumer identity field must be rejected.
 - Resolve `plan_id` and processor family from trusted configuration before accepting the checkout.
 - For Adyen, generate the bridge-only processor shopper reference before the first checkout insert.
 - In a short transaction, insert the first accepted `checkout_id` bound immutably to `plan_id`, normalized `return_url`, processor family, token/request fingerprint, stable provider idempotency key, and the Adyen shopper reference when applicable. The fingerprint is SHA-256 over the verified raw token payload bytes.
@@ -695,7 +695,7 @@ Provider references are sensitive operational data. Stored-payment-method refere
 
 Every timestamp that enters the consumer protocol or an action key uses `sb_utc_second`. Normalize trusted provider observations and local clocks to whole seconds by truncating fractional seconds before comparison and storage, and serialize them as UTC RFC3339 with `Z`. Operational receipt, lease, and audit timestamps may retain PostgreSQL's finer precision.
 
-Every operator abandonment, requeue, manual attempt resolution, charging-block change, or other exceptional state override inserts an append-only `sb_operator_audit` row in the same transaction. Audit targets use bridge event, attempt, checkout, action, or subscription IDs—not provider-native identifiers. Audit metadata is bounded and must not contain secrets, raw provider payloads, payment-method references, or decrypted requests.
+Every operator abandonment, requeue, manual attempt resolution, charging-block change, or other exceptional state override inserts an append-only `sb_operator_audit` row in the same transaction. Audit targets use bridge event, attempt, checkout, action, or subscription IDs--not provider-native identifiers. Audit metadata is bounded and must not contain secrets, raw provider payloads, payment-method references, or decrypted requests.
 
 ---
 
@@ -837,7 +837,7 @@ The period calendar is computed in UTC from the original activation day. Monthly
 5. If no definitive result is established by the resolution deadline, atomically transition the attempt and action to `manual_review`, set the subscription's automatic-charging block, and stop all automatic charging. The visible state remains `past_due`.
 6. An audited operator command may record external evidence and resolve the existing attempt. It must never silently allocate a new payment key. Clearing the charging block or causing `renewed`/`expired` requires an explicit durable resolution and real state transition.
 
-This algorithm, stable identities, exact replay bytes, and fencing—not a claim of provider lookup by idempotency key or merchant reference—provide crash safety.
+This algorithm, stable identities, exact replay bytes, and fencing--not a claim of provider lookup by idempotency key or merchant reference--provide crash safety.
 
 **Adyen event mapping**
 
@@ -945,7 +945,7 @@ Startup must fail fast if the pairing root is not exactly 64 lowercase hexadecim
 | `bridge scheduler-status` | Due/leased renewal and expiry actions plus uncertain/manual-review attempts |
 | `bridge resolve-attempt <attempt_id> ...` | Audited resolution of an existing uncertain/manual-review attempt; never creates a new payment key |
 
-Paid subscription cancel: processor dashboard or portal — not consumer admin CLI.
+Paid subscription cancel: processor dashboard or portal -- not consumer admin CLI.
 
 ---
 
@@ -1033,14 +1033,14 @@ subscription-bridge/
 
 ## 17. Build phases (bridge repo)
 
-1. **Protocol types + HMAC helpers** — share test vectors with consumer `subbridge` package.
-2. **Postgres migrations + idempotent `/v1/start` workflow** — exercise through a fake adapter, without a protocol stub.
-3. **Provider-neutral engine + outbound notifier** — version state transactionally and POST to a mock consumer with retries.
-4. **Stripe adapter** — Checkout, Billing Portal, webhooks, reconcile, and conformance suite.
-5. **Adyen adapter** — initial Checkout/tokenization, authenticated webhook, and reconcile.
-6. **Adyen scheduler and hosted portal** — recurring charges, dunning, payment-method replacement, and cancellation.
-7. **Common adapter conformance** — both providers pass identical lifecycle acceptance.
-8. **Deploy artifacts** — systemd, Caddy, optional Podman/Quadlet, health checks.
+1. **Protocol types + HMAC helpers** -- share test vectors with consumer `subbridge` package.
+2. **Postgres migrations + idempotent `/v1/start` workflow** -- exercise through a fake adapter, without a protocol stub.
+3. **Provider-neutral engine + outbound notifier** -- version state transactionally and POST to a mock consumer with retries.
+4. **Stripe adapter** -- Checkout, Billing Portal, webhooks, reconcile, and conformance suite.
+5. **Adyen adapter** -- initial Checkout/tokenization, authenticated webhook, and reconcile.
+6. **Adyen scheduler and hosted portal** -- recurring charges, dunning, payment-method replacement, and cancellation.
+7. **Common adapter conformance** -- both providers pass identical lifecycle acceptance.
+8. **Deploy artifacts** -- systemd, Caddy, optional Podman/Quadlet, health checks.
 9. **Operator CLI + backup/restore and incident runbooks**.
 
 ---
@@ -1054,7 +1054,7 @@ subscription-bridge/
 5. Block conflicting commerce paths while subscribed (e.g. one-off top-ups → 409).
 6. Portal: sign portal token with active `subscription_ref`; redirect to `/v1/portal`.
 7. Reconcile: periodic GET `/v1/subscriptions/{subscription_ref}` for bridge-backed rows nearing period end.
-8. Gift/comp subscriptions (no processor) stay entirely on consumer — never call bridge.
+8. Gift/comp subscriptions (no processor) stay entirely on consumer -- never call bridge.
 
 ---
 
@@ -1073,7 +1073,7 @@ subscription-bridge/
 
 ## 20. Status
 
-**Greenfield — specification repository created; provider implementation has not begun.** Arkfile's consumer implements current protocol v1 and passes the canonical fixture tests. Finalize and test the bridge migrations, protocol package, schemas, interfaces, state machines, and crash-recovery behavior before implementing either provider. Stripe and Adyen are both required v1 adapters and must pass the common conformance suite before release.
+**Greenfield -- specification repository created; provider implementation has not begun.** Arkfile's consumer implements current protocol v1 and passes the canonical fixture tests. Finalize and test the bridge migrations, protocol package, schemas, interfaces, state machines, and crash-recovery behavior before implementing either provider. Stripe and Adyen are both required v1 adapters and must pass the common conformance suite before release.
 
 ---
 

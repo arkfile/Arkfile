@@ -5,7 +5,7 @@
  * Matches the Go backend (crypto/password_validation.go) exactly.
  *
  * Uses unified config from crypto/password-requirements.json served via API.
- * No zxcvbn, no entropy, no strength scores — pass/fail only.
+ * No zxcvbn, no entropy, no strength scores -- pass/fail only.
  */
 
 import { resolvePasswordConfig, type PasswordConfig } from './floors.js';

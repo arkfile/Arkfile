@@ -15,9 +15,9 @@ Confirmed against the codebase:
 - `models/user.go`: `DefaultStorageLimit = 1181116006` (1.1 GiB). `IsApproved` and `IsAdmin` fields. `User.CheckStorageAvailable(size)` is the upload-time hard-cap gate.
 - `database/unified_schema.sql`:
   - `users.total_storage_bytes BIGINT` (maintained by upload/delete paths).
-  - `users.storage_limit_bytes BIGINT NOT NULL DEFAULT 10737418240` (10 GiB) — disagrees with the Go constant; reconciled here.
+  - `users.storage_limit_bytes BIGINT NOT NULL DEFAULT 10737418240` (10 GiB) -- disagrees with the Go constant; reconciled here.
   - `user_credits(balance_usd_cents INTEGER, ...)` with auto-update trigger.
-  - `credit_transactions(transaction_id, username, amount_usd_cents INTEGER, balance_after_usd_cents INTEGER, transaction_type TEXT, reason, admin_username, metadata TEXT, created_at)` — `transaction_type` has no enum constraint.
+  - `credit_transactions(transaction_id, username, amount_usd_cents INTEGER, balance_after_usd_cents INTEGER, transaction_type TEXT, reason, admin_username, metadata TEXT, created_at)` -- `transaction_type` has no enum constraint.
   - `storage_providers(provider_id, ..., role TEXT DEFAULT 'tertiary', is_active BOOLEAN, cost_per_tb_cents INTEGER NULL, ...)`.
   - Indexes on `user_credits(username)`, `credit_transactions(username, transaction_id, type, created_at, admin_username)`.
 - `models/credits.go`: `UserCredit`, `CreditTransaction`, `GetOrCreateUserCredits`, `GetUserCredits`, `CreateUserCredits`, `AddCredits`, `DebitCredits`, `SetCredits`, `GetUserTransactions`, `GetAllUserCredits`, `FormatCreditsUSD`, `ParseCreditsFromUSD`, `GetUserCreditsSummary`. Transaction-type constants: `credit`, `debit`, `adjustment`, `refund`. All write paths are DB-transactional and emit `logging.LogSecurityEvent(EventAdminAccess, ...)`.
@@ -31,7 +31,7 @@ Nothing in the credits ledger is connected to storage usage today. The frontend 
 
 ### 3.1 Internal Unit: Microcents per GiB per Hour
 
-All balances and amounts are stored as `int64` **microcents** (1 USD = 100 cents = 100,000,000 microcents). The int64 range is ~$92 billion — comfortable. **Balances are signed**: a user who overdraws their balance simply goes negative; there is no separate deficit column (see §3.4).
+All balances and amounts are stored as `int64` **microcents** (1 USD = 100 cents = 100,000,000 microcents). The int64 range is ~$92 billion -- comfortable. **Balances are signed**: a user who overdraws their balance simply goes negative; there is no separate deficit column (see §3.4).
 
 The **rate** used by the meter is denominated as `int64` **microcents per GiB per hour** (binary GiB = 2^30 bytes). This is the canonical internal unit derived from the operator's stated customer price (§3.3).
 
@@ -43,9 +43,9 @@ The per-tick math is one int64 multiply + one shift:
 tick_charge_microcents = (billable_bytes * rate_microcents_per_gib_per_hour) >> 30
 ```
 
-The shift truncates fractional microcents per tick. At 1,356 microcents/GiB/hour, each truncated fraction is < 1 microcent/hour ≈ < $0.0000088/year/user — well below noise floor.
+The shift truncates fractional microcents per tick. At 1,356 microcents/GiB/hour, each truncated fraction is < 1 microcent/hour ≈ < $0.0000088/year/user -- well below noise floor.
 
-**Display formatting**: balances and transaction amounts in microcents are formatted with four decimal places of USD (e.g., `"$5.0000"`, `"-$0.0006"`) so fractional-cent accounting is honest, and a leading minus sign is shown for negative balances. *Projected* monthly costs in the UI use approximate framing (`"~$0.02/month"`) because the 30-day month convention introduces ~3% variance against actual months — calling it precise to four decimals would be misleading.
+**Display formatting**: balances and transaction amounts in microcents are formatted with four decimal places of USD (e.g., `"$5.0000"`, `"-$0.0006"`) so fractional-cent accounting is honest, and a leading minus sign is shown for negative balances. *Projected* monthly costs in the UI use approximate framing (`"~$0.02/month"`) because the 30-day month convention introduces ~3% variance against actual months -- calling it precise to four decimals would be misleading.
 
 ### 3.2 Tick (Hourly) and Settlement (Daily)
 
@@ -82,8 +82,8 @@ This is parsed as a dollars-and-cents string (e.g., `"10.00"`, `"19.99"`, `"24.9
 
 **Suggested values** (the deploy scripts seed `10.00` as the default):
 
-- `10.00` — single storage backend, no replication.
-- `20.00` — two storage backends with replication sync.
+- `10.00` -- single storage backend, no replication.
+- `20.00` -- two storage backends with replication sync.
 
 Conversion to the internal rate uses **floor-rounded integer math** so the derived rate never exceeds the operator's stated price:
 
@@ -110,7 +110,7 @@ The price can be updated at runtime without restart via `arkfile-admin billing s
 
 **Active users** for billing: `is_approved = true` and not deleted. Admins (`is_admin = true` or username matches `isAdminUsername()`) are excluded by default; toggle via `ARKFILE_BILLING_INCLUDE_ADMINS=true` (default `false`) so operator self-usage doesn't pollute beta usage data.
 
-**Negative balances are allowed.** When a daily sweep drains more than the user's current balance, `balance_usd_microcents` simply goes negative. There is no separate deficit column; the signed balance is the single source of truth. This is a deliberate design choice for the beta period: every user — including beta testers whose initial gift has been exhausted — sees an honest, accumulating "what this would cost in a paid deployment" number, which is the most useful possible signal both to the operator and to the testers themselves. Any future payments work that needs to distinguish "debt to be settled" from "credit to be spent" can re-introduce a split column at that time.
+**Negative balances are allowed.** When a daily sweep drains more than the user's current balance, `balance_usd_microcents` simply goes negative. There is no separate deficit column; the signed balance is the single source of truth. This is a deliberate design choice for the beta period: every user -- including beta testers whose initial gift has been exhausted -- sees an honest, accumulating "what this would cost in a paid deployment" number, which is the most useful possible signal both to the operator and to the testers themselves. Any future payments work that needs to distinguish "debt to be settled" from "credit to be spent" can re-introduce a split column at that time.
 
 ### 3.5 Settlement Metadata (Privacy-Sensitive)
 
@@ -134,7 +134,7 @@ It deliberately **omits** `avg_billable_bytes` (and any field that lets an obser
 
 The schema deltas in this document only touch the credits ledger. They do **not** touch file-encryption-key wrappers, OPAQUE auth records, file metadata, or anything else that would render previously-uploaded files inaccessible. By themselves these changes are safe to apply in place.
 
-**However, the choice of deployment script matters enormously** — see §4.3 below. The wrong script can render every previously-uploaded beta-tester file unrecoverable even though the schema deltas themselves are file-safe.
+**However, the choice of deployment script matters enormously** -- see §4.3 below. The wrong script can render every previously-uploaded beta-tester file unrecoverable even though the schema deltas themselves are file-safe.
 
 ### 4.2 Summary of Deltas
 
@@ -181,7 +181,7 @@ The existing `INTEGER` columns are widened to `BIGINT` for cross-backend safety;
 The `test.arkfile.net` deployment is the only environment with real beta-tester data. The schema deltas above are individually file-safe, but the *deploy script* that applies them is not always file-safe.
 
 - **`test-update.sh`** rebuilds binaries and applies in-place migrations without wiping data. **This is the correct rollout path for `test.arkfile.net`.** OPAQUE auth records, file metadata, FEK wrappers, and uploaded blobs are all preserved.
-- **`test-deploy.sh`** is the destructive provisioning script. It wipes the database (including OPAQUE auth records and file metadata) and reseeds from scratch. Running it against `test.arkfile.net` would render every previously-uploaded beta-tester file unrecoverable — the encrypted blobs in object storage become permanently unreadable without the wiped FEK wrappers and auth records. **Do not use it for `test.arkfile.net` after beta testers have begun uploading.**
+- **`test-deploy.sh`** is the destructive provisioning script. It wipes the database (including OPAQUE auth records and file metadata) and reseeds from scratch. Running it against `test.arkfile.net` would render every previously-uploaded beta-tester file unrecoverable -- the encrypted blobs in object storage become permanently unreadable without the wiped FEK wrappers and auth records. **Do not use it for `test.arkfile.net` after beta testers have begun uploading.**
 
 The `_cents → _microcents` rename in step 2 of §11 must therefore be implemented as an in-place ALTER-style migration (rename columns, widen types, preserve any existing rows). Even though `user_credits` may currently be empty in production-like data, writing the migration properly is cheap insurance and establishes the pattern for all future schema changes.
 
@@ -261,7 +261,7 @@ COMMIT;
 
 `TickAllActiveUsers` filters: `is_approved = true` AND (`!is_admin` OR `cfg.IncludeAdmins`). Per-user errors are logged but do not abort the iteration; aggregate `errCount` is returned.
 
-The tick samples `total_storage_bytes` at tick time (not transactional with upload/delete). A user uploading at 12:30 and ticked at 13:00 is billed for what's stored at 13:00 — a small free window, fine at our prices.
+The tick samples `total_storage_bytes` at tick time (not transactional with upload/delete). A user uploading at 12:30 and ticked at 13:00 is billed for what's stored at 13:00 -- a small free window, fine at our prices.
 
 ### 5.3 `SweepAllUsers`
 
@@ -373,20 +373,20 @@ Below-baseline: `billable_bytes = 0`, `current_cost_per_month_microcents = 0`, `
 
 ### 6.3 Extended Admin Endpoints
 
-- `GET /api/admin/credits` — list-all gains per-user `current_usage` block (no runway; expensive). Balances may be negative.
-- `GET /api/admin/credits/:username` — gains `current_usage` + `credits_runway`, retains existing `admin_info`.
-- `GET /api/admin/users/:username/status` — gains `billing` block: `balance_usd_microcents` (signed), `formatted_balance`, `billable_bytes`, `current_cost_per_month_usd_approx`, `last_billed_at`.
+- `GET /api/admin/credits` -- list-all gains per-user `current_usage` block (no runway; expensive). Balances may be negative.
+- `GET /api/admin/credits/:username` -- gains `current_usage` + `credits_runway`, retains existing `admin_info`.
+- `GET /api/admin/users/:username/status` -- gains `billing` block: `balance_usd_microcents` (signed), `formatted_balance`, `billable_bytes`, `current_cost_per_month_usd_approx`, `last_billed_at`.
 
 ### 6.4 New Admin Endpoints
 
 All under `adminGroup` (existing TOTP-protected). All admin actions logged to `admin_logs` via `LogAdminAction`.
 
-- `GET /api/admin/billing/price` — current customer price and derived rate. Response: `{ "customer_price_usd_per_tb_per_month": "10.00", "microcents_per_gib_per_hour": 1356, "resolved_at": "..." }`.
-- `POST /api/admin/billing/set-price` — body `{ "customer_price_usd_per_tb_per_month": "19.99" }`. Validates parseable dollars-and-cents and `> 0`. Updates `billing_settings`, atomically swaps the cached `Rate`, returns the new resolved rate plus `previous_microcents_per_gib_per_hour`.
-- `GET /api/admin/billing/sweep-summary?days=7` — last N days of daily totals from `credit_transactions WHERE transaction_type='usage'` aggregated by day. Each row includes `users_settled`, `total_drained_microcents`, `total_drained_usd`. Plus a top-level `users_currently_negative` point-in-time count.
-- `GET /api/admin/billing/overdrawn` — list users with `balance_usd_microcents < 0`. Used by CLI `list-overdrawn`. Returns the list and a `users_currently_overdrawn` count.
-- `POST /api/admin/billing/gift` — body `{target_username, amount_usd, reason}`. Validates, calls `GiftCredits`, returns `transaction` and `updated_balance`.
-- `POST /api/admin/billing/tick-now` — dev/test only. Returns 403 unless `ADMIN_DEV_TEST_API_ENABLED=true`. Body `{sweep: bool}`. Used by `e2e-test.sh`.
+- `GET /api/admin/billing/price` -- current customer price and derived rate. Response: `{ "customer_price_usd_per_tb_per_month": "10.00", "microcents_per_gib_per_hour": 1356, "resolved_at": "..." }`.
+- `POST /api/admin/billing/set-price` -- body `{ "customer_price_usd_per_tb_per_month": "19.99" }`. Validates parseable dollars-and-cents and `> 0`. Updates `billing_settings`, atomically swaps the cached `Rate`, returns the new resolved rate plus `previous_microcents_per_gib_per_hour`.
+- `GET /api/admin/billing/sweep-summary?days=7` -- last N days of daily totals from `credit_transactions WHERE transaction_type='usage'` aggregated by day. Each row includes `users_settled`, `total_drained_microcents`, `total_drained_usd`. Plus a top-level `users_currently_negative` point-in-time count.
+- `GET /api/admin/billing/overdrawn` -- list users with `balance_usd_microcents < 0`. Used by CLI `list-overdrawn`. Returns the list and a `users_currently_overdrawn` count.
+- `POST /api/admin/billing/gift` -- body `{target_username, amount_usd, reason}`. Validates, calls `GiftCredits`, returns `transaction` and `updated_balance`.
+- `POST /api/admin/billing/tick-now` -- dev/test only. Returns 403 unless `ADMIN_DEV_TEST_API_ENABLED=true`. Body `{sweep: bool}`. Used by `e2e-test.sh`.
 
 ### 6.5 Not Added
 
@@ -396,11 +396,11 @@ No `/api/billing/buy`, `/api/payments/*`, webhooks, invoices, payment-method sto
 
 One new page linked from the user menu. Three sections plus a persistent disclaimer footer.
 
-1. **Balance and runway**. Large balance display in four-decimal USD, signed (e.g., `$5.0000`, `-$0.1234`). Friendly runway estimate when positive (e.g., "~58 years at current usage"); when zero or negative the line reads "Charges continue to accumulate." The numeric balance is shown to **all users at all times**, including when negative — there is no admin-only gating.
-2. **Current storage and cost**. `Storage used`, `Free baseline`, `Billable usage`, `Current rate ($10.00/TiB/month)`, `Your cost (~$0.0098/month at this usage)`, and the contrastive `Free baseline savings (~$0.0108/month — what you'd be paying without the free baseline)`. Below-baseline state replaces the cost lines with *"You are within the free baseline. No charges apply."* The cost lines render the same regardless of balance sign so beta testers always see what their actual usage would cost in a paid deployment.
+1. **Balance and runway**. Large balance display in four-decimal USD, signed (e.g., `$5.0000`, `-$0.1234`). Friendly runway estimate when positive (e.g., "~58 years at current usage"); when zero or negative the line reads "Charges continue to accumulate." The numeric balance is shown to **all users at all times**, including when negative -- there is no admin-only gating.
+2. **Current storage and cost**. `Storage used`, `Free baseline`, `Billable usage`, `Current rate ($10.00/TiB/month)`, `Your cost (~$0.0098/month at this usage)`, and the contrastive `Free baseline savings (~$0.0108/month -- what you'd be paying without the free baseline)`. Below-baseline state replaces the cost lines with *"You are within the free baseline. No charges apply."* The cost lines render the same regardless of balance sign so beta testers always see what their actual usage would cost in a paid deployment.
 3. **Transaction history**. Chronological list paginated by existing `limit`/`offset`. Each row shows date, type, signed microcent amount in four-decimal USD, and post-balance (also signed). Gift and adjustment rows show `by <admin-name>`; usage rows show no attribution.
 
-No payment buttons. No Stripe.js. No external network requests from this page in v1. (Stripe-gating concerns — including the "click to confirm credit-card payment" pattern that loads Stripe.js only on explicit user opt-in — are deferred to `payments.md`.)
+No payment buttons. No Stripe.js. No external network requests from this page in v1. (Stripe-gating concerns -- including the "click to confirm credit-card payment" pattern that loads Stripe.js only on explicit user opt-in -- are deferred to `payments.md`.)
 
 A compact one-line banner above the file list (`Balance: $5.0000  |  Storage: 2.1/50 GiB  |  ~$0.0098/month  |  Manage billing`) is optional; only render when the user has billable bytes or a non-default balance.
 
@@ -468,7 +468,7 @@ If the operator enables a second storage backend with replication sync, raise th
 **`meter_test.go`**
 - Tick math: edge cases at exactly the free baseline (charge = 0), one byte over (charge = `(1 * rate) >> 30`), and well over.
 - Accumulator upsert: first tick inserts; subsequent ticks accumulate; `last_tick_at` monotonic.
-- Below-baseline tick is a complete no-op (no DB write — verified via SQL traffic recording).
+- Below-baseline tick is a complete no-op (no DB write -- verified via SQL traffic recording).
 - Filtering: unapproved skipped; admin skipped when `IncludeAdmins=false`, included when `true`.
 - Per-user error isolation: deliberate failure on user N does not stop user N+1.
 
@@ -489,7 +489,7 @@ If the operator enables a second storage backend with replication sync, raise th
 
 **`gift_test.go`**
 - Validation: rejects `amount <= 0`, rejects empty `reason`.
-- Inserts row with `transaction_type = 'gift'`, correct `admin_username`, correct `balance_after` (works correctly when starting balance is negative — gift bumps the negative balance toward zero, may or may not cross into positive).
+- Inserts row with `transaction_type = 'gift'`, correct `admin_username`, correct `balance_after` (works correctly when starting balance is negative -- gift bumps the negative balance toward zero, may or may not cross into positive).
 - Emits security log event.
 
 ### 10.2 `models/credits_test.go` Updates
@@ -560,7 +560,7 @@ Ten PR-sized steps for one engineer (~2-3 weeks total). This is a recommended la
 | 6 | Extend handlers: `current_usage` / `credits_runway` blocks; new `/api/admin/billing/*` endpoints (`price`, `set-price`, `sweep-summary`, `overdrawn`, `gift`, `tick-now`); handler tests. | ~320 | [DONE: GET extensions in Section B+C; new admin endpoints in Section E. `tick-now` is registered under `/api/admin/dev-test/billing/tick-now` (gated by `ADMIN_DEV_TEST_API_ENABLED`); the route is physically not registered in production-flavored deployments. Handler unit tests are deferred to Section H's e2e billing test, matching the pattern used for other DB-heavy admin endpoints in the codebase.] |
 | 7 | New frontend `/billing` page with three sections + optional banner; minimal Playwright tests per §10.5. | ~380 | [DONE: implemented as an inline panel toggled from the file-section nav (matching the existing security-settings + contact-info pattern) rather than as a standalone `/billing` route, since the SPA has no router and the inline-panel idiom is the only navigation primitive in the app. The Section G-polish pass (a) deleted the always-on beta disclaimer entirely from the response and the panel (see §7's "No always-on disclaimer" paragraph for the rationale), (b) added the `.billing-panel-section` CSS block in `client/static/css/styles.css` so the `<dl>` renders as a tight two-column grid with section eyebrows + tabular numerics + red negative-balance highlighting, (c) tightened copy by deleting the "Free baseline savings" and "Current rate" lines from the user view (the rate is admin-facing; users see only their own projected cost), and (d) moved the runway display from its own line under the balance to a row in the storage grid, directly under "Your projected cost", so the rate→cost→runway relationship is visually adjacent. The optional one-line banner above the file list is also omitted in this implementation; the always-visible Billing nav link makes the same data one click away. Playwright tests deferred to Section H.] |
 | 8 | `arkfile-admin billing` subcommand group (`show`, `set-price`, `gift`, `list-overdrawn`, `tick-now`). | ~380 | [DONE] |
-| 9 | E2E billing tests: (a) `dev-reset.sh` writes billing env vars to `secrets.env` so the meter actually runs in dev; (b) new `phase_11d_billing` in `scripts/testing/e2e-test.sh` exercises the full meter lifecycle (gift → tick → sweep → set-price → drive negative); (c) Playwright test verifying the Billing panel renders correctly with real meter data. | ~150 | [DONE: phase_11d_billing added before phase_12_cleanup — six subsections: initial-gift balance, tick accumulation, tick+sweep usage-transaction with privacy regression guard (avg_billable_bytes absent), gift, set-price round-trip, drive-negative + list-overdrawn; zero new login/logout cycles. Playwright test positioned before Phase 13 in e2e-playwright.ts (see §12.1), asserting balance format, usage grid labels, gift+usage rows, and negative-amount red highlight.] |
+| 9 | E2E billing tests: (a) `dev-reset.sh` writes billing env vars to `secrets.env` so the meter actually runs in dev; (b) new `phase_11d_billing` in `scripts/testing/e2e-test.sh` exercises the full meter lifecycle (gift → tick → sweep → set-price → drive negative); (c) Playwright test verifying the Billing panel renders correctly with real meter data. | ~150 | [DONE: phase_11d_billing added before phase_12_cleanup -- six subsections: initial-gift balance, tick accumulation, tick+sweep usage-transaction with privacy regression guard (avg_billable_bytes absent), gift, set-price round-trip, drive-negative + list-overdrawn; zero new login/logout cycles. Playwright test positioned before Phase 13 in e2e-playwright.ts (see §12.1), asserting balance format, usage grid labels, gift+usage rows, and negative-amount red highlight.] |
 
 Total ≈ 2,450 lines, ~60% non-test. (Earlier drafts of this doc included a row 10 for `docs/billing.md`; that operator-facing markdown was deleted from scope -- the user-facing documentation surface is the code comments, `arkfile-admin billing --help`, and the Billing panel UI itself, not a separate operator page.)
 
@@ -568,17 +568,17 @@ Total ≈ 2,450 lines, ~60% non-test. (Earlier drafts of this doc included a row
 
 ### 11.1 Implementation Status (live)
 
-**DONE — all sections complete, 127/127 e2e-test.sh tests verified (2026-05-02); 15/15 Playwright tests verified (2026-05-03):**
+**DONE -- all sections complete, 127/127 e2e-test.sh tests verified (2026-05-02); 15/15 Playwright tests verified (2026-05-03):**
 
-- A — schema foundation (`storage_limit_bytes` reconcile, microcent rename, `storage_usage_accumulator` + `billing_settings` tables, in-place migration).
-- B+C — `models/credits.go` rename to microcents; deleted deprecated `AddCredits`/`DebitCredits`/`SetCredits` and the `POST/PUT /api/admin/credits/:username` endpoints; extended `GET /api/credits` and `GET /api/admin/credits[/:username]` with `current_usage` and `credits_runway` blocks.
-- D — `billing/` package (types, rates, meter, sweep, scheduler, gift) with full test coverage; `main.go` wires the scheduler when `cfg.Billing.Enabled=true`; config loader reads all `ARKFILE_BILLING_*` and `ARKFILE_CUSTOMER_PRICE_USD_PER_TB_PER_MONTH` env vars.
-- E — `/api/admin/billing/*` endpoints in `handlers/admin_billing.go`: `GET price`, `POST set-price`, `GET sweep-summary`, `GET overdrawn`, `POST gift`. The dev/test-only `tick-now` is registered under `/api/admin/dev-test/billing/tick-now` (gated by `ADMIN_DEV_TEST_API_ENABLED`); the route is physically not registered in production-flavored deployments.
-- F — `arkfile-admin billing` subcommand group (`show [--user NAME]`, `set-price`, `gift`, `list-overdrawn`, `tick-now [--sweep]`); all subcommands have `--json` output and full `--help` text; the `tick-now` subcommand emits a friendly local pre-flight warning when `ADMIN_DEV_TEST_API_ENABLED` is unset.
-- G — Frontend Billing panel (`client/static/js/src/ui/billing.ts`) implemented as an inline panel toggled from the file-section nav, matching the existing security-settings + contact-info pattern. Three sections: Balance, Current Storage and Cost (grid layout), Transaction History (collapsed when empty).
-- G-polish — disclaimer footer entirely deleted from both server (`handlers/credits.go`) and panel; `.billing-panel-section` CSS block in `client/static/css/styles.css` produces a tight two-column grid with section eyebrows, tabular numerics, and red negative-balance highlighting; "Estimated runway" moved into the Current Storage and Cost grid directly under "Your projected cost".
+- A -- schema foundation (`storage_limit_bytes` reconcile, microcent rename, `storage_usage_accumulator` + `billing_settings` tables, in-place migration).
+- B+C -- `models/credits.go` rename to microcents; deleted deprecated `AddCredits`/`DebitCredits`/`SetCredits` and the `POST/PUT /api/admin/credits/:username` endpoints; extended `GET /api/credits` and `GET /api/admin/credits[/:username]` with `current_usage` and `credits_runway` blocks.
+- D -- `billing/` package (types, rates, meter, sweep, scheduler, gift) with full test coverage; `main.go` wires the scheduler when `cfg.Billing.Enabled=true`; config loader reads all `ARKFILE_BILLING_*` and `ARKFILE_CUSTOMER_PRICE_USD_PER_TB_PER_MONTH` env vars.
+- E -- `/api/admin/billing/*` endpoints in `handlers/admin_billing.go`: `GET price`, `POST set-price`, `GET sweep-summary`, `GET overdrawn`, `POST gift`. The dev/test-only `tick-now` is registered under `/api/admin/dev-test/billing/tick-now` (gated by `ADMIN_DEV_TEST_API_ENABLED`); the route is physically not registered in production-flavored deployments.
+- F -- `arkfile-admin billing` subcommand group (`show [--user NAME]`, `set-price`, `gift`, `list-overdrawn`, `tick-now [--sweep]`); all subcommands have `--json` output and full `--help` text; the `tick-now` subcommand emits a friendly local pre-flight warning when `ADMIN_DEV_TEST_API_ENABLED` is unset.
+- G -- Frontend Billing panel (`client/static/js/src/ui/billing.ts`) implemented as an inline panel toggled from the file-section nav, matching the existing security-settings + contact-info pattern. Three sections: Balance, Current Storage and Cost (grid layout), Transaction History (collapsed when empty).
+- G-polish -- disclaimer footer entirely deleted from both server (`handlers/credits.go`) and panel; `.billing-panel-section` CSS block in `client/static/css/styles.css` produces a tight two-column grid with section eyebrows, tabular numerics, and red negative-balance highlighting; "Estimated runway" moved into the Current Storage and Cost grid directly under "Your projected cost".
 
-- H+J — all four deploy scripts write `ARKFILE_BILLING_*` defaults (see §11 row 5); `phase_11d_billing` added to `scripts/testing/e2e-test.sh`; Playwright billing-panel test added to `scripts/testing/e2e-playwright.ts` (see §11 row 9 for detail).
+- H+J -- all four deploy scripts write `ARKFILE_BILLING_*` defaults (see §11 row 5); `phase_11d_billing` added to `scripts/testing/e2e-test.sh`; Playwright billing-panel test added to `scripts/testing/e2e-playwright.ts` (see §11 row 9 for detail).
 
 All sections complete.
 
@@ -588,10 +588,10 @@ All sections complete.
 
 To keep the dependency arrow `billing → models`, `handlers → models`, `main → billing + handlers` clean (and avoid an import cycle through models), `handlers/` does **not** import the `billing/` package directly. Instead, `main.go` wires function-pointer seams during startup:
 
-- `handlers.SetBillingProjectionSeams(freeBaselineFn, resolveRateFn)` — the projection helper used by `GET /api/credits` and the admin per-user endpoints.
-- `handlers.SetBillingGiftFunc(billing.GiftCredits)` — used by `POST /api/admin/billing/gift`.
-- `handlers.SetBillingSetPriceFunc(...)` — wraps `billing.SetCustomerPrice`; used by `POST /api/admin/billing/set-price`.
-- `handlers.SetBillingTickNowFunc(...)` and `SetBillingSweepNowFunc(...)` — used by `POST /api/admin/billing/tick-now` (gated to dev/test).
+- `handlers.SetBillingProjectionSeams(freeBaselineFn, resolveRateFn)` -- the projection helper used by `GET /api/credits` and the admin per-user endpoints.
+- `handlers.SetBillingGiftFunc(billing.GiftCredits)` -- used by `POST /api/admin/billing/gift`.
+- `handlers.SetBillingSetPriceFunc(...)` -- wraps `billing.SetCustomerPrice`; used by `POST /api/admin/billing/set-price`.
+- `handlers.SetBillingTickNowFunc(...)` and `SetBillingSweepNowFunc(...)` -- used by `POST /api/admin/billing/tick-now` (gated to dev/test).
 
 The seams are wired even when `cfg.Billing.Enabled=false`, so `/api/credits` always returns the same JSON shape; rate-dependent fields fall back to zero / `"Billing rate not yet resolved."` rather than disappearing from the response. Frontend and tests can therefore rely on the response structure being stable across enabled/disabled state.
 
@@ -601,12 +601,12 @@ Future contributors adding new endpoints that need to call into `billing/` shoul
 
 | # | Trade-off | Mitigation |
 |---|---|---|
-| 1 | Beta testers see a balance that can go negative even though no money changes hands; some may misread it as being charged. | An earlier draft of this design specified an always-on disclaimer footer to mitigate this. That copy was deliberately removed during Section G implementation (see §7's "No always-on disclaimer" paragraph). Operator guidance about what the numbers mean lives in this design doc and the `arkfile-admin billing --help` text rather than the UI. The negative balance is itself the useful signal — beta testers can see what their actual usage would cost in a paid deployment. |
+| 1 | Beta testers see a balance that can go negative even though no money changes hands; some may misread it as being charged. | An earlier draft of this design specified an always-on disclaimer footer to mitigate this. That copy was deliberately removed during Section G implementation (see §7's "No always-on disclaimer" paragraph). Operator guidance about what the numbers mean lives in this design doc and the `arkfile-admin billing --help` text rather than the UI. The negative balance is itself the useful signal -- beta testers can see what their actual usage would cost in a paid deployment. |
 | 2 | Single price knob means the operator must know what to set; no auto-derivation from provider costs. | Suggested defaults documented (`10.00` for one backend, `20.00` for two with replication). `arkfile-admin billing set-price` is a single command. `storage_providers.cost_per_tb_cents` is retained in schema for operator reference even though the meter does not read it. |
 | 3 | Skipped-sweep day produces one larger transaction row spanning >24h. | Scheduler logs WARN on detection (`> 25h since last sweep`); `period_start`/`period_end` accurately reflect the actual span so reconciliation works. |
 | 4 | Unbounded accumulator if sweeps fail repeatedly and unmonitored. | Real impact small (1 row/user, 2 int columns); operator alert on `last_billed_at < now - 48h`. |
 | 5 | Restart bridges a tick boundary → at-least-once tick (brief slight overcharge). | Documented; the per-tick amount is at most 1 hour of microcents and washes out in practice. |
-| 6 | Microcent migration touches credit-ledger schema. | In-place ALTER-style migration (step 2) preserves existing rows; deltas in this doc do **not** render uploaded files inaccessible. **However** running `test-deploy.sh` on `test.arkfile.net` would wipe everything regardless — use `test-update.sh`. See §4.3. |
+| 6 | Microcent migration touches credit-ledger schema. | In-place ALTER-style migration (step 2) preserves existing rows; deltas in this doc do **not** render uploaded files inaccessible. **However** running `test-deploy.sh` on `test.arkfile.net` would wipe everything regardless -- use `test-update.sh`. See §4.3. |
 | 7 | No bandwidth/egress billing. | Storage-only is a deliberate scope decision; operator sets a higher customer price if they have download-heavy users. |
 | 8 | Single-process scheduler; multi-instance deployment would double-count. | Single-process matches the rest of the architecture (rqlite/SQLite consistency point); not a current concern. |
 | 9 | Negative balances can grow unboundedly if a user is forgotten. | Visible in `arkfile-admin billing list-overdrawn` and in `sweep-summary.users_currently_negative`; future payments work decides resolution policy. |
@@ -619,7 +619,7 @@ Future contributors adding new endpoints that need to call into `billing/` shoul
 
 Three issues discovered during e2e testing of the meter that payments code must not repeat:
 
-**rqlite float64 scanning.** rqlite returns `BIGINT` columns as JSON `float64`, sometimes in scientific notation (e.g., `"6.5011946e+07"`), when values are large. Scanning directly into `int64` fails at runtime with `"converting driver.Value type float64 ... to a int64: invalid syntax"`. The fix — and the required pattern for all future DB reads of `balance_usd_microcents`, `amount_usd_microcents`, and similar columns — is to scan into `float64` first, then cast:
+**rqlite float64 scanning.** rqlite returns `BIGINT` columns as JSON `float64`, sometimes in scientific notation (e.g., `"6.5011946e+07"`), when values are large. Scanning directly into `int64` fails at runtime with `"converting driver.Value type float64 ... to a int64: invalid syntax"`. The fix -- and the required pattern for all future DB reads of `balance_usd_microcents`, `amount_usd_microcents`, and similar columns -- is to scan into `float64` first, then cast:
 
 ```go
 var f float64
@@ -627,17 +627,17 @@ db.QueryRow(`SELECT balance_usd_microcents FROM user_credits WHERE username = ?`
 balance := int64(f)
 ```
 
-Payment top-ups will involve amounts like 5,000,000,000 microcents ($50.00) — well above the threshold where rqlite emits scientific notation. Any bare `int64` scan of a credits column will silently fail for real payment amounts.
+Payment top-ups will involve amounts like 5,000,000,000 microcents ($50.00) -- well above the threshold where rqlite emits scientific notation. Any bare `int64` scan of a credits column will silently fail for real payment amounts.
 
 **Admin API response envelope.** All admin endpoints consumed by `cmd/arkfile-admin/` via `makeRequest` must return `{"success": true, "data": {...}}`. The CLI `Response` struct reads its content from `json:"data"`; a flat response produces `resp.Data = nil` and `--json` output silently prints `null`. Every new payments admin endpoint (refund, invoice, list-transactions) must use the standard wrapper: `c.JSON(http.StatusOK, map[string]interface{}{"success": true, "data": response})`.
 
-**Auto-gift timing.** The approval-time gift (`cfg.Billing.GiftedCreditsUSD`) fires exactly once, at approval. Users approved before billing was configured receive no auto-gift. Any "welcome credit on first payment" must be applied at payment-processing time — not at approval time — to avoid the same missed-gift window.
+**Auto-gift timing.** The approval-time gift (`cfg.Billing.GiftedCreditsUSD`) fires exactly once, at approval. Users approved before billing was configured receive no auto-gift. Any "welcome credit on first payment" must be applied at payment-processing time -- not at approval time -- to avoid the same missed-gift window.
 
-**Go CLI JSON re-encoding (float64 → scientific notation).** When `makeRequest` decodes a server response into `map[string]interface{}`, Go's JSON decoder converts all numbers to `float64`. When `printJSON` re-encodes that map for `--json` output, `float64(1e8)` is emitted as `1e+08` rather than `100000000`. Shell scripts asserting on CLI `--json` output must use `jq` to parse numeric fields — `grep '"field":[0-9]*'` will silently fail to match. This applies to any future payments CLI testing that reads microcent values from the `--json` output.
+**Go CLI JSON re-encoding (float64 → scientific notation).** When `makeRequest` decodes a server response into `map[string]interface{}`, Go's JSON decoder converts all numbers to `float64`. When `printJSON` re-encodes that map for `--json` output, `float64(1e8)` is emitted as `1e+08` rather than `100000000`. Shell scripts asserting on CLI `--json` output must use `jq` to parse numeric fields -- `grep '"field":[0-9]*'` will silently fail to match. This applies to any future payments CLI testing that reads microcent values from the `--json` output.
 
 **e2e drain-to-negative test design.** Organic tick+sweep at `$10/TiB/month` drains only ~75 microcents per iteration against a typical test file set (~57 MiB billable). A test balance of `$0.001` (100,000 microcents) drains in ~3 sweeps only when `billing set-price 9999.99` is applied immediately before the drain loop (raising the per-tick charge ~1,000×), then restored to `10.00` after the loop exits. Future payment e2e tests that need to verify negative-balance behavior should reuse this pattern: set an extreme price, keep test gift amounts at `$0.001` or less, then restore the default price at the end of the phase.
 
-**Playwright billing test session ordering.** The billing panel test in `scripts/testing/e2e-playwright.ts` is placed immediately before Phase 13 (logout test). Phase 12 always ends with a logout (to verify share revocation after the contact-info lifecycle tests), so the billing test calls `performLogin` unconditionally at its start. Phase 13 then checks `localStorage.getItem('token')` and skips its own `performLogin` if the session from the billing test is still live — net result is zero extra login/logout cycles compared to running the suite without the billing test. The original `isLoggedIn` guard (checking the non-existent key `'arkfile_token'`) has been removed; it caused the test to always skip silently.
+**Playwright billing test session ordering.** The billing panel test in `scripts/testing/e2e-playwright.ts` is placed immediately before Phase 13 (logout test). Phase 12 always ends with a logout (to verify share revocation after the contact-info lifecycle tests), so the billing test calls `performLogin` unconditionally at its start. Phase 13 then checks `localStorage.getItem('token')` and skips its own `performLogin` if the session from the billing test is still live -- net result is zero extra login/logout cycles compared to running the suite without the billing test. The original `isLoggedIn` guard (checking the non-existent key `'arkfile_token'`) has been removed; it caused the test to always skip silently.
 
 ## 13. Forward-Looking: Future `docs/wip/payments.md`
 

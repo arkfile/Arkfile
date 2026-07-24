@@ -49,15 +49,15 @@ Once that flips, every file uploaded before the cutover is permanently undecrypt
 
 ### Tranche structure
 
-- **Tranche 1 — Foundations.** Schema additions, shared params files, canonicalization helpers, AAD helper code, shared test vectors, immutability/clarification comments. Nothing in this tranche is called from any existing code path, so existing beta files continue to encrypt, upload, list, and decrypt exactly as before.
-- **Tranche 2 — New Server Surface.** `GET /api/user/storage`, concurrent-upload cap + quota refinement, server acceptance of `encrypted_folder_path` + `folder_path_nonce` on new writes, export bundle extension. All additive. New fields are AAD-bound from birth; there are zero pre-existing rows with these columns set.
-- **Tranche 3 — New Client Features.** Multi-file upload, batch dedup, folder upload via `webkitdirectory`, tree view render, flat/tree toggle, in-memory cache, pagination, CLI `--dir` / `--tree` / `--folder` / `--preserve-folders`. **Existing files still decrypt** during this tranche because the decrypt path for the pre-existing fields does not yet require AAD.
-- **Tranche 4 — AAD Cutover (breaking).** A single coordinated deploy flips AAD binding on `encrypted_filename`, `encrypted_sha256sum`, and `encrypted_fek` for both encrypt (new writes) and decrypt (all reads). E2E and Playwright tests that depend on post-cutover behavior (tamper test) run here.
+- **Tranche 1 -- Foundations.** Schema additions, shared params files, canonicalization helpers, AAD helper code, shared test vectors, immutability/clarification comments. Nothing in this tranche is called from any existing code path, so existing beta files continue to encrypt, upload, list, and decrypt exactly as before.
+- **Tranche 2 -- New Server Surface.** `GET /api/user/storage`, concurrent-upload cap + quota refinement, server acceptance of `encrypted_folder_path` + `folder_path_nonce` on new writes, export bundle extension. All additive. New fields are AAD-bound from birth; there are zero pre-existing rows with these columns set.
+- **Tranche 3 -- New Client Features.** Multi-file upload, batch dedup, folder upload via `webkitdirectory`, tree view render, flat/tree toggle, in-memory cache, pagination, CLI `--dir` / `--tree` / `--folder` / `--preserve-folders`. **Existing files still decrypt** during this tranche because the decrypt path for the pre-existing fields does not yet require AAD.
+- **Tranche 4 -- AAD Cutover (breaking).** A single coordinated deploy flips AAD binding on `encrypted_filename`, `encrypted_sha256sum`, and `encrypted_fek` for both encrypt (new writes) and decrypt (all reads). E2E and Playwright tests that depend on post-cutover behavior (tamper test) run here.
 
 ### Deploy cadence
 
 - Tranches 1–3 may be deployed in separate `test-update.sh` rounds or together; order is flexible within the tranche, but **no item from tranche 4 may ship before any item from tranches 1–3** without losing the non-breaking guarantee.
-- Between tranche 3 and tranche 4, beta users enjoy a period where: folder uploads work, tree view works, multi-file upload works, quota pre-flight works, and all their pre-cutover files still decrypt normally. New files uploaded during this window already carry their AAD-bound `encrypted_folder_path` (if any) but do **not** yet have AAD on `filename` / `sha256sum` / `fek`. Tranche 4 then backfills AAD on those three fields for all **future** writes and enforces it on all reads — causing pre-cutover files to stop decrypting.
+- Between tranche 3 and tranche 4, beta users enjoy a period where: folder uploads work, tree view works, multi-file upload works, quota pre-flight works, and all their pre-cutover files still decrypt normally. New files uploaded during this window already carry their AAD-bound `encrypted_folder_path` (if any) but do **not** yet have AAD on `filename` / `sha256sum` / `fek`. Tranche 4 then backfills AAD on those three fields for all **future** writes and enforces it on all reads -- causing pre-cutover files to stop decrypting.
 
 ---
 
@@ -69,13 +69,13 @@ The following were confirmed by reading the code before finalizing this revision
 - **`/api/uploads/*` is not rate-limited for authed users.** The upload init/chunk/complete endpoints sit in `totpProtectedGroup` with no per-endpoint throttle in `handlers/rate_limiting.go` or `handlers/route_config.go`. Batch upload of hundreds of files will not trip any limit at this layer.
 - **`FloodGuardMiddleware` only escalates on 401/404 from unauthenticated requests.** Authenticated, approved users doing sequential batch upload cannot trip it.
 - **`handlers/export.go` export struct has a clean extension point.** Adding `encrypted_folder_path` and `folder_path_nonce` (and any other new fields) to the export bundle is additive.
-- **Current AAD coverage in the code is narrow.** Only share envelopes use AAD (`share_id || file_id`, no separator). Per-file ciphertext metadata fields (`encrypted_filename`, `encrypted_sha256sum`, `encrypted_fek`) do **not** currently use AAD. All client-encrypted per-file metadata fields get AAD under this plan, but only at Tranche 4 for the three pre-existing fields; `encrypted_folder_path` is AAD-bound from birth in Tranche 2. The column `encrypted_file_sha256sum` is **not** in AAD scope despite its name — see the note in § 3 and the comment on `models.File.EncryptedFileSha256sum`.
+- **Current AAD coverage in the code is narrow.** Only share envelopes use AAD (`share_id || file_id`, no separator). Per-file ciphertext metadata fields (`encrypted_filename`, `encrypted_sha256sum`, `encrypted_fek`) do **not** currently use AAD. All client-encrypted per-file metadata fields get AAD under this plan, but only at Tranche 4 for the three pre-existing fields; `encrypted_folder_path` is AAD-bound from birth in Tranche 2. The column `encrypted_file_sha256sum` is **not** in AAD scope despite its name -- see the note in § 3 and the comment on `models.File.EncryptedFileSha256sum`.
 - **`upload_sessions` has three hand-written SQL call sites in `handlers/uploads.go` that must be updated for new columns.** The `INSERT INTO upload_sessions (...)` in `CreateUploadSession`, the `SELECT ... FROM upload_sessions WHERE id = ?` in `GetUploadStatus`, and the multi-line `SELECT ... FROM upload_sessions WHERE id = ?` used in the `CompleteUpload` preamble. The `UploadChunk` path does not need the new columns.
 - **`CreateUploadSession` does not currently limit concurrent in-progress sessions per user.** Multiple sessions can be created in parallel. A server-side cap is added in Work Item T2-b.
 - **`padded_size` is computed deterministically at session-init time** from `request.TotalSize` via `utils.NewPaddingCalculator().CalculatePaddedSize(...)`, before any chunk arrives. It is persisted on `upload_sessions` and carried to `file_metadata` at `CompleteUpload` time. This means quota accounting can include in-flight sessions exactly, without estimation.
-- **`CreateUploadSession` already returns `file_id` in its JSON response.** The handler generates `fileID := models.GenerateFileID()` and echoes it back alongside `session_id` (`{"session_id": ..., "file_id": fileID, "chunk_size": ...}`). All AAD-bound encryption in Tranches 2–3 (folder-path encryption before `CompleteUpload`) can read `file_id` from this response without any change to response shape. This also confirms the T4-a requirement that clients must not synthesize `file_id` locally — the server-assigned value is already authoritative on the wire.
+- **`CreateUploadSession` already returns `file_id` in its JSON response.** The handler generates `fileID := models.GenerateFileID()` and echoes it back alongside `session_id` (`{"session_id": ..., "file_id": fileID, "chunk_size": ...}`). All AAD-bound encryption in Tranches 2–3 (folder-path encryption before `CompleteUpload`) can read `file_id` from this response without any change to response shape. This also confirms the T4-a requirement that clients must not synthesize `file_id` locally -- the server-assigned value is already authoritative on the wire.
 - **A cancel-upload endpoint already exists** (`DELETE /api/uploads/:fileId` → `CancelUpload` in `handlers/route_config.go`). Users or the client can cleanly abandon any in-progress session, including stale pre-cutover sessions at the Tranche 4 boundary (see T4-e).
-- **Share flow is self-contained and does not depend on the owner's `encrypted_filename` / `encrypted_sha256sum` / `encrypted_fek` columns.** `file_share_keys` has its own `encrypted_fek` column (wrapped by the Share Key derived from the share password + random 32-byte salt — **not** by the owner's account key), and filename / sha256sum live inside the client-side-encrypted `ShareEnvelope` decrypted by the recipient with the share password. Verified from `handlers/file_shares.go`, which comments explicitly: "*plaintext metadata like filename/sha256 is inside the encrypted ShareEnvelope, decrypted client-side with the share password — no need to send server-side encrypted metadata that share recipients cannot decrypt*." This has implications for T4-b: existing shares continue to work through the cutover, because the recipient-facing share payload never reads the owner's AAD-rebinding columns.
+- **Share flow is self-contained and does not depend on the owner's `encrypted_filename` / `encrypted_sha256sum` / `encrypted_fek` columns.** `file_share_keys` has its own `encrypted_fek` column (wrapped by the Share Key derived from the share password + random 32-byte salt -- **not** by the owner's account key), and filename / sha256sum live inside the client-side-encrypted `ShareEnvelope` decrypted by the recipient with the share password. Verified from `handlers/file_shares.go`, which comments explicitly: "*plaintext metadata like filename/sha256 is inside the encrypted ShareEnvelope, decrypted client-side with the share password -- no need to send server-side encrypted metadata that share recipients cannot decrypt*." This has implications for T4-b: existing shares continue to work through the cutover, because the recipient-facing share payload never reads the owner's AAD-rebinding columns.
 - **`test-update.sh` preserves data, keys, and config.** Account records, OPAQUE registration, approval status, TOTP secrets, refresh tokens, and contact info are not touched. Tranche 4 is the only step that causes pre-existing files on `test.arkfile.net` to become undecryptable.
 
 ---
@@ -83,7 +83,7 @@ The following were confirmed by reading the code before finalizing this revision
 ## Current State
 
 ### Upload Flow
-- The HTML file input is `<input type="file" id="fileInput">` — single file only, no `multiple` attribute, no `webkitdirectory`.
+- The HTML file input is `<input type="file" id="fileInput">` -- single file only, no `multiple` attribute, no `webkitdirectory`.
 - The frontend `handleFileUpload()` reads `fileInput.files[0]` and calls `uploadFile(file, options)` for exactly one file.
 - The backend exposes a per-file pipeline: `POST /api/uploads/init` → `POST /api/uploads/:sessionId/chunks/:chunkNumber` x N → `POST /api/uploads/:sessionId/complete`. Each file is an independent upload session.
 - `arkfile-client` takes `--file FILE` (one path) on the upload command.
@@ -159,11 +159,11 @@ AAD = file_id_bytes || 0x00 || field_name_bytes || 0x00 || username_bytes
 ```
 
 - `file_id_bytes`: UTF-8 bytes of the `file_id` string.
-- `field_name_bytes`: UTF-8 bytes of a short ASCII field tag — one of: `"folder_path"`, `"filename"`, `"sha256sum"`, `"fek"`.
+- `field_name_bytes`: UTF-8 bytes of a short ASCII field tag -- one of: `"folder_path"`, `"filename"`, `"sha256sum"`, `"fek"`.
 - `username_bytes`: UTF-8 bytes of the owner username (immutable, per Verification Findings).
 - `0x00`: NUL separator between fields (NUL is forbidden inside all three values, so the encoding is unambiguous).
 
-**Field tags are defined in `crypto/aad-params.json`** and consumed by both TS and Go via the same shared-params loading pattern as `chunking-params.json`, `argon2id-params.json`, `password-requirements.json`. This prevents string drift between the two clients — if either side ever diverges by one character, every decryption fails and the shared test vectors catch it immediately.
+**Field tags are defined in `crypto/aad-params.json`** and consumed by both TS and Go via the same shared-params loading pattern as `chunking-params.json`, `argon2id-params.json`, `password-requirements.json`. This prevents string drift between the two clients -- if either side ever diverges by one character, every decryption fails and the shared test vectors catch it immediately.
 
 The four tags map to per-file ciphertext metadata fields as follows:
 
@@ -179,9 +179,9 @@ The four tags map to per-file ciphertext metadata fields as follows:
 **Per-field protection rationale.** Each of the four in-scope fields gains a distinct defense from AAD, not just uniformity:
 
 - `folder_path`: cross-row swap would mis-render the tree and, more importantly, cause `download --preserve-folders` in the CLI to write decrypted bytes into an attacker-chosen filesystem location under `output_dir`. AAD plus the explicit re-validation + containment check in Work Item T3-g is belt-and-suspenders.
-- `filename`: cross-row swap would cause decrypted bytes of file A to be saved under file B's user-visible name — a confusion-of-identity attack on download. Also underpins the dedup key `(filename, canonical_folder_path)` in Work Item T3-b.
+- `filename`: cross-row swap would cause decrypted bytes of file A to be saved under file B's user-visible name -- a confusion-of-identity attack on download. Also underpins the dedup key `(filename, canonical_folder_path)` in Work Item T3-b.
 - `sha256sum` (plaintext-file hash): the underlying value is privacy-sensitive (file-fingerprinting risk). Cross-row swap breaks the client-side integrity check that confirms decrypted plaintext matches what was uploaded. AAD binds the integrity record to `(file_id, field, username)`.
-- `fek`: the wrapped FEK is the root of the per-file encryption chain. Cross-file FEK substitution without AAD is only caught downstream at per-chunk AEAD tag failure; AAD on the FEK surfaces the fault at the wrapper layer and prevents silent reliance on chunk-level detection. Note that the FEK is wrapped by either the Account Key or the per-file Custom Key depending on `password_type` (envelope `key_type = 0x01` or `0x02`); AAD binding applies uniformly in both cases — the KEK choice is orthogonal to the AAD-verified context (`file_id`, field, username). The other three fields above (`folder_path`, `filename`, `sha256sum`) are always wrapped with the Account Key regardless of the file's `password_type`, per AGENTS.md "File metadata encryption and decryption always uses the Account Key."
+- `fek`: the wrapped FEK is the root of the per-file encryption chain. Cross-file FEK substitution without AAD is only caught downstream at per-chunk AEAD tag failure; AAD on the FEK surfaces the fault at the wrapper layer and prevents silent reliance on chunk-level detection. Note that the FEK is wrapped by either the Account Key or the per-file Custom Key depending on `password_type` (envelope `key_type = 0x01` or `0x02`); AAD binding applies uniformly in both cases -- the KEK choice is orthogonal to the AAD-verified context (`file_id`, field, username). The other three fields above (`folder_path`, `filename`, `sha256sum`) are always wrapped with the Account Key regardless of the file's `password_type`, per AGENTS.md "File metadata encryption and decryption always uses the Account Key."
 
 **Helper (shared between TS and Go):**
 
@@ -212,18 +212,18 @@ plaintext = AES-GCM-Decrypt(key, nonce, ct, tag, aad)   // fails if AAD doesn't 
 ```
 
 What this prevents:
-- **Cross-file swap.** Attacker or bug copies file X's metadata blob onto file Y — without AAD this decrypts cleanly with the wrong file's key bindings and silently displays the wrong value.
+- **Cross-file swap.** Attacker or bug copies file X's metadata blob onto file Y -- without AAD this decrypts cleanly with the wrong file's key bindings and silently displays the wrong value.
 - **Cross-field swap.** Attacker swaps `encrypted_filename` onto the `encrypted_folder_path` slot (or vice versa). With a field tag in AAD, that decryption fails.
 - **Cross-user confusion.** Defense in depth against any code path that accidentally mixes user rows.
 
 Does not prevent (accepted):
 - Rollback to a previous ciphertext for the **same** (file_id, field, username) tuple. Would require a monotonic version counter in AAD; overkill.
 
-**Scope: all four client-encrypted per-file metadata fields above get AAD in this round of work.** `encrypted_folder_path` is AAD-bound from the moment it exists (Tranche 2). `encrypted_filename`, `encrypted_sha256sum`, and `encrypted_fek` flip to AAD-bound at the Tranche 4 cutover; until that cutover their encrypt/decrypt paths remain exactly as they are today, so pre-cutover beta files continue to work. After the cutover, pre-cutover rows fail AAD verification and become undecryptable; accounts and auth are preserved (see Verification Findings). Chunk ciphertext is intentionally left without AAD — unique per-file random FEKs prevent cross-file chunk substitution at the AES-GCM level, and the server's order-dependent streaming SHA-256 (stored in plaintext as `encrypted_file_sha256sum`) prevents within-file chunk reordering, so chunk-level AAD would add nothing.
+**Scope: all four client-encrypted per-file metadata fields above get AAD in this round of work.** `encrypted_folder_path` is AAD-bound from the moment it exists (Tranche 2). `encrypted_filename`, `encrypted_sha256sum`, and `encrypted_fek` flip to AAD-bound at the Tranche 4 cutover; until that cutover their encrypt/decrypt paths remain exactly as they are today, so pre-cutover beta files continue to work. After the cutover, pre-cutover rows fail AAD verification and become undecryptable; accounts and auth are preserved (see Verification Findings). Chunk ciphertext is intentionally left without AAD -- unique per-file random FEKs prevent cross-file chunk substitution at the AES-GCM level, and the server's order-dependent streaming SHA-256 (stored in plaintext as `encrypted_file_sha256sum`) prevents within-file chunk reordering, so chunk-level AAD would add nothing.
 
-**All four fields use the same construction:** nonce = random 12 bytes per blob, AAD = `BuildFileMetadataAAD(field_tag, file_id, username)`, ciphertext-and-tag = `AES-GCM-Encrypt(key, nonce, plaintext, aad)`. The wrapping key depends on the field: `folder_path`, `filename`, and `sha256sum` always use the Account Key (per AGENTS.md "File metadata encryption and decryption always uses the Account Key"); `fek` uses the Account Key or the per-file Custom Key depending on the file's `password_type`. Wire format per field: `nonce` + `ct||tag`, each base64-encoded, sent and stored as separate columns (e.g. `filename_nonce` + `encrypted_filename`). For `encrypted_fek` specifically, the base64'd `ct||tag` payload sits inside the existing envelope: `[0x01][key_type][nonce][ct][tag]` — the envelope header bytes are outside the AAD-protected region; only the wrapped FEK ciphertext carries the AAD binding. The `encrypt`/`decrypt` pseudocode above uses `"folder_path"` as a concrete example; substitute any of the four field tags and the corresponding plaintext for the other fields.
+**All four fields use the same construction:** nonce = random 12 bytes per blob, AAD = `BuildFileMetadataAAD(field_tag, file_id, username)`, ciphertext-and-tag = `AES-GCM-Encrypt(key, nonce, plaintext, aad)`. The wrapping key depends on the field: `folder_path`, `filename`, and `sha256sum` always use the Account Key (per AGENTS.md "File metadata encryption and decryption always uses the Account Key"); `fek` uses the Account Key or the per-file Custom Key depending on the file's `password_type`. Wire format per field: `nonce` + `ct||tag`, each base64-encoded, sent and stored as separate columns (e.g. `filename_nonce` + `encrypted_filename`). For `encrypted_fek` specifically, the base64'd `ct||tag` payload sits inside the existing envelope: `[0x01][key_type][nonce][ct][tag]` -- the envelope header bytes are outside the AAD-protected region; only the wrapped FEK ciphertext carries the AAD binding. The `encrypt`/`decrypt` pseudocode above uses `"folder_path"` as a concrete example; substitute any of the four field tags and the corresponding plaintext for the other fields.
 
-The existing share-envelope AAD (`share_id || file_id`, no separator) is **not** touched — changing it would break all existing shares. New helpers are NUL-separated; old share AAD is left alone.
+The existing share-envelope AAD (`share_id || file_id`, no separator) is **not** touched -- changing it would break all existing shares. New helpers are NUL-separated; old share AAD is left alone.
 
 ### 4. Multi-File Upload: Sequential, One File at a Time
 - Files in a batch upload one at a time. The existing single-file pipeline (init → chunks → complete) is used per file.
@@ -270,12 +270,12 @@ Response:
 
 Rationale:
 - Current clients infer storage info as a side-effect of `POST /api/login`, `GET /api/files`, and `POST /api/uploads/:session/complete`. For batch upload we want a cheap, purpose-built "how much room do I have?" primitive that doesn't require fetching the full file list.
-- Both web and CLI use this for batch pre-flight: before any hashing/encryption/upload begins, sum `calculateTotalEncryptedSize(file.size) + padding` over the selected files and compare against `available_bytes`. If the batch doesn't fit, show the user "This batch needs X MB; you have Y MB available — remove N files" before any work starts.
+- Both web and CLI use this for batch pre-flight: before any hashing/encryption/upload begins, sum `calculateTotalEncryptedSize(file.size) + padding` over the selected files and compare against `available_bytes`. If the batch doesn't fit, show the user "This batch needs X MB; you have Y MB available -- remove N files" before any work starts.
 - Slots into `totpProtectedGroup` in `handlers/route_config.go` alongside `/api/credits`.
 
 ### 11. Tree View Scale Targets
 - **Eager decrypt** of all filename + SHA256 + folder-path blobs up to **1,000 files**.
-  - Expected: ~3 AES-GCM-Decrypt calls per file on small blobs; on mid-range mobile (~0.5 ms/call) that is ~1.5 s worst case for 1,000 files. No progress indicator needed for eager mode — it is sub-second for typical libraries.
+  - Expected: ~3 AES-GCM-Decrypt calls per file on small blobs; on mid-range mobile (~0.5 ms/call) that is ~1.5 s worst case for 1,000 files. No progress indicator needed for eager mode -- it is sub-second for typical libraries.
 - **Above 1,000 files**: always paginate via `GET /api/files?limit=&offset=` (the API already supports it). Flat view decrypts filenames only for the current page. Tree view decrypts folder paths lazily as the user expands each node.
 - **Metadata cache: in-memory `Map<fileID, DecryptedMeta>` scoped to the SPA lifetime.**
   - Rationale: decrypted plaintext in `sessionStorage` or `localStorage` is readable by any script running on the page, including any future XSS. An in-memory `Map` is wiped on tab close or full page reload, which matches the expected security posture for decrypted metadata. The cost is re-decrypting after a refresh, which is acceptable given the sub-second times for typical libraries.
@@ -301,7 +301,7 @@ Work items are grouped into four tranches. Within a tranche, items are listed in
 
 ---
 
-### Tranche 1 — Foundations (non-breaking; no user-visible change)
+### Tranche 1 -- Foundations (non-breaking; no user-visible change)
 
 Nothing in this tranche is called from any existing code path. Beta users see no change in behavior.
 
@@ -315,39 +315,39 @@ Nothing in this tranche is called from any existing code path. Beta users see no
 **Prereq:** none.
 - `database/unified_schema.sql`: add `encrypted_folder_path TEXT` and `folder_path_nonce TEXT` to both `file_metadata` and `upload_sessions`. Both columns nullable; no default value. Existing rows get NULL.
 - Run `scripts/dev-reset.sh` to apply locally.
-- Deploy to `test.arkfile.net` via `scripts/test-update.sh`. Accounts, OPAQUE registration, approval status, TOTP secrets, refresh tokens, and contact info are preserved. **Existing files remain decryptable** — this tranche does not touch any existing encrypt/decrypt path.
+- Deploy to `test.arkfile.net` via `scripts/test-update.sh`. Accounts, OPAQUE registration, approval status, TOTP secrets, refresh tokens, and contact info are preserved. **Existing files remain decryptable** -- this tranche does not touch any existing encrypt/decrypt path.
 
 #### T1-c. Shared params files
 **Prereq:** none.
-- `crypto/folder-path-params.json` — defines max depth, max segment length, max total length, forbidden-char ranges, Unicode normalization form.
-- `crypto/aad-params.json` — defines per-field AAD tag strings (`folder_path`, `filename`, `sha256sum`, `fek`) and the AAD separator byte (`0x00`).
+- `crypto/folder-path-params.json` -- defines max depth, max segment length, max total length, forbidden-char ranges, Unicode normalization form.
+- `crypto/aad-params.json` -- defines per-field AAD tag strings (`folder_path`, `filename`, `sha256sum`, `fek`) and the AAD separator byte (`0x00`).
 - Both follow the existing loading pattern of `chunking-params.json`, `argon2id-params.json`, `password-requirements.json`.
 - Nothing consumes these files yet; they are read by T1-d and T1-e.
 
 #### T1-d. Canonicalization helpers (TS + Go)
 **Prereq:** T1-c.
-- TS: `client/static/js/src/files/folder-path.ts` — `canonicalizeFolderPath`, `validateFolderPath`.
-- Go: `cmd/arkfile-client/folderpath.go` — `CanonicalizeFolderPath`, `ValidateFolderPath`.
+- TS: `client/static/js/src/files/folder-path.ts` -- `canonicalizeFolderPath`, `validateFolderPath`.
+- Go: `cmd/arkfile-client/folderpath.go` -- `CanonicalizeFolderPath`, `ValidateFolderPath`.
 - Both load rules from `crypto/folder-path-params.json`; identical error codes/strings.
 - Not wired into any existing code path yet (the multi-file and folder-upload UIs that call these helpers land in Tranche 3).
 
-#### T1-e. AAD helper (TS + Go) — **helper only, no existing call sites changed**
+#### T1-e. AAD helper (TS + Go) -- **helper only, no existing call sites changed**
 **Prereq:** T1-c.
 - Generic helper `BuildFileMetadataAAD(field, file_id, username)`.
 - TS file location: `client/static/js/src/crypto/aad.ts` (new file).
 - Go file location: `crypto/aad.go` (new file; pure helper, shareable with server-side verification tooling in future).
 - Field tags (`folder_path`, `filename`, `sha256sum`, `fek`) and the AAD separator byte are read from `crypto/aad-params.json`. Never hard-coded in either client.
-- **Critical non-breaking constraint:** this item does **not** modify any of the existing encrypt or decrypt code paths for `encrypted_filename`, `encrypted_sha256sum`, or `encrypted_fek`. The helper is dead code at rest after this item — it is first consumed in Tranche 2 (for the brand-new `encrypted_folder_path` field) and then for the three pre-existing fields only at the Tranche 4 cutover.
+- **Critical non-breaking constraint:** this item does **not** modify any of the existing encrypt or decrypt code paths for `encrypted_filename`, `encrypted_sha256sum`, or `encrypted_fek`. The helper is dead code at rest after this item -- it is first consumed in Tranche 2 (for the brand-new `encrypted_folder_path` field) and then for the three pre-existing fields only at the Tranche 4 cutover.
 
 #### T1-f. Shared test-vectors file + unit tests
 **Prereq:** T1-d, T1-e.
-- `scripts/testing/folder-path-test-vectors.json` — JSON array of `{description, input, canonical_output OR error_code, aad_field?, aad_file_id?, aad_username?, expected_aad_hex?}`.
+- `scripts/testing/folder-path-test-vectors.json` -- JSON array of `{description, input, canonical_output OR error_code, aad_field?, aad_file_id?, aad_username?, expected_aad_hex?}`.
 - TS unit tests (Jest or equivalent) and Go unit tests (`_test.go`) both load this file and assert byte-identical canonicalization results and byte-identical AAD outputs. This is the mechanism that keeps the two clients from drifting.
 - Tests exercise the helpers in isolation; no production code path depends on the outcome yet.
 
 ---
 
-### Tranche 2 — New Server Surface (non-breaking; additive endpoints and fields)
+### Tranche 2 -- New Server Surface (non-breaking; additive endpoints and fields)
 
 All items in this tranche are additive. Existing clients neither call the new endpoint nor send the new fields, so their behavior is unchanged. New fields on new writes are AAD-bound from birth (applies only to `encrypted_folder_path`); the pre-existing three fields still encrypt/decrypt without AAD until Tranche 4.
 
@@ -366,20 +366,20 @@ All items in this tranche are additive. Existing clients neither call the new en
 **Prereq:** T1-b (the schema migration touches the same table shape; land after it for a clean diff).
 - In `handlers/uploads.go` `CreateUploadSession`: before inserting the new session row, run `SELECT COUNT(*) FROM upload_sessions WHERE owner_username = ? AND status = 'in_progress'`. If count >= 2, return HTTP 429 (or 409 Conflict) with a clear message ("Maximum 2 concurrent uploads per user. Cancel an existing upload or wait for it to complete.").
 - Lazy stale-session cleanup: if any matching session is past `expires_at`, mark it `abandoned` (or `expired`) opportunistically in the same SQL path, then re-check the count. Prevents dead sessions from permanently blocking new uploads when a user closes a tab mid-upload.
-- Update the storage-availability check in `CreateUploadSession` (currently `user.CheckStorageAvailable(request.TotalSize)`) so "used" includes in-progress session `padded_size` — consistent with T2-a.
+- Update the storage-availability check in `CreateUploadSession` (currently `user.CheckStorageAvailable(request.TotalSize)`) so "used" includes in-progress session `padded_size` -- consistent with T2-a.
 - **Non-breaking rationale.** Web uploads one file at a time. CLI runs one `upload` command at a time. In normal beta use the cap of 2 is never hit. The 2-session headroom accommodates power users with the web app open in two tabs, or a CLI running alongside a browser upload. No existing workflow trips the cap.
 
 #### T2-c. Server accepts / persists / returns `encrypted_folder_path` + `folder_path_nonce`
 **Prereq:** T1-b.
 - `handlers/uploads.go`: update the three hand-written SQL statements that touch `upload_sessions`:
-  1. `INSERT INTO upload_sessions (...) VALUES (...)` in `CreateUploadSession` — add `encrypted_folder_path`, `folder_path_nonce` to column list and bindings.
-  2. `SELECT ... FROM upload_sessions WHERE id = ?` in `GetUploadStatus` — add the two fields to the SELECT list and the receiving variables.
-  3. Multi-line `SELECT ... FROM upload_sessions WHERE id = ?` in the `CompleteUpload` preamble — add the two fields to the SELECT list and carry them through to the `file_metadata` INSERT.
+  1. `INSERT INTO upload_sessions (...) VALUES (...)` in `CreateUploadSession` -- add `encrypted_folder_path`, `folder_path_nonce` to column list and bindings.
+  2. `SELECT ... FROM upload_sessions WHERE id = ?` in `GetUploadStatus` -- add the two fields to the SELECT list and the receiving variables.
+  3. Multi-line `SELECT ... FROM upload_sessions WHERE id = ?` in the `CompleteUpload` preamble -- add the two fields to the SELECT list and carry them through to the `file_metadata` INSERT.
 - `UploadChunk` is not touched; it only validates ownership and chunk number.
 - `CreateUploadSession` accepts optional `encrypted_folder_path` and `folder_path_nonce` in the JSON request body. Absent = NULL = root level.
 - `handlers/files.go`: `ListFiles` and `GetFileMeta` include the two fields in responses (NULL allowed).
 - `models/file.go`: add the fields to `FileMetadata`.
-- **Server treats these as opaque blobs** and does **not** canonicalize them — the server cannot see the plaintext. Canonicalization is entirely a client-side enforcement.
+- **Server treats these as opaque blobs** and does **not** canonicalize them -- the server cannot see the plaintext. Canonicalization is entirely a client-side enforcement.
 - **Non-breaking rationale.** Existing clients do not send these fields; they remain NULL for all pre-Tranche-3 uploads. Existing clients that read the list response simply ignore unknown fields. `encrypted_folder_path` is AAD-bound from the first row that has it (there are no pre-existing rows).
 
 #### T2-d. Export bundle carries folder-path fields
@@ -393,7 +393,7 @@ All items in this tranche are additive. Existing clients neither call the new en
 
 ---
 
-### Tranche 3 — New Client Features (non-breaking; existing files still decrypt)
+### Tranche 3 -- New Client Features (non-breaking; existing files still decrypt)
 
 All client features below either operate exclusively on the new `encrypted_folder_path` field (AAD-bound from birth), or read existing `encrypted_filename` / `encrypted_sha256sum` without requiring AAD on them (so pre-Tranche-4 rows still decrypt). The Tranche 4 cutover is what eventually flips AAD enforcement on those existing fields.
 
@@ -406,7 +406,7 @@ All client features below either operate exclusively on the new `encrypted_folde
   - Resolve account key once (cached after first derivation).
   - Upload sequentially via existing `uploadFile()`.
 - Batch progress UI:
-  - Overall: "Uploading file 3 of 17 — 45% of batch."
+  - Overall: "Uploading file 3 of 17 -- 45% of batch."
   - Per-file: current **base filename only** (never the folder path) + chunk progress. Reuse the existing progress overlay component.
 - Partial-failure handling:
   - On file-level failure (network, validation, quota), log it, continue with remaining files.
@@ -417,10 +417,10 @@ All client features below either operate exclusively on the new `encrypted_folde
 
 #### T3-b. Batch dedup (pre-flight and in-stream)
 **Prereq:** T1-d, T3-a.
-- **Pre-flight dedup by `(base filename, canonical_folder_path)`.** Before any upload starts, group selected files by that key. If any group has more than one entry, prompt the user once per cluster: "N files in this batch have the same name in the same folder. Upload one copy only? [Yes, skip duplicates] / [No, upload all]". Default action: skip duplicates. Free check — no hashing.
+- **Pre-flight dedup by `(base filename, canonical_folder_path)`.** Before any upload starts, group selected files by that key. If any group has more than one entry, prompt the user once per cluster: "N files in this batch have the same name in the same folder. Upload one copy only? [Yes, skip duplicates] / [No, upload all]". Default action: skip duplicates. Free check -- no hashing.
 - **In-stream content dedup via the existing `digest-cache.ts`.** Refine the cache key from `sha256` alone to `(sha256, canonical_folder_path)` so that the same content uploaded into two different virtual folders is allowed, but the same content re-uploaded into the same folder is skipped and reported in the batch summary.
 - **No batch-wide pre-upload hash pass.** Hashing cost scales with total bytes, not file count. Reuse the existing encrypt-time hash.
-- **Tree view does no additional dedup.** If the DB somehow ends up with two rows sharing `(file_id, canonical_folder_path, filename, sha256)`, both are rendered — we never silently hide data.
+- **Tree view does no additional dedup.** If the DB somehow ends up with two rows sharing `(file_id, canonical_folder_path, filename, sha256)`, both are rendered -- we never silently hide data.
 - **Non-breaking rationale.** This refines a client-side, ephemeral cache key. For single-file uploads into root (the pre-Tranche-3 status quo), `canonical_folder_path = ""`, so the effective key is identical to today's `sha256` and no user-visible behavior changes for existing workflows.
 
 #### T3-c. Web: "Add to virtual folder?" text input on single-file upload
@@ -443,9 +443,9 @@ All client features below either operate exclusively on the new `encrypted_folde
 #### T3-e. Web (L1): tree view render + flat/tree toggle + in-memory cache + pagination (no AAD on existing fields yet)
 **Prereq:** T2-c, T1-d, T1-e.
 - In the files listing fetch, decrypt:
-  - `encrypted_filename` — **without AAD** (Tranche 4 will add AAD here).
-  - `encrypted_sha256sum` — **without AAD** (Tranche 4 will add AAD here).
-  - `encrypted_folder_path` — **with AAD** (tag = `folder_path`), because this field is AAD-bound from birth.
+  - `encrypted_filename` -- **without AAD** (Tranche 4 will add AAD here).
+  - `encrypted_sha256sum` -- **without AAD** (Tranche 4 will add AAD here).
+  - `encrypted_folder_path` -- **with AAD** (tag = `folder_path`), because this field is AAD-bound from birth.
 - Build a client-side tree:
   - Parse canonical paths into nested objects.
   - Group files by folder. Files with no folder path go to root.
@@ -483,10 +483,10 @@ All client features below either operate exclusively on the new `encrypted_folde
   ```
 - `list-files --folder PATH`: filter listing to a specific subtree.
 - `download --preserve-folders`:
-  - Without the flag (default): behave as today — output the file at `--output PATH` (filename appended if PATH is a directory).
+  - Without the flag (default): behave as today -- output the file at `--output PATH` (filename appended if PATH is a directory).
   - With the flag: construct the target path `{output_dir}/{decrypted_folder_path}/{filename}`, creating directories as needed. Print a confirmation prompt before writing:
     ```
-    Will save to: /home/user/downloads/photos/2025/vacation/img001.jpg — proceed? (y/N)
+    Will save to: /home/user/downloads/photos/2025/vacation/img001.jpg -- proceed? (y/N)
     ```
   - `-y` / `--yes` suppresses the prompt for scripting use.
   - **Belt-and-suspenders validation.** Re-run `ValidateFolderPath` on the decrypted plaintext folder path before constructing the filesystem path, and verify the final joined absolute path is still under `output_dir` (via `filepath.Rel` / absolute-path containment). AAD binding on `encrypted_folder_path` already cryptographically prevents an attacker from inserting a crafted path via DB tampering (the attacker does not have the user's account key), so this is defense-in-depth against a future canonicalizer regression, not mitigation for an active attacker. Fail the download with a clear error if either check fails.
@@ -496,14 +496,14 @@ All client features below either operate exclusively on the new `encrypted_folde
 **Prereq:** all prior items in T1/T2/T3.
 - **Testing flow (must be respected):** `dev-reset.sh` first, then `e2e-test.sh`, then `e2e-playwright.sh`.
 - `scripts/testing/e2e-test.sh`: multi-file upload via `curl` and `arkfile-client --dir`, folder path round-trip (AAD on `folder_path`), pre-flight quota rejection, partial-failure handling, export/restore preserves folder structure, canonicalization edge cases, server-side max-2-concurrent-session enforcement. Target file count: up to ~50 real files with a nested folder structure (~5 folders, mixed sizes including one medium file to exercise chunking within a batch).
-- **Negative tests for `download --preserve-folders` containment:** construct two scenarios and confirm the CLI refuses with a clear error and writes nothing to disk: (1) tamper `encrypted_folder_path` in rqlite so the decrypted plaintext fails `ValidateFolderPath` on re-validation (e.g., contains `..` or a NUL byte — note this should be caught by AAD first in a non-tampered system, so the test specifically exercises the belt-and-suspenders path); (2) construct a decrypted folder path whose final joined absolute path would escape `output_dir` and confirm the containment check (`filepath.Rel` / absolute-path prefix) rejects it. These two cases directly cover the defense-in-depth validations called out in T3-g.
-- `scripts/testing/e2e-playwright.ts`: browser-level folder upload, tree view, flat/tree toggle, `localStorage` persistence, in-memory cache behavior after tab reload. Stays ≤ ~20 files total — leverages what `e2e-test.sh` has already set up. No attempt to reproduce scale behavior in the browser.
+- **Negative tests for `download --preserve-folders` containment:** construct two scenarios and confirm the CLI refuses with a clear error and writes nothing to disk: (1) tamper `encrypted_folder_path` in rqlite so the decrypted plaintext fails `ValidateFolderPath` on re-validation (e.g., contains `..` or a NUL byte -- note this should be caught by AAD first in a non-tampered system, so the test specifically exercises the belt-and-suspenders path); (2) construct a decrypted folder path whose final joined absolute path would escape `output_dir` and confirm the containment check (`filepath.Rel` / absolute-path prefix) rejects it. These two cases directly cover the defense-in-depth validations called out in T3-g.
+- `scripts/testing/e2e-playwright.ts`: browser-level folder upload, tree view, flat/tree toggle, `localStorage` persistence, in-memory cache behavior after tab reload. Stays ≤ ~20 files total -- leverages what `e2e-test.sh` has already set up. No attempt to reproduce scale behavior in the browser.
 - **Scale behavior above 1,000 files is covered only by unit tests** (TS Jest + Go `_test.go`) that feed synthetic mocked `/api/files` responses at counts of 1, 10, 999, 1000, 1001, 5000. No e2e or Playwright test uploads thousands of real files.
 - **Tamper tests deferred to T4-d.** An AAD-binding tamper test (swap a blob between two files in the DB and confirm client-side decryption fails) only meaningfully tests the Tranche 4 cutover. It does not run here.
 
 ---
 
-### Tranche 4 — AAD Cutover (BREAKING; coordinated deploy)
+### Tranche 4 -- AAD Cutover (BREAKING; coordinated deploy)
 
 **This is the only tranche that breaks pre-existing files on `test.arkfile.net`.** Accounts, OPAQUE, TOTP, refresh tokens, and contact info are preserved (see Verification Findings), but every file uploaded before this tranche lands becomes permanently undecryptable from the client side, because the decrypt paths for `encrypted_filename`, `encrypted_sha256sum`, and `encrypted_fek` now require AAD that those rows were not written with.
 
@@ -519,18 +519,18 @@ Tranche 4 is intentionally small and should be landed as a single coordinated de
 - Wire format unchanged; only the AAD input to AES-GCM changes.
 
 #### T4-b. Flip AAD on existing decrypt paths (`filename`, `sha256sum`, `fek`)
-**Prereq:** T4-a; must ship in the same deploy. Since these two items ship together, the database only ever contains either pre-cutover rows (no AAD; readers without AAD succeed) or post-cutover rows (AAD; readers with AAD succeed). There is never a live mix — the two items are one atomic change.
+**Prereq:** T4-a; must ship in the same deploy. Since these two items ship together, the database only ever contains either pre-cutover rows (no AAD; readers without AAD succeed) or post-cutover rows (AAD; readers with AAD succeed). There is never a live mix -- the two items are one atomic change.
 - TS: `client/static/js/src/files/list.ts` (and any sibling file listing / detail views), `client/static/js/src/files/download.ts`:
   - `encrypted_filename` decrypt: pass `aad = BuildFileMetadataAAD("filename", fileID, username)`.
   - `encrypted_sha256sum` decrypt: pass `aad = BuildFileMetadataAAD("sha256sum", fileID, username)`.
   - `encrypted_fek` decrypt (wrapped-FEK unwrap, owner-side only): pass `aad = BuildFileMetadataAAD("fek", fileID, username)`.
-- Go CLI: `cmd/arkfile-client/...` download + list-files + offline_decrypt paths — same three call sites.
+- Go CLI: `cmd/arkfile-client/...` download + list-files + offline_decrypt paths -- same three call sites.
 - Failure mode: pre-cutover rows fail AES-GCM tag verification and surface as a clear error ("This file was encrypted before an incompatible security upgrade and cannot be decrypted. It remains listed but is no longer readable.") rather than a generic "decryption failed." The tree/flat view continues to render the row (we never silently hide data); individual file actions error out with the above message.
 - **Share flow is untouched and existing shares continue to work.** Per the Verification Findings, the share flow is self-contained: `file_share_keys` has its own `encrypted_fek` column (wrapped by a Share Key derived from the share password + random 32-byte salt, NOT by the owner's account key), and all filename / sha256sum metadata lives inside the client-side-encrypted `ShareEnvelope` that the recipient decrypts with the share password. Neither the recipient-visible share `encrypted_fek` nor the envelope contents depend on the owner's `file_metadata.encrypted_filename` / `encrypted_sha256sum` / `encrypted_fek` columns that this cutover rebinds. Existing shares created before the cutover remain fully functional.
-  - The existing share-envelope AAD (`share_id || file_id`, no separator) is intentionally left alone — changing it would invalidate existing shares and provides no additional security benefit.
+  - The existing share-envelope AAD (`share_id || file_id`, no separator) is intentionally left alone -- changing it would invalidate existing shares and provides no additional security benefit.
   - **New shares created after the cutover:** the owner-side code path that builds a new `ShareEnvelope` first decrypts the owner's own `encrypted_fek` (now AAD-bound per this item) and re-wraps it with the Share Key for the recipient. This upgrade is automatic because the owner-side unwrap goes through the updated decrypt path. `client/static/js/src/files/share.ts` therefore does **not** need a new AAD wiring for the share-creation path beyond what the owner's download/list code already receives.
 
-#### T4-c. `list.ts` L2 wiring — AAD verification on existing fields in the tree/flat path
+#### T4-c. `list.ts` L2 wiring -- AAD verification on existing fields in the tree/flat path
 **Prereq:** T4-a, T4-b.
 - This is the tree-view-specific slice of T4-b, called out separately because the list decrypt path is the highest-volume consumer and worth explicitly verifying in CI.
 - The two decrypt calls in `list.ts` identified in T3-e as "without AAD" now pass AAD.
@@ -545,43 +545,43 @@ Tranche 4 is intentionally small and should be landed as a single coordinated de
 #### T4-e. Dev-reset / test-update deploy procedure
 **Prereq:** T4-a through T4-d.
 - Running `sudo bash scripts/dev-reset.sh` destroys local dev state, so local dev is fine.
-- `scripts/test-update.sh` is the procedure used to deploy this tranche to `test.arkfile.net`. Accounts, OPAQUE, TOTP, refresh tokens, approval status, and contact info survive. Pre-cutover file rows remain in the database and in S3 but cannot be decrypted; users see them listed with the "incompatible security upgrade" error on any action. No cleanup tooling is planned for stale pre-cutover rows — the beta is small enough that users can delete-and-reupload on their own cadence.
+- `scripts/test-update.sh` is the procedure used to deploy this tranche to `test.arkfile.net`. Accounts, OPAQUE, TOTP, refresh tokens, approval status, and contact info survive. Pre-cutover file rows remain in the database and in S3 but cannot be decrypted; users see them listed with the "incompatible security upgrade" error on any action. No cleanup tooling is planned for stale pre-cutover rows -- the beta is small enough that users can delete-and-reupload on their own cadence.
 - **In-progress upload sessions at the cutover.** Any `upload_sessions` rows in state `in_progress` when the deploy lands were started without AAD on the pre-existing fields. After deploy, the owner's client code has the updated encrypt path, but the partially-uploaded session still holds AAD-less `encrypted_filename` / `encrypted_sha256sum` / `encrypted_fek` values in `upload_sessions`. Calling `CompleteUpload` on such a session would transfer those AAD-less values into `file_metadata`, producing rows that cannot be decrypted post-cutover. Recommended handling: on first successful post-cutover login (detectable via a client-side version marker or simply by observing that the server rejects a re-auth with the old build), the client lists its in-progress sessions and issues `DELETE /api/uploads/:fileId` (the existing `CancelUpload` endpoint, verified in the Verification Findings) against each, then restarts uploads fresh. No server-side migration is required; this is a client-initiated cleanup using an endpoint that already exists. In the beta context, a simpler operator-level message to beta testers ("please cancel any in-flight uploads in your browser or CLI and restart them after the update") is also sufficient.
 
 ---
 
 ## Open Decisions (all resolved, kept for record)
 
-### A — AAD scope: RESOLVED as all client-encrypted per-file metadata fields
+### A -- AAD scope: RESOLVED as all client-encrypted per-file metadata fields
 
 All four client-encrypted per-file metadata fields get AAD in this round: `folder_path`, `filename`, `sha256sum`, `fek`. `encrypted_folder_path` is AAD-bound from birth in Tranche 2. The other three flip at the Tranche 4 cutover. Each has a distinct per-field threat motivation (see § 3 "Per-field protection rationale"), not just uniformity-for-uniformity's-sake. Existing encrypted metadata on local dev and `test.arkfile.net` becomes undecryptable after the Tranche 4 cutover; `test-update.sh` preserves accounts and auth records. No migration tooling is planned.
 
-The column `file_metadata.encrypted_file_sha256sum` is excluded from AAD scope. Despite the `encrypted_` prefix, its stored value is a plaintext server-computed SHA-256 of the already-client-encrypted data stream — there is nothing there to protect with AAD. The column keeps its historical name; a clarifying block comment is added to `models.File.EncryptedFileSha256sum` in `models/file.go` (T1-a).
+The column `file_metadata.encrypted_file_sha256sum` is excluded from AAD scope. Despite the `encrypted_` prefix, its stored value is a plaintext server-computed SHA-256 of the already-client-encrypted data stream -- there is nothing there to protect with AAD. The column keeps its historical name; a clarifying block comment is added to `models.File.EncryptedFileSha256sum` in `models/file.go` (T1-a).
 
 The rejected options ("folder_path only" and "versioned-per-row `aad_version` column") are not pursued. The latter is the kind of legacy/dual-decrypt tech debt AGENTS.md tells us to avoid.
 
-### B — Go AAD helper placement: RESOLVED as `crypto/aad.go`
+### B -- Go AAD helper placement: RESOLVED as `crypto/aad.go`
 
 Alongside `crypto/gcm.go`, `crypto/share_kdf.go`. Pure helper (no server state dependency), shareable with server-side verification tooling in the future. CLI imports `crypto/` freely.
 
-### C — `models/user.go` immutability comment: RESOLVED as yes
+### C -- `models/user.go` immutability comment: RESOLVED as yes
 
 Short header comment noting that username is a permanent, immutable identifier used as a stable key across `file_metadata`, `file_encryption_keys`, `file_storage_locations`, and as part of AAD binding for per-file metadata. There is no rename path; adding one would require re-encrypting all per-file AAD-bound metadata. Landed in T1-a.
 
-### D — Field-tag naming in shared JSON: RESOLVED as `crypto/aad-params.json`
+### D -- Field-tag naming in shared JSON: RESOLVED as `crypto/aad-params.json`
 
 Field tags (`folder_path`, `filename`, `sha256sum`, `fek`) and the AAD separator byte live in `crypto/aad-params.json`, consumed by both TS and Go. Same pattern as `chunking-params.json` / `argon2id-params.json` / `password-requirements.json`. Prevents tag-string drift between the two clients.
 
-### E — Concurrent-upload cap + quota accounting: RESOLVED
+### E -- Concurrent-upload cap + quota accounting: RESOLVED
 
 - Server-side cap of **2 in-progress upload sessions per user** (see Work Item T2-b). Client discipline is strictly sequential (1 at a time); the 2-session headroom accommodates power users with the web app open in two tabs or a CLI running alongside a browser upload.
 - Quota accounting includes both committed `file_metadata.padded_size` and in-progress `upload_sessions.padded_size`. `padded_size` is computed deterministically at session-init time, so the sum is exact.
 
-### F — Canonical path case sensitivity: RESOLVED as case-sensitive, NFC-normalized
+### F -- Canonical path case sensitivity: RESOLVED as case-sensitive, NFC-normalized
 
 `Photos/2025` and `photos/2025` are distinct folders. Canonicalization applies NFC Unicode normalization but does not case-fold. Matches POSIX behavior and avoids any server-visible collation rules.
 
-### G — Work-item ordering: RESOLVED as four deployment tranches
+### G -- Work-item ordering: RESOLVED as four deployment tranches
 
 All non-breaking work is grouped into Tranches 1–3 and may be deployed incrementally to `test.arkfile.net` via `test-update.sh` without affecting any existing beta file. Tranche 4 is the single coordinated cutover that turns on AAD for the three pre-existing fields and, as a side effect, invalidates all pre-cutover files for client-side decryption. See "Deployment Tranches & Non-Breaking-First Principle" and the per-tranche work-item lists above.
 
@@ -612,7 +612,7 @@ Each item below is explicitly **out of scope for this round of work**. One-line 
 - Already partially handled: Work Item T3-e paginates and lazy-decrypts folder paths above 1,000 files. Further lazy schemes (e.g., decrypt only visible tree-view nodes with a virtual scroller) are a natural extension.
 
 ### "Download all in this folder as zip" (web)
-- Single-file download on web goes to the browser's download folder with the decrypted filename — the browser UX doesn't support per-download folder structure. A future "download folder as zip" feature would pack the decrypted tree into an in-memory zip client-side and offer it as a single download. Not in this round.
+- Single-file download on web goes to the browser's download folder with the decrypted filename -- the browser UX doesn't support per-download folder structure. A future "download folder as zip" feature would pack the decrypted tree into an in-memory zip client-side and offer it as a single download. Not in this round.
 
 ### Cleanup tooling for pre-Tranche-4 rows
 - After the Tranche 4 cutover, pre-cutover rows remain in rqlite and in S3 but are permanently undecryptable. No tooling is planned to bulk-delete them; users can delete-and-reupload at their own cadence, and the beta is small enough that this is tractable. A future "prune undecryptable rows" admin script could be added but is explicitly deferred.
@@ -622,54 +622,54 @@ Each item below is explicitly **out of scope for this round of work**. One-line 
 ## Files That Will Be Modified
 
 ### Backend (Go)
-- `database/unified_schema.sql` — add `encrypted_folder_path`, `folder_path_nonce` columns on both `file_metadata` and `upload_sessions`.
-- `handlers/uploads.go` — accept folder path fields in `CreateUploadSession`; persist on `upload_sessions`; carry to `file_metadata` on `CompleteUpload`; enforce 2-session concurrency cap; lazy stale-session cleanup; in-progress-aware quota check.
-- `handlers/files.go` — include folder path fields in list/meta responses; add `GetUserStorage` handler.
-- `handlers/route_config.go` — wire `GET /api/user/storage` into `totpProtectedGroup`.
-- `handlers/export.go` — include folder path in export bundle.
-- `models/file.go` — add fields to `FileMetadata` struct; clarifying comment on `EncryptedFileSha256sum`.
-- `models/user.go` — short header comment noting username immutability.
+- `database/unified_schema.sql` -- add `encrypted_folder_path`, `folder_path_nonce` columns on both `file_metadata` and `upload_sessions`.
+- `handlers/uploads.go` -- accept folder path fields in `CreateUploadSession`; persist on `upload_sessions`; carry to `file_metadata` on `CompleteUpload`; enforce 2-session concurrency cap; lazy stale-session cleanup; in-progress-aware quota check.
+- `handlers/files.go` -- include folder path fields in list/meta responses; add `GetUserStorage` handler.
+- `handlers/route_config.go` -- wire `GET /api/user/storage` into `totpProtectedGroup`.
+- `handlers/export.go` -- include folder path in export bundle.
+- `models/file.go` -- add fields to `FileMetadata` struct; clarifying comment on `EncryptedFileSha256sum`.
+- `models/user.go` -- short header comment noting username immutability.
 
 ### Shared crypto (Go)
-- `crypto/aad.go` — new file: generic `BuildFileMetadataAAD(field, file_id, username)`.
-- `crypto/aad_test.go` — new file: unit tests driven by the shared test-vectors JSON.
+- `crypto/aad.go` -- new file: generic `BuildFileMetadataAAD(field, file_id, username)`.
+- `crypto/aad_test.go` -- new file: unit tests driven by the shared test-vectors JSON.
 
 ### Frontend (TypeScript)
-- `client/static/index.html` — multi-file input (`multiple`), folder upload button (`webkitdirectory`), "Add to virtual folder?" text input on single-file form.
-- `client/static/js/src/files/upload.ts` — multi-file loop, folder path encryption (with AAD from Tranche 3 onward), pre-flight quota check, "Add to virtual folder?" wiring. Tranche 4 changes the AAD inputs for `encrypted_filename` / `encrypted_sha256sum` / `encrypted_fek` construction.
-- `client/static/js/src/files/list.ts` — tree building, tree rendering, flat/tree toggle, in-memory decrypted-metadata cache, pagination + lazy decrypt above 1,000 files. Tranche 4 changes the AAD inputs for `encrypted_filename` / `encrypted_sha256sum` decrypt.
-- `client/static/js/src/files/download.ts` — Tranche 4 changes the AAD inputs for `encrypted_fek` unwrap and any metadata decrypts.
-- `client/static/js/src/files/share.ts` — **not modified in this project.** The share flow is self-contained (own `encrypted_fek` in `file_share_keys` + client-side `ShareEnvelope`) and does not read the owner's `encrypted_filename` / `encrypted_sha256sum` / `encrypted_fek` columns. The owner-side unwrap-and-rewrap for building new `ShareEnvelope`s at T4-b reuses the updated decrypt path in `download.ts` / `list.ts`; no local change here.
-- `client/static/js/src/files/digest-cache.ts` — refine cache key to `(sha256, canonical_folder_path)` (T3-b).
-- `client/static/js/src/files/folder-path.ts` — new file: `canonicalizeFolderPath`, `validateFolderPath`.
-- `client/static/js/src/crypto/aad.ts` — new file: `buildFileMetadataAAD`.
-- `client/static/js/src/files/export.ts` — plumb folder path fields into export bundle (AAD-bound from birth).
-- `client/static/css/styles.css` — tree component styles.
-- `client/static/js/src/types/api.d.ts` — add folder path fields to `ServerFileEntry`; add `GET /api/user/storage` response type.
+- `client/static/index.html` -- multi-file input (`multiple`), folder upload button (`webkitdirectory`), "Add to virtual folder?" text input on single-file form.
+- `client/static/js/src/files/upload.ts` -- multi-file loop, folder path encryption (with AAD from Tranche 3 onward), pre-flight quota check, "Add to virtual folder?" wiring. Tranche 4 changes the AAD inputs for `encrypted_filename` / `encrypted_sha256sum` / `encrypted_fek` construction.
+- `client/static/js/src/files/list.ts` -- tree building, tree rendering, flat/tree toggle, in-memory decrypted-metadata cache, pagination + lazy decrypt above 1,000 files. Tranche 4 changes the AAD inputs for `encrypted_filename` / `encrypted_sha256sum` decrypt.
+- `client/static/js/src/files/download.ts` -- Tranche 4 changes the AAD inputs for `encrypted_fek` unwrap and any metadata decrypts.
+- `client/static/js/src/files/share.ts` -- **not modified in this project.** The share flow is self-contained (own `encrypted_fek` in `file_share_keys` + client-side `ShareEnvelope`) and does not read the owner's `encrypted_filename` / `encrypted_sha256sum` / `encrypted_fek` columns. The owner-side unwrap-and-rewrap for building new `ShareEnvelope`s at T4-b reuses the updated decrypt path in `download.ts` / `list.ts`; no local change here.
+- `client/static/js/src/files/digest-cache.ts` -- refine cache key to `(sha256, canonical_folder_path)` (T3-b).
+- `client/static/js/src/files/folder-path.ts` -- new file: `canonicalizeFolderPath`, `validateFolderPath`.
+- `client/static/js/src/crypto/aad.ts` -- new file: `buildFileMetadataAAD`.
+- `client/static/js/src/files/export.ts` -- plumb folder path fields into export bundle (AAD-bound from birth).
+- `client/static/css/styles.css` -- tree component styles.
+- `client/static/js/src/types/api.d.ts` -- add folder path fields to `ServerFileEntry`; add `GET /api/user/storage` response type.
 
 ### CLI (Go)
-- `cmd/arkfile-client/commands.go` — `--dir` flag for upload; `--tree` and optional `--folder PATH` flags for `list-files`; `--preserve-folders` flag for `download`. Tranche 4 changes the AAD inputs for the three pre-existing fields in encrypt/decrypt paths.
-- `cmd/arkfile-client/folderpath.go` — new file: `CanonicalizeFolderPath`, `ValidateFolderPath` (mirrors TS).
-- `cmd/arkfile-client/folderpath_test.go` — new file: Go unit tests driven by the shared test-vectors JSON.
-- `cmd/arkfile-client/offline_decrypt.go` — extend `bundleMeta` + `decrypt-blob` display path for the new folder-path fields (see T2-d). Tranche 4 changes the AAD inputs for `filename` / `sha256sum` / `fek` decrypt here.
+- `cmd/arkfile-client/commands.go` -- `--dir` flag for upload; `--tree` and optional `--folder PATH` flags for `list-files`; `--preserve-folders` flag for `download`. Tranche 4 changes the AAD inputs for the three pre-existing fields in encrypt/decrypt paths.
+- `cmd/arkfile-client/folderpath.go` -- new file: `CanonicalizeFolderPath`, `ValidateFolderPath` (mirrors TS).
+- `cmd/arkfile-client/folderpath_test.go` -- new file: Go unit tests driven by the shared test-vectors JSON.
+- `cmd/arkfile-client/offline_decrypt.go` -- extend `bundleMeta` + `decrypt-blob` display path for the new folder-path fields (see T2-d). Tranche 4 changes the AAD inputs for `filename` / `sha256sum` / `fek` decrypt here.
 - The AAD helper is not CLI-local; the CLI imports `crypto/aad.go` directly.
 
 ### Config / shared spec
-- `crypto/folder-path-params.json` — new file: max depth / segment length / total length / forbidden char ranges / Unicode normalization form (NFC) flag.
-- `crypto/aad-params.json` — new file: per-field AAD tag strings (`folder_path`, `filename`, `sha256sum`, `fek`) and the AAD separator byte (`0x00`). Consumed by both TS and Go via the shared-params loading pattern.
+- `crypto/folder-path-params.json` -- new file: max depth / segment length / total length / forbidden char ranges / Unicode normalization form (NFC) flag.
+- `crypto/aad-params.json` -- new file: per-field AAD tag strings (`folder_path`, `filename`, `sha256sum`, `fek`) and the AAD separator byte (`0x00`). Consumed by both TS and Go via the shared-params loading pattern.
 
 ### Docs
-- `docs/wip/arkbackup-export.md` — add the two new optional folder-path fields and their AAD binding to the bundle-format spec.
+- `docs/wip/arkbackup-export.md` -- add the two new optional folder-path fields and their AAD binding to the bundle-format spec.
 
 ### Test assets
-- `scripts/testing/folder-path-test-vectors.json` — new file: shared canonicalization and AAD test vectors (authoritative source consumed by both TS and Go unit tests).
+- `scripts/testing/folder-path-test-vectors.json` -- new file: shared canonicalization and AAD test vectors (authoritative source consumed by both TS and Go unit tests).
 
 ### Tests
-- `scripts/testing/e2e-test.sh` — multi-file upload tests, folder path round-trip, pre-flight quota rejection, partial-failure simulation (Tranche 3). AAD tamper test added at Tranche 4.
-- `scripts/testing/e2e-playwright.ts` — browser-level folder upload, tree view, flat/tree toggle, localStorage persistence, in-memory cache behavior after reload (Tranche 3). AAD tamper test added at Tranche 4.
-- `handlers/uploads_test.go` — folder path field handling in `CreateUploadSession` / `CompleteUpload`; concurrent-session cap enforcement; in-progress-aware quota.
-- `handlers/files_test.go` — folder path in list/meta responses; `GetUserStorage` endpoint tests.
-- `handlers/export_test.go` — folder path included in export bundle.
+- `scripts/testing/e2e-test.sh` -- multi-file upload tests, folder path round-trip, pre-flight quota rejection, partial-failure simulation (Tranche 3). AAD tamper test added at Tranche 4.
+- `scripts/testing/e2e-playwright.ts` -- browser-level folder upload, tree view, flat/tree toggle, localStorage persistence, in-memory cache behavior after reload (Tranche 3). AAD tamper test added at Tranche 4.
+- `handlers/uploads_test.go` -- folder path field handling in `CreateUploadSession` / `CompleteUpload`; concurrent-session cap enforcement; in-progress-aware quota.
+- `handlers/files_test.go` -- folder path in list/meta responses; `GetUserStorage` endpoint tests.
+- `handlers/export_test.go` -- folder path included in export bundle.
 
 ---
 
@@ -680,8 +680,8 @@ Each item below is explicitly **out of scope for this round of work**. One-line 
 - File sizes remain visible (needed for quota). Existing deterministic padding already obscures exact sizes.
 - Folder structure (depth, breadth, naming patterns) is hidden since paths are encrypted per-file.
 - The pre-flight quota endpoint returns only the user's own storage summary; no PII.
-- Decrypted metadata is held in an **in-memory `Map`** scoped to the SPA lifetime — not `sessionStorage`, not `localStorage`, not IndexedDB. This minimizes the blast radius of any future XSS: decrypted plaintext filenames and folder paths never touch a storage API that can be read by arbitrary scripts on the page. The tradeoff is having to re-decrypt after a full page reload, which is acceptable given the sub-second times for libraries under 1,000 files and the lazy-decrypt path for larger libraries.
-- During the window between Tranche 3 landing and Tranche 4 cutover, new files carry AAD-bound `encrypted_folder_path` but not AAD-bound `encrypted_filename` / `encrypted_sha256sum` / `encrypted_fek`. This is a strictly narrower defense-in-depth posture than post-Tranche-4 (the cross-row / cross-field / cross-user protections on those three fields are not active yet), but it is **no weaker than the pre-v3 status quo** — so operating in this window does not reduce any existing privacy guarantee. Tranche 4 closes the gap.
+- Decrypted metadata is held in an **in-memory `Map`** scoped to the SPA lifetime -- not `sessionStorage`, not `localStorage`, not IndexedDB. This minimizes the blast radius of any future XSS: decrypted plaintext filenames and folder paths never touch a storage API that can be read by arbitrary scripts on the page. The tradeoff is having to re-decrypt after a full page reload, which is acceptable given the sub-second times for libraries under 1,000 files and the lazy-decrypt path for larger libraries.
+- During the window between Tranche 3 landing and Tranche 4 cutover, new files carry AAD-bound `encrypted_folder_path` but not AAD-bound `encrypted_filename` / `encrypted_sha256sum` / `encrypted_fek`. This is a strictly narrower defense-in-depth posture than post-Tranche-4 (the cross-row / cross-field / cross-user protections on those three fields are not active yet), but it is **no weaker than the pre-v3 status quo** -- so operating in this window does not reduce any existing privacy guarantee. Tranche 4 closes the gap.
 
 ---
 

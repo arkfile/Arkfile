@@ -213,8 +213,8 @@ When MFA is enabled, the OPAQUE login process returns a temporary token instead 
 **Backup Code Recovery (two paths):**
 The system generates cryptographically secure backup codes during MFA setup. Each backup code is a 10-character alphanumeric string (~59.5 bits of entropy) hashed with Argon2id and stored single-use. Used backup codes are immediately invalidated and logged.
 
-- **Path A — Emergency one-shot login:** After OPAQUE login, the user submits a backup code at `POST /api/mfa/auth` with `is_backup: true`. The server validates and consumes the code, then issues a full access token. The enrolled second factor is unchanged; the user will need their normal TOTP code (or another backup code) on the next login.
-- **Path B — Re-enroll with a backup code:** After OPAQUE login, the user consumes a backup code via `POST /api/mfa/recover-with-backup-code`, receives a short-lived `arkfile-mfa-reset` JWT, then calls `POST /api/mfa/reset` to stage new enrollment material and fresh backup codes. The user must complete MFA setup (`/api/mfa/verify`) before gaining full access.
+- **Path A -- Emergency one-shot login:** After OPAQUE login, the user submits a backup code at `POST /api/mfa/auth` with `is_backup: true`. The server validates and consumes the code, then issues a full access token. The enrolled second factor is unchanged; the user will need their normal TOTP code (or another backup code) on the next login.
+- **Path B -- Re-enroll with a backup code:** After OPAQUE login, the user consumes a backup code via `POST /api/mfa/recover-with-backup-code`, receives a short-lived `arkfile-mfa-reset` JWT, then calls `POST /api/mfa/reset` to stage new enrollment material and fresh backup codes. The user must complete MFA setup (`/api/mfa/verify`) before gaining full access.
 
 **Credential Storage:**
 TOTP secrets and WebAuthn credential records are encrypted with AES-256-GCM under a per-user key derived via HKDF-SHA256 from the user-secret master (`mfa_user` purpose). Backup codes are never stored in cleartext; only Argon2id hashes are persisted.
@@ -244,7 +244,7 @@ Arkfile uses the same account password for two completely independent purposes: 
 
 **Account Password for Authentication (OPAQUE).** The account password is used with the OPAQUE protocol to authenticate the user. OPAQUE performs a password-authenticated key exchange in which the client proves knowledge of the password without ever transmitting it. The server never learns the password at any point during registration or login. OPAQUE has its own internal key derivation and does not use Argon2id. The output of a successful OPAQUE authentication is a set of session keys used for JWT token issuance and session management.
 
-**Account Password for File Encryption (Argon2id -> Account Key).** The same account password is used separately, entirely on the client side, to derive an Account Key via Argon2id. This Account Key serves as a Key Encryption Key (KEK). For each file, a cryptographically random 256-bit File Encryption Key (FEK) is generated, and the FEK is wrapped (encrypted) by the KEK using AES-256-GCM. The file data itself is encrypted with the FEK. The salt for this derivation is deterministic, computed as `SHA-256("arkfile-account-key-salt:{username}")`. This is safe because the Argon2id-derived key only wraps the FEK — the actual file encryption uses random FEKs with unique nonces, and the memory-hard properties of Argon2id protect the KEK even with a known salt.
+**Account Password for File Encryption (Argon2id -> Account Key).** The same account password is used separately, entirely on the client side, to derive an Account Key via Argon2id. This Account Key serves as a Key Encryption Key (KEK). For each file, a cryptographically random 256-bit File Encryption Key (FEK) is generated, and the FEK is wrapped (encrypted) by the KEK using AES-256-GCM. The file data itself is encrypted with the FEK. The salt for this derivation is deterministic, computed as `SHA-256("arkfile-account-key-salt:{username}")`. This is safe because the Argon2id-derived key only wraps the FEK -- the actual file encryption uses random FEKs with unique nonces, and the memory-hard properties of Argon2id protect the KEK even with a known salt.
 
 **Custom Password for File Encryption (Argon2id -> Custom Key).** Users may optionally provide a custom password instead of using their account key to encrypt a file. This custom password goes through the same Argon2id derivation with a different deterministic salt (`SHA-256("arkfile-custom-key-salt:{username}")`), producing a Custom Key (KEK) that wraps the FEK. The encrypted envelope format distinguishes account-wrapped from custom-wrapped FEKs via a key type byte (0x01 for account, 0x02 for custom), so the client knows which password to request at decryption time.
 
@@ -260,7 +260,7 @@ All password-based key derivation contexts (account key, custom key, and share k
 - **Parallelism:** 1 thread
 - **Output key length:** 32 bytes (256 bits)
 
-These parameters exceed the strongest OWASP-recommended configuration for Argon2id (m=47,104 KiB / 46 MiB, t=1, p=1) as of 2026 by using significantly more memory and more iterations. Parallelism is set to 1 because the client-side key derivation runs in a browser WebAssembly context, which is single-threaded. Setting parallelism higher than 1 would not actually parallelize the computation in a browser — it would instead multiply the sequential work, increasing latency without improving security. With p=1 and t=4 at 128 MiB, the derivation is expected to take approximately 1–3 seconds in modern browsers, which is practical for interactive authentication while being extremely costly for attackers to brute-force.
+These parameters exceed the strongest OWASP-recommended configuration for Argon2id (m=47,104 KiB / 46 MiB, t=1, p=1) as of 2026 by using significantly more memory and more iterations. Parallelism is set to 1 because the client-side key derivation runs in a browser WebAssembly context, which is single-threaded. Setting parallelism higher than 1 would not actually parallelize the computation in a browser -- it would instead multiply the sequential work, increasing latency without improving security. With p=1 and t=4 at 128 MiB, the derivation is expected to take approximately 1–3 seconds in modern browsers, which is practical for interactive authentication while being extremely costly for attackers to brute-force.
 
 ## Session Management
 
@@ -539,7 +539,7 @@ rqlite -H localhost:4001 \
 **Containment Actions:**
 ```bash
 # Rotate JWT keys immediately
-# User-secret master rotation only — see Key Rotation Procedures above
+# User-secret master rotation only -- see Key Rotation Procedures above
 
 # Revoke all active sessions
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
@@ -789,7 +789,7 @@ rqlite -H localhost:4001 \
 sudo systemctl stop arkfile
 
 # Emergency key rotation
-# User-secret master rotation only — see Key Rotation Procedures above
+# User-secret master rotation only -- see Key Rotation Procedures above
 
 # Security audit
 ./scripts/security-audit.sh

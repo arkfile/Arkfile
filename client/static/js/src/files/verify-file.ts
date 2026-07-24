@@ -1,5 +1,5 @@
 /**
- * Verify File tool — hash a local file and compare to an expected SHA-256.
+ * Verify File tool -- hash a local file and compare to an expected SHA-256.
  *
  * Uses computeStreamingSHA256 so peak memory stays near one chunk regardless of
  * file size. Works offline once the expected digest is known. Does not log
@@ -180,7 +180,7 @@ async function runVerifyFromPanel(): Promise<void> {
     return;
   }
 
-  // mismatch — show digests in the panel only (not in toast text that might linger)
+  // mismatch -- show digests in the panel only (not in toast text that might linger)
   if (resultEl) {
     resultEl.innerHTML = '';
     const title = document.createElement('p');

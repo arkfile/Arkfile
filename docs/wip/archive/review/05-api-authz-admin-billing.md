@@ -1,4 +1,4 @@
-# Slice E — API / Authz / Admin / Billing
+# Slice E -- API / Authz / Admin / Billing
 
 Author: in-depth security review per `docs/wip/idsrp.md` §8 (backend authz & object storage), §10 (API security), §14 (logging/telemetry hygiene), §22.3 (per-endpoint TOTP gating).
 Plan reference: `docs/wip/review/00-plan.md` §4 Slice E.
@@ -6,9 +6,9 @@ Plan reference: `docs/wip/review/00-plan.md` §4 Slice E.
 ## 0. Scope
 
 ### `idsrp.md` sections covered here
-- §8 Backend Authorization & Object Storage — the admin / billing / misc surface only; file blob authz already covered in Slice C, share authz in Slice D.
-- §10 API Security — admin / billing / misc endpoints registered in `handlers/route_config.go`.
-- §14 Logging/Telemetry hygiene — admin, billing, credits, export, contact-info, health-monitoring code paths only.
+- §8 Backend Authorization & Object Storage -- the admin / billing / misc surface only; file blob authz already covered in Slice C, share authz in Slice D.
+- §10 API Security -- admin / billing / misc endpoints registered in `handlers/route_config.go`.
+- §14 Logging/Telemetry hygiene -- admin, billing, credits, export, contact-info, health-monitoring code paths only.
 - §22.3 TOTP-gated route verification at the API surface, with a mandatory `TOTP-gated?` column in §3.1.
 
 ### `idsrp.md` sections deferred to other slices
@@ -19,34 +19,34 @@ Plan reference: `docs/wip/review/00-plan.md` §4 Slice E.
 - §3 (WASM, frontend), §12 (XSS), §13 (supply chain), §15 (deployment) → Slice F.
 
 ### Files actually read for this slice
-- `handlers/route_config.go` (entire) — route registration ground truth.
-- `handlers/middleware.go` (entire) — `AdminMiddleware`, `RequireApproved`, `RequireTOTP`, `RateLimitMiddleware`, `TimingProtectionMiddleware`, `TLSVersionCheck`, `PrivacyRequestLogger`.
-- `handlers/admin.go` (entire 1429 LOC) — user management, system status, security events, file/share inspection.
-- `handlers/admin_auth.go` (entire) — admin OPAQUE handshake (read for completeness; canonical analysis in Slice A).
-- `handlers/admin_billing.go` (entire) — billing-price, gift, sweep-summary, overdrawn, tick-now (dev/test).
-- `handlers/admin_storage.go` (entire 891 LOC) — multi-backend storage management, role swaps, copy/verify task submission.
-- `handlers/admin_task_runner.go` (entire) — background copy/verify task lifecycle.
-- `handlers/credits.go`, `handlers/billing_projection.go` — user/admin credit views and projection seams.
-- `handlers/export.go` (entire) — `.arkbackup` export endpoint family.
-- `handlers/contact_info.go` — user contact-info CRUD and admin read.
-- `handlers/config.go` — public config endpoints (argon2/password/chunking/version).
-- `handlers/rate_limiting.go` — share + auth rate-limit ladder and `share_access_attempts` table reuse.
-- `handlers/flood_guard.go` — in-memory 401/404 flood detector wired globally in `main.go`.
-- `handlers/handlers.go`, `handlers/response.go`, `handlers/error_pages.go` — small helpers.
-- `billing/types.go`, `billing/rates.go`, `billing/meter.go`, `billing/sweep.go`, `billing/scheduler.go`, `billing/gift.go` — billing math, scheduler, ledger writes.
-- `models/credits.go` — credits ledger model, `FormatCreditsUSD` / `ParseCreditsFromUSD`.
-- `models/admin_task.go` — admin_tasks CRUD.
-- `database/unified_schema.sql` (entire) — schema-level authz: FK / ON DELETE / UNIQUE / indices.
-- `logging/security_events.go` — security event logger and sanitizer.
-- `monitoring/health_endpoints.go` — `HealthMonitor`, public `/healthz` / `/readyz` registered from `main.go`.
-- `main.go` (selected sections) — `/healthz`, `/readyz`, billing scheduler wiring, FloodGuard wiring, dev-admin auto-create.
+- `handlers/route_config.go` (entire) -- route registration ground truth.
+- `handlers/middleware.go` (entire) -- `AdminMiddleware`, `RequireApproved`, `RequireTOTP`, `RateLimitMiddleware`, `TimingProtectionMiddleware`, `TLSVersionCheck`, `PrivacyRequestLogger`.
+- `handlers/admin.go` (entire 1429 LOC) -- user management, system status, security events, file/share inspection.
+- `handlers/admin_auth.go` (entire) -- admin OPAQUE handshake (read for completeness; canonical analysis in Slice A).
+- `handlers/admin_billing.go` (entire) -- billing-price, gift, sweep-summary, overdrawn, tick-now (dev/test).
+- `handlers/admin_storage.go` (entire 891 LOC) -- multi-backend storage management, role swaps, copy/verify task submission.
+- `handlers/admin_task_runner.go` (entire) -- background copy/verify task lifecycle.
+- `handlers/credits.go`, `handlers/billing_projection.go` -- user/admin credit views and projection seams.
+- `handlers/export.go` (entire) -- `.arkbackup` export endpoint family.
+- `handlers/contact_info.go` -- user contact-info CRUD and admin read.
+- `handlers/config.go` -- public config endpoints (argon2/password/chunking/version).
+- `handlers/rate_limiting.go` -- share + auth rate-limit ladder and `share_access_attempts` table reuse.
+- `handlers/flood_guard.go` -- in-memory 401/404 flood detector wired globally in `main.go`.
+- `handlers/handlers.go`, `handlers/response.go`, `handlers/error_pages.go` -- small helpers.
+- `billing/types.go`, `billing/rates.go`, `billing/meter.go`, `billing/sweep.go`, `billing/scheduler.go`, `billing/gift.go` -- billing math, scheduler, ledger writes.
+- `models/credits.go` -- credits ledger model, `FormatCreditsUSD` / `ParseCreditsFromUSD`.
+- `models/admin_task.go` -- admin_tasks CRUD.
+- `database/unified_schema.sql` (entire) -- schema-level authz: FK / ON DELETE / UNIQUE / indices.
+- `logging/security_events.go` -- security event logger and sanitizer.
+- `monitoring/health_endpoints.go` -- `HealthMonitor`, public `/healthz` / `/readyz` registered from `main.go`.
+- `main.go` (selected sections) -- `/healthz`, `/readyz`, billing scheduler wiring, FloodGuard wiring, dev-admin auto-create.
 
 ### Out-of-scope for this slice (one-line each)
-- TOTP middleware *internal* correctness (constant-time compare, time-step, lockout state, two-tier JWT model) — **Slice A** owns this.
-- Admin OPAQUE handshake correctness — **Slice A**.
-- Argon2id parameter trust on `/api/config/argon2` — covered in **Slice B** finding B-19.
-- Frontend / CSP / dependency pinning / Caddy / systemd / build supply chain — **Slice F**.
-- `_test.go` content review beyond presence/absence — testing-gap items go to §6.
+- TOTP middleware *internal* correctness (constant-time compare, time-step, lockout state, two-tier JWT model) -- **Slice A** owns this.
+- Admin OPAQUE handshake correctness -- **Slice A**.
+- Argon2id parameter trust on `/api/config/argon2` -- covered in **Slice B** finding B-19.
+- Frontend / CSP / dependency pinning / Caddy / systemd / build supply chain -- **Slice F**.
+- `_test.go` content review beyond presence/absence -- testing-gap items go to §6.
 
 ---
 
@@ -72,7 +72,7 @@ auth.Echo = Echo.Group("")
  │  + TokenRevocationMiddleware               : per-jti revocation lookup
  │  + RequireApproved                         : user.is_approved OR user.is_admin
  │
- ├── /api/totp/status, /api/totp/reset        : full JWT only (no TOTP gate — by design, lets a user
+ ├── /api/totp/status, /api/totp/reset        : full JWT only (no TOTP gate -- by design, lets a user
  │                                              reset/check status after a partial state)
  └── totpProtectedGroup = auth.Echo.Group("")
      │ + RequireTOTP                          : user.totp_enabled == true
@@ -128,7 +128,7 @@ Three gates layered, in order, before any admin handler runs:
    6. Block `arkfile-dev-admin` in production (`utils.IsDevAdminAccount`).
    7. Audit log via `logging.LogSecurityEvent(EventAdminAccess, …)` with no IP.
 
-2. Many admin handlers repeat their own admin check inline (`if !user.IsAdmin`) — defense-in-depth duplication that is mostly fine but inconsistent (see E-13).
+2. Many admin handlers repeat their own admin check inline (`if !user.IsAdmin`) -- defense-in-depth duplication that is mostly fine but inconsistent (see E-13).
 
 3. `admin_billing.go` introduces local helpers `requireAdmin` / `requireAdminWithUsername` (lines 324-353) that only check `IsAdmin`, *not* localhost or dev-admin-in-production. They rely on `AdminMiddleware` for those checks. As long as the route is registered under `adminGroup`, this is safe today; **the helper is a footgun for any future caller** outside `adminGroup`.
 
@@ -183,7 +183,7 @@ Numbering is contiguous in this slice (`E-NN`). Severity per `idsrp.md` §18 wit
 - Category: authorization / TOTP-enforcement
 - Component: `handlers/route_config.go`, `handlers/middleware.go`, `handlers/admin_auth.go`
 - Affected files/functions: `handlers/route_config.go:166-168`; `handlers/middleware.go:559-629` (`AdminMiddleware`); cross-ref `handlers/admin_auth.go:189-211` (`AdminOpaqueAuthFinalize`).
-- Description: `adminGroup` is constructed as `Echo.Group("/api/admin")` with `auth.JWTMiddleware()` + `AdminMiddleware`. `AdminMiddleware` enforces localhost-only, rate limiting, audit logging, and `user.HasAdminPrivileges()` — but **does not** include `RequireTOTP` nor check any `totp_verified=true` claim on the JWT. By contrast, `totpProtectedGroup` for regular-user routes explicitly layers `RequireTOTP` on top of JWT (`route_config.go:95-96`).
+- Description: `adminGroup` is constructed as `Echo.Group("/api/admin")` with `auth.JWTMiddleware()` + `AdminMiddleware`. `AdminMiddleware` enforces localhost-only, rate limiting, audit logging, and `user.HasAdminPrivileges()` -- but **does not** include `RequireTOTP` nor check any `totp_verified=true` claim on the JWT. By contrast, `totpProtectedGroup` for regular-user routes explicitly layers `RequireTOTP` on top of JWT (`route_config.go:95-96`).
 
   In practice today this is **partially mitigated** because `AdminOpaqueAuthFinalize` (`admin_auth.go:189-193`) refuses to issue any auth artifact unless the admin already has TOTP enabled, and it returns only a *temp* token from `auth.GenerateTemporaryTOTPToken`. Slice A is the authoritative review of that two-tier flow and whether a temp token is rejected by every protected route.
 - Evidence:
@@ -194,7 +194,7 @@ Numbering is contiguous in this slice (`E-NN`). Severity per `idsrp.md` §18 wit
   adminGroup.Use(AdminMiddleware)      // Then admin middleware
   ```
   ```
-  // handlers/middleware.go:559-629 — no RequireTOTP, no totp_verified claim check
+  // handlers/middleware.go:559-629 -- no RequireTOTP, no totp_verified claim check
   func AdminMiddleware(next echo.HandlerFunc) echo.HandlerFunc { ... }
   ```
 - Attack scenario:
@@ -227,9 +227,9 @@ Numbering is contiguous in this slice (`E-NN`). Severity per `idsrp.md` §18 wit
   ```
   These fragments are then concatenated into the WHERE clause and executed via `database.DB.QueryRow("SELECT COUNT(*) FROM file_metadata fm WHERE " + p + ...)`.
 
-  The `providerID` value comes from `storage.Registry.PrimaryID()` / `SecondaryID()` / `TertiaryID()`, which in turn read the `provider_id` column from the `storage_providers` table. **`storage_providers.provider_id` is admin-controlled** — admin storage management endpoints (e.g. `AdminSetCost`, the migration paths that insert provider rows) accept `provider_id` from JSON body and write it to the table without sanitization beyond the empty check. An admin who can write provider rows can plant a malicious `provider_id` containing `' OR 1=1 --` etc.
+  The `providerID` value comes from `storage.Registry.PrimaryID()` / `SecondaryID()` / `TertiaryID()`, which in turn read the `provider_id` column from the `storage_providers` table. **`storage_providers.provider_id` is admin-controlled** -- admin storage management endpoints (e.g. `AdminSetCost`, the migration paths that insert provider rows) accept `provider_id` from JSON body and write it to the table without sanitization beyond the empty check. An admin who can write provider rows can plant a malicious `provider_id` containing `' OR 1=1 --` etc.
 
-  This is technically "admin-injects-into-admin-endpoint" so the privilege escalation is bounded — but it lets an admin produce arbitrary read/exec on the rqlite cluster from a counted endpoint, bypassing the schema-level controls and the audit trail.
+  This is technically "admin-injects-into-admin-endpoint" so the privilege escalation is bounded -- but it lets an admin produce arbitrary read/exec on the rqlite cluster from a counted endpoint, bypassing the schema-level controls and the audit trail.
 
 - Evidence:
   ```
@@ -366,7 +366,7 @@ Numbering is contiguous in this slice (`E-NN`). Severity per `idsrp.md` §18 wit
   ```
   (No `UNIQUE(transaction_id)`; no `CREATE UNIQUE INDEX` on transaction_id; only a non-unique index at `unified_schema.sql:546`.)
   ```
-  // billing/gift.go:81-91 — no transaction_id passed
+  // billing/gift.go:81-91 -- no transaction_id passed
   res, err := tx.Exec(`
       INSERT INTO credit_transactions
         (username, amount_usd_microcents, balance_after_usd_microcents,
@@ -469,7 +469,7 @@ Numbering is contiguous in this slice (`E-NN`). Severity per `idsrp.md` §18 wit
   return microcents, nil
   ```
   No overflow check after the multiplication or the addition.
-- Attack scenario (post-payment-processor): Attacker submits an inflated value in a webhook payload that passes signature verification (e.g. via a processor misconfig); `ParseCreditsFromUSD` returns a negative `microcents` which `GiftCredits` rejects because `amountMicrocents <= 0` — but other paths (e.g. a refund path or a custom-currency convert path) may not have that guard.
+- Attack scenario (post-payment-processor): Attacker submits an inflated value in a webhook payload that passes signature verification (e.g. via a processor misconfig); `ParseCreditsFromUSD` returns a negative `microcents` which `GiftCredits` rejects because `amountMicrocents <= 0` -- but other paths (e.g. a refund path or a custom-currency convert path) may not have that guard.
 - Impact: signed overflow silently produces negative or wrap-around values. Combined with any caller that skips the `<= 0` check, attacker-controlled balance manipulation.
 - Recommendation:
   1. After computing `microcents = dollars*MicrocentsPerUSD + fractional*10_000`, check both:
@@ -495,7 +495,7 @@ Numbering is contiguous in this slice (`E-NN`). Severity per `idsrp.md` §18 wit
 
   However, the formula is structurally fragile:
   1. There is no compile-time or runtime check that `billable` is bounded.
-  2. The right-shift by 30 doesn't help — it only divides *after* the multiplication that may have already overflowed.
+  2. The right-shift by 30 doesn't help -- it only divides *after* the multiplication that may have already overflowed.
   3. If the rate is raised drastically (e.g. an operator typo: `$10000.00/TiB/month` instead of `$10.00`), the overflow ceiling drops by 1000×.
 
 - Evidence:
@@ -524,7 +524,7 @@ Numbering is contiguous in this slice (`E-NN`). Severity per `idsrp.md` §18 wit
 - Category: design / billing accounting transparency
 - Component: `billing/rates.go`
 - Affected files/functions: `billing/rates.go:200-213` (`computeRate`), `billing/rates.go:182-184` (docstring).
-- Description: `computeRate` divides the monthly customer price by `1024 * 720` to get microcents/GiB/hour. The "720" is documented as "30 days × 24 hours". Real average month length is ~730.5 hours, so a $10/TiB/month price is actually billed at $10 × (720 / 730.5) ≈ $9.86/TiB/month effective. The docstring acknowledges floor-rounding "so the derived rate never exceeds the operator's stated price" — but the chosen 720 systematically *under-bills* by ~1.4% which is a different invariant.
+- Description: `computeRate` divides the monthly customer price by `1024 * 720` to get microcents/GiB/hour. The "720" is documented as "30 days × 24 hours". Real average month length is ~730.5 hours, so a $10/TiB/month price is actually billed at $10 × (720 / 730.5) ≈ $9.86/TiB/month effective. The docstring acknowledges floor-rounding "so the derived rate never exceeds the operator's stated price" -- but the chosen 720 systematically *under-bills* by ~1.4% which is a different invariant.
 
   Either choice is defensible; the issue is that the README and admin price endpoint surface the headline number ($10) without disclosing the 720-vs-730.5 mismatch. This is an honesty/transparency gap rather than a correctness bug.
 
@@ -536,7 +536,7 @@ Numbering is contiguous in this slice (`E-NN`). Severity per `idsrp.md` §18 wit
   //   microcents_per_GiB_per_hour  = floor(microcents_per_TiB_per_month / 1024 / 720)
   //                                                                 ^TiB->GiB ^days*hours
   ```
-- Recommendation: document this explicitly in `docs/wip/storage-credits-v2.md` and in the admin price response. Alternative: switch to `730.5 * 2` half-hours / `730` rounded — pick one, document the trade-off.
+- Recommendation: document this explicitly in `docs/wip/storage-credits-v2.md` and in the admin price response. Alternative: switch to `730.5 * 2` half-hours / `730` rounded -- pick one, document the trade-off.
 - Suggested tests: golden-file test pinning the conversion for a representative table of prices, with a comment justifying the chosen denominator.
 
 ---
@@ -563,7 +563,7 @@ Numbering is contiguous in this slice (`E-NN`). Severity per `idsrp.md` §18 wit
   )
   ```
 - Recommendation: key the rate limit on `c.Request().URL.Path` (or on a normalized route prefix from `c.Path()`) rather than a constant.
-- Suggested tests: send 20 alternating calls to two different admin routes; expect either both to be limited at 10 each (per-route) or all 20 to share a bucket — depending on which design you choose, but make the behavior explicit and tested.
+- Suggested tests: send 20 alternating calls to two different admin routes; expect either both to be limited at 10 each (per-route) or all 20 to share a bucket -- depending on which design you choose, but make the behavior explicit and tested.
 
 ---
 
@@ -673,7 +673,7 @@ The original finding analysis (preserved below for the audit trail):
       return echo.NewHTTPError(http.StatusForbidden, "Admin endpoints only available from localhost")
   }
   ```
-  Echo's `c.RealIP()` walks `X-Forwarded-For` and `X-Real-IP` headers by default. If Arkfile is fronted by a reverse proxy that doesn't strip incoming `X-Forwarded-For` (Caddy by default *appends* rather than replaces — see Caddyfile review in Slice F), a client can send `X-Forwarded-For: 127.0.0.1` and the admin endpoint accepts the request.
+  Echo's `c.RealIP()` walks `X-Forwarded-For` and `X-Real-IP` headers by default. If Arkfile is fronted by a reverse proxy that doesn't strip incoming `X-Forwarded-For` (Caddy by default *appends* rather than replaces -- see Caddyfile review in Slice F), a client can send `X-Forwarded-For: 127.0.0.1` and the admin endpoint accepts the request.
 
   Whether this is exploitable depends on `Caddyfile.prod` and on whether `e.IPExtractor` is explicitly set to `echo.ExtractIPFromRealIPHeader` / `echo.ExtractIPDirect`. I did not read `main.go` for that line in this slice; if `e.IPExtractor` is unset (default), `c.RealIP()` *does* parse `X-Forwarded-For`.
 
@@ -690,7 +690,7 @@ The original finding analysis (preserved below for the audit trail):
   2. Caddy appends `X-Forwarded-For: <real-client-ip>` to the request.
   3. An attacker sends `X-Forwarded-For: 127.0.0.1` from the public internet. Caddy appends the real IP, producing `X-Forwarded-For: 127.0.0.1, 1.2.3.4`.
   4. Echo's `c.RealIP()` returns `127.0.0.1` (the first entry). `isLocalhostIP` returns true.
-  5. Attacker has bypassed the localhost gate — but still needs to defeat JWT + AdminMiddleware's admin-flag check, so this is not a complete bypass on its own.
+  5. Attacker has bypassed the localhost gate -- but still needs to defeat JWT + AdminMiddleware's admin-flag check, so this is not a complete bypass on its own.
 - Impact: defense-in-depth loss. Combined with any future bug that lets a non-admin JWT through (or with a stolen admin JWT from XSS), the localhost gate provides no actual protection.
 - Recommendation:
   1. Read the raw `c.Request().RemoteAddr` (after stripping the port) instead of `c.RealIP()` for the localhost check. `RemoteAddr` is the actual TCP peer.
@@ -708,7 +708,7 @@ The original finding analysis (preserved below for the audit trail):
 - Confidence: **High**
 - Category: logging hygiene / privacy
 - Component: `handlers/admin.go`, `handlers/admin_billing.go`
-- Affected files/functions: `handlers/admin.go:1421-1428` (`LogAdminAction`); call sites at `handlers/admin.go:710` (`UpdateUser` — `"Updated fields: isApproved: true, isAdmin: true, storageLimitBytes: …"`) and `handlers/admin_billing.go:78-80` (`billing_set_price` — `"price: 10.00 -> 19.99 (rate: 1356 -> 2711 microcents/GiB/hour)"`) and `handlers/admin_billing.go:254-255` (`billing_gift` — `"amount: $5.0000, reason: <operator-supplied string>"`).
+- Affected files/functions: `handlers/admin.go:1421-1428` (`LogAdminAction`); call sites at `handlers/admin.go:710` (`UpdateUser` -- `"Updated fields: isApproved: true, isAdmin: true, storageLimitBytes: …"`) and `handlers/admin_billing.go:78-80` (`billing_set_price` -- `"price: 10.00 -> 19.99 (rate: 1356 -> 2711 microcents/GiB/hour)"`) and `handlers/admin_billing.go:254-255` (`billing_gift` -- `"amount: $5.0000, reason: <operator-supplied string>"`).
 - Description: `LogAdminAction` accepts arbitrary `details string` and inserts into `admin_logs.details`. Free-form operator input (e.g. a gift reason like `"PII: paid by alice@example.com"`) is persisted in cleartext, indefinitely (no documented retention).
 - Recommendation:
   1. Document that `admin_logs.details` is operator-controlled cleartext.
@@ -754,7 +754,7 @@ The original finding analysis (preserved below for the audit trail):
 
 - Recommendation:
   1. Move the audit log to after `next(c)` in `AdminMiddleware` and include `res.Status` + `err.Error()`.
-  2. Remove the per-handler `LogSecurityEvent(EventAdminAccess, …)` redundancy — the middleware logs the wrapped operation comprehensively.
+  2. Remove the per-handler `LogSecurityEvent(EventAdminAccess, …)` redundancy -- the middleware logs the wrapped operation comprehensively.
   3. Required for payment-processor audit compliance (PCI / SOC 2): every privileged action needs a single, unambiguous outcome record.
 
 ---
@@ -766,7 +766,7 @@ The original finding analysis (preserved below for the audit trail):
 - Category: privacy / design-disclosure
 - Component: `handlers/contact_info.go`, `models/contact_info.go` (not read in detail)
 - Affected files/functions: `handlers/contact_info.go:103-138` (`AdminGetContactInfo`).
-- Description: The system intentionally encrypts user contact info at rest with a server-side key derived from the master key (per the schema comment at `unified_schema.sql:393-396`). This is server-knowable encryption, not E2EE — the server *can* decrypt and does so for admins via this endpoint. The encryption is a defense-in-depth measure against database snapshot exfiltration, not a confidentiality guarantee from the server operator.
+- Description: The system intentionally encrypts user contact info at rest with a server-side key derived from the master key (per the schema comment at `unified_schema.sql:393-396`). This is server-knowable encryption, not E2EE -- the server *can* decrypt and does so for admins via this endpoint. The encryption is a defense-in-depth measure against database snapshot exfiltration, not a confidentiality guarantee from the server operator.
 
   This is a documentation/expectation gap: the schema phrase "Only the admin can decrypt and read contact information" reads like an E2EE claim when in fact the server holds the key.
 
@@ -800,7 +800,7 @@ Combined with the `RequireTOTP` middleware addition to `adminGroup` and `devTest
 
   The header path is intended for the CLI client which "sends standard Bearer token auth" (handler comment line 198). The CLI's JWT was issued after TOTP completion (Slice A confirms), so in practice this works. **But**: any code path that mints an Arkfile JWT without TOTP completion (e.g. a future bug, or the `auth.Echo` "TOTP setup is not yet done" temp-JWT if it ever shares the signing key) would let that JWT download any file the user owns.
 
-  The same comment notes "the handler validates auth internally via resolveExportAuth() which checks either JWT or token" — but it does not verify TOTP status.
+  The same comment notes "the handler validates auth internally via resolveExportAuth() which checks either JWT or token" -- but it does not verify TOTP status.
 
 - Evidence:
   ```
@@ -932,7 +932,7 @@ Combined with the `RequireTOTP` middleware addition to `adminGroup` and `devTest
   1. The same row's `entity_id` and the synthetic `share_id`'s embedded entity_id are duplicates (`shareID` ends with the same value as `entityID`).
   2. The UNIQUE constraint `UNIQUE(share_id, entity_id)` is satisfied trivially because both halves come from the same source.
   3. The "share" cleanup queries that target `share_access_attempts` (e.g. for revoked shares) cannot distinguish between real share entries and auth-rate-limit entries.
-  4. The scan at line 505-513 reads `share_id` into the variable named `entry.EndpointType` — a confusing aliasing.
+  4. The scan at line 505-513 reads `share_id` into the variable named `entry.EndpointType` -- a confusing aliasing.
 
   Functionally it works; semantically it's a footgun for future maintenance.
 
@@ -942,8 +942,8 @@ Combined with the `RequireTOTP` middleware addition to `adminGroup` and `devTest
   // Use a different table/approach - we'll reuse share_access_attempts with endpoint_type as share_id
   shareID := "auth_" + endpointType + "_" + entityID
   ```
-- Recommendation: introduce a dedicated `auth_rate_limit_attempts` table or — better — generalize `rate_limit_state` to cover this case (it already exists for the per-endpoint generic rate limiter). Migrating callers off `share_access_attempts` removes the cross-contamination risk.
-- Cross-refs: Slice D D-10 (share rate-limit ladder) — that finding uses the same table for its intended purpose.
+- Recommendation: introduce a dedicated `auth_rate_limit_attempts` table or -- better -- generalize `rate_limit_state` to cover this case (it already exists for the per-endpoint generic rate limiter). Migrating callers off `share_access_attempts` removes the cross-contamination risk.
+- Cross-refs: Slice D D-10 (share rate-limit ladder) -- that finding uses the same table for its intended purpose.
 
 ---
 
@@ -976,7 +976,7 @@ Combined with the `RequireTOTP` middleware addition to `adminGroup` and `devTest
 
   Slice B already covers the *content* of these endpoints under finding B-19 (server-controlled Argon2id params). The Slice E observation is purely that no rate limit is applied here, which is consistent with the design.
 
-- Recommendation: optional — add a generous shared rate limit (e.g. 60/min per entity) just to dampen accidental client retry storms.
+- Recommendation: optional -- add a generous shared rate limit (e.g. 60/min per entity) just to dampen accidental client retry storms.
 
 ---
 
@@ -994,7 +994,7 @@ Combined with the `RequireTOTP` middleware addition to `adminGroup` and `devTest
 
 ## 3. Tables
 
-### 3.1 Endpoint Review Table — admin / billing / misc endpoints
+### 3.1 Endpoint Review Table -- admin / billing / misc endpoints
 
 Columns: `Method | Endpoint | Auth | Authz rule | TOTP-gated? | Rate-limited? | Sensitive inputs | Sensitive outputs | Notable issues | Suggested tests`.
 
@@ -1002,72 +1002,72 @@ Columns: `Method | Endpoint | Auth | Authz rule | TOTP-gated? | Rate-limited? | 
 
 | Method | Endpoint | Auth | Authz rule | TOTP-gated? | Rate-limited? | Sensitive inputs | Sensitive outputs | Notable issues | Suggested tests |
 |---|---|---|---|---|---|---|---|---|---|
-| GET | `/healthz` | None | None | N/A | No | — | `{"status":"alive"}` | Trivial; reachable publicly | Unauth GET returns 200 |
-| GET | `/readyz` | None | None | N/A | No | — | rqlite / storage health, may leak error wording | E-16 | Negative: assert errors don't include host/port |
-| GET | `/api/config/argon2` | None | None | N/A | No (E-26) | — | Argon2 params JSON | Slice B B-19 | Public GET returns 200 |
-| GET | `/api/config/password-requirements` | None | None | N/A | No | — | password reqs JSON | Slice B B-19 | — |
-| GET | `/api/config/chunking` | None | None | N/A | No | — | chunk config JSON | Slice B | — |
-| GET | `/api/version` | None | None | N/A | No | — | version string | Low risk | — |
-| GET | `/api/admin-contacts` | None | None | N/A | No | — | admin contacts JSON | Public exposes admin usernames; intentional for support contact | Verify minimal disclosure |
+| GET | `/healthz` | None | None | N/A | No | -- | `{"status":"alive"}` | Trivial; reachable publicly | Unauth GET returns 200 |
+| GET | `/readyz` | None | None | N/A | No | -- | rqlite / storage health, may leak error wording | E-16 | Negative: assert errors don't include host/port |
+| GET | `/api/config/argon2` | None | None | N/A | No (E-26) | -- | Argon2 params JSON | Slice B B-19 | Public GET returns 200 |
+| GET | `/api/config/password-requirements` | None | None | N/A | No | -- | password reqs JSON | Slice B B-19 | -- |
+| GET | `/api/config/chunking` | None | None | N/A | No | -- | chunk config JSON | Slice B | -- |
+| GET | `/api/version` | None | None | N/A | No | -- | version string | Low risk | -- |
+| GET | `/api/admin-contacts` | None | None | N/A | No | -- | admin contacts JSON | Public exposes admin usernames; intentional for support contact | Verify minimal disclosure |
 | POST | `/api/refresh` | Refresh token | per-token | N/A | No | refresh token | new JWT | Slice A |
-| POST | `/api/logout` | JWT | self | N/A | No | JWT | — | Slice A |
-| GET | `/api/totp/status` | JWT (full) | self | N/A | No | — | TOTP status flags | Slice A |
-| POST | `/api/totp/reset` | JWT (full) | self | N/A | No | — | reset confirmation | Slice A |
-| POST | `/api/totp/setup` | TOTP-temp JWT | self | (entry point) | No | — | QR / URI | Slice A |
+| POST | `/api/logout` | JWT | self | N/A | No | JWT | -- | Slice A |
+| GET | `/api/totp/status` | JWT (full) | self | N/A | No | -- | TOTP status flags | Slice A |
+| POST | `/api/totp/reset` | JWT (full) | self | N/A | No | -- | reset confirmation | Slice A |
+| POST | `/api/totp/setup` | TOTP-temp JWT | self | (entry point) | No | -- | QR / URI | Slice A |
 | POST | `/api/totp/verify` | TOTP-temp JWT | self | (entry point) | Yes (TOTP) | TOTP code | full JWT | Slice A |
 | POST | `/api/totp/auth` | TOTP-temp JWT | self | (entry point) | Yes (TOTP) | TOTP code | full JWT | Slice A |
-| POST | `/api/revoke-token` | JWT+TOTP | self | **Yes** | No | jti | — | OK |
-| POST | `/api/auth/revoke-all` | JWT+TOTP | self | **Yes** | No | — | — | OK |
+| POST | `/api/revoke-token` | JWT+TOTP | self | **Yes** | No | jti | -- | OK |
+| POST | `/api/auth/revoke-all` | JWT+TOTP | self | **Yes** | No | -- | -- | OK |
 | GET | `/api/credits` | JWT+TOTP | self | **Yes** | No | pagination | balance, transactions, runway | OK |
-| GET | `/api/user/contact-info` | JWT (no Approved) +TOTP | self | **Yes** | No | — | contact info (decrypted) | OK |
-| PUT | `/api/user/contact-info` | JWT (no Approved) +TOTP | self | **Yes** | No | contact info JSON | — | size-limit OK |
-| DELETE | `/api/user/contact-info` | JWT (no Approved) +TOTP | self | **Yes** | No | — | — | OK |
+| GET | `/api/user/contact-info` | JWT (no Approved) +TOTP | self | **Yes** | No | -- | contact info (decrypted) | OK |
+| PUT | `/api/user/contact-info` | JWT (no Approved) +TOTP | self | **Yes** | No | contact info JSON | -- | size-limit OK |
+| DELETE | `/api/user/contact-info` | JWT (no Approved) +TOTP | self | **Yes** | No | -- | -- | OK |
 | POST | `/api/files/:fileId/export-token` | JWT+TOTP | self-owns-file | **Yes** | No | fileId | short-lived JWT (60s) | OK |
 | GET | `/api/files/:fileId/export` | JWT *or* export-token | (token-bound) or self-owns-file | **No (header path)** / Indirect (token path) | No | fileId, ?token= | **encrypted blob + metadata** | **E-19** | Negative: non-TOTP JWT should be rejected |
 | POST | `/api/admin/login/response` | None (pre-auth) | None | (entry point) | Yes (login limiter) | username, credential | session-id, response | Slice A |
-| POST | `/api/admin/login/finalize` | None (pre-auth) | None | (entry point — requires TOTP next) | Yes | session-id, authU | temp-token | Slice A |
-| GET | `/api/admin/credits` | JWT+Admin | localhost+admin | **No (E-01)** | Yes (admin 10/min) | — | every user's balance | E-01, E-13 | Negative: non-TOTP JWT rejected |
-| GET | `/api/admin/credits/:username` | JWT+Admin | localhost+admin | **No** | Yes | username | one user's full ledger | E-01 | — |
-| GET | `/api/admin/users` | JWT+Admin | localhost+admin | **No** | Yes | — | all users + TOTP-enabled + file_count | E-01, E-12 (cross) | — |
-| POST | `/api/admin/users/:u/approve` | JWT+Admin | localhost+admin | **No** | Yes | approved_by, storage_limit | — | E-01 | — |
-| GET | `/api/admin/users/:u/status` | JWT+Admin | localhost+admin | **No** | Yes | username | TOTP/OPAQUE/tokens/billing | E-01 | — |
-| PUT | `/api/admin/users/:u/storage` | JWT+Admin | localhost+admin | **No** | Yes | storage_limit_bytes | — | E-01 | bounds-check positive |
-| POST | `/api/admin/users/:u/revoke` | JWT+Admin | localhost+admin | **No** | Yes | username | — | E-01; doesn't revoke JWTs (Slice A) | — |
-| DELETE | `/api/admin/users/:u` | JWT+Admin | localhost+admin | **No** | Yes | username | — | **E-21 (cascade)**, E-01 | Negative: cannot delete if balance != 0 |
-| PUT | `/api/admin/users/:u` | JWT+Admin | localhost+admin | **No** | Yes | is_approved, is_admin, storage_limit | — | E-01, E-15 (details log) | — |
-| POST | `/api/admin/users/:u/force-logout` | JWT+Admin | localhost+admin | **No** | Yes | username | — | Slice A on JWT revocation | — |
-| GET | `/api/admin/users/:u/files` | JWT+Admin | localhost+admin | **No** | Yes | username | file_id, storage_id, locations | E-01 | — |
-| GET | `/api/admin/users/:u/shares` | JWT+Admin | localhost+admin | **No** | Yes | username | share_ids, access_count | E-01 | — |
+| POST | `/api/admin/login/finalize` | None (pre-auth) | None | (entry point -- requires TOTP next) | Yes | session-id, authU | temp-token | Slice A |
+| GET | `/api/admin/credits` | JWT+Admin | localhost+admin | **No (E-01)** | Yes (admin 10/min) | -- | every user's balance | E-01, E-13 | Negative: non-TOTP JWT rejected |
+| GET | `/api/admin/credits/:username` | JWT+Admin | localhost+admin | **No** | Yes | username | one user's full ledger | E-01 | -- |
+| GET | `/api/admin/users` | JWT+Admin | localhost+admin | **No** | Yes | -- | all users + TOTP-enabled + file_count | E-01, E-12 (cross) | -- |
+| POST | `/api/admin/users/:u/approve` | JWT+Admin | localhost+admin | **No** | Yes | approved_by, storage_limit | -- | E-01 | -- |
+| GET | `/api/admin/users/:u/status` | JWT+Admin | localhost+admin | **No** | Yes | username | TOTP/OPAQUE/tokens/billing | E-01 | -- |
+| PUT | `/api/admin/users/:u/storage` | JWT+Admin | localhost+admin | **No** | Yes | storage_limit_bytes | -- | E-01 | bounds-check positive |
+| POST | `/api/admin/users/:u/revoke` | JWT+Admin | localhost+admin | **No** | Yes | username | -- | E-01; doesn't revoke JWTs (Slice A) | -- |
+| DELETE | `/api/admin/users/:u` | JWT+Admin | localhost+admin | **No** | Yes | username | -- | **E-21 (cascade)**, E-01 | Negative: cannot delete if balance != 0 |
+| PUT | `/api/admin/users/:u` | JWT+Admin | localhost+admin | **No** | Yes | is_approved, is_admin, storage_limit | -- | E-01, E-15 (details log) | -- |
+| POST | `/api/admin/users/:u/force-logout` | JWT+Admin | localhost+admin | **No** | Yes | username | -- | Slice A on JWT revocation | -- |
+| GET | `/api/admin/users/:u/files` | JWT+Admin | localhost+admin | **No** | Yes | username | file_id, storage_id, locations | E-01 | -- |
+| GET | `/api/admin/users/:u/shares` | JWT+Admin | localhost+admin | **No** | Yes | username | share_ids, access_count | E-01 | -- |
 | GET | `/api/admin/users/:u/contact-info` | JWT+Admin | localhost+admin | **No** | Yes | username | decrypted contact info | E-01, E-18 | audit-log every call |
-| DELETE | `/api/admin/files/:fileId` | JWT+Admin | localhost+admin | **No** | Yes | fileId | — | E-01 | — |
-| POST | `/api/admin/shares/:shareId/revoke` | JWT+Admin | localhost+admin | **No** | Yes | shareId | — | E-01; Slice D D-04 (reason leak) | — |
+| DELETE | `/api/admin/files/:fileId` | JWT+Admin | localhost+admin | **No** | Yes | fileId | -- | E-01 | -- |
+| POST | `/api/admin/shares/:shareId/revoke` | JWT+Admin | localhost+admin | **No** | Yes | shareId | -- | E-01; Slice D D-04 (reason leak) | -- |
 | GET | `/api/admin/files/:fileId/export` | JWT+Admin | localhost+admin | **No** | Yes | fileId | **encrypted blob of any user's file** | **E-20**, E-01 | Tamper-evident audit-log required |
-| GET | `/api/admin/system/status` | JWT+Admin | localhost+admin | **No** | Yes | — | user counts, storage stats, TOTP counts | E-01 | — |
-| GET | `/api/admin/system/health` | JWT+Admin | localhost+admin | **No** | Yes | — | DB / keys / storage / system details | E-01 | endpoint/bucket disclosed (admin OK) |
-| GET | `/api/admin/security/events` | JWT+Admin | localhost+admin | **No** | Yes | type, severity, entity_id, limit | security events including usernames | E-01, E-27 | — |
-| GET | `/api/admin/storage/status` | JWT+Admin | localhost+admin | **No** | Yes | — | provider IDs, costs, sizes | E-01 | — |
-| GET | `/api/admin/storage/sync-status` | JWT+Admin | localhost+admin | **No** | Yes | — | per-provider sync stats | **E-02 (SQLi)**, E-01 | Negative: malformed provider_id |
-| POST | `/api/admin/storage/copy-all` | JWT+Admin | localhost+admin | **No** | Yes | source_id, dest_id, verify, skip_existing | task_id | E-01 | — |
-| POST | `/api/admin/storage/copy-user-files` | JWT+Admin | localhost+admin | **No** | Yes | username, source_id, dest_id | task_id | E-01 | — |
-| POST | `/api/admin/storage/copy-file` | JWT+Admin | localhost+admin | **No** | Yes | file_id, source_id, dest_id | task_id | E-01 | — |
-| GET | `/api/admin/storage/task/:taskId` | JWT+Admin | localhost+admin | **No** | Yes | task_id | task status + details | E-01; task IDs are UUIDs | — |
-| POST | `/api/admin/storage/cancel-task/:taskId` | JWT+Admin | localhost+admin | **No** | Yes | task_id | — | E-01 | — |
-| POST | `/api/admin/storage/set-primary` | JWT+Admin | localhost+admin | **No** | Yes | provider_id | role swap result | E-01 | — |
-| POST | `/api/admin/storage/set-secondary` | JWT+Admin | localhost+admin | **No** | Yes | provider_id | — | E-01 | — |
-| POST | `/api/admin/storage/set-tertiary` | JWT+Admin | localhost+admin | **No** | Yes | provider_id | — | E-01 | — |
-| POST | `/api/admin/storage/swap-providers` | JWT+Admin | localhost+admin | **No** | Yes | — | swap result | E-01 | — |
-| POST | `/api/admin/storage/verify-storage` | JWT+Admin | localhost+admin | **No** | Yes | provider_id (opt) | verification details | E-01 | — |
-| POST | `/api/admin/storage/set-cost` | JWT+Admin | localhost+admin | **No** | Yes | provider_id, cost_per_tb_cents | — | E-01 | — |
-| POST | `/api/admin/storage/verify-all` | JWT+Admin | localhost+admin | **No** | Yes | provider_id (opt), fix, concurrency | task_id | E-01 | — |
-| GET | `/api/admin/alerts/summary` | JWT+Admin | localhost+admin | **No** | Yes | — | counts of failures/orphans/etc | E-01 | — |
-| GET | `/api/admin/billing/price` | JWT+Admin | localhost+admin | **No** | Yes | — | current rate | E-01 | — |
+| GET | `/api/admin/system/status` | JWT+Admin | localhost+admin | **No** | Yes | -- | user counts, storage stats, TOTP counts | E-01 | -- |
+| GET | `/api/admin/system/health` | JWT+Admin | localhost+admin | **No** | Yes | -- | DB / keys / storage / system details | E-01 | endpoint/bucket disclosed (admin OK) |
+| GET | `/api/admin/security/events` | JWT+Admin | localhost+admin | **No** | Yes | type, severity, entity_id, limit | security events including usernames | E-01, E-27 | -- |
+| GET | `/api/admin/storage/status` | JWT+Admin | localhost+admin | **No** | Yes | -- | provider IDs, costs, sizes | E-01 | -- |
+| GET | `/api/admin/storage/sync-status` | JWT+Admin | localhost+admin | **No** | Yes | -- | per-provider sync stats | **E-02 (SQLi)**, E-01 | Negative: malformed provider_id |
+| POST | `/api/admin/storage/copy-all` | JWT+Admin | localhost+admin | **No** | Yes | source_id, dest_id, verify, skip_existing | task_id | E-01 | -- |
+| POST | `/api/admin/storage/copy-user-files` | JWT+Admin | localhost+admin | **No** | Yes | username, source_id, dest_id | task_id | E-01 | -- |
+| POST | `/api/admin/storage/copy-file` | JWT+Admin | localhost+admin | **No** | Yes | file_id, source_id, dest_id | task_id | E-01 | -- |
+| GET | `/api/admin/storage/task/:taskId` | JWT+Admin | localhost+admin | **No** | Yes | task_id | task status + details | E-01; task IDs are UUIDs | -- |
+| POST | `/api/admin/storage/cancel-task/:taskId` | JWT+Admin | localhost+admin | **No** | Yes | task_id | -- | E-01 | -- |
+| POST | `/api/admin/storage/set-primary` | JWT+Admin | localhost+admin | **No** | Yes | provider_id | role swap result | E-01 | -- |
+| POST | `/api/admin/storage/set-secondary` | JWT+Admin | localhost+admin | **No** | Yes | provider_id | -- | E-01 | -- |
+| POST | `/api/admin/storage/set-tertiary` | JWT+Admin | localhost+admin | **No** | Yes | provider_id | -- | E-01 | -- |
+| POST | `/api/admin/storage/swap-providers` | JWT+Admin | localhost+admin | **No** | Yes | -- | swap result | E-01 | -- |
+| POST | `/api/admin/storage/verify-storage` | JWT+Admin | localhost+admin | **No** | Yes | provider_id (opt) | verification details | E-01 | -- |
+| POST | `/api/admin/storage/set-cost` | JWT+Admin | localhost+admin | **No** | Yes | provider_id, cost_per_tb_cents | -- | E-01 | -- |
+| POST | `/api/admin/storage/verify-all` | JWT+Admin | localhost+admin | **No** | Yes | provider_id (opt), fix, concurrency | task_id | E-01 | -- |
+| GET | `/api/admin/alerts/summary` | JWT+Admin | localhost+admin | **No** | Yes | -- | counts of failures/orphans/etc | E-01 | -- |
+| GET | `/api/admin/billing/price` | JWT+Admin | localhost+admin | **No** | Yes | -- | current rate | E-01 | -- |
 | POST | `/api/admin/billing/set-price` | JWT+Admin | localhost+admin | **No** | Yes | customer_price_usd_per_tb_per_month | new rate | **E-01**, E-06 | Negative: overflow input |
-| GET | `/api/admin/billing/sweep-summary` | JWT+Admin | localhost+admin | **No** | Yes | days | per-day usage aggregates | E-01 | — |
-| GET | `/api/admin/billing/overdrawn` | JWT+Admin | localhost+admin | **No** | Yes | — | usernames in negative balance | E-01 | — |
+| GET | `/api/admin/billing/sweep-summary` | JWT+Admin | localhost+admin | **No** | Yes | days | per-day usage aggregates | E-01 | -- |
+| GET | `/api/admin/billing/overdrawn` | JWT+Admin | localhost+admin | **No** | Yes | -- | usernames in negative balance | E-01 | -- |
 | POST | `/api/admin/billing/gift` | JWT+Admin | localhost+admin | **No** | Yes | target_username, amount_usd, reason | transaction | **E-01**, **E-04**, E-06, E-15 | Duplicate-gift test |
-| POST | `/api/admin/dev-test/users/cleanup` | JWT+Admin (dev-only) | localhost+admin+dev-flag | **No** | Yes | username, confirm | rows-cleared map | E-11 (duplicate cleanup row); production-disabled | — |
-| GET | `/api/admin/dev-test/totp/decrypt-check/:u` | JWT+Admin (dev-only) | localhost+admin+dev-flag+DEBUG_MODE | **No** | Yes | username | TOTP diagnostic flags | E-12; triple-gated | — |
-| POST | `/api/admin/dev-test/billing/tick-now` | JWT+Admin (dev-only) | localhost+admin+dev-flag | **No** | Yes | sweep | tick+sweep result | E-04, E-05 | — |
+| POST | `/api/admin/dev-test/users/cleanup` | JWT+Admin (dev-only) | localhost+admin+dev-flag | **No** | Yes | username, confirm | rows-cleared map | E-11 (duplicate cleanup row); production-disabled | -- |
+| GET | `/api/admin/dev-test/totp/decrypt-check/:u` | JWT+Admin (dev-only) | localhost+admin+dev-flag+DEBUG_MODE | **No** | Yes | username | TOTP diagnostic flags | E-12; triple-gated | -- |
+| POST | `/api/admin/dev-test/billing/tick-now` | JWT+Admin (dev-only) | localhost+admin+dev-flag | **No** | Yes | sweep | tick+sweep result | E-04, E-05 | -- |
 
 **Count summary**: 64 endpoints in this slice's scope. **51 of the 64** are on `adminGroup` and are therefore **not** route-level TOTP-gated; per E-01 this is the headline finding for the slice.
 
@@ -1091,13 +1091,13 @@ Columns: `Operation | Inputs (untrusted?) | DB writes | Atomicity | Idempotent? 
 |---|---|---|---|---|
 | `user_credits` | username → users | CASCADE | wipes balance row | E-21 |
 | `credit_transactions` | username → users | CASCADE | **wipes ledger** | **E-21** (Critical for payments) |
-| `credit_transactions` | (transaction_id) | — | NOT UNIQUE | E-04 |
-| `credit_transactions.transaction_type` | — | — | No CHECK constraint | E-22 |
+| `credit_transactions` | (transaction_id) | -- | NOT UNIQUE | E-04 |
+| `credit_transactions.transaction_type` | -- | -- | No CHECK constraint | E-22 |
 | `storage_usage_accumulator` | username → users | CASCADE | wipes accumulator | E-21 |
 | `admin_logs` | admin_username → users | CASCADE | **wipes admin audit trail** | **E-21** |
 | `file_storage_locations` | provider_id → storage_providers | (no rule = NO ACTION) | cannot delete provider with locations | E-23 |
-| `file_share_keys` | file_id → file_metadata | CASCADE | revoking the file revokes the share — intended |
-| `storage_providers.provider_id` | — | — | No format check (must be sanitized) | **E-02** (combined with admin_storage.go interpolation) |
+| `file_share_keys` | file_id → file_metadata | CASCADE | revoking the file revokes the share -- intended |
+| `storage_providers.provider_id` | -- | -- | No format check (must be sanitized) | **E-02** (combined with admin_storage.go interpolation) |
 
 ---
 
@@ -1116,7 +1116,7 @@ Items the `idsrp.md` prompt asks about that do not exist in Arkfile's admin/bill
 | CDN cache-poisoning for private content | Deferred to Slice F | Caddy / CDN posture. |
 | TOTP middleware *implementation* details (constant-time, lockout state) | Deferred to Slice A | This slice only verifies route-level wiring (E-01). |
 | Two-tier JWT model correctness (temp vs full token) | Deferred to Slice A | This slice only verifies route-level wiring. |
-| Email verification / password reset flow | TBD — deferred to Slice A | None exists in this slice's scope; Arkfile's "lost password = lost files" posture means there is no reset by design. |
+| Email verification / password reset flow | TBD -- deferred to Slice A | None exists in this slice's scope; Arkfile's "lost password = lost files" posture means there is no reset by design. |
 | Device enrollment / device management | N/A | Refresh tokens exist; no per-device UI. |
 | systemd / Caddy / TLS / build supply chain | Deferred to Slice F |  |
 | WASM artifact integrity / SRI | Deferred to Slice F |  |
@@ -1146,7 +1146,7 @@ Tests that this slice's findings demand and that are missing or thin in the pres
    - Ledger invariant: `sum(credit_transactions.amount WHERE username = U) == user_credits.balance` always holds (E-03/E-04).
 
 2. **High-priority (authz / TOTP gating)**:
-   - For every `/api/admin/**` route, verify a non-TOTP-verified JWT is rejected — this is the per-route verification §22.3 demands (E-01).
+   - For every `/api/admin/**` route, verify a non-TOTP-verified JWT is rejected -- this is the per-route verification §22.3 demands (E-01).
    - SQL-injection probe: write a `storage_providers` row with `provider_id = "x' OR 1=1 --"` and call `GET /api/admin/storage/sync-status` → assert error (E-02).
    - Localhost-bypass probe: craft `X-Forwarded-For: 127.0.0.1` against `/api/admin/users` from a non-loopback client → assert 403 (E-14).
    - Export-header path: present a synthetic non-TOTP JWT to `GET /api/files/:fileId/export` (Bearer header) → assert 403 once E-19 is fixed.
@@ -1161,7 +1161,7 @@ Tests that this slice's findings demand and that are missing or thin in the pres
    - Assertion: `storage_providers.provider_id` matches `^[a-zA-Z0-9_-]+$`.
 
 5. **Logging hygiene**:
-   - Assert `admin_logs.details` for `update_user` does not include the user's storage limit if the design says it shouldn't (E-15 — clarify the policy first).
+   - Assert `admin_logs.details` for `update_user` does not include the user's storage limit if the design says it shouldn't (E-15 -- clarify the policy first).
    - Assert `/readyz` error responses do not contain "rqlite" / driver-specific wording (E-16).
 
 ---

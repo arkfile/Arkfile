@@ -56,7 +56,7 @@ Offset    Size        Field                Description
 | `version` | Constant | Bundle format version for forward compatibility |
 | `file_id` | `file_metadata.file_id` | Unique file identifier |
 | `encrypted_fek` | `file_metadata.encrypted_fek` | Base64-encoded wrapped FEK (2-byte envelope header + AES-GCM encrypted 32-byte key) |
-| `password_type` | `file_metadata.password_type` | `"account"` or `"custom"` — determines which key unwraps the FEK |
+| `password_type` | `file_metadata.password_type` | `"account"` or `"custom"` -- determines which key unwraps the FEK |
 | `size_bytes` | `file_metadata.size_bytes` | Encrypted data size (without padding). Used to know where real data ends |
 | `padded_size` | `file_metadata.padded_size` | Total S3 object size including padding. For integrity verification |
 | `encrypted_filename` | `file_metadata.encrypted_filename` | Base64-encoded AES-GCM ciphertext of original filename |
@@ -100,7 +100,7 @@ Content-Length: <total bundle size>
 10. Stream S3 object to response (full blob including padding)
 ```
 
-**Memory usage:** O(1) — the blob is streamed directly from S3 to the HTTP response. Only the JSON metadata (~500 bytes) is buffered.
+**Memory usage:** O(1) -- the blob is streamed directly from S3 to the HTTP response. Only the JSON metadata (~500 bytes) is buffered.
 
 **Error handling:**
 - 404 if file not found or not owned by user
@@ -155,8 +155,8 @@ Understanding which passwords are needed for decryption:
 **Metadata (filename, SHA-256 hash):** Always encrypted with the **account key** (derived from the user's account password via Argon2id), regardless of password type. This means the account password is ALWAYS required for full decryption with verification.
 
 **FEK (File Encryption Key):** Wrapped with either:
-- **Account key** (if `password_type` = `"account"`) — same key used for metadata
-- **Custom KEK** (if `password_type` = `"custom"`) — derived from a separate custom password via Argon2id
+- **Account key** (if `password_type` = `"account"`) -- same key used for metadata
+- **Custom KEK** (if `password_type` = `"custom"`) -- derived from a separate custom password via Argon2id
 
 **File data chunks:** Always encrypted with the FEK.
 
@@ -173,7 +173,7 @@ Understanding which passwords are needed for decryption:
 
 Decrypts a `.arkbackup` bundle using only local computation. No network required.
 
-**Usage — account-password file (interactive):**
+**Usage -- account-password file (interactive):**
 ```bash
 arkfile-client decrypt-blob \
   --bundle myfile.arkbackup \
@@ -182,7 +182,7 @@ arkfile-client decrypt-blob \
 # Prompts: "Enter your account password: " (no echo)
 ```
 
-**Usage — custom-password file (interactive):**
+**Usage -- custom-password file (interactive):**
 ```bash
 arkfile-client decrypt-blob \
   --bundle myfile.arkbackup \
@@ -395,13 +395,13 @@ echo "[OK] Offline export & decrypt verification complete"
 
 ### Overview
 
-Browser users can export `.arkbackup` bundles directly from the file list UI. Since the bundle is an opaque encrypted binary (not decrypted client-side), the browser just triggers a download — no crypto processing needed in the browser.
+Browser users can export `.arkbackup` bundles directly from the file list UI. Since the bundle is an opaque encrypted binary (not decrypted client-side), the browser just triggers a download -- no crypto processing needed in the browser.
 
 **Important UX note:** The browser CANNOT decrypt `.arkbackup` bundles. The export button should clearly communicate that offline decryption requires `arkfile-client`.
 
 ### Large File Download Challenge
 
-The existing browser download uses `fetch()` -> `Blob` -> `createObjectURL()`, which buffers the entire response in browser memory. For a 1GB `.arkbackup` bundle, this would consume 1GB of browser RAM — unacceptable.
+The existing browser download uses `fetch()` -> `Blob` -> `createObjectURL()`, which buffers the entire response in browser memory. For a 1GB `.arkbackup` bundle, this would consume 1GB of browser RAM -- unacceptable.
 
 **Solution: Short-lived download token**
 
@@ -465,7 +465,7 @@ export async function exportBackup(fileId: string): Promise<void> {
 
     const { token } = await response.json();
 
-    // Step 2: Open the export URL with the token — browser handles download natively
+    // Step 2: Open the export URL with the token -- browser handles download natively
     window.location.href = `/api/files/${fileId}/export?token=${encodeURIComponent(token)}`;
 
     showSuccess(
@@ -539,8 +539,8 @@ test('export encrypted backup from browser', async ({ page }) => {
 | `handlers/export.go` | **NEW** | `ExportFile`, `AdminExportFile`, `CreateExportToken` handlers |
 | `handlers/route_config.go` | Modified | Add export, export-token, and admin export routes |
 | **CLI Client** | | |
-| `cmd/arkfile-client/export.go` | **NEW** | `export` command — downloads bundle from server |
-| `cmd/arkfile-client/offline_decrypt.go` | **NEW** | `decrypt-blob` command — offline decryption |
+| `cmd/arkfile-client/export.go` | **NEW** | `export` command -- downloads bundle from server |
+| `cmd/arkfile-client/offline_decrypt.go` | **NEW** | `decrypt-blob` command -- offline decryption |
 | `cmd/arkfile-client/main.go` | Modified | Add `export` and `decrypt-blob` command dispatch + usage text |
 | **Admin CLI** | | |
 | `cmd/arkfile-admin/main.go` | Modified | Add `export-file` command for admin file export |
@@ -563,7 +563,7 @@ test('export encrypted backup from browser', async ({ page }) => {
 
 ## Security Considerations
 
-1. **The `.arkbackup` bundle contains encrypted data only.** The FEK is wrapped with the user's account key — it cannot be unwrapped without the user's password.
+1. **The `.arkbackup` bundle contains encrypted data only.** The FEK is wrapped with the user's account key -- it cannot be unwrapped without the user's password.
 
 2. **No plaintext is stored in the bundle.** Filename, SHA-256 hash, and file contents are all encrypted. Only the `file_id`, sizes, and crypto parameters are in cleartext.
 

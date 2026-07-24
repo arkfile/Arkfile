@@ -72,7 +72,7 @@ func TestBuildChunkAAD_CrossLanguageVector(t *testing.T) {
 }
 
 // =============================================================================
-// DETERMINISM + UNIQUENESS — BuildChunkAAD
+// DETERMINISM + UNIQUENESS -- BuildChunkAAD
 // =============================================================================
 
 func TestBuildChunkAAD_Deterministic(t *testing.T) {
@@ -108,7 +108,7 @@ func TestBuildChunkAAD_UniqueByTotalChunks(t *testing.T) {
 }
 
 // =============================================================================
-// DETERMINISM + DISTINCTION — BuildFEKEnvelopeAAD
+// DETERMINISM + DISTINCTION -- BuildFEKEnvelopeAAD
 // =============================================================================
 
 func TestBuildFEKEnvelopeAAD_Deterministic(t *testing.T) {
@@ -136,7 +136,7 @@ func TestBuildFEKEnvelopeAAD_FileIDDistinction(t *testing.T) {
 }
 
 // =============================================================================
-// DETERMINISM + DISTINCTION — BuildMetadataFieldAAD
+// DETERMINISM + DISTINCTION -- BuildMetadataFieldAAD
 // =============================================================================
 
 func TestBuildMetadataFieldAAD_Deterministic(t *testing.T) {
@@ -190,7 +190,7 @@ func TestAADFieldLabels_AreCanonicalStrings(t *testing.T) {
 }
 
 // =============================================================================
-// TAMPER-DETECTION NEGATIVE TESTS — proves AAD binding actually catches
+// TAMPER-DETECTION NEGATIVE TESTS -- proves AAD binding actually catches
 // chunk swap / reorder / cross-file substitution / truncation at the
 // AEAD layer
 // =============================================================================

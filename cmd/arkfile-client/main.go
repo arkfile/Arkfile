@@ -342,7 +342,7 @@ func main() {
 		}
 	case "__agent-daemon":
 		// Internal command: run agent in foreground as a daemon process.
-		// Not intended for direct user invocation — used by ensureAgentRunning().
+		// Not intended for direct user invocation -- used by ensureAgentRunning().
 		agent, err := NewAgent()
 		if err != nil {
 			logError("Agent daemon failed: %v", err)
@@ -822,7 +822,7 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 	saveSession := fs.Bool("save-session", true, "Save session for future use")
 	keyTTL := fs.Int("key-ttl", DefaultKeyTTLHours, "Account key TTL in hours (1-4, default 1)")
 	totpCode := fs.String("totp-code", "", "TOTP code for non-interactive login")
-	totpSecret := fs.String("totp-secret", "", "TOTP secret — CLI generates the code internally (for scripted/test use)")
+	totpSecret := fs.String("totp-secret", "", "TOTP secret -- CLI generates the code internally (for scripted/test use)")
 	backupCode := fs.String("backup-code", "", "10-character backup code for one-shot emergency login")
 	mfaMethod := fs.String("mfa-method", "", "Second factor method for login: totp or webauthn")
 	credentialID := fs.String("credential-id", "", "WebAuthn credential id when multiple security keys are enrolled")
@@ -853,7 +853,7 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 		clearBytes(password)
 		return fmt.Errorf("failed to create credential request: %w", err)
 	}
-	// NOTE: Do NOT zero password here — it is needed after OPAQUE completes
+	// NOTE: Do NOT zero password here -- it is needed after OPAQUE completes
 	// to derive the Argon2id account key for file encryption.
 
 	authResp, err := client.makeRequest("POST", "/api/opaque/login/response", map[string]string{
@@ -978,7 +978,7 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 	}
 
 	// Derive the account key for file encryption using Argon2id.
-	// This is completely separate from OPAQUE — OPAQUE is only for authentication.
+	// This is completely separate from OPAQUE -- OPAQUE is only for authentication.
 	// The account key is derived from the user's password + username using the
 	// embedded Argon2id parameters, matching the TypeScript frontend exactly.
 	accountKey := crypto.DeriveAccountPasswordKey(password, *usernameFlag)
@@ -1195,7 +1195,7 @@ func handleAgentStop() error {
 	// Send stop command via socket.
 	// handleStop in the daemon wipes all sensitive data, removes the socket,
 	// and calls os.Exit(0). The client may get a connection error if the
-	// daemon exits before the response is fully read — that is expected.
+	// daemon exits before the response is fully read -- that is expected.
 	_ = client.Stop()
 
 	// Clean up socket file if the daemon's os.Exit didn't remove it
@@ -1226,7 +1226,7 @@ func handleAgentStatus(args []string) error {
 		} else {
 			fmt.Printf("Socket: %s (stale, attempting removal)\n", client.socketPath)
 			if rmErr := os.Remove(client.socketPath); rmErr != nil {
-				fmt.Printf("Socket: CRITICAL — failed to remove stale socket: %v\n", rmErr)
+				fmt.Printf("Socket: CRITICAL -- failed to remove stale socket: %v\n", rmErr)
 				fmt.Println("  This may indicate a permissions issue or filesystem problem.")
 				fmt.Printf("  Manual action required: rm %s\n", client.socketPath)
 				fmt.Println("  Until removed, the agent cannot be restarted.")
@@ -1235,7 +1235,7 @@ func handleAgentStatus(args []string) error {
 			}
 		}
 
-		// Daemon process audit — scan /proc for orphaned __agent-daemon processes
+		// Daemon process audit -- scan /proc for orphaned __agent-daemon processes
 		var orphanPIDs []string
 		entries, _ := os.ReadDir("/proc")
 		for _, entry := range entries {
@@ -1255,7 +1255,7 @@ func handleAgentStatus(args []string) error {
 			fmt.Println("Process: no daemon process detected")
 		} else {
 			for _, pid := range orphanPIDs {
-				fmt.Printf("Process: CRITICAL — orphaned daemon process detected (PID %s)\n", pid)
+				fmt.Printf("Process: CRITICAL -- orphaned daemon process detected (PID %s)\n", pid)
 			}
 			fmt.Println("  The daemon process is alive but not responding on its socket.")
 			fmt.Println("  Key material may still be in process memory.")

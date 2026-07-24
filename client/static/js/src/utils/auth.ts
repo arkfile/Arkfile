@@ -79,7 +79,7 @@ export class AuthManager {
   // Auto-refresh timer: fires slightly before the 30-minute JWT TTL.
   private static autoRefreshTimer: number | null = null;
   private static visibilityRefreshAttached = false;
-  // 25 minutes — fires with 5 minutes to spare before the 30-minute JWT TTL.
+  // 25 minutes -- fires with 5 minutes to spare before the 30-minute JWT TTL.
   private static readonly AUTO_REFRESH_INTERVAL = 25 * 60 * 1000;
 
   public static isAuthenticated(): boolean {

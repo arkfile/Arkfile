@@ -371,7 +371,7 @@ export class LoginManager {
 
       hideProgress();
       // Re-registration preserves MFA enrollment, so this continues straight
-      // into the existing second-factor flow — no extra login round-trip.
+      // into the existing second-factor flow -- no extra login round-trip.
       await LoginManager.routeAfterOpaque(finalizeData, credentials);
     } catch (error) {
       clearClientSecret('reregistration_secret');

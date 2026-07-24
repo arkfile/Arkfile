@@ -48,7 +48,7 @@ AlmaLinux 10 uses cgroup v2 and SELinux by default. Keep SELinux enforcing. On x
 
 Install Caddy on the host (package or static binary) so it can bind 443 and proxy to loopback. Caddy may run as its own unprivileged user or via a small system unit; it is outside the scope of the `almapay` compose project.
 
-## Phase 1 — One-time host bootstrap (operator root)
+## Phase 1 -- One-time host bootstrap (operator root)
 
 The following commands illustrate the intended privilege boundary; they are not yet a version-pinned installer. The implemented `bootstrap-host` command must validate existing identities and install exact supported packages without concealing failures behind unconditional success.
 
@@ -86,7 +86,7 @@ id -u almapay   # use this value wherever ALMAPAY_UID appears below
 
 All Phase 2 onward container work runs as `almapay` from an operator session via `sudo -u almapay -H` (and `XDG_RUNTIME_DIR=/run/user/ALMAPAY_UID` when invoking user systemd). Do not use `sudo podman`.
 
-## Phase 2 — Fetch compose tooling and generate the stack
+## Phase 2 -- Fetch compose tooling and generate the stack
 
 The examples in this phase remain non-production pseudocode until `upstream.lock` exists. A supported implementation must explicitly fetch and detach at the pinned commit; cloning the current default branch is not sufficient. It must also prove that every generator bind mount works with SELinux enforcing and uses reviewed private relabeling such as `:Z`.
 
@@ -168,7 +168,7 @@ sudo -u almapay -H bash -lc '
 
 Initial synchronization for Bitcoin (pruned) and Monero can take hours or days. Expect elevated CPU, disk I/O, and memory until nodes catch up. Wait for reasonable chain sync before enabling production payment methods or accepting mainnet funds.
 
-## Phase 3 — User systemd persistence
+## Phase 3 -- User systemd persistence
 
 Register a user service for `almapay` so the stack survives reboot. Create `/var/lib/almapay/.config/systemd/user/almapay.service` (replace `ALMAPAY_UID` with the numeric uid from `id -u almapay`):
 
@@ -209,7 +209,7 @@ For later restarts use the same pattern:
 sudo -u almapay -H XDG_RUNTIME_DIR=/run/user/$(id -u almapay) systemctl --user restart almapay.service
 ```
 
-## Phase 4 — Caddy reverse proxy
+## Phase 4 -- Caddy reverse proxy
 
 Configure Caddy on the host to terminate TLS and forward to BTCPay. Minimal example (`/etc/caddy/Caddyfile` or a snippet under `/etc/caddy/conf.d/`):
 
@@ -225,7 +225,7 @@ Reload Caddy after DNS points at the host. BTCPay should see HTTPS externally (`
 
 For iframe embedding in third-party applications, those applications must allow this origin in `frame-src` Content Security Policy. That is an integrator concern, not part of this host protocol.
 
-## Phase 5 — Wallets and cryptocurrencies
+## Phase 5 -- Wallets and cryptocurrencies
 
 Complete first-time BTCPay registration through the public URL (`https://pay.example.com`). Configure a descriptor-based Bitcoin wallet per store (hot wallet or watch-only/xpub, per your policy). The reference container sets `CREATE_WALLET=false`; BTCPay and NBXplorer track descriptors/xpubs rather than depending on a Bitcoin Core hot wallet. Bitcoin Core 30 removed legacy BDB wallet loading and legacy RPCs including `importprivkey`, `importaddress`, `importmulti`, `importwallet`, `dumpprivkey`, and `dumpwallet`; no AlmaPay script or runbook may use them. Migrating a pre-existing BDB wallet with `migratewallet` is a separate, manual migration outside the fresh-install path.
 
@@ -235,7 +235,7 @@ Monero on BTCPay is server-wide: all stores on one instance share the same Moner
 
 Enable BTC and XMR payment methods on each store after wallets are ready and nodes are sufficiently synced.
 
-## Phase 6 — Plugins (optional: Boltz and Stripe)
+## Phase 6 -- Plugins (optional: Boltz and Stripe)
 
 Open **Plugins → Manage Plugins** in the BTCPay UI. Skip this phase if on-chain BTC (and XMR, if enabled) is enough.
 
@@ -251,13 +251,13 @@ Install **Stripe Payments** only after confirming its exact release declares com
 
 BTCPay 2.4 no longer supports LNBank, LNDHub, Lightning Charge, or the deprecated Shopify Scripts integration. Do not configure them. BTCPay moved to .NET 10 beginning with 2.3.7, so query the live plugin manifest, pin each compatible Boltz, Stripe, and Monero plugin release, and test restart behavior. After plugin changes, always restart through user systemd and verify plugin status in the UI before taking production traffic.
 
-## Phase 7 — Multiple stores and integrators
+## Phase 7 -- Multiple stores and integrators
 
 A single BTCPay instance supports many stores and consumer applications. Create a distinct store for each application and environment. For each store, note the Store ID, issue a least-privilege Greenfield API key with the required invoice permissions, and register a webhook pointing at that integrator's public HTTPS endpoint. Save the webhook signing secret the UI displays; the integrator should verify the provider signature header on delivery (for example `BTCPay-Sig`). Use separate API keys, store IDs, and webhook secrets per store so one application or test environment cannot read, mutate, or settle against another application's records. Confirm webhook delivery from the BTCPay UI before relying on automated settlement.
 
 AlmaPay does not define an application's invoice metadata, fulfillment, ledger, or webhook route. Each integrator owns those policies and its application-level idempotency. Multiple applications on one deployment must be under one trusted server operator; store credentials do not isolate mutually distrustful administrators, and server-wide plugins and logging policy remain shared. Monero remains a custody exception: stores on the same BTCPay deployment share server-level wallet view material even when application credentials and invoice records are isolated. Use separate deployments where administration, custody, or host-level privacy policy must be independent.
 
-## Phase 8 — Operations
+## Phase 8 -- Operations
 
 Updates must be lockfile-driven, never an unreviewed `git pull`. Create and verify a pre-update backup, fetch the requested commit, regenerate Compose, inspect the configuration and image diff, pull pinned images, restart through user systemd, and run verification. Retain the previous generated configuration and image references. A BTCPay database migration may make binary rollback unsafe; the documented rollback is restoration of the pre-update database and deployment backup.
 

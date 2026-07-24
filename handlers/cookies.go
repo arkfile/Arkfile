@@ -45,7 +45,7 @@ func issueSessionCookies(c echo.Context, fullToken, refreshToken, csrfToken stri
 	jwtLifetime := utils.GetJWTTokenLifetime()
 	jwtMaxAge := int(jwtLifetime.Seconds())
 
-	// Full JWT — HttpOnly, expires with the JWT itself.
+	// Full JWT -- HttpOnly, expires with the JWT itself.
 	c.SetCookie(&http.Cookie{
 		Name:     CookieFullToken,
 		Value:    fullToken,
@@ -56,7 +56,7 @@ func issueSessionCookies(c echo.Context, fullToken, refreshToken, csrfToken stri
 		SameSite: http.SameSiteStrictMode,
 	})
 
-	// Refresh token — HttpOnly, longer-lived.
+	// Refresh token -- HttpOnly, longer-lived.
 	c.SetCookie(&http.Cookie{
 		Name:     CookieRefresh,
 		Value:    refreshToken,
@@ -67,7 +67,7 @@ func issueSessionCookies(c echo.Context, fullToken, refreshToken, csrfToken stri
 		SameSite: http.SameSiteStrictMode,
 	})
 
-	// CSRF token — NOT HttpOnly so JavaScript can read it.
+	// CSRF token -- NOT HttpOnly so JavaScript can read it.
 	// Rotated on every token issuance so a stolen value goes stale quickly.
 	c.SetCookie(&http.Cookie{
 		Name:     CookieCSRF,

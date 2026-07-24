@@ -42,7 +42,7 @@ These features build on top of the existing single-file chunked upload pipeline.
 - **Zero-knowledge preserved.** Folder structure must never leak to the server. All folder paths are client-side encrypted metadata; server treats the encrypted blob and its nonce as opaque bytes.
 - **Constrained-device friendly.** Must work on a mobile device with ~3 GB RAM for arbitrarily large batches, including individual files up to 6 GB. One-chunk-at-a-time streaming per file stays mandatory.
 - **Single way to do things per client.** TS frontend and Go CLI functions mirror each other in naming, structure, and logic for upload, list, tree, and download operations.
-- **Greenfield reset permitted.** There are no production deployments. Any deployment receiving this change is reset — `dev-reset.sh` locally, `test-deploy.sh` on the beta. No legacy paths, no per-row version flags, no dual-decrypt branches.
+- **Greenfield reset permitted.** There are no production deployments. Any deployment receiving this change is reset -- `dev-reset.sh` locally, `test-deploy.sh` on the beta. No legacy paths, no per-row version flags, no dual-decrypt branches.
 
 ### Greenfield-Reset Stance
 
@@ -56,23 +56,23 @@ The one-shot wipe replaces v3's intricate tranche choreography with a single coh
 
 ### Glossary
 
-- **AAD** — Additional Authenticated Data. Extra context bytes passed to an AEAD cipher (here, AES-GCM). AAD is not encrypted but is cryptographically bound to the ciphertext: the same ciphertext decrypted with different AAD fails with an authentication error. Used here to bind each per-file metadata ciphertext to a specific `(file_id, field, username)` tuple.
-- **AES-GCM** — AES in Galois/Counter Mode. The AEAD cipher used throughout Arkfile for client-side encryption.
-- **FEK** — File Encryption Key. A random 256-bit key generated per file and used to encrypt the file's chunk data. The FEK is itself wrapped (encrypted) by a KEK.
-- **KEK** — Key Encryption Key. A key whose only job is to encrypt other keys. In Arkfile, the Account Key and Custom Key act as KEKs; the FEK they wrap is the actual file-encrypting key.
-- **OPAQUE** — Asymmetric PAKE protocol (RFC draft). Used for authentication without ever transmitting the password.
-- **Account Key** — Argon2id-derived key bound to the user's account password. Acts as KEK for per-file metadata and (by default) for the FEK.
-- **Custom Key** — Argon2id-derived key bound to an optional per-file custom password. Acts as KEK for the FEK when `password_type = custom`.
-- **Canonical folder path** — A folder path in the normalized form defined in § 3.2 (forward slashes, no leading/trailing slash, NFC-normalized, no dot segments, no empty segments, etc.).
-- **`upload_sessions`** — Server-side table tracking in-progress chunked uploads. Row transitions `in_progress` → `completed` | `abandoned`.
-- **`file_metadata`** — Server-side table holding finalized file metadata after a successful `CompleteUpload`.
+- **AAD** -- Additional Authenticated Data. Extra context bytes passed to an AEAD cipher (here, AES-GCM). AAD is not encrypted but is cryptographically bound to the ciphertext: the same ciphertext decrypted with different AAD fails with an authentication error. Used here to bind each per-file metadata ciphertext to a specific `(file_id, field, username)` tuple.
+- **AES-GCM** -- AES in Galois/Counter Mode. The AEAD cipher used throughout Arkfile for client-side encryption.
+- **FEK** -- File Encryption Key. A random 256-bit key generated per file and used to encrypt the file's chunk data. The FEK is itself wrapped (encrypted) by a KEK.
+- **KEK** -- Key Encryption Key. A key whose only job is to encrypt other keys. In Arkfile, the Account Key and Custom Key act as KEKs; the FEK they wrap is the actual file-encrypting key.
+- **OPAQUE** -- Asymmetric PAKE protocol (RFC draft). Used for authentication without ever transmitting the password.
+- **Account Key** -- Argon2id-derived key bound to the user's account password. Acts as KEK for per-file metadata and (by default) for the FEK.
+- **Custom Key** -- Argon2id-derived key bound to an optional per-file custom password. Acts as KEK for the FEK when `password_type = custom`.
+- **Canonical folder path** -- A folder path in the normalized form defined in § 3.2 (forward slashes, no leading/trailing slash, NFC-normalized, no dot segments, no empty segments, etc.).
+- **`upload_sessions`** -- Server-side table tracking in-progress chunked uploads. Row transitions `in_progress` → `completed` | `abandoned`.
+- **`file_metadata`** -- Server-side table holding finalized file metadata after a successful `CompleteUpload`.
 
 ---
 
 ## 2. Current State
 
 ### Upload Flow
-- The HTML file input in `client/static/index.html` is `<input type="file" id="fileInput">` — single file only, no `multiple` attribute, no `webkitdirectory`.
+- The HTML file input in `client/static/index.html` is `<input type="file" id="fileInput">` -- single file only, no `multiple` attribute, no `webkitdirectory`.
 - The TS frontend reads `fileInput.files[0]` in `client/static/js/src/files/upload.ts` and calls the single-file upload helper exactly once.
 - The backend exposes a per-file pipeline in `handlers/uploads.go`:
   - `POST /api/uploads/init` → `CreateUploadSession`
@@ -92,7 +92,7 @@ The one-shot wipe replaces v3's intricate tranche choreography with a single coh
 - `file_metadata` has no folder/path columns. Files are a flat collection per `owner_username`.
 - `upload_sessions` carries per-file encrypted metadata (`encrypted_filename`, `encrypted_sha256sum`, `encrypted_fek`, plus corresponding nonces) during the in-progress upload.
 - Filenames are encrypted client-side. The server cannot see, sort, or filter by filename or path.
-- Schema is defined in `database/unified_schema.sql` and applied by `database/database.go::createTables()` at app startup via a single whole-file `DB.Exec`. All statements are `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` — no `ALTER TABLE` statements anywhere. See Section 4 for the implication.
+- Schema is defined in `database/unified_schema.sql` and applied by `database/database.go::createTables()` at app startup via a single whole-file `DB.Exec`. All statements are `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` -- no `ALTER TABLE` statements anywhere. See Section 4 for the implication.
 
 ### Per-File AAD Scope Today
 - Currently, only share envelopes use AAD (`share_id || file_id`, no separator), in `handlers/file_shares.go` and `client/static/js/src/shares/`.
@@ -164,11 +164,11 @@ AAD = file_id_bytes || 0x00 || field_name_bytes || 0x00 || username_bytes
 ```
 
 - `file_id_bytes`: UTF-8 bytes of the `file_id` string (as returned by the server from `CreateUploadSession`).
-- `field_name_bytes`: UTF-8 bytes of a short ASCII field tag — one of: `"folder_path"`, `"filename"`, `"sha256sum"`, `"fek"`.
+- `field_name_bytes`: UTF-8 bytes of a short ASCII field tag -- one of: `"folder_path"`, `"filename"`, `"sha256sum"`, `"fek"`.
 - `username_bytes`: UTF-8 bytes of the owner username (immutable, per Section 4).
 - `0x00`: NUL separator between fields. NUL is forbidden inside all three values (forbidden in folder-path segments per § 3.2; not present in usernames per the username validator; not present in file-id strings which are alphanumeric), so the encoding is unambiguous.
 
-**Field tags and the separator byte are hardcoded as language-level constants** in both `crypto/aad.go` (Go) and `client/static/js/src/crypto/aad.ts` (TS). They are not loaded from JSON. Renaming any of them is a hard-fork decryption event — every pre-rename ciphertext stops decrypting — so they should be treated as part of the on-the-wire ciphertext contract and never altered. The shared test vectors (§ 5 Phase A, item A6) catch any divergence between the two implementations immediately.
+**Field tags and the separator byte are hardcoded as language-level constants** in both `crypto/aad.go` (Go) and `client/static/js/src/crypto/aad.ts` (TS). They are not loaded from JSON. Renaming any of them is a hard-fork decryption event -- every pre-rename ciphertext stops decrypting -- so they should be treated as part of the on-the-wire ciphertext contract and never altered. The shared test vectors (§ 5 Phase A, item A6) catch any divergence between the two implementations immediately.
 
 **Field / tag / column mapping:**
 
@@ -184,7 +184,7 @@ AAD = file_id_bytes || 0x00 || field_name_bytes || 0x00 || username_bytes
 **Per-field protection rationale.** Each of the four in-scope fields gains a distinct defense from AAD, not just uniformity:
 
 - `folder_path`: cross-row swap would mis-render the tree and, more importantly, cause `download --preserve-folders` in the CLI to write decrypted bytes into an attacker-chosen filesystem location under the target output directory. AAD plus the explicit re-validation + containment check in § 5 Phase C, item C12 is belt-and-suspenders.
-- `filename`: cross-row swap would cause decrypted bytes of file A to be saved under file B's user-visible name — a confusion-of-identity attack on download. Also underpins the dedup key `(filename, canonical_folder_path)` in § 5 Phase C, item C6.
+- `filename`: cross-row swap would cause decrypted bytes of file A to be saved under file B's user-visible name -- a confusion-of-identity attack on download. Also underpins the dedup key `(filename, canonical_folder_path)` in § 5 Phase C, item C6.
 - `sha256sum` (plaintext-file hash): the underlying value is privacy-sensitive (file-fingerprinting risk). Cross-row swap would break the client-side integrity check that confirms decrypted plaintext matches what was uploaded. AAD binds the integrity record to `(file_id, field, username)`.
 - `fek`: the wrapped FEK is the root of the per-file encryption chain. Cross-file FEK substitution without AAD is only caught downstream at per-chunk AEAD tag failure; AAD on the wrapped FEK surfaces the fault at the wrapper layer and prevents silent reliance on chunk-level detection.
 
@@ -192,7 +192,7 @@ AAD = file_id_bytes || 0x00 || field_name_bytes || 0x00 || username_bytes
 
 - `folder_path`, `filename`, `sha256sum` always use the **Account Key** as KEK regardless of the file's `password_type`, per AGENTS.md "File metadata encryption and decryption always uses the Account Key."
 - `fek` uses the **Account Key** or the **per-file Custom Key** depending on the file's `password_type` (envelope `key_type = 0x01` for account, `0x02` for custom).
-- AAD binding applies uniformly in both cases — the KEK choice is orthogonal to the AAD-verified context (`file_id`, field, username).
+- AAD binding applies uniformly in both cases -- the KEK choice is orthogonal to the AAD-verified context (`file_id`, field, username).
 
 **Helper (shared between TS and Go):** both define their tags and separator byte as language-level constants (no JSON load).
 
@@ -255,11 +255,11 @@ export function buildFileMetadataAAD(
 }
 ```
 
-Both implementations must produce byte-identical output for the same inputs — proved by A6's shared test vectors. The Go helper sits in the shared `crypto/` package alongside `gcm.go` and `share_kdf.go`; the CLI imports it directly.
+Both implementations must produce byte-identical output for the same inputs -- proved by A6's shared test vectors. The Go helper sits in the shared `crypto/` package alongside `gcm.go` and `share_kdf.go`; the CLI imports it directly.
 
 **Folder-path bucket padding (folder_path field only).**
 
-To reduce length-based fingerprinting of the encrypted folder path, the canonical plaintext is padded to a 64-byte bucket before encryption. Other fields (`filename`, `sha256sum`, `fek`) are not bucket-padded here — `sha256sum` and `fek` are always exactly 32 bytes, and `filename` padding is handled elsewhere in the existing envelope flow.
+To reduce length-based fingerprinting of the encrypted folder path, the canonical plaintext is padded to a 64-byte bucket before encryption. Other fields (`filename`, `sha256sum`, `fek`) are not bucket-padded here -- `sha256sum` and `fek` are always exactly 32 bytes, and `filename` padding is handled elsewhere in the existing envelope flow.
 
 ```
 Encrypt:
@@ -301,13 +301,13 @@ plaintext  = AES-GCM-Decrypt(key, nonce, ct, tag, aad)   // fails if AAD doesn't
 
 **Wire format.** Two distinct shapes are used.
 
-- **`folder_path`, `filename`, `sha256sum`** — two separate base64 columns:
+- **`folder_path`, `filename`, `sha256sum`** -- two separate base64 columns:
   - `<field>_nonce` carries the 12-byte AES-GCM nonce.
   - `encrypted_<field>` carries `ciphertext || 16-byte AES-GCM tag` (the tag is appended by AES-GCM).
-- **`encrypted_fek`** — one base64 column carrying the existing envelope wrapper `[0x01][key_type][nonce][ct][tag]`. The envelope header bytes (`0x01` magic + `key_type`) sit **outside** the AAD-protected region; only the wrapped FEK's ciphertext carries the AAD binding. The 12-byte nonce and 16-byte tag inside the envelope are the AES-GCM nonce and tag for the wrapped-FEK encryption.
+- **`encrypted_fek`** -- one base64 column carrying the existing envelope wrapper `[0x01][key_type][nonce][ct][tag]`. The envelope header bytes (`0x01` magic + `key_type`) sit **outside** the AAD-protected region; only the wrapped FEK's ciphertext carries the AAD binding. The 12-byte nonce and 16-byte tag inside the envelope are the AES-GCM nonce and tag for the wrapped-FEK encryption.
 
 **What this prevents:**
-- **Cross-file swap.** Attacker or bug copies file X's metadata blob onto file Y — without AAD this decrypts cleanly with the wrong file's key bindings and silently displays the wrong value. With AAD, decryption fails.
+- **Cross-file swap.** Attacker or bug copies file X's metadata blob onto file Y -- without AAD this decrypts cleanly with the wrong file's key bindings and silently displays the wrong value. With AAD, decryption fails.
 - **Cross-field swap.** Attacker swaps `encrypted_filename` onto the `encrypted_folder_path` slot (or vice versa). With a field tag in AAD, that decryption fails.
 - **Cross-user confusion.** Defense in depth against any code path that accidentally mixes user rows (note: username is immutable per Section 4, so this binding is permanent).
 
@@ -334,7 +334,7 @@ plaintext  = AES-GCM-Decrypt(key, nonce, ct, tag, aad)   // fails if AAD doesn't
 
 - When any file in the user's listing has a non-NULL folder path: **default to tree view**. The "any file has a folder path" signal is read from the `has_folder_paths` boolean on the `GET /api/user/storage` response (§ 3.9 / § B4) so the client can decide the default before fetching `GET /api/files`.
 - When all files are at root: default to flat view.
-- User can toggle between tree and flat at any time. Toggle preference is remembered in `localStorage` under the key `arkfile:file-list-view` → `"tree"` or `"flat"`. The key is not username-qualified — Arkfile is single-user-per-browser-profile (you must be logged in to use the SPA), and a view-rendering preference is not sensitive enough to justify writing the username into `localStorage`.
+- User can toggle between tree and flat at any time. Toggle preference is remembered in `localStorage` under the key `arkfile:file-list-view` → `"tree"` or `"flat"`. The key is not username-qualified -- Arkfile is single-user-per-browser-profile (you must be logged in to use the SPA), and a view-rendering preference is not sensitive enough to justify writing the username into `localStorage`.
 
 ### 3.7 Multi-File / Folder Share: Not in This Round
 
@@ -365,14 +365,14 @@ Response:
 
 **Rationale:**
 - Current clients infer storage info as a side-effect of `POST /api/login`, `GET /api/files`, and `POST /api/uploads/:session/complete`. For batch upload we want a cheap, purpose-built "how much room do I have?" primitive that does not require fetching the full file list.
-- Both web and CLI use this for batch pre-flight: before any hashing/encryption/upload begins, sum `calculateTotalEncryptedSize(file.size) + padding` over the selected files and compare against `available_bytes`. If the batch doesn't fit, show the user "This batch needs X MB; you have Y MB available — remove N files" before any work starts.
+- Both web and CLI use this for batch pre-flight: before any hashing/encryption/upload begins, sum `calculateTotalEncryptedSize(file.size) + padding` over the selected files and compare against `available_bytes`. If the batch doesn't fit, show the user "This batch needs X MB; you have Y MB available -- remove N files" before any work starts.
 - Slots into `totpProtectedGroup` in `handlers/route_config.go` alongside `/api/credits`.
 - `total_bytes` includes both `SUM(padded_size) FROM file_metadata WHERE owner_username = ?` and `SUM(padded_size) FROM upload_sessions WHERE owner_username = ? AND status = 'in_progress'`. Since `padded_size` is computed deterministically at `CreateUploadSession` time (see Section 4), the sum is exact, not estimated.
 
 ### 3.10 Tree View Scale Targets
 
 - **Eager decrypt** of all filename + SHA256 + folder-path blobs up to **1,000 files**.
-  - Expected: ~3 AES-GCM-Decrypt calls per file on small blobs; on mid-range mobile (~0.5 ms/call) that is ~1.5 s worst case for 1,000 files. No progress indicator needed — sub-second for typical libraries.
+  - Expected: ~3 AES-GCM-Decrypt calls per file on small blobs; on mid-range mobile (~0.5 ms/call) that is ~1.5 s worst case for 1,000 files. No progress indicator needed -- sub-second for typical libraries.
 - **Above 1,000 files**: always paginate via `GET /api/files?limit=&offset=` (the API already supports it). Flat view decrypts filenames only for the current page. Tree view decrypts folder paths lazily as the user expands each node.
 - **Metadata cache: in-memory `Map<fileID, DecryptedMeta>` scoped to the SPA lifetime.**
   - Rationale: decrypted plaintext in `sessionStorage` or `localStorage` is readable by any script running on the page, including any future XSS. An in-memory `Map` is wiped on tab close or full page reload, which matches the expected security posture for decrypted metadata. The cost is re-decrypting after a refresh, which is acceptable given the sub-second times for typical libraries.
@@ -407,7 +407,7 @@ The Account Key is the Argon2id-derived KEK used to wrap per-file `fek`s and to 
   - Yes → extend the cache lifetime to cover the batch and only the batch (revert at batch completion or abort).
   - No → fall through to the existing per-file password-prompt path.
   - The default is whichever is least surprising given the current cache state (if the user is already in a long cache window, default Yes; if cache is off or near expiry, default No).
-- **Rationale.** The Account Key in browser memory is the worst-case blast-radius asset for any future XSS on the SPA — it can decrypt every metadata blob and unwrap every account-wrapped FEK. The mandatory clearing events above keep the residency window tight by default, and the opt-in extension gives the user explicit control over the long-upload tradeoff rather than silently extending the window for them.
+- **Rationale.** The Account Key in browser memory is the worst-case blast-radius asset for any future XSS on the SPA -- it can decrypt every metadata blob and unwrap every account-wrapped FEK. The mandatory clearing events above keep the residency window tight by default, and the opt-in extension gives the user explicit control over the long-upload tradeoff rather than silently extending the window for them.
 - **Out of scope but worth flagging.** The existing cache stores the wrapping `CryptoKey` (non-extractable) in JS memory and the wrapped Account Key ciphertext in `sessionStorage`. The § 3.10 reasoning that "decrypted plaintext in `sessionStorage` is readable by any script on the page" applies in mitigated form here: the wrapped ciphertext is useless without the in-memory wrapping key. Whether to revisit this is a separate review, not part of this folders project.
 
 ---
@@ -440,9 +440,9 @@ Only share envelopes use AAD (`share_id || file_id`, no separator). Per-file cip
 
 Phase B must update all three to include `encrypted_folder_path` and `folder_path_nonce`:
 
-1. `INSERT INTO upload_sessions (...) VALUES (...)` in `CreateUploadSession` — add the two columns to the INSERT list and the corresponding bindings.
-2. `SELECT owner_username, file_id, encrypted_filename, filename_nonce, encrypted_sha256sum, sha256sum_nonce, status, total_chunks, total_size, created_at, expires_at FROM upload_sessions WHERE id = ?` in `GetUploadStatus` — add the two fields to the SELECT list and the receiving variables.
-3. Multi-line `SELECT owner_username, file_id, storage_id, storage_upload_id, status, total_chunks, total_size, chunk_size, padded_size, password_hint, password_type, encrypted_filename, filename_nonce, encrypted_sha256sum, sha256sum_nonce, encrypted_fek FROM upload_sessions WHERE id = ?` in `CompleteUpload` preamble — add the two fields to the SELECT list and carry them through into the `file_metadata` INSERT.
+1. `INSERT INTO upload_sessions (...) VALUES (...)` in `CreateUploadSession` -- add the two columns to the INSERT list and the corresponding bindings.
+2. `SELECT owner_username, file_id, encrypted_filename, filename_nonce, encrypted_sha256sum, sha256sum_nonce, status, total_chunks, total_size, created_at, expires_at FROM upload_sessions WHERE id = ?` in `GetUploadStatus` -- add the two fields to the SELECT list and the receiving variables.
+3. Multi-line `SELECT owner_username, file_id, storage_id, storage_upload_id, status, total_chunks, total_size, chunk_size, padded_size, password_hint, password_type, encrypted_filename, filename_nonce, encrypted_sha256sum, sha256sum_nonce, encrypted_fek FROM upload_sessions WHERE id = ?` in `CompleteUpload` preamble -- add the two fields to the SELECT list and carry them through into the `file_metadata` INSERT.
 
 `UploadChunk` does not touch these columns and does not need changes in this path. `CancelUpload` also does not need column-list changes.
 
@@ -456,7 +456,7 @@ Multiple in-progress sessions per user can be created in parallel today. A serve
 
 ### 4.9 `file_id` Generation: Client-Generated, Server-Validated
 
-Today the server generates `file_id` inside `CreateUploadSession` via `models.GenerateFileID()` (which is `uuid.New().String()` — a plain UUIDv4 with 122 bits of randomness) and echoes it back to the client alongside `session_id`:
+Today the server generates `file_id` inside `CreateUploadSession` via `models.GenerateFileID()` (which is `uuid.New().String()` -- a plain UUIDv4 with 122 bits of randomness) and echoes it back to the client alongside `session_id`:
 
 ```json
 {"session_id": "...", "file_id": "...", "chunk_size": ...}
@@ -484,9 +484,9 @@ For this project, AAD on per-file metadata must bind to a `file_id` that the cli
 
 This is the key finding that lets us rebind owner-side `encrypted_fek` AAD without breaking the share flow.
 
-- `file_share_keys` has its own `encrypted_fek` column wrapped by the **Share Key** derived from the share password + random 32-byte salt — **not** by the owner's account key. Source: `database/unified_schema.sql` (table `file_share_keys`) and `handlers/file_shares.go`.
+- `file_share_keys` has its own `encrypted_fek` column wrapped by the **Share Key** derived from the share password + random 32-byte salt -- **not** by the owner's account key. Source: `database/unified_schema.sql` (table `file_share_keys`) and `handlers/file_shares.go`.
 - Filename and SHA-256 metadata live inside the client-side-encrypted `ShareEnvelope` decrypted by the recipient with the share password, not via the owner's `encrypted_filename` / `encrypted_sha256sum` columns.
-- `handlers/file_shares.go` comments this explicitly: "*plaintext metadata like filename/sha256 is inside the encrypted ShareEnvelope, decrypted client-side with the share password — no need to send server-side encrypted metadata that share recipients cannot decrypt*."
+- `handlers/file_shares.go` comments this explicitly: "*plaintext metadata like filename/sha256 is inside the encrypted ShareEnvelope, decrypted client-side with the share password -- no need to send server-side encrypted metadata that share recipients cannot decrypt*."
 
 **Implications for this project:**
 
@@ -501,11 +501,11 @@ This is the key finding that lets us rebind owner-side `encrypted_fek` AAD witho
 - `database/database.go::createTables()` runs on every app startup and executes the entire `unified_schema.sql` file via a single `DB.Exec`.
 - Every `CREATE TABLE` statement in `unified_schema.sql` uses `CREATE TABLE IF NOT EXISTS`. Likewise every index uses `CREATE INDEX IF NOT EXISTS`.
 - There are **no** `ALTER TABLE` statements in `unified_schema.sql` and no migration framework anywhere in the codebase.
-- `scripts/test-update.sh` copies updated `database/` files into `/opt/arkfile/database/` and restarts services. The app's startup then re-runs `createTables()` — but on an existing rqlite database, the `CREATE TABLE IF NOT EXISTS` statements are no-ops. **The newly-added `encrypted_folder_path` and `folder_path_nonce` columns would silently not appear on the live database.**
+- `scripts/test-update.sh` copies updated `database/` files into `/opt/arkfile/database/` and restarts services. The app's startup then re-runs `createTables()` -- but on an existing rqlite database, the `CREATE TABLE IF NOT EXISTS` statements are no-ops. **The newly-added `encrypted_folder_path` and `folder_path_nonce` columns would silently not appear on the live database.**
 
 **Consequence for this project:** any deployment that currently has the pre-v4 schema cannot receive the v4 schema via `test-update.sh`. It must be wiped (`test-deploy.sh`, which does a fresh install) or recreated (`dev-reset.sh` locally). See Section 7 for the concrete deploy plan.
 
-**Future note (out of scope for this project):** introducing a column-evolution mechanism in `database/database.go` (e.g., inspecting `PRAGMA table_info(table_name)` and emitting conditional `ALTER TABLE` statements for known additions, or adopting a minimal migrations runner) would remove this constraint for future schema-adding projects. That is deliberately not pursued here — it is its own small infrastructure project, unrelated to folders/multi-upload, and conflating the two would muddy the review. Section 9 records it as a deferred item.
+**Future note (out of scope for this project):** introducing a column-evolution mechanism in `database/database.go` (e.g., inspecting `PRAGMA table_info(table_name)` and emitting conditional `ALTER TABLE` statements for known additions, or adopting a minimal migrations runner) would remove this constraint for future schema-adding projects. That is deliberately not pursued here -- it is its own small infrastructure project, unrelated to folders/multi-upload, and conflating the two would muddy the review. Section 9 records it as a deferred item.
 
 ---
 
@@ -513,16 +513,16 @@ This is the key finding that lets us rebind owner-side `encrypted_fek` AAD witho
 
 Four phases. Each phase ships as a coherent unit and ends with an explicit **unit-test gate** before moving to the next. Within a phase, items are listed in dependency order and may be batched in one or more PRs.
 
-- **Phase A** — Shared primitives (no runtime behavior yet). Ends with TS + Go unit tests on canonicalization and AAD helpers, both driven by the shared test-vectors file.
-- **Phase B** — Server surface (endpoints, SQL sites, concurrency cap, quota). Ends with Go handler tests.
-- **Phase C** — Client features (TS web + Go CLI, paired). Encrypt/decrypt paths for all four AAD-bound fields ship here. Ends with TS + Go unit tests on AAD round-trips, folder upload logic, tree rendering, and containment checks.
-- **Phase D** — Integration and browser tests (`e2e-test.sh` + `e2e-playwright.ts`). No new unit tests — exercises what A/B/C built.
+- **Phase A** -- Shared primitives (no runtime behavior yet). Ends with TS + Go unit tests on canonicalization and AAD helpers, both driven by the shared test-vectors file.
+- **Phase B** -- Server surface (endpoints, SQL sites, concurrency cap, quota). Ends with Go handler tests.
+- **Phase C** -- Client features (TS web + Go CLI, paired). Encrypt/decrypt paths for all four AAD-bound fields ship here. Ends with TS + Go unit tests on AAD round-trips, folder upload logic, tree rendering, and containment checks.
+- **Phase D** -- Integration and browser tests (`e2e-test.sh` + `e2e-playwright.ts`). No new unit tests -- exercises what A/B/C built.
 
 **Guiding principle for ordering:** each item's encrypt path ships together with its decrypt path in the same PR. There is never a shipped state where a new field can be written but not read, or read but not written.
 
 ---
 
-### Phase A — Shared Primitives
+### Phase A -- Shared Primitives
 
 Goal: land all the pieces that every downstream phase depends on. None of these items changes runtime behavior on their own.
 
@@ -541,7 +541,7 @@ Add two nullable columns to each of the two affected tables in `database/unified
 
 Both columns are nullable with no default value. A fresh `dev-reset.sh` applies these cleanly (the whole schema is `CREATE TABLE IF NOT EXISTS` executed against an empty DB).
 
-**Important:** this item, by itself, is useless on an existing `test.arkfile.net` database because of the schema-evolution gap in Finding 4.12. That is expected — the deploy story in Section 7 wipes the beta before the code ships.
+**Important:** this item, by itself, is useless on an existing `test.arkfile.net` database because of the schema-evolution gap in Finding 4.12. That is expected -- the deploy story in Section 7 wipes the beta before the code ships.
 
 **Files touched:** `database/unified_schema.sql`.
 
@@ -562,7 +562,7 @@ Pure-comment changes. Land early to make subsequent diffs easier to read.
 
 One new file, loaded by both TS and Go via the same pattern used for `crypto/argon2id-params.json`, `crypto/chunking-params.json`, and `crypto/password-requirements.json`.
 
-- `crypto/folder-path-params.json` — defines the rules table from § 3.2:
+- `crypto/folder-path-params.json` -- defines the rules table from § 3.2:
   - `max_depth` (integer, = 32)
   - `max_segment_bytes` (integer, = 255)
   - `max_total_bytes` (integer, = 1024)
@@ -574,9 +574,9 @@ One new file, loaded by both TS and Go via the same pattern used for `crypto/arg
   - `allow_trailing_slash` (boolean, = `false`)
   - `allow_empty_segment` (boolean, = `false`)
   - `allow_dot_segments` (boolean, = `false`)
-  - `padding_bucket_bytes` (integer, = 64) — bucket size for the folder-path NUL-pad described in § 3.3.
+  - `padding_bucket_bytes` (integer, = 64) -- bucket size for the folder-path NUL-pad described in § 3.3.
 
-The AAD field tags and separator byte from § 3.3 are **not** in JSON — they are language-level constants in `crypto/aad.go` and `client/static/js/src/crypto/aad.ts` (see § 3.3 and Phase A item A5). They are part of the on-the-wire ciphertext contract and a JSON indirection would only obscure a hard-fork rename event, not enable a safe one.
+The AAD field tags and separator byte from § 3.3 are **not** in JSON -- they are language-level constants in `crypto/aad.go` and `client/static/js/src/crypto/aad.ts` (see § 3.3 and Phase A item A5). They are part of the on-the-wire ciphertext contract and a JSON indirection would only obscure a hard-fork rename event, not enable a safe one.
 
 Nothing consumes this file yet; it is read by A4.
 
@@ -589,11 +589,11 @@ Nothing consumes this file yet; it is read by A4.
 Two mirrored helpers, each driven entirely by A3's JSON rules.
 
 - Go CLI: `cmd/arkfile-client/folderpath.go` (new file).
-  - `func CanonicalizeFolderPath(input string) (string, error)` — applies NFC normalization, splits on `/`, validates each segment against the rules, re-joins, returns the canonical form. Returns a typed error for each rule violation (one of a small set of exported error values or a shared error type carrying an error code string).
-  - `func ValidateFolderPath(path string) error` — non-mutating validator (accepts an already-canonical path and returns nil or an error). Used by § 5 Phase C item C12's belt-and-suspenders check.
+  - `func CanonicalizeFolderPath(input string) (string, error)` -- applies NFC normalization, splits on `/`, validates each segment against the rules, re-joins, returns the canonical form. Returns a typed error for each rule violation (one of a small set of exported error values or a shared error type carrying an error code string).
+  - `func ValidateFolderPath(path string) error` -- non-mutating validator (accepts an already-canonical path and returns nil or an error). Used by § 5 Phase C item C12's belt-and-suspenders check.
 - TS: `client/static/js/src/files/folder-path.ts` (new file).
-  - `canonicalizeFolderPath(input: string): string` — throws a typed error on rule violations.
-  - `validateFolderPath(path: string): {ok: boolean, code?: string, message?: string}` — non-throwing validator suitable for inline UI feedback (§ 3.11, § 5 Phase C item C4/C5).
+  - `canonicalizeFolderPath(input: string): string` -- throws a typed error on rule violations.
+  - `validateFolderPath(path: string): {ok: boolean, code?: string, message?: string}` -- non-throwing validator suitable for inline UI feedback (§ 3.11, § 5 Phase C item C4/C5).
   - Error codes are identical string tokens to the Go side (e.g., `"FP_DOT_SEGMENT"`, `"FP_SEGMENT_TOO_LONG"`, `"FP_DEPTH_EXCEEDED"`, `"FP_FORBIDDEN_CHAR"`, `"FP_LEADING_SLASH"`, `"FP_TRAILING_SLASH"`, `"FP_EMPTY_SEGMENT"`, `"FP_TOTAL_TOO_LONG"`).
 
 Not wired into any existing code path yet. Phase C consumes them.
@@ -609,7 +609,7 @@ Two mirrored helpers, with field tags and separator byte hardcoded as language-l
 - Go: `crypto/aad.go` (new file). Exports `AADFieldFolderPath`, `AADFieldFilename`, `AADFieldSha256sum`, `AADFieldFEK` constants and `BuildFileMetadataAAD(field, fileID, username string) []byte`. Placement alongside `crypto/gcm.go`, `crypto/share_kdf.go`. Pure helper with no server state dependency. The CLI imports `crypto/` directly.
 - TS: `client/static/js/src/crypto/aad.ts` (new file). Exports `AAD_FIELD` const object, `AADField` type, and `buildFileMetadataAAD(field, fileID, username): Uint8Array`. Placed alongside `src/crypto/aes-gcm.ts`, `src/crypto/file-encryption.ts`, `src/crypto/metadata-helpers.ts`.
 
-Both implementations must produce byte-identical output for the same inputs — proved by A6's shared test vectors.
+Both implementations must produce byte-identical output for the same inputs -- proved by A6's shared test vectors.
 
 Dead code at rest after this item. Phase C is the first consumer.
 
@@ -622,18 +622,18 @@ Dead code at rest after this item. Phase C is the first consumer.
 Single authoritative file used by both TS and Go unit tests.
 
 - `scripts/testing/folder-path-test-vectors.json` (new file). A JSON array of test-case objects. Each object has:
-  - `description` (string, required) — human-readable name of the case.
-  - `kind` (string, required) — one of `"canonicalize_ok"`, `"canonicalize_reject"`, `"aad_bytes"`.
+  - `description` (string, required) -- human-readable name of the case.
+  - `kind` (string, required) -- one of `"canonicalize_ok"`, `"canonicalize_reject"`, `"aad_bytes"`.
   - For `canonicalize_ok`: `input` (string), `canonical_output` (string).
   - For `canonicalize_reject`: `input` (string), `error_code` (string, from the A4 code set).
   - For `aad_bytes`: `field` (string, one of the four AAD tags), `file_id` (string), `username` (string), `expected_aad_hex` (string, lowercase hex of the full AAD bytes).
 - For `folder_path_padded` (new in v4): `canonical_input` (string, already canonical), `expected_padded_hex` (string, lowercase hex of the NUL-padded plaintext), `expected_padded_len_bytes` (integer, must be a multiple of 64 and ≥ 64).
 
-Initial vector coverage (not exhaustive; these are the categories — the actual file enumerates specific concrete cases):
+Initial vector coverage (not exhaustive; these are the categories -- the actual file enumerates specific concrete cases):
 - `canonicalize_ok`: empty string → empty string; simple `photos/2025`; mixed-case preserved; NFC fusion of composed vs. decomposed Unicode; exactly 255-byte segment; exactly 32 segments; exactly 1024-byte total.
 - `canonicalize_reject`: leading slash, trailing slash, double slash, `.` segment, `..` segment, backslash in segment, NUL byte in segment, control char in segment, 256-byte segment (over limit), 33 segments (over limit), 1025-byte total (over limit).
 - `aad_bytes`: all four tags × two file-id samples × two username samples × ASCII-and-Unicode combinations, with the expected hex pre-computed by whoever writes the vectors (and asserted in both runtimes).
-- `folder_path_padded`: `""` → 64 bytes (all NUL); `"a"` (1 byte) → 64 bytes; 63-byte path → 64 bytes; 64-byte path → 128 bytes; 65-byte path → 128 bytes; 1024-byte max-length path → 1088 bytes (17 buckets × 64 — ensures the maximum-length plaintext still gets at least one byte of padding).
+- `folder_path_padded`: `""` → 64 bytes (all NUL); `"a"` (1 byte) → 64 bytes; 63-byte path → 64 bytes; 64-byte path → 128 bytes; 65-byte path → 128 bytes; 1024-byte max-length path → 1088 bytes (17 buckets × 64 -- ensures the maximum-length plaintext still gets at least one byte of padding).
 
 #### A7. Unit tests gate for Phase A
 
@@ -641,10 +641,10 @@ Initial vector coverage (not exhaustive; these are the categories — the actual
 
 Four new test files, all driven by the A6 shared vectors:
 
-- `crypto/aad_test.go` — loads `scripts/testing/folder-path-test-vectors.json`, iterates `aad_bytes` entries, asserts `hex.EncodeToString(BuildFileMetadataAAD(field, file_id, username)) == expected_aad_hex`.
-- `cmd/arkfile-client/folderpath_test.go` — loads the same vectors, iterates `canonicalize_ok` and `canonicalize_reject` entries, asserts `CanonicalizeFolderPath(input)` returns `canonical_output` or the expected `error_code`.
-- `client/static/js/src/__tests__/aad.test.ts` — TS mirror of `crypto/aad_test.go`.
-- `client/static/js/src/__tests__/folder-path.test.ts` — TS mirror of `cmd/arkfile-client/folderpath_test.go`.
+- `crypto/aad_test.go` -- loads `scripts/testing/folder-path-test-vectors.json`, iterates `aad_bytes` entries, asserts `hex.EncodeToString(BuildFileMetadataAAD(field, file_id, username)) == expected_aad_hex`.
+- `cmd/arkfile-client/folderpath_test.go` -- loads the same vectors, iterates `canonicalize_ok` and `canonicalize_reject` entries, asserts `CanonicalizeFolderPath(input)` returns `canonical_output` or the expected `error_code`.
+- `client/static/js/src/__tests__/aad.test.ts` -- TS mirror of `crypto/aad_test.go`.
+- `client/static/js/src/__tests__/folder-path.test.ts` -- TS mirror of `cmd/arkfile-client/folderpath_test.go`.
 
 Run gates before declaring Phase A complete:
 
@@ -659,7 +659,7 @@ Both suites pass. Neither exercises any server code or storage backend. Phase A 
 
 ---
 
-### Phase B — Server Surface
+### Phase B -- Server Surface
 
 Goal: teach the server to accept, persist, and return the new folder-path fields; add the pre-flight quota endpoint; add the concurrent-session cap. All server changes ship as a coherent set and are covered by Go handler tests.
 
@@ -713,16 +713,16 @@ Content-Type: application/json
 
 In `handlers/uploads.go`:
 
-1. **`CreateUploadSession`** — update the `INSERT INTO upload_sessions (...)` statement:
+1. **`CreateUploadSession`** -- update the `INSERT INTO upload_sessions (...)` statement:
    - Add `file_id`, `encrypted_folder_path`, and `folder_path_nonce` to the request body parsing and INSERT bindings.
    - Validate the client-supplied `file_id` per § 4.9: well-formed UUIDv4 (HTTP 400 + `invalid_file_id` if not), no collision with existing `upload_sessions` or `file_metadata` rows (HTTP 409 + `file_id_collision` if already present).
    - Pull `encrypted_folder_path` and `folder_path_nonce` from the request body. Both optional; if absent or empty, bind `sql.NullString{Valid: false}` for each. If one is present but not the other, reject with HTTP 400 + `folder_path_pair_required`.
    - Do **not** canonicalize, decrypt, or inspect the encrypted values server-side. They are opaque ciphertext + nonce bytes from the client's perspective. (Per § 3.5, the server never sees plaintext paths.)
    - The response continues to echo `file_id` back so the client can confirm round-trip correctness.
 
-2. **`GetUploadStatus`** — update the `SELECT` list to include `encrypted_folder_path` and `folder_path_nonce`, add them to the `Scan()` targets, and include them in the JSON response alongside the existing `encrypted_filename` / `filename_nonce` / `encrypted_sha256sum` / `sha256sum_nonce` fields. Both nullable; NULL is serialized as `null` in the response.
+2. **`GetUploadStatus`** -- update the `SELECT` list to include `encrypted_folder_path` and `folder_path_nonce`, add them to the `Scan()` targets, and include them in the JSON response alongside the existing `encrypted_filename` / `filename_nonce` / `encrypted_sha256sum` / `sha256sum_nonce` fields. Both nullable; NULL is serialized as `null` in the response.
 
-3. **`CompleteUpload`** — update the multi-line `SELECT` in the preamble to include the two new fields; carry them as `sql.NullString` through the handler; include them in the final `INSERT INTO file_metadata (...)` statement (also update that INSERT to include the two columns + placeholders).
+3. **`CompleteUpload`** -- update the multi-line `SELECT` in the preamble to include the two new fields; carry them as `sql.NullString` through the handler; include them in the final `INSERT INTO file_metadata (...)` statement (also update that INSERT to include the two columns + placeholders).
 
 `UploadChunk` is not touched.
 
@@ -733,7 +733,7 @@ In `handlers/uploads.go`:
 **Prereq:** B1.
 
 - `handlers/uploads.go`: extend the request body type for `CreateUploadSession`:
-  - `file_id` (string, **required**, UUIDv4) — client-generated per § 4.9.
+  - `file_id` (string, **required**, UUIDv4) -- client-generated per § 4.9.
   - `encrypted_folder_path` (string, omitempty)
   - `folder_path_nonce` (string, omitempty)
   - Presence validation per B1 (both or neither for the folder-path pair; UUIDv4 format and non-collision for `file_id`).
@@ -756,11 +756,11 @@ In `handlers/uploads.go` `CreateUploadSession`, before inserting the new session
       AND status = 'in_progress'
       AND expires_at < CURRENT_TIMESTAMP
    ```
-   Swallow errors here (log and continue) — if the cleanup fails, the count query below will reflect reality including stale rows; that is at worst a false "cap exceeded."
+   Swallow errors here (log and continue) -- if the cleanup fails, the count query below will reflect reality including stale rows; that is at worst a false "cap exceeded."
 
 2. **Concurrent-session cap.** Run `SELECT COUNT(*) FROM upload_sessions WHERE owner_username = ? AND status = 'in_progress'`. If the count ≥ 2, return HTTP 429 (`echo.NewHTTPError(http.StatusTooManyRequests, "Maximum 2 concurrent uploads per user. Cancel an existing upload or wait for it to complete.")`).
 
-3. **In-progress-aware quota check.** Replace (or augment) the existing `user.CheckStorageAvailable(request.TotalSize)` with a check that also accounts for `SUM(padded_size)` from in-progress sessions for the same user. Use the same rqlite query shape that `GetUserStorage` in B4 uses — extract into a shared helper (`models/user.go` or a new helper in `handlers/uploads.go`) to avoid drift between the two code sites.
+3. **In-progress-aware quota check.** Replace (or augment) the existing `user.CheckStorageAvailable(request.TotalSize)` with a check that also accounts for `SUM(padded_size)` from in-progress sessions for the same user. Use the same rqlite query shape that `GetUserStorage` in B4 uses -- extract into a shared helper (`models/user.go` or a new helper in `handlers/uploads.go`) to avoid drift between the two code sites.
 
 **Files touched:** `handlers/uploads.go` (primarily), optionally `models/user.go` for the shared quota helper.
 
@@ -800,8 +800,8 @@ In `handlers/uploads.go` `CreateUploadSession`, before inserting the new session
 
 **Prereq:** A1, B2.
 
-- `handlers/export.go`: extend the per-file entry in the exported JSON bundle to include `encrypted_folder_path` and `folder_path_nonce`. Both optional; NULL omitted from the JSON (or serialized as `null` — pick whichever matches the existing export shape).
-- The encrypted body of the export bundle is not changed by this work — only the per-file metadata block at the top of the bundle grows two optional fields.
+- `handlers/export.go`: extend the per-file entry in the exported JSON bundle to include `encrypted_folder_path` and `folder_path_nonce`. Both optional; NULL omitted from the JSON (or serialized as `null` -- pick whichever matches the existing export shape).
+- The encrypted body of the export bundle is not changed by this work -- only the per-file metadata block at the top of the bundle grows two optional fields.
 
 **Files touched:** `handlers/export.go`.
 
@@ -812,14 +812,14 @@ In `handlers/uploads.go` `CreateUploadSession`, before inserting the new session
 All new tests are Go handler tests using the existing sqlmock-based patterns in `handlers/*_test.go`. No new test harness is needed.
 
 - `handlers/uploads_test.go`:
-  - New test: `CreateUploadSession` with folder-path fields present — asserts INSERT bindings include them and the session row's `encrypted_folder_path` / `folder_path_nonce` are set correctly.
-  - New test: `CreateUploadSession` with folder-path fields absent — asserts INSERT bindings pass NULL for both columns.
-  - New test: `CreateUploadSession` with exactly one of the two fields present — asserts HTTP 400 with the "must be provided together" message.
+  - New test: `CreateUploadSession` with folder-path fields present -- asserts INSERT bindings include them and the session row's `encrypted_folder_path` / `folder_path_nonce` are set correctly.
+  - New test: `CreateUploadSession` with folder-path fields absent -- asserts INSERT bindings pass NULL for both columns.
+  - New test: `CreateUploadSession` with exactly one of the two fields present -- asserts HTTP 400 with the "must be provided together" message.
   - New test: `GetUploadStatus` returns the two fields in the response when set.
   - New test: `CompleteUpload` carries folder-path from `upload_sessions` to `file_metadata`.
-  - New test: 2-session cap — create two in-progress sessions via sqlmock, assert the third returns HTTP 429.
-  - New test: lazy stale-session cleanup — seed one in-progress session with `expires_at < NOW`, assert it is updated to `abandoned` and the cap check then passes.
-  - New test: in-progress-aware quota — seed an in-progress session with `padded_size = X`, attempt to create another with `total_size` such that `X + padded(Y) > limit`, assert HTTP 403 with `{"error": "storage_quota_exceeded"}` and the `details` block populated per § B0.
+  - New test: 2-session cap -- create two in-progress sessions via sqlmock, assert the third returns HTTP 429.
+  - New test: lazy stale-session cleanup -- seed one in-progress session with `expires_at < NOW`, assert it is updated to `abandoned` and the cap check then passes.
+  - New test: in-progress-aware quota -- seed an in-progress session with `padded_size = X`, attempt to create another with `total_size` such that `X + padded(Y) > limit`, assert HTTP 403 with `{"error": "storage_quota_exceeded"}` and the `details` block populated per § B0.
 - `handlers/files_test.go`:
   - New test: `ListFiles` includes the two new fields in the response.
   - New test: `GetFileMeta` includes the two new fields in the response.
@@ -839,9 +839,9 @@ All new tests pass; existing tests still pass. Phase B is complete.
 
 ---
 
-### Phase C — Client Features
+### Phase C -- Client Features
 
-Goal: ship all four AAD-bound client fields, multi-file upload, folder upload, tree view, pre-flight quota, dedup, `--dir`/`--tree`/`--preserve-folders`, and offline-decrypt support — in both the TypeScript web frontend and the Go CLI. Every item pairs TS and Go changes; the order within the phase pairs up each feature's encrypt and decrypt paths so the test suite can always round-trip what it writes.
+Goal: ship all four AAD-bound client fields, multi-file upload, folder upload, tree view, pre-flight quota, dedup, `--dir`/`--tree`/`--preserve-folders`, and offline-decrypt support -- in both the TypeScript web frontend and the Go CLI. Every item pairs TS and Go changes; the order within the phase pairs up each feature's encrypt and decrypt paths so the test suite can always round-trip what it writes.
 
 **Critical invariant for the whole phase:** every AAD construction uses the **client-generated `file_id`** (UUIDv4) for that file (§ 3.3, § 4.9). The same `file_id` is built once locally before any encryption, used as AAD input for all four per-file fields, and passed verbatim into `CreateUploadSession`. The server validates and echoes it back so the client can confirm round-trip correctness.
 
@@ -893,20 +893,20 @@ Every location that currently decrypts `encrypted_filename`, `encrypted_sha256su
 
 **Prereq:** C1 (AAD on encrypt), B4 (`/api/user/storage` endpoint).
 
-- `client/static/index.html`: add the `multiple` attribute to `<input type="file" id="fileInput">`. Add a dedicated folder-upload input (separate element, with `webkitdirectory` — see C5) so the user explicitly chooses between "pick files" and "pick folder."
+- `client/static/index.html`: add the `multiple` attribute to `<input type="file" id="fileInput">`. Add a dedicated folder-upload input (separate element, with `webkitdirectory` -- see C5) so the user explicitly chooses between "pick files" and "pick folder."
 - `client/static/js/src/files/upload.ts`:
   - Refactor the single-file `handleFileUpload()` into `handleMultiFileUpload()`:
     - Read all files from `fileInput.files`.
-    - **Pre-flight quota:** call `GET /api/user/storage`, sum `calculateTotalEncryptedSize(file.size) + padding` over the batch. If `totalRequired > available_bytes`, show a rejection dialog with "This batch needs X MB; you have Y MB available — remove N files" and abort before any work.
+    - **Pre-flight quota:** call `GET /api/user/storage`, sum `calculateTotalEncryptedSize(file.size) + padding` over the batch. If `totalRequired > available_bytes`, show a rejection dialog with "This batch needs X MB; you have Y MB available -- remove N files" and abort before any work.
     - Resolve the Account Key once (cached per-session via the existing `account-key-cache.ts`).
     - Per file: upload sequentially via the existing per-file pipeline (pre-init → init → chunks → complete), using the cached key. All four AAD-bound blobs are built per-file.
   - **Batch progress UI:**
-    - Overall: "Uploading file 3 of 17 — 45% of batch."
+    - Overall: "Uploading file 3 of 17 -- 45% of batch."
     - Per-file: current **base filename only** (never the folder path, to limit what's displayed in logs or screenshots). Reuse the existing per-chunk progress component from `src/ui/progress.ts`.
   - **Partial-failure handling:**
     - On file-level failure (network, validation, quota), log it in a per-file error list, continue with remaining files.
     - At end of batch, show summary: "14 uploaded, 3 failed" with per-file error reasons.
-    - **Stop-on-fatal:** abort the batch on any of: HTTP 401 (`unauthorized`, session expired), HTTP 403 with any `error` code (account disabled / approval revoked / TOTP required / `storage_quota_exceeded`), HTTP 429 (`concurrent_upload_limit` — should not happen in sequential mode but treat as fatal). All other failures (network, transient 5xx, per-file validation) are per-file and the batch continues.
+    - **Stop-on-fatal:** abort the batch on any of: HTTP 401 (`unauthorized`, session expired), HTTP 403 with any `error` code (account disabled / approval revoked / TOTP required / `storage_quota_exceeded`), HTTP 429 (`concurrent_upload_limit` -- should not happen in sequential mode but treat as fatal). All other failures (network, transient 5xx, per-file validation) are per-file and the batch continues.
   - Tests (see C15 gate): mix of account-password and custom-password file entries in one batch; validates that Account Key is reused and Custom Keys are derived per-file as needed.
 
 **Files touched:** `client/static/index.html`, `client/static/js/src/files/upload.ts`.
@@ -949,12 +949,12 @@ Two dedup layers:
 
 1. **Pre-flight dedup (batch only, before any hashing).** Before upload starts, group selected files by `(base_filename, canonical_folder_path)`. If any group has more than one entry, prompt the user once per cluster:
    > "N files in this batch have the same name in the same folder. Upload one copy only?  [Yes, skip duplicates]  [No, upload all]"
-   Default action: skip. Free check — no hashing.
+   Default action: skip. Free check -- no hashing.
 2. **In-stream content dedup (refines the existing `src/utils/digest-cache.ts`).** The current cache key is `sha256`. Refine to `(sha256, canonical_folder_path)` so the same bytes into two different virtual folders is allowed, but the same bytes re-uploaded into the same folder is skipped and reported in the batch summary.
 
 **No batch-wide pre-upload hash pass.** Hashing cost scales with total bytes, not file count. Reuse the encrypt-time hash.
 
-**Tree view does no additional dedup.** If the DB somehow ends up with two rows sharing `(canonical_folder_path, filename, sha256)`, both render — we never silently hide data. (`file_id` is the primary key on `file_metadata`, so it cannot collide; the meaningful identity-class for the tree is the user-visible triple.)
+**Tree view does no additional dedup.** If the DB somehow ends up with two rows sharing `(canonical_folder_path, filename, sha256)`, both render -- we never silently hide data. (`file_id` is the primary key on `file_metadata`, so it cannot collide; the meaningful identity-class for the tree is the user-visible triple.)
 
 **Files touched:** `client/static/js/src/files/upload.ts`, `client/static/js/src/utils/digest-cache.ts`.
 
@@ -994,7 +994,7 @@ In `client/static/js/src/files/list.ts`:
 
 #### C9. Go CLI: AAD on encrypt paths for all four fields
 
-**Prereq:** A5 (Go AAD helper), A4 (Go canonicalization helper), B1–B4, C1 (parity — same client-generated `file_id` + AAD construction pattern as the TS side).
+**Prereq:** A5 (Go AAD helper), A4 (Go canonicalization helper), B1–B4, C1 (parity -- same client-generated `file_id` + AAD construction pattern as the TS side).
 
 Mirror of C1 on the CLI side.
 
@@ -1003,7 +1003,7 @@ Mirror of C1 on the CLI side.
   - Build AAD via `crypto.BuildFileMetadataAAD(field, fileID, username)` for each of the four fields.
   - Encrypt each metadata blob with AES-GCM using the appropriate KEK (Account or Custom for `fek`; Account for the rest) and the per-field AAD. The `folder_path` plaintext goes through the 64-byte bucket padding from § 3.3 before encryption.
   - Submit the `CreateUploadSession` request with `file_id` plus all four encrypted blobs. Verify the server's echo of `file_id` matches what was sent; abort and retry with a fresh UUID on mismatch.
-- The CLI and the web frontend must produce byte-identical AAD bytes for the same `(field, file_id, username)` — proved by A6's shared vectors.
+- The CLI and the web frontend must produce byte-identical AAD bytes for the same `(field, file_id, username)` -- proved by A6's shared vectors.
 
 **Files touched:** `cmd/arkfile-client/commands.go`, `cmd/arkfile-client/crypto_utils.go`.
 
@@ -1052,17 +1052,17 @@ Mirror of C2.
     |   +-- taxes.pdf  (512 KB)
     +-- backup.tar.gz  (4.1 GB)
     ```
-  - `list-files --folder PATH`: filter the listing to files whose decrypted folder path starts with the canonicalized form of `PATH` (treating `PATH` as a prefix with proper segment boundaries — `photos` matches `photos/2025` but not `photosfoo/`). Works with both flat and `--tree` output.
+  - `list-files --folder PATH`: filter the listing to files whose decrypted folder path starts with the canonicalized form of `PATH` (treating `PATH` as a prefix with proper segment boundaries -- `photos` matches `photos/2025` but not `photosfoo/`). Works with both flat and `--tree` output.
   - `download --preserve-folders`:
     - Without the flag (current behavior): write to `--output PATH` (filename appended if `PATH` is a directory).
     - With the flag: construct the target path as `{output_dir}/{decrypted_folder_path}/{filename}`, creating directories as needed. Print a confirmation prompt before writing:
       ```
-      Will save to: /home/user/downloads/photos/2025/vacation/img001.jpg — proceed? (y/N)
+      Will save to: /home/user/downloads/photos/2025/vacation/img001.jpg -- proceed? (y/N)
       ```
     - `-y` / `--yes` suppresses the prompt for scripting use.
   - **Belt-and-suspenders validation for `--preserve-folders`.**
     - Re-run `ValidateFolderPath` on the **decrypted plaintext** folder path before constructing the filesystem path. Any failure here is hard-fail (decrypt aborts, nothing written). AAD binding on `encrypted_folder_path` already cryptographically prevents an attacker from inserting a crafted path via DB tampering (the attacker does not hold the user's Account Key), so this validation is defense-in-depth against a future canonicalizer bug or bad decrypt, not mitigation for an active attacker.
-    - After computing the target path, verify the absolute form is still under `output_dir`: compute `absTarget` and `absOutputDir`, then `rel, err := filepath.Rel(absOutputDir, absTarget)` — reject if `err != nil` or `rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))`. Fail with a clear error if the containment check doesn't hold.
+    - After computing the target path, verify the absolute form is still under `output_dir`: compute `absTarget` and `absOutputDir`, then `rel, err := filepath.Rel(absOutputDir, absTarget)` -- reject if `err != nil` or `rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))`. Fail with a clear error if the containment check doesn't hold.
 
 **Files touched:** `cmd/arkfile-client/commands.go`.
 
@@ -1111,11 +1111,11 @@ TS and Go unit tests, paired like the production code.
 - Extend `cmd/arkfile-client/crypto_utils_test.go`:
   - AAD round-trip for each of the four fields. Use the shared vectors for input conformance and custom round-trip cases for the full encrypt+decrypt+AAD cycle.
   - Wrong-AAD rejection cases mirroring the TS side.
-  - **Folder-path padding round-trip**: drive the `folder_path_padded` vectors from A6 — assert encrypt produces the expected padded plaintext length and that decrypt-then-strip recovers the canonical input exactly.
-- Extend `cmd/arkfile-client/folderpath_test.go` with a **belt-and-suspenders `ValidateFolderPath` test set**: hand-crafted inputs that exercise every error code (`FP_DOT_SEGMENT`, `FP_FORBIDDEN_CHAR`, `FP_LEADING_SLASH`, etc.) by calling `ValidateFolderPath` directly. This stands in for the dropped dev-only AAD-bypass endpoint from D1 — the validator is testable in isolation at the unit-test layer, which is the right place for it.
+  - **Folder-path padding round-trip**: drive the `folder_path_padded` vectors from A6 -- assert encrypt produces the expected padded plaintext length and that decrypt-then-strip recovers the canonical input exactly.
+- Extend `cmd/arkfile-client/folderpath_test.go` with a **belt-and-suspenders `ValidateFolderPath` test set**: hand-crafted inputs that exercise every error code (`FP_DOT_SEGMENT`, `FP_FORBIDDEN_CHAR`, `FP_LEADING_SLASH`, etc.) by calling `ValidateFolderPath` directly. This stands in for the dropped dev-only AAD-bypass endpoint from D1 -- the validator is testable in isolation at the unit-test layer, which is the right place for it.
 - New `cmd/arkfile-client/commands_test.go`:
   - `--dir` walker: given a synthetic directory tree (created in a temp dir), assert the collected `{abs, relDir}` pairs match expectations, and that rejected paths are enumerated correctly.
-  - `--preserve-folders` containment check: construct decrypted folder paths that (a) pass `ValidateFolderPath` and resolve under the output dir, (b) pass `ValidateFolderPath` but would join to a path outside the output dir (attempt). Assert (a) writes, (b) errors with containment-violation message. Use a mocked write sink to observe attempted writes without touching the real FS. (Case (c) — `ValidateFolderPath` failure — is covered by the `folderpath_test.go` extension above.)
+  - `--preserve-folders` containment check: construct decrypted folder paths that (a) pass `ValidateFolderPath` and resolve under the output dir, (b) pass `ValidateFolderPath` but would join to a path outside the output dir (attempt). Assert (a) writes, (b) errors with containment-violation message. Use a mocked write sink to observe attempted writes without touching the real FS. (Case (c) -- `ValidateFolderPath` failure -- is covered by the `folderpath_test.go` extension above.)
 
 Run gates:
 
@@ -1130,9 +1130,9 @@ All new tests pass; all pre-existing tests (Phase A, Phase B) still pass. Phase 
 
 ---
 
-### Phase D — Integration & Browser Tests
+### Phase D -- Integration & Browser Tests
 
-Goal: validate the whole stack end-to-end. No new unit tests or production code here — Phase D exercises what Phases A–C built.
+Goal: validate the whole stack end-to-end. No new unit tests or production code here -- Phase D exercises what Phases A–C built.
 
 #### D1. `scripts/testing/e2e-test.sh`: multi-file, folder, quota, dedup, tamper, containment
 
@@ -1155,7 +1155,7 @@ Add new test groups to `e2e-test.sh`, following the existing style (`curl` + `ar
 - **`download --preserve-folders` containment negative tests.**
   - Tamper `encrypted_folder_path` in rqlite so the AAD check fails (primary defense). Assert the CLI's error message matches the AAD-failure contract.
   - Hand-craft a test case where a decrypted folder path would join to a filesystem path that escapes `output_dir`. Assert the containment check catches it and the CLI writes nothing.
-  - Note: the belt-and-suspenders `ValidateFolderPath` check is exercised at the unit-test layer in C15's extension to `cmd/arkfile-client/folderpath_test.go` — no special server endpoint is needed, and v4 deliberately does not introduce an AAD-bypass endpoint (that would itself be an attack surface even when gated by `ADMIN_DEV_TEST_API_ENABLED`).
+  - Note: the belt-and-suspenders `ValidateFolderPath` check is exercised at the unit-test layer in C15's extension to `cmd/arkfile-client/folderpath_test.go` -- no special server endpoint is needed, and v4 deliberately does not introduce an AAD-bypass endpoint (that would itself be an attack surface even when gated by `ADMIN_DEV_TEST_API_ENABLED`).
 
 **Files touched:** `scripts/testing/e2e-test.sh`.
 
@@ -1193,67 +1193,67 @@ All tests pass. Section 7 deploy gate is now reachable.
 
 ### Backend (Go)
 
-- `database/unified_schema.sql` — add `encrypted_folder_path TEXT` + `folder_path_nonce TEXT` on both `file_metadata` and `upload_sessions`.
-- `handlers/uploads.go` — accept client-generated `file_id` (UUIDv4 validation, collision check) plus folder-path fields in `CreateUploadSession`; persist on `upload_sessions`; carry to `file_metadata` on `CompleteUpload`; enforce 2-session concurrency cap; lazy stale-session cleanup; in-progress-aware quota check; structured error responses per § B0.
-- `handlers/files.go` — include folder-path fields in `ListFiles` / `GetFileMeta` responses; add `GetUserStorage` handler (or split into new `handlers/storage.go`) returning `total_bytes`/`limit_bytes`/`available_bytes`/`usage_percent`/`has_folder_paths`.
-- `handlers/route_config.go` — wire `GET /api/user/storage` into `totpProtectedGroup`.
-- `handlers/export.go` — include folder-path fields in export bundle.
-- `models/file.go` — add `EncryptedFolderPath` + `FolderPathNonce` fields to `FileMetadata`; clarifying block comment on `EncryptedFileSha256sum` (A2).
-- `models/user.go` — short header comment noting username immutability (A2).
+- `database/unified_schema.sql` -- add `encrypted_folder_path TEXT` + `folder_path_nonce TEXT` on both `file_metadata` and `upload_sessions`.
+- `handlers/uploads.go` -- accept client-generated `file_id` (UUIDv4 validation, collision check) plus folder-path fields in `CreateUploadSession`; persist on `upload_sessions`; carry to `file_metadata` on `CompleteUpload`; enforce 2-session concurrency cap; lazy stale-session cleanup; in-progress-aware quota check; structured error responses per § B0.
+- `handlers/files.go` -- include folder-path fields in `ListFiles` / `GetFileMeta` responses; add `GetUserStorage` handler (or split into new `handlers/storage.go`) returning `total_bytes`/`limit_bytes`/`available_bytes`/`usage_percent`/`has_folder_paths`.
+- `handlers/route_config.go` -- wire `GET /api/user/storage` into `totpProtectedGroup`.
+- `handlers/export.go` -- include folder-path fields in export bundle.
+- `models/file.go` -- add `EncryptedFolderPath` + `FolderPathNonce` fields to `FileMetadata`; clarifying block comment on `EncryptedFileSha256sum` (A2).
+- `models/user.go` -- short header comment noting username immutability (A2).
 
 ### Shared crypto (Go)
 
-- `crypto/aad.go` — new file: generic `BuildFileMetadataAAD(field, fileID, username)`.
-- `crypto/aad_test.go` — new file: unit tests driven by the shared test-vectors JSON.
+- `crypto/aad.go` -- new file: generic `BuildFileMetadataAAD(field, fileID, username)`.
+- `crypto/aad_test.go` -- new file: unit tests driven by the shared test-vectors JSON.
 
 ### Frontend (TypeScript)
 
-- `client/static/index.html` — `multiple` attribute on the file input; folder-upload input with `webkitdirectory`; "Add to virtual folder?" text input on single-file form; flat/tree toggle element.
-- `client/static/js/src/files/upload.ts` — multi-file loop, folder-path encryption with AAD, client-generated `file_id` (UUIDv4) wiring, pre-flight quota check, "Add to virtual folder?" wiring, folder upload via `webkitdirectory`, batch progress UI, partial-failure handling, opt-in Account-Key-cache extension prompt for long batches (§ 3.13).
-- `client/static/js/src/files/list.ts` — AAD-bound decrypt of `filename` / `sha256sum` / `folder_path`; tree building; tree rendering; flat/tree toggle with `localStorage`; in-memory `Map<fileID, DecryptedMeta>` cache; pagination + lazy decrypt above 1,000 files.
-- `client/static/js/src/files/download.ts` — AAD-bound unwrap of `encrypted_fek`, AAD-bound decrypt of `encrypted_filename` / `encrypted_sha256sum`.
-- `client/static/js/src/files/streaming-download.ts` — same AAD updates as `download.ts` where applicable.
-- `client/static/js/src/files/share.ts` — **not modified.** The share-creation path uses the owner's updated unwrap via `download.ts` / `list.ts` automatically (§ 4.11). Recipient-facing decrypt is untouched.
-- `client/static/js/src/utils/digest-cache.ts` — refine cache key to `(sha256, canonical_folder_path)` (C6).
-- `client/static/js/src/files/folder-path.ts` — new file: `canonicalizeFolderPath`, `validateFolderPath`.
-- `client/static/js/src/crypto/aad.ts` — new file: `buildFileMetadataAAD`.
-- `client/static/js/src/crypto/metadata-helpers.ts` and/or `file-encryption.ts` — thread AAD inputs through shared metadata construction helpers where centralized.
-- `client/static/js/src/files/export.ts` — extend export-bundle parser to handle folder-path fields with AAD.
-- `client/static/css/styles.css` — tree component styles.
-- `client/static/js/src/types/api.d.ts` — add folder-path fields to `ServerFileEntry`; add `GET /api/user/storage` response type (including `has_folder_paths`); add typed-error-response shape per § B0.
-- `client/static/js/src/crypto/account-key-cache.ts` — wire `beforeunload` / `pagehide` listeners and JWT-session-expiry hook into `cleanupAccountKeyCache()`; add the opt-in batch-extension flow per § 3.13.
+- `client/static/index.html` -- `multiple` attribute on the file input; folder-upload input with `webkitdirectory`; "Add to virtual folder?" text input on single-file form; flat/tree toggle element.
+- `client/static/js/src/files/upload.ts` -- multi-file loop, folder-path encryption with AAD, client-generated `file_id` (UUIDv4) wiring, pre-flight quota check, "Add to virtual folder?" wiring, folder upload via `webkitdirectory`, batch progress UI, partial-failure handling, opt-in Account-Key-cache extension prompt for long batches (§ 3.13).
+- `client/static/js/src/files/list.ts` -- AAD-bound decrypt of `filename` / `sha256sum` / `folder_path`; tree building; tree rendering; flat/tree toggle with `localStorage`; in-memory `Map<fileID, DecryptedMeta>` cache; pagination + lazy decrypt above 1,000 files.
+- `client/static/js/src/files/download.ts` -- AAD-bound unwrap of `encrypted_fek`, AAD-bound decrypt of `encrypted_filename` / `encrypted_sha256sum`.
+- `client/static/js/src/files/streaming-download.ts` -- same AAD updates as `download.ts` where applicable.
+- `client/static/js/src/files/share.ts` -- **not modified.** The share-creation path uses the owner's updated unwrap via `download.ts` / `list.ts` automatically (§ 4.11). Recipient-facing decrypt is untouched.
+- `client/static/js/src/utils/digest-cache.ts` -- refine cache key to `(sha256, canonical_folder_path)` (C6).
+- `client/static/js/src/files/folder-path.ts` -- new file: `canonicalizeFolderPath`, `validateFolderPath`.
+- `client/static/js/src/crypto/aad.ts` -- new file: `buildFileMetadataAAD`.
+- `client/static/js/src/crypto/metadata-helpers.ts` and/or `file-encryption.ts` -- thread AAD inputs through shared metadata construction helpers where centralized.
+- `client/static/js/src/files/export.ts` -- extend export-bundle parser to handle folder-path fields with AAD.
+- `client/static/css/styles.css` -- tree component styles.
+- `client/static/js/src/types/api.d.ts` -- add folder-path fields to `ServerFileEntry`; add `GET /api/user/storage` response type (including `has_folder_paths`); add typed-error-response shape per § B0.
+- `client/static/js/src/crypto/account-key-cache.ts` -- wire `beforeunload` / `pagehide` listeners and JWT-session-expiry hook into `cleanupAccountKeyCache()`; add the opt-in batch-extension flow per § 3.13.
 
 ### CLI (Go)
 
-- `cmd/arkfile-client/commands.go` — `--dir` flag for `upload`; `--tree` and optional `--folder PATH` flags for `list-files`; `--preserve-folders` flag for `download`; client-generated `file_id` (UUIDv4) per file; AAD construction for all four fields; structured-error parsing per § B0.
-- `cmd/arkfile-client/crypto_utils.go` — thread AAD inputs into metadata encrypt/decrypt helpers.
-- `cmd/arkfile-client/folderpath.go` — new file: `CanonicalizeFolderPath`, `ValidateFolderPath` (mirrors TS).
-- `cmd/arkfile-client/folderpath_test.go` — new file: Go unit tests driven by the shared test-vectors JSON.
-- `cmd/arkfile-client/offline_decrypt.go` — extend `bundleMeta` struct + `decrypt-blob` display path for the new folder-path fields (C13).
-- `cmd/arkfile-client/dedup.go` — refine dedup key to `(sha256, canonical_folder_path)` (C14).
-- `cmd/arkfile-client/commands_test.go` — new file: `--dir` walker tests, `--preserve-folders` containment tests.
+- `cmd/arkfile-client/commands.go` -- `--dir` flag for `upload`; `--tree` and optional `--folder PATH` flags for `list-files`; `--preserve-folders` flag for `download`; client-generated `file_id` (UUIDv4) per file; AAD construction for all four fields; structured-error parsing per § B0.
+- `cmd/arkfile-client/crypto_utils.go` -- thread AAD inputs into metadata encrypt/decrypt helpers.
+- `cmd/arkfile-client/folderpath.go` -- new file: `CanonicalizeFolderPath`, `ValidateFolderPath` (mirrors TS).
+- `cmd/arkfile-client/folderpath_test.go` -- new file: Go unit tests driven by the shared test-vectors JSON.
+- `cmd/arkfile-client/offline_decrypt.go` -- extend `bundleMeta` struct + `decrypt-blob` display path for the new folder-path fields (C13).
+- `cmd/arkfile-client/dedup.go` -- refine dedup key to `(sha256, canonical_folder_path)` (C14).
+- `cmd/arkfile-client/commands_test.go` -- new file: `--dir` walker tests, `--preserve-folders` containment tests.
 - The AAD helper is not CLI-local; the CLI imports `crypto/aad.go` directly.
 
 ### Config / shared spec
 
-- `crypto/folder-path-params.json` — new file: canonicalization rules and `padding_bucket_bytes` (§ 3.2, § 3.3, A3).
-- AAD field tags + separator byte are language-level constants in `crypto/aad.go` and `client/static/js/src/crypto/aad.ts` (no JSON file — see § 3.3 / A3 / A5 for rationale).
+- `crypto/folder-path-params.json` -- new file: canonicalization rules and `padding_bucket_bytes` (§ 3.2, § 3.3, A3).
+- AAD field tags + separator byte are language-level constants in `crypto/aad.go` and `client/static/js/src/crypto/aad.ts` (no JSON file -- see § 3.3 / A3 / A5 for rationale).
 
 ### Docs
 
-- `docs/wip/arkbackup-export.md` — add the two new optional folder-path fields and their AAD binding to the bundle-format spec.
+- `docs/wip/arkbackup-export.md` -- add the two new optional folder-path fields and their AAD binding to the bundle-format spec.
 
 ### Test assets
 
-- `scripts/testing/folder-path-test-vectors.json` — new file: shared canonicalization and AAD test vectors (authoritative source consumed by both TS and Go unit tests).
+- `scripts/testing/folder-path-test-vectors.json` -- new file: shared canonicalization and AAD test vectors (authoritative source consumed by both TS and Go unit tests).
 
 ### Tests
 
-- `handlers/uploads_test.go` — folder-path field handling in `CreateUploadSession` / `CompleteUpload`; 2-session cap enforcement; stale-session cleanup; in-progress-aware quota with `storage_quota_exceeded` error code; client-supplied `file_id` validation (UUIDv4 format and collision-rejection).
-- `handlers/files_test.go` — folder-path in list/meta responses; `GetUserStorage` endpoint tests.
-- `handlers/export_test.go` — folder-path included in export bundle.
-- `scripts/testing/e2e-test.sh` — multi-file upload tests, folder-path round-trip, pre-flight quota rejection, partial-failure handling, export round-trip, canonicalization edge cases, 2-session cap, AAD tamper tests (all four fields), `--preserve-folders` containment negative tests.
-- `scripts/testing/e2e-playwright.ts` — browser-level folder upload, tree view, flat/tree toggle, `localStorage` persistence, in-memory cache behavior after reload, AAD-tamper UI surfacing.
+- `handlers/uploads_test.go` -- folder-path field handling in `CreateUploadSession` / `CompleteUpload`; 2-session cap enforcement; stale-session cleanup; in-progress-aware quota with `storage_quota_exceeded` error code; client-supplied `file_id` validation (UUIDv4 format and collision-rejection).
+- `handlers/files_test.go` -- folder-path in list/meta responses; `GetUserStorage` endpoint tests.
+- `handlers/export_test.go` -- folder-path included in export bundle.
+- `scripts/testing/e2e-test.sh` -- multi-file upload tests, folder-path round-trip, pre-flight quota rejection, partial-failure handling, export round-trip, canonicalization edge cases, 2-session cap, AAD tamper tests (all four fields), `--preserve-folders` containment negative tests.
+- `scripts/testing/e2e-playwright.ts` -- browser-level folder upload, tree view, flat/tree toggle, `localStorage` persistence, in-memory cache behavior after reload, AAD-tamper UI surfacing.
 
 ---
 
@@ -1279,12 +1279,12 @@ sudo bash scripts/testing/e2e-playwright.sh
 
 **Procedure:** use `scripts/test-deploy.sh` (fresh install), **not** `scripts/test-update.sh`.
 
-Why: `test-update.sh` copies updated `database/` files but relies on the app's startup `createTables()` to apply schema — which is a no-op for adding columns to existing tables (§ 4.12). Using `test-update.sh` here would silently fail to add `encrypted_folder_path` / `folder_path_nonce` to the live rqlite, and every downstream feature in this project would break.
+Why: `test-update.sh` copies updated `database/` files but relies on the app's startup `createTables()` to apply schema -- which is a no-op for adding columns to existing tables (§ 4.12). Using `test-update.sh` here would silently fail to add `encrypted_folder_path` / `folder_path_nonce` to the live rqlite, and every downstream feature in this project would break.
 
 Beta-user notice template (to send out ~1 week before the deploy, and again the day of):
 
 ```
-Subject: Arkfile beta reset notice — YYYY-MM-DD
+Subject: Arkfile beta reset notice -- YYYY-MM-DD
 
 Hi Arkfile beta testers,
 
@@ -1330,7 +1330,7 @@ This deploy story assumes the schema-evolution gap (§ 4.12) remains in place. F
 - Continue using `test-deploy.sh` + a beta-reset notice as the standard pattern; or
 - Introduce a column-evolution mechanism in `database/database.go` (see Section 9 deferred item).
 
-v4 does not make that decision — it only makes the one-time call for this project.
+v4 does not make that decision -- it only makes the one-time call for this project.
 
 ---
 
@@ -1344,7 +1344,7 @@ v4 does not make that decision — it only makes the one-time call for this proj
 - **Folder structure (depth, breadth, naming patterns) is hidden** since paths are encrypted per-file with bucket-padded length and AAD-bound ciphertext.
 - **`file_id` is client-generated and opaque** (UUIDv4, per § 4.9). It carries no server-secret content and reveals nothing about the user, file, or folder beyond what `CreateUploadSession` would have observed anyway.
 - **The pre-flight quota endpoint returns only the user's own storage summary.** No PII. No cross-user information. The new `has_folder_paths` boolean reveals only whether the user has at least one foldered file (a one-bit signal, no folder names or counts). Same JWT auth as every other user-scoped endpoint.
-- **Decrypted metadata is held in an in-memory `Map`** scoped to the SPA lifetime — not `sessionStorage`, not `localStorage`, not IndexedDB. This minimizes the blast radius of any future XSS: decrypted plaintext filenames and folder paths never touch a storage API that can be read by arbitrary scripts on the page. The tradeoff is having to re-decrypt after a full page reload, which is acceptable given the sub-second times for libraries under 1,000 files and the lazy-decrypt path for larger libraries.
+- **Decrypted metadata is held in an in-memory `Map`** scoped to the SPA lifetime -- not `sessionStorage`, not `localStorage`, not IndexedDB. This minimizes the blast radius of any future XSS: decrypted plaintext filenames and folder paths never touch a storage API that can be read by arbitrary scripts on the page. The tradeoff is having to re-decrypt after a full page reload, which is acceptable given the sub-second times for libraries under 1,000 files and the lazy-decrypt path for larger libraries.
 - **Account Key residency is bounded and user-controlled.** Per § 3.13, the Account Key cache is wiped on logout, JWT session expiry, page navigation, and inactivity timeout. Long batch uploads that would exceed the inactivity timeout require an explicit opt-in to extend the cache for the duration of the batch.
 - **Tamper visibility.** AAD on all four fields means that cross-row swaps, cross-field swaps, or cross-user confusion all surface as decryption failures rather than silent wrong-data display. The tamper E2E tests in D1 are the functional proof.
 
@@ -1381,7 +1381,7 @@ Each item below is explicitly **out of scope for this project**. One-line notes 
 
 ### "Download all in this folder as zip" (web)
 
-- Single-file download on web goes to the browser's download folder with the decrypted filename — the browser UX doesn't support per-download folder structure. A future feature could pack the decrypted tree into an in-memory zip client-side and offer it as a single download. Not in this round.
+- Single-file download on web goes to the browser's download folder with the decrypted filename -- the browser UX doesn't support per-download folder structure. A future feature could pack the decrypted tree into an in-memory zip client-side and offer it as a single download. Not in this round.
 
 ### Column-evolution mechanism in `database/database.go`
 
@@ -1392,7 +1392,7 @@ Each item below is explicitly **out of scope for this project**. One-line notes 
 
 ### Import / restore from export bundle
 
-- The export bundle already carries encrypted folder-path fields after B5 (and is parsable client-side after C8 / C13). A matching import path — upload the bundle, re-materialize each file into `file_metadata` + `file_storage_locations`, re-encrypt content into S3 — is a separate project.
+- The export bundle already carries encrypted folder-path fields after B5 (and is parsable client-side after C8 / C13). A matching import path -- upload the bundle, re-materialize each file into `file_metadata` + `file_storage_locations`, re-encrypt content into S3 -- is a separate project.
 - **Corner check:** v4 preserves the information needed to do the restore round-trip; no decision here blocks future import work.
 
 ---

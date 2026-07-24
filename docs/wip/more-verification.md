@@ -13,9 +13,9 @@ Given the security-critical nature of your codebase, layering techniques *beyond
 #### Static analysis and security scanning
 
 - **`go vet` and `golangci-lint`** with a curated linter set (staticcheck, unused, ineffassign, copylocks, etc.).
-- **`gosec`** — security-focused analyzer that flags crypto misuse, hardcoded credentials, weak randomness, insecure TLS, etc.
-- **`govulncheck`** — scans your dependency graph against the Go vulnerability database and reports *actually reachable* vulnerable code, which dramatically reduces noise.
-- **Semgrep** with the Go and crypto rule packs — good for catching custom anti-patterns (e.g., using AES-CBC without authentication, reusing nonces, mixing key versions).
+- **`gosec`** -- security-focused analyzer that flags crypto misuse, hardcoded credentials, weak randomness, insecure TLS, etc.
+- **`govulncheck`** -- scans your dependency graph against the Go vulnerability database and reports *actually reachable* vulnerable code, which dramatically reduces noise.
+- **Semgrep** with the Go and crypto rule packs -- good for catching custom anti-patterns (e.g., using AES-CBC without authentication, reusing nonces, mixing key versions).
 - For the TS client: **`eslint-plugin-security`**, **`npm audit`**/`osv-scanner`, and a strict `tsconfig` with `strict` + `noUncheckedIndexedAccess`.
 
 #### Race detection and memory sanitizer
@@ -68,13 +68,13 @@ For an authorization-heavy server, instrument policy decisions and replay them a
 
 #### Differential testing against a reference implementation
 
-If your crypto envelope format has a reference (e.g., RFC 8188 for HTTP encryption, age, or libsodium's `secretbox`), generate ciphertexts from the reference and confirm your clients decrypt them — and vice versa.
+If your crypto envelope format has a reference (e.g., RFC 8188 for HTTP encryption, age, or libsodium's `secretbox`), generate ciphertexts from the reference and confirm your clients decrypt them -- and vice versa.
 
 #### Model-based testing for the sharing/permission state machine
 
 Permissions on shared files typically form a small state machine (private → shared-link → shared-with-users → revoked). Encode it in **`rapid`** or in **DSL-based tools like `fsm-go`**, and let the model drive both the server API and assertions about who can read what at any point.
 
-### Formal Verification — Yes, It Can Fit
+### Formal Verification -- Yes, It Can Fit
 
 Formal verification is realistic for *parts* of your system, not the whole thing. The trick is picking the right boundary.
 
@@ -82,8 +82,8 @@ Formal verification is realistic for *parts* of your system, not the whole thing
 
 If your system defines its own protocol for key exchange, sharing, or authenticated requests (even a small one), model it in:
 
-- **ProVerif** or **Tamarin** — symbolic, unbounded-session proofs of secrecy, authentication, and forward secrecy.
-- **CryptoVerif** — computational, closer to the actual primitives.
+- **ProVerif** or **Tamarin** -- symbolic, unbounded-session proofs of secrecy, authentication, and forward secrecy.
+- **CryptoVerif** -- computational, closer to the actual primitives.
 
 These tools have been used to validate WireGuard, TLS 1.3, Signal's double ratchet, etc. Even if you don't prove the implementation, proving the *protocol design* rules out a large and embarrassing class of bugs.
 
@@ -96,11 +96,11 @@ A 2022 paper ([ar5iv.labs.arxiv.org](https://ar5iv.labs.arxiv.org/html/2212.0262
 - Security properties (injective agreement, forward secrecy) are proven modularly per participant.
 - The library is almost entirely ghost code, so it imposes no runtime overhead and existing implementations need not be restructured much.
 
-For your server, this means you could — at reasonable cost — annotate the request-handling and key-management paths with Gobra pre/postconditions and prove things like "every decryption key returned to a client was derived only from material present in a valid, unrevoked share grant."
+For your server, this means you could -- at reasonable cost -- annotate the request-handling and key-management paths with Gobra pre/postconditions and prove things like "every decryption key returned to a client was derived only from material present in a valid, unrevoked share grant."
 
 #### 3. Verifying critical Go modules with Dafny
 
-**Dafny** can compile to Go, and there are verified systems written this way — e.g., **daisy-nfsd**, a crash-safe concurrent NFS server that combines Dafny proofs of file-system operations with Perennial proofs of the underlying transaction system ([zzctmac/daisy-nfsd](https://github.com/zzctmac/daisy-nfsd)). For leaf modules with crisp specs (e.g., your envelope format parser, AEAD wrapper, key-derivation step, or share-graph resolver), you could:
+**Dafny** can compile to Go, and there are verified systems written this way -- e.g., **daisy-nfsd**, a crash-safe concurrent NFS server that combines Dafny proofs of file-system operations with Perennial proofs of the underlying transaction system ([zzctmac/daisy-nfsd](https://github.com/zzctmac/daisy-nfsd)). For leaf modules with crisp specs (e.g., your envelope format parser, AEAD wrapper, key-derivation step, or share-graph resolver), you could:
 
 1. Specify in Dafny.
 2. Prove functional correctness.

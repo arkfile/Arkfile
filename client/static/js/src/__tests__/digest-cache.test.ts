@@ -1,5 +1,5 @@
 /**
- * Unit Tests — Digest Cache (Client-Side Deduplication)
+ * Unit Tests -- Digest Cache (Client-Side Deduplication)
  *
  * Tests for: addDigest, checkDuplicate, removeDigest, clearDigestCache,
  * populateDigestCache
@@ -27,7 +27,7 @@ import {
 } from '../crypto/primitives';
 
 // ============================================================================
-// Setup — clean slate before each test
+// Setup -- clean slate before each test
 // ============================================================================
 
 beforeEach(() => {
@@ -247,7 +247,7 @@ describe('populateDigestCache', () => {
       },
     ];
 
-    // Should not throw — individual failures are non-fatal
+    // Should not throw -- individual failures are non-fatal
     await populateDigestCache(accountKey, files);
 
     expect(checkDuplicate('somedigest')).toBeNull();

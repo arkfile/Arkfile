@@ -76,7 +76,7 @@ Arkfile uses the same Account Password for two completely independent purposes: 
 
 **Account Password for Authentication (OPAQUE).** The account password is used with the OPAQUE protocol to authenticate the user. OPAQUE performs a password-authenticated key exchange in which the client proves knowledge of the password without ever transmitting it. The server never learns the password at any point during registration or login. OPAQUE has its own internal key derivation and does not use Argon2id. The output of a successful OPAQUE authentication is a set of session keys used for JWT token issuance and session management. Nothing from the OPAQUE auth/login/registration process is ever to be used for anything dealing with file encryption or decryption.
 
-**Account Password for File Encryption (Argon2id -> Account Key).** The same account password is used separately, entirely on the client side, to derive an Account Key via Argon2id. This Account Key serves as a Key Encryption Key (KEK). For each file, a cryptographically random 256-bit File Encryption Key (FEK) is generated, and the FEK is wrapped (encrypted) by the KEK using AES-256-GCM. The file data itself is encrypted with the FEK. The salt for this derivation is deterministic, computed as `SHA-256("arkfile-account-key-salt:{username}")`. This is safe because the Argon2id-derived key only wraps the FEK — the actual file encryption uses random FEKs with unique nonces, and the memory-hard properties of Argon2id protect the KEK even with a known salt. See crypto/argon2id-params.json for current Argon2id parameters. The Account Key is also used to encrypt and decrypt all file metadata for an individual user's own files.
+**Account Password for File Encryption (Argon2id -> Account Key).** The same account password is used separately, entirely on the client side, to derive an Account Key via Argon2id. This Account Key serves as a Key Encryption Key (KEK). For each file, a cryptographically random 256-bit File Encryption Key (FEK) is generated, and the FEK is wrapped (encrypted) by the KEK using AES-256-GCM. The file data itself is encrypted with the FEK. The salt for this derivation is deterministic, computed as `SHA-256("arkfile-account-key-salt:{username}")`. This is safe because the Argon2id-derived key only wraps the FEK -- the actual file encryption uses random FEKs with unique nonces, and the memory-hard properties of Argon2id protect the KEK even with a known salt. See crypto/argon2id-params.json for current Argon2id parameters. The Account Key is also used to encrypt and decrypt all file metadata for an individual user's own files.
 
 **Custom Password for File Encryption (Argon2id -> Custom Key).** Users may optionally provide a custom password instead of using their account key to encrypt a file. This custom password goes through the same Argon2id derivation with a different deterministic salt (`SHA-256("arkfile-custom-key-salt:{username}")`), producing a Custom Key (KEK) that wraps the FEK. The encrypted envelope format distinguishes account-wrapped from custom-wrapped FEKs via a key type byte (0x01 for account, 0x02 for custom), so the client knows which password to request at decryption time. File metadata encryption and decryption always uses the Account Key.
 
@@ -100,7 +100,7 @@ No emojis in any code, documentation, or responses please. If needed, instead of
 
 ## Comment/Log/Print Formatting
 
-No "===" or "---" characters for formatting in log/print statements or comments please. Keep comments short and concise and focused on the intended or established functionality of the app in its ideal form. (NOTE: If you find yourself beginning to write something to the effect of "keeping this for backwards compatibility" or "keep this as a fallback" stop and immediately flag this to the developers. Refer to 'Greenfield App' and 'Function Review Sanity Checks' sections for more information.)
+No "===" or "---" characters for formatting in log statements or comments please (exceptions: section headers in long code files; console printed output separators). Keep comments short and concise and focused on the intended or established functionality of the app in its ideal form. (NOTE: If you find yourself beginning to write something to the effect of "keeping this for backwards compatibility" or "keep this as a fallback" stop and immediately flag this to the developers. Refer to 'Greenfield App' and 'Function Review Sanity Checks' sections for more information.)
 
 ## Responses in Chat and Discussions about the Codebase
 
@@ -116,7 +116,7 @@ Do not name functions or variables or include in comments references to temporar
 
 ## Document Formatting
 
-Do not add unnecessary hard line breaks within paragraphs. Allow continuous lines of arbitrary length and allow IDEs and text editors to do the line-wrapping as desired by the end-user, reader or developer.
+Do not add unnecessary hard line breaks within paragraphs. Allow continuous lines of arbitrary length and allow IDEs and text editors to do the line-wrapping as desired by the end-user, reader or developer. Never user em-dashes (—), only double-dashes (--).
 
 ## Representative Users and Threat Models
 

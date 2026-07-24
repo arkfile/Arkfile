@@ -4,7 +4,7 @@ This document plans the Multi-Factor Authentication enhancement for Arkfile: har
 
 ## Goals
 
-Arkfile currently requires TOTP as the sole second factor. This project adds FIDO2/WebAuthn hardware security keys as an alternative second factor (user picks one at enrollment in the first release), preserves backup codes as the primary self-service recovery path for all MFA types, adds an admin CLI command to reset a user's MFA, improves sitewide visibility of contact/admin-contact affordances, completes the user-secret master rotation script so it re-encrypts all dependent database rows, and achieves functional equivalence between the TypeScript browser client and the `arkfile-client` Go CLI for MFA enrollment and login. Admin bootstrap is equally in scope: after `arkfile-admin bootstrap` on a new instance, the operator must be able to complete initial MFA setup with either TOTP or a hardware security key via `arkfile-admin` on the server host — not through the website. Administrators do not perform admin functions in the web app; all privileged operations, including bootstrap, MFA enrollment, and ongoing administration, run through `arkfile-admin` on the instance itself.
+Arkfile currently requires TOTP as the sole second factor. This project adds FIDO2/WebAuthn hardware security keys as an alternative second factor (user picks one at enrollment in the first release), preserves backup codes as the primary self-service recovery path for all MFA types, adds an admin CLI command to reset a user's MFA, improves sitewide visibility of contact/admin-contact affordances, completes the user-secret master rotation script so it re-encrypts all dependent database rows, and achieves functional equivalence between the TypeScript browser client and the `arkfile-client` Go CLI for MFA enrollment and login. Admin bootstrap is equally in scope: after `arkfile-admin bootstrap` on a new instance, the operator must be able to complete initial MFA setup with either TOTP or a hardware security key via `arkfile-admin` on the server host -- not through the website. Administrators do not perform admin functions in the web app; all privileged operations, including bootstrap, MFA enrollment, and ongoing administration, run through `arkfile-admin` on the instance itself.
 
 ## Non-goals (first release)
 
@@ -46,9 +46,9 @@ Gaps and issues identified before implementation begins:
 
 Arkfile supports two self-service backup-code flows. Both remain in the product after the MFA rename. Each consumes one single-use backup code. Both work regardless of whether the enrolled second factor is TOTP or a hardware security key. Document both in `docs/user-faq.md` and expose both clearly in the MFA login UI and in `arkfile-client`.
 
-**Path A — Emergency one-shot login.** After OPAQUE password login, the user enters a backup code on the second-factor screen and chooses sign-in only (no re-enrollment). API: `POST /api/mfa/auth` with `is_backup: true` (today `TOTPAuth`). The server validates and consumes the backup code, then issues a full access token. The enrolled second factor is unchanged. The user can access their account once but will need their normal second factor (or another backup code, or path B) on the next login. Use when the user still has their authenticator or security key elsewhere and merely needs temporary access, or when they are not ready to re-enroll yet.
+**Path A -- Emergency one-shot login.** After OPAQUE password login, the user enters a backup code on the second-factor screen and chooses sign-in only (no re-enrollment). API: `POST /api/mfa/auth` with `is_backup: true` (today `TOTPAuth`). The server validates and consumes the backup code, then issues a full access token. The enrolled second factor is unchanged. The user can access their account once but will need their normal second factor (or another backup code, or path B) on the next login. Use when the user still has their authenticator or security key elsewhere and merely needs temporary access, or when they are not ready to re-enroll yet.
 
-**Path B — Re-enroll with a backup code.** After OPAQUE password login, the user chooses to set up a new second factor using a backup code (lost authenticator or security key). API: `POST /api/mfa/recover-with-backup-code` (consumes the code, issues a short-lived reset-tier JWT), then `POST /api/mfa/reset` (issues new enrollment material and a fresh set of ten backup codes). The user completes enrollment before gaining full access. Use when the normal second factor is lost or must be replaced.
+**Path B -- Re-enroll with a backup code.** After OPAQUE password login, the user chooses to set up a new second factor using a backup code (lost authenticator or security key). API: `POST /api/mfa/recover-with-backup-code` (consumes the code, issues a short-lived reset-tier JWT), then `POST /api/mfa/reset` (issues new enrollment material and a fresh set of ten backup codes). The user completes enrollment before gaining full access. Use when the normal second factor is lost or must be replaced.
 
 **UI requirements.** The MFA login modal (and equivalent CLI prompts) must present both options with distinct labels so users do not confuse them. Suggested framing: sign in once with a backup code versus set up a new second factor with a backup code. Do not merge into a single undifferentiated backup-code field.
 
@@ -64,7 +64,7 @@ Second, if the user has lost their second factor or wants to replace it, use pat
 
 Third, if backup codes are also lost, contact the instance admin using the admin contact details shown on the site. The admin verifies the requester's identity out-of-band. The recommended verification method is matching the request against contact methods the user previously saved under Contact Info (encrypted, admin-readable). Contact Info remains optional for normal usage but is strongly recommended before anyone relies on admin-assisted MFA reset.
 
-Fourth, the admin runs a **full** MFA reset: `arkfile-admin reset-user-mfa --username USER --confirm`. This clears all MFA credentials and backup codes, force-logouts all sessions, and leaves the account in `requires_mfa_setup` state. The user logs in with their password and completes MFA enrollment again. Admin reset is for **total lockout** (all factors and backup codes gone). It is not the normal path when the user still has another enrolled factor or usable backup codes — those cases are steps one and two above.
+Fourth, the admin runs a **full** MFA reset: `arkfile-admin reset-user-mfa --username USER --confirm`. This clears all MFA credentials and backup codes, force-logouts all sessions, and leaves the account in `requires_mfa_setup` state. The user logs in with their password and completes MFA enrollment again. Admin reset is for **total lockout** (all factors and backup codes gone). It is not the normal path when the user still has another enrolled factor or usable backup codes -- those cases are steps one and two above.
 
 Lost password means lost files. Lost second factor and lost backup codes means the account cannot be recovered without admin intervention, and admin intervention is only appropriate when identity (that the person requesting reset actually owns the account) can be established out-of-band.
 
@@ -94,7 +94,7 @@ Also update the `user_auth_status` view to join `user_mfa_credentials` instead o
 
 Drop old tables entirely. No compatibility views. Update all Go packages (`auth`, `handlers`, crypto key purposes), TypeScript frontend, `arkfile-client`, `arkfile-admin`, `unified_schema.sql`, dev-reset path, `e2e-test.sh`, `e2e-playwright`, `docs/api.md`, `docs/security.md`, `scripts/maintenance/rotate-user-secret-master.sh`, `monitoring/key_health.go` if it references TOTP key types. Phase 1 rename is a repo-wide sweep, not only tables and core handlers: route group names and comments (`totpProtectedGroup`, `pendingAllowedGroup`), middleware and security-event strings, JSON response fields (`requires_totp` → `requires_mfa`), CLI commands and help text (`setup-totp`, `generate-totp`), deploy-script echoes, e2e helpers (`wait_for_totp_window`, Playwright TOTP selectors), `monitoring/key_health.go` audience labels, and `handlers/export.go` claim checks. Live source should retain no TOTP-specific identifiers except the dev-only fixed secret in `auth/dev_admin.go` and prose in end-user docs where "TOTP" names the method type.
 
-Rename JWT/API concepts: `requires_totp` becomes `requires_mfa`, `requires_totp_setup` becomes `requires_mfa_setup`, `RequireTOTP` middleware becomes `RequireMFA`, route group `/api/totp` becomes `/api/mfa`. JWT audiences may become `arkfile-mfa`, `arkfile-mfa-reset` (rename from `arkfile-totp` / `arkfile-totp-reset`) for consistency — update all validators, cookies flow, and clients together.
+Rename JWT/API concepts: `requires_totp` becomes `requires_mfa`, `requires_totp_setup` becomes `requires_mfa_setup`, `RequireTOTP` middleware becomes `RequireMFA`, route group `/api/totp` becomes `/api/mfa`. JWT audiences may become `arkfile-mfa`, `arkfile-mfa-reset` (rename from `arkfile-totp` / `arkfile-totp-reset`) for consistency -- update all validators, cookies flow, and clients together.
 
 Rename the user-secret master HKDF purpose from `totp_user` to `mfa_user` in `crypto/totp_keys.go` (rename file to e.g. `crypto/mfa_keys.go`, function `DeriveMFAUserKey`). Greenfield redeploy of test.arkfile.net; no in-place ciphertext migration needed for purpose rename if DB is wiped on redeploy.
 
@@ -121,20 +121,20 @@ Explicit library choices per surface. All three clients call the same server beg
 
 | Surface | Binary / area | Package or component | Role |
 |---------|---------------|----------------------|------|
-| Server | `arkfile` | [`github.com/go-webauthn/webauthn`](https://github.com/go-webauthn/webauthn) | Relying party: registration/auth begin/finish, assertion and attestation verification, signCount checks. Pure Go — no libfido2, no OpenSSL on the server. |
-| Browser | TypeScript frontend (`client/static/js`) | [`@simplewebauthn/browser`](https://www.npmjs.com/package/@simplewebauthn/browser) | Wraps `navigator.credentials.create()` / `get()` for enroll and login. Ceremony helper only — no RP verification in the browser. |
-| Go CLI | `arkfile-client`, `arkfile-admin` | [Yubico `libfido2`](https://github.com/Yubico/libfido2) (C, vendored, statically linked) | CTAP2 client over USB HID: device discovery, `MakeCredential`, `GetAssertion`. Works with YubiKey, Nitrokey 3/3C, and other FIDO2 keys — not YubiKey-specific. |
+| Server | `arkfile` | [`github.com/go-webauthn/webauthn`](https://github.com/go-webauthn/webauthn) | Relying party: registration/auth begin/finish, assertion and attestation verification, signCount checks. Pure Go -- no libfido2, no OpenSSL on the server. |
+| Browser | TypeScript frontend (`client/static/js`) | [`@simplewebauthn/browser`](https://www.npmjs.com/package/@simplewebauthn/browser) | Wraps `navigator.credentials.create()` / `get()` for enroll and login. Ceremony helper only -- no RP verification in the browser. |
+| Go CLI | `arkfile-client`, `arkfile-admin` | [Yubico `libfido2`](https://github.com/Yubico/libfido2) (C, vendored, statically linked) | CTAP2 client over USB HID: device discovery, `MakeCredential`, `GetAssertion`. Works with YubiKey, Nitrokey 3/3C, and other FIDO2 keys -- not YubiKey-specific. |
 | Go CLI (Go binding) | same | [`github.com/keys-pub/go-libfido2`](https://github.com/keys-pub/go-libfido2) *or* a thin custom CGO wrapper (same pattern as `auth/opaque_wrapper.h`) | Go ↔ libfido2 glue in a shared internal module used by both CLIs. |
-| Go CLI (vendored C deps) | same | `libcbor`, `zlib`, minimal static **`libcrypto`** (OpenSSL 3) | Required to build `libfido2`. Vendored and linked like libsodium/libopaque today — not taken from the host OS package manager at deploy time. |
+| Go CLI (vendored C deps) | same | `libcbor`, `zlib`, minimal static **`libcrypto`** (OpenSSL 3) | Required to build `libfido2`. Vendored and linked like libsodium/libopaque today -- not taken from the host OS package manager at deploy time. |
 
-**Not used:** `@simplewebauthn/server` (RP verification stays in Go); immature pure-Go CTAP stacks (`go-fido2`, `go-ctap/ctaphid`) — insufficient production track record for Arkfile.
+**Not used:** `@simplewebauthn/server` (RP verification stays in Go); immature pure-Go CTAP stacks (`go-fido2`, `go-ctap/ctaphid`) -- insufficient production track record for Arkfile.
 
 ### Go CLI: static C stack notes
 
 The CLIs already static-link vendored C for OPAQUE (`libopaque`, `liboprf`, libsodium via `scripts/setup/build-libopaque.sh` and `CGO_LDFLAGS` in `scripts/setup/build.sh`). The FIDO stack follows the same model:
 
 - Add `scripts/setup/build-libfido2.sh` to vendor and build static archives for `libcbor`, `zlib`, minimal OpenSSL **`libcrypto`**, and `libfido2` (`BUILD_STATIC_LIBS=ON`).
-- Extend `build.sh` `CGO_CFLAGS` / `CGO_LDFLAGS` for `arkfile-client` and `arkfile-admin` only. The **`arkfile` server binary does not link libfido2** — it has no USB/CTAP role.
+- Extend `build.sh` `CGO_CFLAGS` / `CGO_LDFLAGS` for `arkfile-client` and `arkfile-admin` only. The **`arkfile` server binary does not link libfido2** -- it has no USB/CTAP role.
 - **OpenSSL scope:** link **`libcrypto` only** (not `libssl`). Build OpenSSL with a minimal configuration (`no-apps`, `no-ssl`, `no-engine`, and other features Arkfile does not need). The CLI uses libfido2 for CTAP transport and device I/O; assertion/attestation **verification** is done on the server by `go-webauthn`, so the OpenSSL footprint is a subset of a full OpenSSL install.
 - **Size tuning:** use `-ffunction-sections`, `-fdata-sections`, `-Wl,--gc-sections`, and LTO when building the C libraries where practical. Expect roughly **+2–4 MB per CLI binary** (plan for up to ~+8 MB worst case).
 - **Linux deploy:** USB keys still need `hidraw` access (udev/`plugdev` rules). NFC (e.g. Nitrokey 3C) may use libfido2 PC/SC paths later; USB is the primary v1 path.
@@ -151,7 +151,7 @@ Shared lockout and rate-limiting must sit above method-specific code from Phase 
 
 Backup code generation, hashing (Argon2id per code), validation, and both backup-code login paths are method-agnostic. Rename endpoints: `POST /api/mfa/auth` (includes `is_backup: true` for path A), `POST /api/mfa/recover-with-backup-code`, and `POST /api/mfa/reset` (path B).
 
-Admin reset (`POST /api/admin/users/:username/reset-mfa`) must call existing force-logout / token revocation and log a security event. Do not use `ResetTOTP` (which UPDATEs an existing row and re-issues TOTP secrets). See **Full vs credential-scoped reset** below — v1 implements full reset only; shape the handler and request body so an optional `credential_id` (or label) can be added in Phase 9 without a breaking API change.
+Admin reset (`POST /api/admin/users/:username/reset-mfa`) must call existing force-logout / token revocation and log a security event. Do not use `ResetTOTP` (which UPDATEs an existing row and re-issues TOTP secrets). See **Full vs credential-scoped reset** below -- v1 implements full reset only; shape the handler and request body so an optional `credential_id` (or label) can be added in Phase 9 without a breaking API change.
 
 ## Browser client (TypeScript)
 
@@ -165,7 +165,7 @@ Use only strictly typed TypeScript in new/modified code and dependencies as much
 
 ## arkfile-client (Go CLI) parity
 
-Hardware key support in `arkfile-client` is equal priority to the browser. The CLI must support the same enrollment and login ceremonies via the same API endpoints. Implement CTAP2 over USB HID using vendored Yubico **`libfido2`** plus `go-libfido2` or a thin CGO wrapper — see **WebAuthn dependency choices** and **Go CLI: static C stack notes**. The CLI is a CTAP transport client only; it formats WebAuthn responses for the server finish endpoints and does not perform RP-side assertion verification (that is `go-webauthn` on the server).
+Hardware key support in `arkfile-client` is equal priority to the browser. The CLI must support the same enrollment and login ceremonies via the same API endpoints. Implement CTAP2 over USB HID using vendored Yubico **`libfido2`** plus `go-libfido2` or a thin CGO wrapper -- see **WebAuthn dependency choices** and **Go CLI: static C stack notes**. The CLI is a CTAP transport client only; it formats WebAuthn responses for the server finish endpoints and does not perform RP-side assertion verification (that is `go-webauthn` on the server).
 
 Commands: `setup-mfa` (interactive, choose `totp` or `security key`), `login` (existing flow extended with security key auth step and path A backup login via `is_backup: true`). Path B remains `recover-mfa` (rename from `recover-totp`). Add path A to `login` if not present today (interactive or `--backup-code` flag at MFA step). Share the libfido2-backed CTAP module with `arkfile-admin` so both CLIs use one static-linked stack and one ceremony helper implementation.
 
@@ -173,11 +173,11 @@ Commands: `setup-mfa` (interactive, choose `totp` or `security key`), `login` (e
 
 The entire admin lifecycle is server-side CLI only. Account creation (`arkfile-admin bootstrap` with the bootstrap token), MFA enrollment (`setup-mfa` after bootstrap), authentication (`login`), and every privileged command thereafter run through `arkfile-admin` on the instance host. The website is not an admin console and must not be documented or implemented as a fallback for bootstrap MFA. This is a hard acceptance criterion for shipping WebAuthn, not an optional parity stretch goal.
 
-`arkfile-admin setup-mfa` must grow an interactive method picker and a security-key branch that drives the same begin/finish registration API as the browser uses for end users. `arkfile-admin login` must complete the matching authentication ceremony when the enrolled method is `webauthn`, including path A backup login where applicable. Reuse the same vendored **`libfido2`** / shared CTAP module as `arkfile-client` (direct USB HID CTAP2; no browser WebAuthn dependency) so static C builds and security review happen once. Emit backup codes from the setup response the same way as `arkfile-client` automation (`BACKUP_CODE_*` when `--show-secret` or equivalent is inappropriate for WebAuthn-only flows). Because CTAP2 runs on the machine where `arkfile-admin` executes, the security key must be reachable from that host — typically plugged into the server or forwarded to it, not into the operator's desktop browser.
+`arkfile-admin setup-mfa` must grow an interactive method picker and a security-key branch that drives the same begin/finish registration API as the browser uses for end users. `arkfile-admin login` must complete the matching authentication ceremony when the enrolled method is `webauthn`, including path A backup login where applicable. Reuse the same vendored **`libfido2`** / shared CTAP module as `arkfile-client` (direct USB HID CTAP2; no browser WebAuthn dependency) so static C builds and security review happen once. Emit backup codes from the setup response the same way as `arkfile-client` automation (`BACKUP_CODE_*` when `--show-secret` or equivalent is inappropriate for WebAuthn-only flows). Because CTAP2 runs on the machine where `arkfile-admin` executes, the security key must be reachable from that host -- typically plugged into the server or forwarded to it, not into the operator's desktop browser.
 
 Deploy runbooks must stop implying TOTP-only admin setup. Replace "Setup TOTP" echoes with generic MFA wording and document both methods. Fix stale identifiers while touching these files (`verify-login` in `local-deploy.sh` should be `login`; `etc/keys/totp` chmod lines are legacy path names). Hardware-key bootstrap is most practical on **`local-deploy.sh`**: the operator typically runs deploy and `arkfile-admin` on the same machine that has the USB port, so `setup-mfa` with a plugged-in key is the primary documented path for local instances.
 
-**Remote VPS deploys (`test-deploy.sh`, `prod-deploy.sh`).** Operators usually SSH into a headless VPS. USB security keys are attached to the operator's workstation, not the remote host, so `arkfile-admin setup-mfa` on the VPS cannot see the key unless the operator deliberately forwards USB to the server (USB/IP, `usbip`, serial console with local KVM, etc.). Whether that works is environment-specific and should not be assumed in the default runbook. For test/prod, treat **TOTP via `arkfile-admin setup-mfa` on the VPS** as the default practical path. When a security-key-first admin is required on a remote instance, document only CLI-viable options: deploy on hardware the operator physically controls (`local-deploy.sh` or equivalent, key on that host), attach the key directly to the VPS if it has a USB port and the operator has physical or out-of-band console access, or use advanced USB forwarding to the VPS with an explicit warning that this is operator-managed and untested as a universal procedure. Do not document browser-based admin MFA setup as an alternative — it violates the admin model. Shipping WebAuthn does not require solving universal SSH USB passthrough; it does require that `arkfile-admin` supports both methods wherever the key is reachable from the server host.
+**Remote VPS deploys (`test-deploy.sh`, `prod-deploy.sh`).** Operators usually SSH into a headless VPS. USB security keys are attached to the operator's workstation, not the remote host, so `arkfile-admin setup-mfa` on the VPS cannot see the key unless the operator deliberately forwards USB to the server (USB/IP, `usbip`, serial console with local KVM, etc.). Whether that works is environment-specific and should not be assumed in the default runbook. For test/prod, treat **TOTP via `arkfile-admin setup-mfa` on the VPS** as the default practical path. When a security-key-first admin is required on a remote instance, document only CLI-viable options: deploy on hardware the operator physically controls (`local-deploy.sh` or equivalent, key on that host), attach the key directly to the VPS if it has a USB port and the operator has physical or out-of-band console access, or use advanced USB forwarding to the VPS with an explicit warning that this is operator-managed and untested as a universal procedure. Do not document browser-based admin MFA setup as an alternative -- it violates the admin model. Shipping WebAuthn does not require solving universal SSH USB passthrough; it does require that `arkfile-admin` supports both methods wherever the key is reachable from the server host.
 
 ## arkfile-admin: reset-user-mfa
 
@@ -195,9 +195,9 @@ Two distinct operations; v1 (one method per user) implements **full reset** only
 
 **Full reset (default, Phase 5).** For total lockout: user has lost all enrolled factors and all backup codes. DELETE all rows in `user_mfa_credentials`, `user_mfa_backup_codes`, and MFA usage logs for the user; force-logout all sessions; account enters `requires_mfa_setup`. In v1 this is the only credential row anyway.
 
-**Credential-scoped reset (Phase 9, multi-method).** For removing one stale enrollment while others remain — e.g. retire a lost YubiKey when the user still has TOTP or another key, but cannot log in to remove it themselves. DELETE one credential row (and any usage data tied to that credential). **Keep** account-level backup codes if at least one completed credential remains. Still force-logout (MFA configuration changed). If the delete leaves zero credentials, escalate to full-reset semantics (clear backup codes, `requires_mfa_setup`).
+**Credential-scoped reset (Phase 9, multi-method).** For removing one stale enrollment while others remain -- e.g. retire a lost YubiKey when the user still has TOTP or another key, but cannot log in to remove it themselves. DELETE one credential row (and any usage data tied to that credential). **Keep** account-level backup codes if at least one completed credential remains. Still force-logout (MFA configuration changed). If the delete leaves zero credentials, escalate to full-reset semantics (clear backup codes, `requires_mfa_setup`).
 
-**Identifying the credential.** Full reset needs no method detail. Credential-scoped reset requires agreement on **which enrollment** — not `method_type` alone (a user may have two security keys). Use `credential_id` (UUID once schema allows multiple rows per user) or the user's private **label** ("Travel Nitrokey"). Admin CLI should list non-secret metadata first (`method_type`, label, enrolled date); user and admin confirm the same label out-of-band.
+**Identifying the credential.** Full reset needs no method detail. Credential-scoped reset requires agreement on **which enrollment** -- not `method_type` alone (a user may have two security keys). Use `credential_id` (UUID once schema allows multiple rows per user) or the user's private **label** ("Travel Nitrokey"). Admin CLI should list non-secret metadata first (`method_type`, label, enrolled date); user and admin confirm the same label out-of-band.
 
 **Self-service first.** Users with multiple factors who lose one should use another factor or backup codes (paths A/B); admin reset remains the last resort for total lockout or exceptional credential removal.
 
@@ -220,25 +220,25 @@ The tension: re-encryption must run with the main Arkfile service **stopped** (n
 
 ### Two-phase operator flow
 
-**Step 1 — `prepare` (server running, normal admin auth)**
+**Step 1 -- `prepare` (server running, normal admin auth)**
 
-1. Admin runs `arkfile-admin login` (OPAQUE + 2FA) if session is missing or expired — same as any other admin command.
+1. Admin runs `arkfile-admin login` (OPAQUE + 2FA) if session is missing or expired -- same as any other admin command.
 2. Admin runs `arkfile-admin rotate-user-secret-master prepare --confirm`.
 3. This is a **network command** to a new admin API route (e.g. `POST /api/admin/system/prepare-user-secret-master-rotation`). Server validates full-tier admin JWT and completed MFA, same middleware stack as other admin routes.
-4. Server returns a **single-use rotation mandate**: a signed blob bound to admin username, short TTL (e.g. 5–15 minutes), explicit purpose `user-secret-master-rotation`, and a nonce or server-side single-use flag so it cannot be replayed after `apply`. No DB or key-file changes in `prepare` — authorization only.
+4. Server returns a **single-use rotation mandate**: a signed blob bound to admin username, short TTL (e.g. 5–15 minutes), explicit purpose `user-secret-master-rotation`, and a nonce or server-side single-use flag so it cannot be replayed after `apply`. No DB or key-file changes in `prepare` -- authorization only.
 5. CLI writes the mandate to a path the operator chooses (stdout or `--mandate-file`).
 
-**Step 2 — stop service**
+**Step 2 -- stop service**
 
 6. Operator stops Arkfile (`systemctl stop arkfile` or equivalent). Confirm no concurrent writes.
 
-**Step 3 — `apply` (server stopped, mandate-gated local work)**
+**Step 3 -- `apply` (server stopped, mandate-gated local work)**
 
 7. Admin runs `arkfile-admin rotate-user-secret-master apply --mandate-file PATH --confirm`.
-8. This command **does not use HTTP**. It verifies the mandate cryptographically offline (verify key from install layout — same trust boundary as `/opt/arkfile` today). Without a valid, unexpired, unused mandate, `apply` refuses to run.
+8. This command **does not use HTTP**. It verifies the mandate cryptographically offline (verify key from install layout -- same trust boundary as `/opt/arkfile` today). Without a valid, unexpired, unused mandate, `apply` refuses to run.
 9. `apply` performs pre-flight checks (DB path, master key file exist), backs up master key and DB, then:
    - Loads old master into memory for derivation only.
-   - Generates new master (32 random bytes, `0400` permissions) to a temp path — do not install until re-encrypt succeeds.
+   - Generates new master (32 random bytes, `0400` permissions) to a temp path -- do not install until re-encrypt succeeds.
    - Re-encrypts all user-secret-wrapped rows (see below).
    - Atomically swaps `user-secret-master.bin`.
    - Runs verification pass.
@@ -246,7 +246,7 @@ The tension: re-encryption must run with the main Arkfile service **stopped** (n
 
 `apply` is not an auth bypass: it is gated by a credential issued only after admin + 2FA on `prepare`. Re-prompting OPAQUE/TOTP at `apply` time is impractical while the server is down; the mandate is the correct proof-of-authorization for the offline phase.
 
-Do **not** expose full rotation as a generic admin REST endpoint that mutates the DB while the server is running — that conflicts with both the stop-service requirement and clean locking.
+Do **not** expose full rotation as a generic admin REST endpoint that mutates the DB while the server is running -- that conflicts with both the stop-service requirement and clean locking.
 
 `scripts/maintenance/rotate-user-secret-master.sh` may remain as an optional thin wrapper that prints the runbook steps (login → prepare → stop → apply → start) but the Go logic lives in `arkfile-admin` subcommands linked to the same `crypto` and DB packages as the server.
 
@@ -273,7 +273,7 @@ Homepage: add persistent footer link Contact Admin showing `ARKFILE_ADMIN_CONTAC
 
 Logged-in pages: keep Contact Info nav entry for user's encrypted contact details; ensure admin contact is also reachable without hunting (footer or nav).
 
-Fix `/api/admin-contacts` response shape inconsistency between `handlers/files.go` and `client/static/js/src/files/list.ts` — pick one canonical JSON shape (recommend keeping flat `adminUsernames` + `adminContact` and fixing `list.ts`, or document a nested format if multiple admins with multiple contacts is needed later).
+Fix `/api/admin-contacts` response shape inconsistency between `handlers/files.go` and `client/static/js/src/files/list.ts` -- pick one canonical JSON shape (recommend keeping flat `adminUsernames` + `adminContact` and fixing `list.ts`, or document a nested format if multiple admins with multiple contacts is needed later).
 
 Pending-approval page already shows admin contact; keep that behavior.
 
@@ -325,26 +325,26 @@ Use whole phase numbers only. Each phase should leave tests green before startin
 
 **Phase 2: COMPLETE** Fix reset-tier JWT routing. Add `ResetJWTMiddleware` (or equivalent) so `/api/mfa/reset` accepts `arkfile-mfa-reset` tokens. Add browser UI for path A (emergency one-shot backup login) alongside existing path B re-enroll UI. HTTP integration tests and e2e for both path A and path B. Verify `arkfile-client` supports both paths end-to-end.
 
-**Phase 3: COMPLETE** Codebase cleanup and crypto rename. Removed `InitializeTOTPMasterKey`, `GetTOTPMasterKeyStatus`, and unused `totpMasterKey` state. Renamed `totp_user` → `mfa_user`, `DeriveTOTPUserKey` → `DeriveMFAUserKey`, `crypto/totp_keys.go` → `crypto/mfa_keys.go`. Split `auth/totp.go` into `auth/mfa_*.go` with shared lockout helpers. `MFAAuth` `is_backup` retained for path A. Updated `docs/security.md` for `mfa_user` purpose and both backup-code paths. **Requires `dev-reset.sh` after deploy** — existing MFA ciphertext encrypted under `totp_user` will not decrypt under `mfa_user`.
+**Phase 3: COMPLETE** Codebase cleanup and crypto rename. Removed `InitializeTOTPMasterKey`, `GetTOTPMasterKeyStatus`, and unused `totpMasterKey` state. Renamed `totp_user` → `mfa_user`, `DeriveTOTPUserKey` → `DeriveMFAUserKey`, `crypto/totp_keys.go` → `crypto/mfa_keys.go`. Split `auth/totp.go` into `auth/mfa_*.go` with shared lockout helpers. `MFAAuth` `is_backup` retained for path A. Updated `docs/security.md` for `mfa_user` purpose and both backup-code paths. **Requires `dev-reset.sh` after deploy** -- existing MFA ciphertext encrypted under `totp_user` will not decrypt under `mfa_user`.
 
 **Phase 4: COMPLETE** User-secret master rotation with full DB re-encrypt. Added `arkfile-admin rotate-user-secret-master prepare|apply` and `POST /api/admin/system/prepare-user-secret-master-rotation`. Mandate-gated offline apply re-encrypts `user_mfa_credentials` and `user_contact_info`, atomically swaps `user-secret-master.bin`, and verifies sample decrypts. **Deleted** unsafe key-only `rotate-user-secret-master.sh` body, dead `arkfile-admin key-rotation` stub, and stale `rotate-jwt-keys.sh`. Removed legacy `etc/keys/jwt/` scaffolding from deploy scripts. JWT keys remain in KeyManager (`system_keys`); automated JWT rotation is future work.
 
-**Phase 5: COMPLETE** Admin MFA reset — **full reset only** (v1 has one credential per user). `POST /api/admin/users/:username/reset-mfa` and `arkfile-admin reset-user-mfa --username USER --confirm`: delete all credentials, backup codes, usage logs; force-logout; audit log; contact-info display and `--acknowledge-no-contact-info` when empty. API/CLI accept optional future `credential_id` / `--credential-id` / `--label` (v1 returns 400 if set). Handler, auth, and integration tests; e2e fused into admin `reset-user-mfa` + payments re-enrollment (no extra user login/logout cycles).
+**Phase 5: COMPLETE** Admin MFA reset -- **full reset only** (v1 has one credential per user). `POST /api/admin/users/:username/reset-mfa` and `arkfile-admin reset-user-mfa --username USER --confirm`: delete all credentials, backup codes, usage logs; force-logout; audit log; contact-info display and `--acknowledge-no-contact-info` when empty. API/CLI accept optional future `credential_id` / `--credential-id` / `--label` (v1 returns 400 if set). Handler, auth, and integration tests; e2e fused into admin `reset-user-mfa` + payments re-enrollment (no extra user login/logout cycles).
 
-**Phase 6: COMPLETE** WebAuthn server and browser client (end users only). Server: `github.com/go-webauthn/webauthn` — registration/auth begin/finish endpoints; WebAuthn `credential_data` read-modify-write and signCount verification. Browser: `@simplewebauthn/browser` — enrollment method picker (TOTP or security key, one method only); backup codes on both paths; Tor warning in UI. OPAQUE finalize responses include `mfa_method` when MFA is required.
+**Phase 6: COMPLETE** WebAuthn server and browser client (end users only). Server: `github.com/go-webauthn/webauthn` -- registration/auth begin/finish endpoints; WebAuthn `credential_data` read-modify-write and signCount verification. Browser: `@simplewebauthn/browser` -- enrollment method picker (TOTP or security key, one method only); backup codes on both paths; Tor warning in UI. OPAQUE finalize responses include `mfa_method` when MFA is required.
 
-**Phase 7: COMPLETE** CLI FIDO2 parity for `arkfile-client` and `arkfile-admin`. Vendored static **`libfido2`** (+ `libcbor`, `zlib`, minimal **`libcrypto`**) via `scripts/setup/build-libfido2.sh`; **thin in-repo CGO wrapper** (`clictap/fido_wrapper.c`, `clictap/device.go`) — not `go-libfido2`; WebAuthn ceremony bridge (`clictap/webauthn_ceremony.go`); shared `cli/mfa` for setup/login; `setup-mfa` method picker (`totp` | `webauthn`); `login` routes on `mfa_method` with security-key auth and `--backup-code` on both CLIs. Server binary does not link libfido2. Deploy runbooks updated (`local-deploy.sh`, `test-deploy.sh`, `prod-deploy.sh`).
+**Phase 7: COMPLETE** CLI FIDO2 parity for `arkfile-client` and `arkfile-admin`. Vendored static **`libfido2`** (+ `libcbor`, `zlib`, minimal **`libcrypto`**) via `scripts/setup/build-libfido2.sh`; **thin in-repo CGO wrapper** (`clictap/fido_wrapper.c`, `clictap/device.go`) -- not `go-libfido2`; WebAuthn ceremony bridge (`clictap/webauthn_ceremony.go`); shared `cli/mfa` for setup/login; `setup-mfa` method picker (`totp` | `webauthn`); `login` routes on `mfa_method` with security-key auth and `--backup-code` on both CLIs. Server binary does not link libfido2. Deploy runbooks updated (`local-deploy.sh`, `test-deploy.sh`, `prod-deploy.sh`).
 
 **Phase 8: COMPLETE** Sitewide Contact Admin + FAQ footer; fix admin-contacts API consumption in `list.ts`; MFA login recovery hint; publish FAQ page from `docs/user-faq.md` (`client/static/faq.html`, opens in new tab); update homepage feature card for TOTP and hardware security keys.
 
-**Phase 9: COMPLETE** Dual MFA enrollment (max two methods: one TOTP + one WebAuthn). Schema: `credential_id` primary key, `UNIQUE(username, method_type)`, account-level `user_mfa_lockout`. User-private encrypted WebAuthn labels (`user_label` in credential blob). Self-service credential list/remove/label/regenerate backup codes; add-second-factor endpoints; login method picker when both enrolled. Backup codes regenerate on first enrollment, path B / factor replacement, admin full reset, and explicit user regenerate — but not when adding the complementary second factor or removing one factor while another remains. Admin credential-scoped reset by `credential_id` only (no label exposure). **Requires `dev-reset.sh` after deploy** (greenfield schema; no in-place migration).
+**Phase 9: COMPLETE** Dual MFA enrollment (max two methods: one TOTP + one WebAuthn). Schema: `credential_id` primary key, `UNIQUE(username, method_type)`, account-level `user_mfa_lockout`. User-private encrypted WebAuthn labels (`user_label` in credential blob). Self-service credential list/remove/label/regenerate backup codes; add-second-factor endpoints; login method picker when both enrolled. Backup codes regenerate on first enrollment, path B / factor replacement, admin full reset, and explicit user regenerate -- but not when adding the complementary second factor or removing one factor while another remains. Admin credential-scoped reset by `credential_id` only (no label exposure). **Requires `dev-reset.sh` after deploy** (greenfield schema; no in-place migration).
 
 ## Other notes
 
 - Aim to support NFC as well as USB for HW keys where applicable.
 - `auth/dev_admin.go` fixed dev TOTP secret remains dev-only; keep working through renames.
 - Review `monitoring/key_health.go` for stale TOTP key type references during Phase 1.
-- CSP in `handlers/middleware.go` — verify no change needed for WebAuthn (`navigator.credentials`); recheck if adding inline scripts for FAQ page.
+- CSP in `handlers/middleware.go` -- verify no change needed for WebAuthn (`navigator.credentials`); recheck if adding inline scripts for FAQ page.
 - `pendingAllowedGroup` requires completed MFA before contact-info APIs; consistent with registration flow (MFA before approval).
 
 ## Greenfield and clean codebase concerns

@@ -1,4 +1,4 @@
-# Slice F — Frontend / WASM / Supply Chain / Ops
+# Slice F -- Frontend / WASM / Supply Chain / Ops
 
 Author: in-depth security review per `docs/wip/idsrp.md` §3 (frontend / WASM / TS), §12 (XSS), §13 (supply chain & build), §15 (deployment & operational), §14 residual (frontend telemetry), §22.1 (CLI binary build / supply chain).
 Plan reference: `docs/wip/review/00-plan.md` §4 Slice F.
@@ -6,43 +6,43 @@ Plan reference: `docs/wip/review/00-plan.md` §4 Slice F.
 ## 0. Scope
 
 ### `idsrp.md` sections covered here
-- §3 Frontend / WASM / TypeScript surface — every `client/static/**` asset not already covered by an earlier slice's "TS in scope" subset.
-- §12 XSS — every `innerHTML` sink in `client/static/js/src/**`, CSP, Trusted Types, source-map exposure, SVG/PDF preview risk.
-- §13 Supply chain and build — Go modules, npm/Bun packages, vendored C submodules, WASM artifact, lockfile state, integrity checks (hash algorithms in use), build-flag inventory for `arkfile` / `arkfile-client` / `arkfile-admin` per `idsrp.md` §22.1.
-- §15 Deployment and operational — Caddyfile family, systemd unit hardening, deployment-script content (file modes, secret placement on disk, sudo escalation as written), public health endpoints.
-- §14 residual — frontend telemetry / log surfaces not already covered by Slices A–E (sourcemap exposure, error pages, service-worker logs).
-- §22.1 — CLI binary supply chain (static vs dynamic linking, reproducibility flags, signing/provenance).
+- §3 Frontend / WASM / TypeScript surface -- every `client/static/**` asset not already covered by an earlier slice's "TS in scope" subset.
+- §12 XSS -- every `innerHTML` sink in `client/static/js/src/**`, CSP, Trusted Types, source-map exposure, SVG/PDF preview risk.
+- §13 Supply chain and build -- Go modules, npm/Bun packages, vendored C submodules, WASM artifact, lockfile state, integrity checks (hash algorithms in use), build-flag inventory for `arkfile` / `arkfile-client` / `arkfile-admin` per `idsrp.md` §22.1.
+- §15 Deployment and operational -- Caddyfile family, systemd unit hardening, deployment-script content (file modes, secret placement on disk, sudo escalation as written), public health endpoints.
+- §14 residual -- frontend telemetry / log surfaces not already covered by Slices A–E (sourcemap exposure, error pages, service-worker logs).
+- §22.1 -- CLI binary supply chain (static vs dynamic linking, reproducibility flags, signing/provenance).
 
 ### `idsrp.md` sections deferred to other slices
-- §4 OPAQUE / TOTP / JWT correctness, browser auth UX flows, agent daemon — **Slice A** owns; this slice only flags frontend storage of auth-derived secrets (F-07, F-08).
-- §5 / §6 / §16 Argon2id / file encryption / key hierarchy — **Slice B**.
-- §6 (cont.) chunked upload/download — **Slice C**.
-- §7 / §11 sharing and share-related metadata — **Slice D**.
-- §8 / §10 backend authz / admin / billing API surface — **Slice E**.
-- TOTP middleware *implementation* correctness, two-tier JWT model — **Slice A**.
+- §4 OPAQUE / TOTP / JWT correctness, browser auth UX flows, agent daemon -- **Slice A** owns; this slice only flags frontend storage of auth-derived secrets (F-07, F-08).
+- §5 / §6 / §16 Argon2id / file encryption / key hierarchy -- **Slice B**.
+- §6 (cont.) chunked upload/download -- **Slice C**.
+- §7 / §11 sharing and share-related metadata -- **Slice D**.
+- §8 / §10 backend authz / admin / billing API surface -- **Slice E**.
+- TOTP middleware *implementation* correctness, two-tier JWT model -- **Slice A**.
 
 ### Files actually read for this slice
-- `main.go` — Echo setup, `e.IPExtractor` posture, `/healthz` + `/readyz` wiring, `initializeAdminUser` dev-admin seeding, TLS posture.
-- `utils/environment.go` — production detection (`IsProductionEnvironment`); the entire env-var-fuzzy-match implementation.
-- `handlers/middleware.go` (selected: `CSPMiddleware`, `AdminMiddleware`, `RequireTOTP`, `isLocalhostIP`, `parseIPAddress`, `RateLimitMiddleware`) — the CSP policy ground truth, the localhost-only admin gate (`c.RealIP()` call sites).
-- `handlers/bootstrap.go` — admin bootstrap localhost gate (`c.RealIP()` call sites).
-- `Caddyfile`, `Caddyfile.local`, `Caddyfile.test`, `Caddyfile.prod` — TLS posture, reverse-proxy block, `trusted_proxies` posture (absent), HSTS, `tls_insecure_skip_verify` for the localhost upstream.
-- `systemd/arkfile.service`, `systemd/caddy.service`, `systemd/rqlite.service`, `systemd/seaweedfs.service` — full directive-by-directive review for §3.2.
-- `scripts/setup/build.sh` (entire 590 LOC) — `go build` invocations for all three Go binaries (`arkfile`, `arkfile-client`, `arkfile-admin`), `CGO_LDFLAGS`, TypeScript build invocation, asset copy paths.
-- `scripts/prod-deploy.sh` (selected: secrets.env writer, Caddy env-file writer, bootstrap-token instructions, deSEC token storage) — operator-visible secret surface as written.
-- `scripts/maintenance/rotate-jwt-keys.sh` (head) — stale-vs-current question.
-- `client/static/index.html`, `client/static/shared.html`, `client/static/theme-preview.html` (head), `client/static/errors/**` (presence check) — `<script>` references, inline `<style>` blocks, SRI posture.
-- `client/static/js/package.json`, `client/static/js/bun.lock` (head) — dependency pins, build script invocation.
-- `client/static/js/src/utils/auth.ts` — token storage (localStorage).
-- `client/static/js/src/auth/totp.ts`, `client/static/js/src/auth/login.ts`, `client/static/js/src/auth/totp-setup.ts` — `window.totpLoginData` lifecycle, `innerHTML` modal sinks, inline `onclick=` handlers.
+- `main.go` -- Echo setup, `e.IPExtractor` posture, `/healthz` + `/readyz` wiring, `initializeAdminUser` dev-admin seeding, TLS posture.
+- `utils/environment.go` -- production detection (`IsProductionEnvironment`); the entire env-var-fuzzy-match implementation.
+- `handlers/middleware.go` (selected: `CSPMiddleware`, `AdminMiddleware`, `RequireTOTP`, `isLocalhostIP`, `parseIPAddress`, `RateLimitMiddleware`) -- the CSP policy ground truth, the localhost-only admin gate (`c.RealIP()` call sites).
+- `handlers/bootstrap.go` -- admin bootstrap localhost gate (`c.RealIP()` call sites).
+- `Caddyfile`, `Caddyfile.local`, `Caddyfile.test`, `Caddyfile.prod` -- TLS posture, reverse-proxy block, `trusted_proxies` posture (absent), HSTS, `tls_insecure_skip_verify` for the localhost upstream.
+- `systemd/arkfile.service`, `systemd/caddy.service`, `systemd/rqlite.service`, `systemd/seaweedfs.service` -- full directive-by-directive review for §3.2.
+- `scripts/setup/build.sh` (entire 590 LOC) -- `go build` invocations for all three Go binaries (`arkfile`, `arkfile-client`, `arkfile-admin`), `CGO_LDFLAGS`, TypeScript build invocation, asset copy paths.
+- `scripts/prod-deploy.sh` (selected: secrets.env writer, Caddy env-file writer, bootstrap-token instructions, deSEC token storage) -- operator-visible secret surface as written.
+- `scripts/maintenance/rotate-jwt-keys.sh` (head) -- stale-vs-current question.
+- `client/static/index.html`, `client/static/shared.html`, `client/static/theme-preview.html` (head), `client/static/errors/**` (presence check) -- `<script>` references, inline `<style>` blocks, SRI posture.
+- `client/static/js/package.json`, `client/static/js/bun.lock` (head) -- dependency pins, build script invocation.
+- `client/static/js/src/utils/auth.ts` -- token storage (localStorage).
+- `client/static/js/src/auth/totp.ts`, `client/static/js/src/auth/login.ts`, `client/static/js/src/auth/totp-setup.ts` -- `window.totpLoginData` lifecycle, `innerHTML` modal sinks, inline `onclick=` handlers.
 - Grep sweep across `client/static/js/src/**` for `innerHTML`, `localStorage.*`, `sessionStorage.*`, `window.*` globals.
-- `config/dependency-hashes.json` — pinning posture for SeaweedFS and rqlite.
-- `.gitmodules` — vendored C submodule pins.
+- `config/dependency-hashes.json` -- pinning posture for SeaweedFS and rqlite.
+- `.gitmodules` -- vendored C submodule pins.
 
 ### Files deliberately not read (or read only at the index level)
-- Every file under `/opt/arkfile/etc/**` and any `.env` / `secrets.env` — blocked by `.clinerules`. Where a finding's escalation hinges on runtime file modes / contents under `/opt/arkfile/etc/`, the question is logged in §5.
-- `vendor/stef/libopaque/**`, `vendor/stef/liboprf/**`, `client/static/js/libopaque.js` byte-for-byte — `00-plan.md` §2 treats the vendored C as trusted upstream; this slice only audits how the *artifact* is built, pinned, and served.
-- `scripts/testing/**` — out of scope per `00-plan.md` §4 (Slice F).
+- Every file under `/opt/arkfile/etc/**` and any `.env` / `secrets.env` -- blocked by `.clinerules`. Where a finding's escalation hinges on runtime file modes / contents under `/opt/arkfile/etc/`, the question is logged in §5.
+- `vendor/stef/libopaque/**`, `vendor/stef/liboprf/**`, `client/static/js/libopaque.js` byte-for-byte -- `00-plan.md` §2 treats the vendored C as trusted upstream; this slice only audits how the *artifact* is built, pinned, and served.
+- `scripts/testing/**` -- out of scope per `00-plan.md` §4 (Slice F).
 - `_test.go` files (presence/absence noted; content not inspected here).
 
 ### Out-of-scope notes
@@ -146,7 +146,7 @@ Missing across all three:
 | WASM artifact (`libopaque.js`) | Checked into repo, no checksum, no SRI tag | Built from source but no hash pin at serve time | **F-04** |
 | npm deps via Bun | `package.json` uses `^` ranges; `bun.lock` exists in the working tree | Lockfile present, but `bun install` runs without `--frozen-lockfile` | **F-13** |
 | SeaweedFS release | `config/dependency-hashes.json` records `md5_url` | **MD5** | **F-11** |
-| rqlite | "built from source" — no commit / tag pin | Unpinned | **F-12** |
+| rqlite | "built from source" -- no commit / tag pin | Unpinned | **F-12** |
 
 ### 1.5 Production runtime layout
 
@@ -230,18 +230,18 @@ The original finding analysis (preserved below for the audit trail):
   - `handlers/bootstrap.go:35-39` and `:106-110` (admin-bootstrap localhost gate, also via `c.RealIP()`),
   - `Caddyfile.prod:9-46` (no `trusted_proxies` directive, no XFF stripping),
   - `Caddyfile.test:52-90` (mirrors prod; same gap).
-- Description: Echo's default `c.RealIP()` walks the `X-Forwarded-For` header and returns the left-most value. The Arkfile process does **not** override `e.IPExtractor` in `main.go`, so any HTTP client (including a remote unauthenticated one) can send `X-Forwarded-For: 127.0.0.1` and have `c.RealIP()` return `127.0.0.1`. Caddy's reverse-proxy block in `Caddyfile.prod`/`.test` does not declare `trusted_proxies` and does not strip the incoming header before forwarding — Caddy *appends* its own observed IP to the chain rather than replacing it. The Go process sees the attacker-supplied left-most value first.
+- Description: Echo's default `c.RealIP()` walks the `X-Forwarded-For` header and returns the left-most value. The Arkfile process does **not** override `e.IPExtractor` in `main.go`, so any HTTP client (including a remote unauthenticated one) can send `X-Forwarded-For: 127.0.0.1` and have `c.RealIP()` return `127.0.0.1`. Caddy's reverse-proxy block in `Caddyfile.prod`/`.test` does not declare `trusted_proxies` and does not strip the incoming header before forwarding -- Caddy *appends* its own observed IP to the chain rather than replacing it. The Go process sees the attacker-supplied left-most value first.
 
   Two privileged paths trust `c.RealIP()` for *authorization*, not just for privacy/rate-limit keying:
 
-  1. `AdminMiddleware` (`handlers/middleware.go:559-629`) — refuses any non-loopback IP. With XFF spoofing this fails open and the entire `/api/admin/**` surface (51 endpoints, per Slice E §3.1) is reachable remotely.
-  2. `handlers/bootstrap.go:35-39, 106-110` — the admin-bootstrap-token redemption flow also requires a loopback caller. With XFF spoofing a remote attacker can redeem the bootstrap token directly if they can also obtain it (see F-03).
+  1. `AdminMiddleware` (`handlers/middleware.go:559-629`) -- refuses any non-loopback IP. With XFF spoofing this fails open and the entire `/api/admin/**` surface (51 endpoints, per Slice E §3.1) is reachable remotely.
+  2. `handlers/bootstrap.go:35-39, 106-110` -- the admin-bootstrap-token redemption flow also requires a loopback caller. With XFF spoofing a remote attacker can redeem the bootstrap token directly if they can also obtain it (see F-03).
 
   This is a defense-in-depth failure that elevates two existing Medium/High findings (Slice E E-14, Slice A A-02/A-13/A-14/A-26) into a single Critical headline.
 
 - Evidence:
   ```go
-  // main.go:244-303 — Echo creation; grep shows no IPExtractor anywhere
+  // main.go:244-303 -- Echo creation; grep shows no IPExtractor anywhere
   e := echo.New()
   ...
   // (no e.IPExtractor = ... line in main.go)
@@ -264,7 +264,7 @@ The original finding analysis (preserved below for the audit trail):
   ip := c.RealIP()
   ```
   ```
-  # Caddyfile.prod:27-36 — no trusted_proxies, no header stripping
+  # Caddyfile.prod:27-36 -- no trusted_proxies, no header stripping
   reverse_proxy localhost:8443 {
       transport http { tls; tls_insecure_skip_verify }
       health_uri /readyz
@@ -307,11 +307,11 @@ The original finding analysis (preserved below for the audit trail):
 - Affected files/functions:
   - `main.go:705-783` (`initializeAdminUser`); the hardcoded constants at `main.go:723-725`,
   - `main.go:96` (calls `config.ValidateProductionConfig`),
-  - `config/config.go:483-512` (`ValidateProductionConfig` — fail-closed startup abort),
+  - `config/config.go:483-512` (`ValidateProductionConfig` -- fail-closed startup abort),
   - `auth/dev_admin.go:23-45` (`CreateDevAdminWithOPAQUE` triple-layered security gate),
   - `utils/environment.go:11-57` (`IsProductionEnvironment`),
   - `utils/environment.go:60-75` (`IsDevAdminAccount`),
-  - `scripts/dev-reset.sh:510` (`ADMIN_USERNAMES=arkfile-dev-admin` — dev-iteration tool, intentional),
+  - `scripts/dev-reset.sh:510` (`ADMIN_USERNAMES=arkfile-dev-admin` -- dev-iteration tool, intentional),
   - `scripts/prod-deploy.sh:391`, `scripts/test-deploy.sh:391`, `scripts/local-deploy.sh:838` (all write `ADMIN_USERNAMES=${ADMIN_USERNAME}` from operator's `--admin-username` value).
 - Description: The dev-admin auto-create path is the fixed credentials seeded by `initializeAdminUser` at `main.go:723-725`:
 
@@ -362,7 +362,7 @@ The original finding analysis (preserved below for the audit trail):
   }
   ```
   ```go
-  // auth/dev_admin.go:27-45 (CreateDevAdminWithOPAQUE — layers 1-3)
+  // auth/dev_admin.go:27-45 (CreateDevAdminWithOPAQUE -- layers 1-3)
   if utils.IsProductionEnvironment() {
       return nil, fmt.Errorf("SECURITY: Dev admin creation blocked in production environment")
   }
@@ -375,7 +375,7 @@ The original finding analysis (preserved below for the audit trail):
   }
   ```
   ```go
-  // config/config.go:484-508 (ValidateProductionConfig — startup-time fail-closed)
+  // config/config.go:484-508 (ValidateProductionConfig -- startup-time fail-closed)
   func ValidateProductionConfig() error {
       if utils.IsProductionEnvironment() {
           ...
@@ -397,19 +397,19 @@ The original finding analysis (preserved below for the audit trail):
 - Recommendation:
   1. **Build-tag separation.** Move `initializeAdminUser` (`main.go:705-783`) and `auth/dev_admin.go` behind `//go:build dev`. Production builds (`go build` with no tags) would not contain the hardcoded constants and would not register the auto-seed path at all. The `dev-reset.sh` workflow would build with `-tags dev`. This eliminates the "binary leak == credential leak" failure mode entirely and aligns with the `AGENTS.md` greenfield posture.
   2. As a smaller fix in the meantime: change the constants to be loaded from an env var at startup (e.g. `DEV_ADMIN_PASSWORD`, `DEV_ADMIN_TOTP_SECRET`) which `dev-reset.sh` writes into the dev-only `secrets.env` and `prod-deploy.sh`/`test-deploy.sh`/`local-deploy.sh` never write. Production binaries would no longer contain the constants.
-  3. Tighten `IsProductionEnvironment()`: drop the hostname-substring heuristic (matches `prod`/`production`/`live` literally) and the `PORT ∈ {443,80,8443}` heuristic. Require an explicit positive marker (`ENVIRONMENT=production` or equivalent) set by the deploy script. The current heuristics provide false-positive coverage but they also invite drift if an operator picks a hostname that happens to match — the explicit marker is more honest about intent.
+  3. Tighten `IsProductionEnvironment()`: drop the hostname-substring heuristic (matches `prod`/`production`/`live` literally) and the `PORT ∈ {443,80,8443}` heuristic. Require an explicit positive marker (`ENVIRONMENT=production` or equivalent) set by the deploy script. The current heuristics provide false-positive coverage but they also invite drift if an operator picks a hostname that happens to match -- the explicit marker is more honest about intent.
   4. Have `scripts/prod-deploy.sh`, `scripts/test-deploy.sh`, and `scripts/local-deploy.sh` all unconditionally write `ENVIRONMENT=production` into `secrets.env`. This makes `ValidateProductionConfig`'s fail-closed abort an enforced part of every non-dev deploy, not a heuristic.
 - Suggested tests:
   - Post-build: `strings ./build/bin/arkfile | grep -c -E 'DevAdmin2025|ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D'` must return 0 after the build-tag separation lands.
   - Integration: boot the prod-tag binary with `ADMIN_USERNAMES=arkfile-dev-admin` and confirm seeding does not occur (the auto-create function should not be linked in).
   - Integration: boot the dev-tag binary with `ADMIN_USERNAMES=arkfile-dev-admin` and confirm seeding works as today.
   - Unit: `ValidateProductionConfig` with `ENVIRONMENT=production` + `ADMIN_USERNAMES=arkfile-dev-admin` returns the `FATAL:` error (regression test).
-- Cross-refs: Slice F F-05 (release reproducibility — same binary-content concerns), Slice A A-26 (admin bootstrap path), Slice E E-12 (dev-test API gating).
+- Cross-refs: Slice F F-05 (release reproducibility -- same binary-content concerns), Slice A A-26 (admin bootstrap path), Slice E E-12 (dev-test API gating).
 
 
 ---
 
-### Finding F-03: Bootstrap token harvested from systemd journal — re-bootstrap by anyone with root + `journalctl`
+### Finding F-03: Bootstrap token harvested from systemd journal -- re-bootstrap by anyone with root + `journalctl`
 
 - Severity: **High** (Critical when combined with F-01)
 - Confidence: **High**
@@ -418,7 +418,7 @@ The original finding analysis (preserved below for the audit trail):
 - Affected files/functions:
   - `scripts/prod-deploy.sh:1186` (operator instruction: `sudo journalctl -u arkfile --no-pager -n 250 | grep BOOTSTRAP`),
   - `systemd/arkfile.service:9-15` (no `StandardOutput=` / `StandardError=` redirection; logs default to journal),
-  - `auth/bootstrap.go` (Slice A) — emits the bootstrap token via `log.Printf` / `logging.InfoLogger`.
+  - `auth/bootstrap.go` (Slice A) -- emits the bootstrap token via `log.Printf` / `logging.InfoLogger`.
 - Description: The production-deploy flow emits the admin bootstrap token to standard output, which systemd captures in the journal. Operators are instructed to retrieve the token with `journalctl -u arkfile | grep BOOTSTRAP`. The token therefore lives in `/var/log/journal/**` indefinitely (until journal rotation, which on a default Debian/Ubuntu install is weeks).
 
   Two consequences:
@@ -434,7 +434,7 @@ The original finding analysis (preserved below for the audit trail):
   echo "       bootstrap --token <BOOTSTRAP_TOKEN> --username ${ADMIN_USERNAME}"
   ```
   ```
-  # systemd/arkfile.service (entire) — no StandardOutput=null or =append:/secure/path
+  # systemd/arkfile.service (entire) -- no StandardOutput=null or =append:/secure/path
   ```
 - Attack scenario:
   1. Operator runs `scripts/prod-deploy.sh`. Bootstrap token is logged to journal.
@@ -452,7 +452,7 @@ The original finding analysis (preserved below for the audit trail):
 - Suggested tests:
   - Integration: redeem a fresh bootstrap token after the configured TTL; expect 403.
   - Audit-log test: verify the redemption event lands in `admin_logs` (or whichever table Slice A defines) with the operator's username.
-- Cross-refs: Slice A A-26 (admin bootstrap path), Slice F F-01 (XFF bypass), Slice F F-09 (no `LimitCORE=0` — a core dump of arkfile-during-bootstrap would also contain the token).
+- Cross-refs: Slice A A-26 (admin bootstrap path), Slice F F-01 (XFF bypass), Slice F F-09 (no `LimitCORE=0` -- a core dump of arkfile-during-bootstrap would also contain the token).
 
 ---
 
@@ -463,17 +463,17 @@ The original finding analysis (preserved below for the audit trail):
 - Category: supply-chain / cryptographic
 - Component: `client/static/index.html`, build pipeline, asset-serving path
 - Affected files/functions:
-  - `client/static/index.html:355` — `<script src="/js/libopaque.js"></script>` (no `integrity=`, no `crossorigin=`),
-  - `client/static/index.html:356` — `<script src="/js/dist/app.js"></script>` (same),
-  - `client/static/js/libopaque.js` — 345 KB checked-in artifact built from `vendor/stef/libopaque` via `scripts/setup/build-libopaque-wasm.sh`,
-  - `handlers/middleware.go:359-370` — CSP `script-src 'self' 'wasm-unsafe-eval'` (same-origin only).
+  - `client/static/index.html:355` -- `<script src="/js/libopaque.js"></script>` (no `integrity=`, no `crossorigin=`),
+  - `client/static/index.html:356` -- `<script src="/js/dist/app.js"></script>` (same),
+  - `client/static/js/libopaque.js` -- 345 KB checked-in artifact built from `vendor/stef/libopaque` via `scripts/setup/build-libopaque-wasm.sh`,
+  - `handlers/middleware.go:359-370` -- CSP `script-src 'self' 'wasm-unsafe-eval'` (same-origin only).
 - Description: The OPAQUE WASM library is loaded same-origin via a plain `<script>` tag with no Subresource Integrity hash. CSP `script-src 'self'` blocks off-origin script loads, which mitigates external substitution. Same-origin substitution paths remain in scope:
   - A bug in the asset-copy step in `build.sh` that picks up a stale `libopaque.js` from a different branch.
   - A misconfigured CDN / proxy / load-balancer cache (none deployed today, but Caddy with explicit caching directives would qualify).
-  - A compromised build artifact (a malicious commit to `vendor/stef/libopaque` that is not detected by code review — `idsrp.md` §13 explicitly worries about this).
+  - A compromised build artifact (a malicious commit to `vendor/stef/libopaque` that is not detected by code review -- `idsrp.md` §13 explicitly worries about this).
   - A malicious admin with write access to `/opt/arkfile/client/static/js/` who swaps in a tampered library.
 
-  Because OPAQUE is the entire authentication primitive, a tampered `libopaque.js` is a Critical-impact substitution — it can be made to send the plaintext password to an attacker-controlled subresource (CSP would not block this for `connect-src 'self' data: blob:` if the data exfil is encoded in a same-origin fetch).
+  Because OPAQUE is the entire authentication primitive, a tampered `libopaque.js` is a Critical-impact substitution -- it can be made to send the plaintext password to an attacker-controlled subresource (CSP would not block this for `connect-src 'self' data: blob:` if the data exfil is encoded in a same-origin fetch).
 
 - Evidence:
   ```html
@@ -482,18 +482,18 @@ The original finding analysis (preserved below for the audit trail):
   <script src="/js/dist/app.js"></script>
   ```
   ```
-  // handlers/middleware.go:359-370 — CSP intentionally allows same-origin scripts
+  // handlers/middleware.go:359-370 -- CSP intentionally allows same-origin scripts
   csp := "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; ..."
   ```
 - Attack scenario:
   1. Attacker gains write access to `/opt/arkfile/client/static/js/libopaque.js` (a misconfigured CI deploy, a tampered backup-restore, a compromised operator account).
-  2. The tampered library passes its OPAQUE handshake normally but `fetch`es the plaintext password to a same-origin path that the attacker has also registered (e.g. by squatting an unauthenticated endpoint or by tunneling through `/api/contact-info` — Slice E E-15).
+  2. The tampered library passes its OPAQUE handshake normally but `fetch`es the plaintext password to a same-origin path that the attacker has also registered (e.g. by squatting an unauthenticated endpoint or by tunneling through `/api/contact-info` -- Slice E E-15).
   3. CSP `script-src 'self'` passes because the source remains same-origin. No SRI exists to detect the swap.
 - Impact: Any subresource-substitution path on the WASM file becomes a silent password-exfiltration channel. Defense-in-depth gap; the same-origin restriction is not sufficient given the OPAQUE library's role.
 - Recommendation:
   1. Generate a SHA-384 hash of `client/static/js/libopaque.js` at build time and bake the `integrity="sha384-..."` attribute into `index.html` and `shared.html`. Same for `/js/dist/app.js`.
   2. Automate it: in `scripts/setup/build.sh`, after the WASM and TS builds complete, compute hashes and substitute placeholders in the HTML templates.
-  3. Pin the WASM artifact in `config/dependency-hashes.json` alongside SeaweedFS — but use SHA-256 (not MD5; see F-11).
+  3. Pin the WASM artifact in `config/dependency-hashes.json` alongside SeaweedFS -- but use SHA-256 (not MD5; see F-11).
   4. Verify the WASM artifact on every server startup against the recorded hash and refuse to start on mismatch. (`monitoring/key_health.go` is the obvious place to add a `verifyClientArtifacts()` check.)
 - Suggested tests:
   - Integration: tamper with `libopaque.js` byte-for-byte after `build.sh` runs; the next browser load should hard-fail with a CSP/SRI error and the server-startup self-test should refuse to start.
@@ -510,8 +510,8 @@ The original finding analysis (preserved below for the audit trail):
 - Component: `scripts/setup/build.sh`
 - Affected files/functions:
   - `scripts/setup/build.sh:402-433` (`build_go_binaries_static`),
-  - `scripts/setup/build.sh:414` — `local STATIC_LDFLAGS='-extldflags "-static"'` (this is the **only** ldflag),
-  - `scripts/setup/build.sh:417,421,425` — the three `go build` invocations for `arkfile`, `arkfile-client`, `arkfile-admin`.
+  - `scripts/setup/build.sh:414` -- `local STATIC_LDFLAGS='-extldflags "-static"'` (this is the **only** ldflag),
+  - `scripts/setup/build.sh:417,421,425` -- the three `go build` invocations for `arkfile`, `arkfile-client`, `arkfile-admin`.
 - Description: All three binaries are built with `go build -a -ldflags '-extldflags "-static"' -o ...`. Missing flags:
 
   | Flag | Purpose | Consequence today |
@@ -563,12 +563,12 @@ The original finding analysis (preserved below for the audit trail):
 - Category: supply-chain / cryptographic
 - Component: `scripts/setup/build.sh`, `.gitmodules`
 - Affected files/functions:
-  - `scripts/setup/build.sh:409` — `export CGO_LDFLAGS="-L./vendor/stef/libopaque/src -L./vendor/stef/liboprf/src -lopaque -loprf $(pkg-config --libs --static libsodium)"`,
-  - `.gitmodules` — pins `libopaque` (`6e9ac92`) and `liboprf` (`a8c0410`) only; **no libsodium submodule**.
+  - `scripts/setup/build.sh:409` -- `export CGO_LDFLAGS="-L./vendor/stef/libopaque/src -L./vendor/stef/liboprf/src -lopaque -loprf $(pkg-config --libs --static libsodium)"`,
+  - `.gitmodules` -- pins `libopaque` (`6e9ac92`) and `liboprf` (`a8c0410`) only; **no libsodium submodule**.
 - Description: libopaque depends on libsodium for AEAD / KDF / scalar arithmetic. The Arkfile build links against whatever libsodium is installed on the build host via `pkg-config --libs --static libsodium`. Consequences:
 
   1. **No pinning by hash.** Two builds on two different machines (or the same machine across an `apt upgrade`) link against potentially different libsodium versions. Reproducibility is impossible.
-  2. **Supply-chain transitivity.** A compromise of the host's package manager — or of the apt/dnf mirror it points at — silently changes the cryptographic primitive underlying OPAQUE. Every OPAQUE-derived key the Arkfile build produces depends on this binary.
+  2. **Supply-chain transitivity.** A compromise of the host's package manager -- or of the apt/dnf mirror it points at -- silently changes the cryptographic primitive underlying OPAQUE. Every OPAQUE-derived key the Arkfile build produces depends on this binary.
   3. **Reviewer cannot audit "the libsodium that ships".** `00-plan.md` §2 sets the scope to "audit the CGO surface and the build flags". With libsodium unpinned, the CGO surface's correctness is contingent on a moving target.
 
   This is a strictly worse supply-chain posture than the way `libopaque` and `liboprf` are handled (git submodule + pinned commit). The fix is the same approach: add libsodium as a submodule at a known-good commit, build it from source as part of `build-libopaque.sh`, and link statically against the resulting `.a`.
@@ -581,7 +581,7 @@ The original finding analysis (preserved below for the audit trail):
   export CGO_LDFLAGS="-L./vendor/stef/libopaque/src -L./vendor/stef/liboprf/src -lopaque -loprf $(pkg-config --libs --static libsodium)"
   ```
   ```
-  # .gitmodules — no libsodium entry (manual inspection)
+  # .gitmodules -- no libsodium entry (manual inspection)
   ```
 - Attack scenario:
   - Host's libsodium package is rolled to a backdoored release (via mirror compromise or maintainer-account takeover, both of which have historical precedent). The Arkfile build silently picks up the new version on the next CI run.
@@ -610,7 +610,7 @@ The original finding analysis (preserved below for the audit trail):
   - cross-ref Slice A A-05 (browser auth-token storage policy).
 - Description: Both the full JWT and the refresh token are persisted to `localStorage` under the keys `token` and `refresh_token`. Any same-origin JavaScript can read both:
 
-  - XSS via a future filename / display-name / contact-info / share-message DOM sink — there are 12 files in `client/static/js/src/**` containing `innerHTML` (see F-17).
+  - XSS via a future filename / display-name / contact-info / share-message DOM sink -- there are 12 files in `client/static/js/src/**` containing `innerHTML` (see F-17).
   - A compromised dependency (`@noble/hashes`, `zxcvbn`, `bun-types`, `typescript`) bundled into `dist/app.js` could exfiltrate the tokens without modifying any Arkfile-authored code.
   - A browser extension with `<all_urls>` permissions trivially harvests both.
 
@@ -633,13 +633,13 @@ The original finding analysis (preserved below for the audit trail):
   }
   ```
 - Attack scenario:
-  1. Attacker discovers a stored-XSS path through a filename or display-name field (filenames are encrypted but display-names / contact-info are not encrypted at storage — see Slice E E-15, E-18).
+  1. Attacker discovers a stored-XSS path through a filename or display-name field (filenames are encrypted but display-names / contact-info are not encrypted at storage -- see Slice E E-15, E-18).
   2. The injected payload reads `localStorage.getItem('token')` and `getItem('refresh_token')`, posts both to an attacker-controlled endpoint via `fetch(...)`.
   3. Attacker has the user's full auth state until the refresh token expires.
 - Impact: Realistic account takeover in the presence of any same-origin script execution. Combined with the 12 `innerHTML` sinks in `src/**` and the absence of Trusted Types (F-17), this is the canonical XSS-to-account-takeover path that `idsrp.md` §12 warns about.
 - Recommendation:
   1. Move auth tokens to `HttpOnly` cookies with `Secure`, `SameSite=Strict`, and `Path=/api`. The Go side already accepts `Authorization: Bearer` so the cookie path needs a small middleware addition.
-  2. Refactor the frontend to drop the localStorage path entirely (no defaults, no fallback — greenfield, per `AGENTS.md`).
+  2. Refactor the frontend to drop the localStorage path entirely (no defaults, no fallback -- greenfield, per `AGENTS.md`).
   3. Adopt CSRF defense for state-changing requests: SameSite=Strict + a `X-CSRF-Token` double-submit cookie. Slice E noted there is no CSRF middleware today; this is the right time to add one.
   4. Add Trusted Types (`require-trusted-types-for 'script'`) and migrate every `innerHTML` sink to a DOM-builder helper (F-17 recommendation).
 - Suggested tests:
@@ -656,10 +656,10 @@ The original finding analysis (preserved below for the audit trail):
 - Category: frontend / authorization / privacy
 - Component: `client/static/js/src/auth/login.ts`, `client/static/js/src/auth/totp.ts`
 - Affected files/functions:
-  - `client/static/js/src/auth/login.ts:163` — `window.totpLoginData = { ..., password }` after OPAQUE-login-finalize succeeds,
-  - `client/static/js/src/auth/totp.ts:49` — sets `window.totpLoginData` for the modal flow,
-  - `client/static/js/src/auth/totp.ts:182, 195, 209-223` — reads `totpLoginData.password`, uses it to call into the post-TOTP code path that re-derives the account key, then attempts to scrub the field at `:213-215`.
-- Description: After OPAQUE login finalizes and before TOTP succeeds, the browser holds the user's plaintext password in a same-origin `window` global named `totpLoginData`. The reason given in code comments is that the post-TOTP code needs to re-run Argon2id to derive the account key (which OPAQUE itself does not expose because the OPAQUE export key is intentionally not used for file encryption — per `AGENTS.md`).
+  - `client/static/js/src/auth/login.ts:163` -- `window.totpLoginData = { ..., password }` after OPAQUE-login-finalize succeeds,
+  - `client/static/js/src/auth/totp.ts:49` -- sets `window.totpLoginData` for the modal flow,
+  - `client/static/js/src/auth/totp.ts:182, 195, 209-223` -- reads `totpLoginData.password`, uses it to call into the post-TOTP code path that re-derives the account key, then attempts to scrub the field at `:213-215`.
+- Description: After OPAQUE login finalizes and before TOTP succeeds, the browser holds the user's plaintext password in a same-origin `window` global named `totpLoginData`. The reason given in code comments is that the post-TOTP code needs to re-run Argon2id to derive the account key (which OPAQUE itself does not expose because the OPAQUE export key is intentionally not used for file encryption -- per `AGENTS.md`).
 
   The lifetime is short (one HTTP round trip to `/api/totp/verify`) but the field is unreachable to any other tab and trivial for an XSS payload to read. The scrubbing logic at `totp.ts:213-215` is best-effort:
 
@@ -763,7 +763,7 @@ The original finding analysis (preserved below for the audit trail):
   #  CapabilityBoundingSet=, UMask=, IPAddressDeny=)
   ```
   ```
-  # systemd/rqlite.service: no SystemCallFilter, no PrivateDevices (has it actually — verify)
+  # systemd/rqlite.service: no SystemCallFilter, no PrivateDevices (has it actually -- verify)
   # systemd/seaweedfs.service: no SystemCallFilter, no PrivateDevices, otherwise as above
   ```
 - Attack scenario:
@@ -779,7 +779,7 @@ The original finding analysis (preserved below for the audit trail):
   - Per-unit: `systemd-analyze security <unit>` and assert score thresholds in CI.
   - Crash test: `kill -SEGV` the arkfile PID; assert no file appears under `/var/lib/systemd/coredump/`.
   - Sandbox negation: in a test environment, send the arkfile process a SIGSYS-triggering syscall and verify the unit terminates.
-- Cross-refs: Slice F F-03 (token in journal — also benefits), Slice A A-18 (key material persistence), Slice B B-25 (key zeroization).
+- Cross-refs: Slice F F-03 (token in journal -- also benefits), Slice A A-18 (key material persistence), Slice B B-25 (key zeroization).
 
 ---
 
@@ -846,7 +846,7 @@ The original finding analysis (preserved below for the audit trail):
   2. Better: pin the binary by SHA-256 *in the file itself*, not by reference to a remote URL the same attacker controls. Hash-pin once at audit time, refuse to install on mismatch.
 - Suggested tests:
   - Negative: tamper with the downloaded `tar.gz` post-fetch; assert setup fails with a hash mismatch.
-- Cross-refs: Slice F F-04 (WASM SRI — same recommendation).
+- Cross-refs: Slice F F-04 (WASM SRI -- same recommendation).
 
 ---
 
@@ -857,11 +857,11 @@ The original finding analysis (preserved below for the audit trail):
 - Category: supply-chain
 - Component: `config/dependency-hashes.json`, `scripts/setup/06-setup-rqlite-build.sh`
 - Affected files/functions:
-  - `config/dependency-hashes.json:20` — `"rqlite": "rqlite is built from source (see scripts/setup/06-setup-rqlite-build.sh) and does not use pre-built binaries."`,
+  - `config/dependency-hashes.json:20` -- `"rqlite": "rqlite is built from source (see scripts/setup/06-setup-rqlite-build.sh) and does not use pre-built binaries."`,
   - `scripts/setup/06-setup-rqlite-build.sh` (not read in this slice in detail; presumed to `git clone` upstream and build current HEAD or a hand-edited tag).
 - Description: "Built from source" without a pinned commit / tag means the rqlite binary in production is whatever `master` happened to be on the day the deploy ran. Reproducibility is impossible. Two operators deploying the same Arkfile version on two different days install different rqlite binaries.
 
-  rqlite is the system of record for users, OPAQUE records, credit transactions, sessions, and admin audit logs. A regression — or a backdoor — in upstream rqlite is silently picked up on the next deploy.
+  rqlite is the system of record for users, OPAQUE records, credit transactions, sessions, and admin audit logs. A regression -- or a backdoor -- in upstream rqlite is silently picked up on the next deploy.
 
 - Evidence:
   ```json
@@ -886,17 +886,17 @@ The original finding analysis (preserved below for the audit trail):
 - Category: supply-chain
 - Component: `client/static/js/package.json`, `client/static/js/bun.lock`, `scripts/setup/build.sh`
 - Affected files/functions:
-  - `client/static/js/package.json:21-27` — both `devDependencies` and `dependencies` use `^` semver ranges,
-  - `client/static/js/bun.lock` — present in the working tree (text format, reviewable),
-  - `scripts/setup/build.sh:349` — `${BUN_CMD} install || { echo ...; exit 1; }` (no `--frozen-lockfile`).
+  - `client/static/js/package.json:21-27` -- both `devDependencies` and `dependencies` use `^` semver ranges,
+  - `client/static/js/bun.lock` -- present in the working tree (text format, reviewable),
+  - `scripts/setup/build.sh:349` -- `${BUN_CMD} install || { echo ...; exit 1; }` (no `--frozen-lockfile`).
 - Description: `package.json` pins `@noble/hashes` `^2.0.1`, `zxcvbn` `^4.4.2`, `bun-types` `^1.2.21`, `typescript` `^5.9.2`. With `^`-ranges, Bun is free to update to a newer minor/patch on every install. `bun.lock` is committed (good), but `bun install` without `--frozen-lockfile` will silently update the lockfile when an upstream registry has a newer version that satisfies the `^` range.
 
   Consequences:
   1. Two builds on two different days against the same `package.json` may resolve to different bundled JS in `dist/app.js`. Reproducibility is impossible.
   2. A typosquatting / dependency-confusion attack against any of these packages picks up automatically on the next `bun install`.
-  3. `@noble/hashes` is part of the cryptographic surface used for non-OPAQUE primitives (SHA-256, HKDF in some helpers — Slice B has the detail). Drift on this package is a direct crypto-supply-chain risk.
+  3. `@noble/hashes` is part of the cryptographic surface used for non-OPAQUE primitives (SHA-256, HKDF in some helpers -- Slice B has the detail). Drift on this package is a direct crypto-supply-chain risk.
 
-  `bun.lock` is the text-format lockfile (good — much more reviewable than the legacy binary `bun.lockb`). Switching to `--frozen-lockfile` is a one-flag fix.
+  `bun.lock` is the text-format lockfile (good -- much more reviewable than the legacy binary `bun.lockb`). Switching to `--frozen-lockfile` is a one-flag fix.
 
 - Evidence:
   ```json
@@ -937,16 +937,16 @@ The original finding analysis (preserved below for the audit trail):
 - Category: frontend / design / privacy
 - Component: `client/static/js/src/auth/totp.ts`, `client/static/js/src/ui/**`, `handlers/middleware.go`
 - Affected files/functions:
-  - `handlers/middleware.go:359-370` — `script-src 'self' 'wasm-unsafe-eval'` (no `'unsafe-inline'`),
-  - `client/static/js/src/auth/totp.ts:107` — `<button onclick="this.closest('.modal-overlay').remove(); delete window.totpLoginData;" ...>` injected via `innerHTML`,
-  - `client/static/js/src/auth/totp.ts`, `totp-setup.ts`, `shares/share-list.ts`, `shares/share-access.ts`, `ui/modals.ts`, `ui/password-modal.ts`, `ui/contact-info.ts`, `ui/billing.ts`, `files/list.ts`, `files/share.ts`, `utils/password-toggle.ts` — 12 files contain `innerHTML` assignments (grep).
-- Description: The Arkfile CSP is strict (`script-src 'self' 'wasm-unsafe-eval'` — no `'unsafe-inline'`, no `'unsafe-eval'`). However, several TS modules build HTML strings that include inline `onclick=` event handlers and assign them via `innerHTML`. Per the CSP spec, inline event handlers are subject to `script-src` and are blocked when `'unsafe-inline'` is absent.
+  - `handlers/middleware.go:359-370` -- `script-src 'self' 'wasm-unsafe-eval'` (no `'unsafe-inline'`),
+  - `client/static/js/src/auth/totp.ts:107` -- `<button onclick="this.closest('.modal-overlay').remove(); delete window.totpLoginData;" ...>` injected via `innerHTML`,
+  - `client/static/js/src/auth/totp.ts`, `totp-setup.ts`, `shares/share-list.ts`, `shares/share-access.ts`, `ui/modals.ts`, `ui/password-modal.ts`, `ui/contact-info.ts`, `ui/billing.ts`, `files/list.ts`, `files/share.ts`, `utils/password-toggle.ts` -- 12 files contain `innerHTML` assignments (grep).
+- Description: The Arkfile CSP is strict (`script-src 'self' 'wasm-unsafe-eval'` -- no `'unsafe-inline'`, no `'unsafe-eval'`). However, several TS modules build HTML strings that include inline `onclick=` event handlers and assign them via `innerHTML`. Per the CSP spec, inline event handlers are subject to `script-src` and are blocked when `'unsafe-inline'` is absent.
 
   In practice this means **the handlers silently do not fire in production**. The most visible example is the "cancel" button in the TOTP-modal at `totp.ts:107`: clicking it does nothing in a CSP-enforcing browser. The modal can only be dismissed by navigating away.
 
   Two consequences:
   1. **UX bug today.** Real users in real browsers are unable to use these controls.
-  2. **CSP-loosening pressure.** When a developer notices the broken UX and "fixes" it by relaxing CSP to `'unsafe-inline'`, the entire script-src defense collapses — XSS sinks (F-17) now have a direct landing zone.
+  2. **CSP-loosening pressure.** When a developer notices the broken UX and "fixes" it by relaxing CSP to `'unsafe-inline'`, the entire script-src defense collapses -- XSS sinks (F-17) now have a direct landing zone.
 
   This finding lives at the intersection of frontend correctness and security policy. Treating it as security-relevant is justified by the second consequence: the natural fix path *weakens* the CSP, which is the only defense against XSS that the application has today.
 
@@ -981,9 +981,9 @@ The original finding analysis (preserved below for the audit trail):
 - Category: frontend / design
 - Component: `handlers/middleware.go`, `client/static/shared.html`
 - Affected files/functions:
-  - `handlers/middleware.go:361` — `style-src 'self' 'unsafe-inline'`,
-  - `client/static/shared.html:8-40` — a 32-line inline `<style>` block.
-- Description: CSP allows inline styles, mostly to accommodate the inline `<style>` block in `shared.html` (used for the anonymous-recipient share-receive page). Inline `style-src` is a much smaller risk than inline `script-src` — the worst a stored-XSS-via-CSS payload can do is exfiltrate by `background-image: url(...)` against `img-src` (`'self' data:`) which is also restricted. Still, every relaxation of CSP is a defense-in-depth weakening.
+  - `handlers/middleware.go:361` -- `style-src 'self' 'unsafe-inline'`,
+  - `client/static/shared.html:8-40` -- a 32-line inline `<style>` block.
+- Description: CSP allows inline styles, mostly to accommodate the inline `<style>` block in `shared.html` (used for the anonymous-recipient share-receive page). Inline `style-src` is a much smaller risk than inline `script-src` -- the worst a stored-XSS-via-CSS payload can do is exfiltrate by `background-image: url(...)` against `img-src` (`'self' data:`) which is also restricted. Still, every relaxation of CSP is a defense-in-depth weakening.
 
   The fix is mechanical: move the inline styles into `/css/shared.css` and serve it as a same-origin stylesheet.
 
@@ -1011,7 +1011,7 @@ The original finding analysis (preserved below for the audit trail):
 - Confidence: **High**
 - Category: frontend / defense-in-depth
 - Component: `handlers/middleware.go`
-- Affected files/functions: `handlers/middleware.go:372-378` — header set is CSP / XCTO / XFO / XSSP / Referrer-Policy only.
+- Affected files/functions: `handlers/middleware.go:372-378` -- header set is CSP / XCTO / XFO / XSSP / Referrer-Policy only.
 - Description: `Permissions-Policy` (formerly `Feature-Policy`) lets the server disable browser features that the application does not need: `camera`, `microphone`, `geolocation`, `payment`, `usb`, `serial`, `bluetooth`, `magnetometer`, `gyroscope`, `accelerometer`, `ambient-light-sensor`, `autoplay`, `display-capture`, `fullscreen`, `picture-in-picture`, `sync-xhr`, etc. None of these are used by Arkfile.
 
   A header `Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), accelerometer=(), gyroscope=(), magnetometer=(), ambient-light-sensor=(), display-capture=(), midi=(), encrypted-media=(), sync-xhr=()` denies them all. In the presence of XSS (F-07), this prevents an attacker from also using the user's camera / mic / geolocation as a side channel.
@@ -1021,7 +1021,7 @@ The original finding analysis (preserved below for the audit trail):
   c.Response().Header().Set("Permissions-Policy",
       "camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), accelerometer=(), gyroscope=(), magnetometer=(), ambient-light-sensor=(), display-capture=(), midi=(), encrypted-media=(), sync-xhr=()")
   ```
-- Cross-refs: Slice F F-17 (Trusted Types — same site for adding a header).
+- Cross-refs: Slice F F-17 (Trusted Types -- same site for adding a header).
 
 ---
 
@@ -1032,17 +1032,17 @@ The original finding analysis (preserved below for the audit trail):
 - Category: frontend / XSS / design
 - Component: `handlers/middleware.go`, `client/static/js/src/**`
 - Affected files/functions:
-  - `handlers/middleware.go:359-370` — CSP has no `require-trusted-types-for` directive,
+  - `handlers/middleware.go:359-370` -- CSP has no `require-trusted-types-for` directive,
   - 12 TS files with `innerHTML` writes (grep): `shares/share-access.ts`, `shares/share-list.ts`, `auth/totp.ts`, `auth/totp-setup.ts`, `ui/modals.ts`, `ui/password-modal.ts`, `ui/contact-info.ts`, `ui/messages.ts`, `ui/billing.ts`, `files/list.ts`, `files/share.ts`, `utils/password-toggle.ts`.
 - Description: Trusted Types is a Chrome-and-Firefox-supported CSP mechanism that turns every `innerHTML = ...` (and `document.write`, `eval`, `setTimeout(string)`, etc.) into a runtime type error unless the value is wrapped in a `TrustedHTML` object produced by a registered policy. It is the modern, type-system-enforced answer to XSS.
 
   Arkfile's CSP does not enable Trusted Types. Every one of the 12 `innerHTML` sinks is a potential XSS landing zone if any untrusted data ever reaches the right-hand side of `el.innerHTML =`. Today, most of them concatenate static strings + locally-derived values, but some interpolate server-fetched data:
 
-  - `shares/share-list.ts` — share metadata (owner-controlled `revoked_reason` per Slice D D-04; recipient-controlled strings if any in the future),
-  - `shares/share-access.ts` — anonymous-recipient flow; envelopes are encrypted but error messages flow through here,
-  - `ui/contact-info.ts` — user-controlled contact-info display (Slice E E-15, E-18 — admin-readable),
-  - `files/list.ts` — file listing, including any storage-info strings (Slice C, Slice E),
-  - `files/share.ts` — share creation modal; share password is *typed* here.
+  - `shares/share-list.ts` -- share metadata (owner-controlled `revoked_reason` per Slice D D-04; recipient-controlled strings if any in the future),
+  - `shares/share-access.ts` -- anonymous-recipient flow; envelopes are encrypted but error messages flow through here,
+  - `ui/contact-info.ts` -- user-controlled contact-info display (Slice E E-15, E-18 -- admin-readable),
+  - `files/list.ts` -- file listing, including any storage-info strings (Slice C, Slice E),
+  - `files/share.ts` -- share creation modal; share password is *typed* here.
 
   Slice D D-14 already raised obvious template-literal XSS sinks in the share UI. This finding is the broader Trusted Types coverage.
 
@@ -1088,7 +1088,7 @@ The original finding analysis (preserved below for the audit trail):
 - Component: `Caddyfile`, `Caddyfile.local`, `Caddyfile.test`, `Caddyfile.prod`
 - Affected files/functions: `Caddyfile.prod:30`, `Caddyfile.local:21`, `Caddyfile.test:73` (and `Caddyfile`).
 - Description: All four Caddyfile variants reverse-proxy to the local Arkfile process over HTTPS-on-localhost-with-self-signed-cert, and use `tls_insecure_skip_verify` to skip cert validation on that hop. Acceptable today because:
-  - The upstream is `localhost:8443` (loopback only — not reachable off-host).
+  - The upstream is `localhost:8443` (loopback only -- not reachable off-host).
   - The certificate is generated by `scripts/setup/04-setup-tls-certs.sh` as a self-signed cert that the Arkfile process owns.
   - Caddy and Arkfile run on the same host under the same operator.
 
@@ -1108,7 +1108,7 @@ The original finding analysis (preserved below for the audit trail):
 - Category: design / operational / technical-debt
 - Component: `scripts/maintenance/rotate-jwt-keys.sh`
 - Affected files/functions:
-  - `scripts/maintenance/rotate-jwt-keys.sh:19-25` — `KEY_DIR="$ARKFILE_HOME/etc/keys/jwt/current"`,
+  - `scripts/maintenance/rotate-jwt-keys.sh:19-25` -- `KEY_DIR="$ARKFILE_HOME/etc/keys/jwt/current"`,
   - cross-ref Slice A's finding that JWT signing keys are now managed via `crypto.KeyManager` in the database, not on disk.
 - Description: The maintenance script manages files in `/opt/arkfile/etc/keys/jwt/current/` and `/opt/arkfile/backups/jwt-rotation/`. Per Slice A, JWT signing keys are now sourced from the database via `KeyManager` and the on-disk path is no longer authoritative. The script is a leftover from an earlier design and risks confusing operators into thinking they have rotated keys when they have not.
 
@@ -1129,9 +1129,9 @@ The original finding analysis (preserved below for the audit trail):
 - Category: operational / privacy / defense-in-depth
 - Component: `main.go`, `Caddyfile.prod`
 - Affected files/functions:
-  - `main.go:30-65` — both endpoints registered at the root, no middleware,
-  - `Caddyfile.prod:32` — Caddy's own `health_uri /readyz` proxies through.
-- Description: `/healthz` returns `{"status":"alive"}` — trivial. `/readyz` reports rqlite + storage status to *anyone* on the internet, including the wording of any error (`fmt.Sprintf("not ready: %v", err)`). Slice E E-22 (cross-ref) already raised this for the admin-side variant; this entry is the public-listener manifestation.
+  - `main.go:30-65` -- both endpoints registered at the root, no middleware,
+  - `Caddyfile.prod:32` -- Caddy's own `health_uri /readyz` proxies through.
+- Description: `/healthz` returns `{"status":"alive"}` -- trivial. `/readyz` reports rqlite + storage status to *anyone* on the internet, including the wording of any error (`fmt.Sprintf("not ready: %v", err)`). Slice E E-22 (cross-ref) already raised this for the admin-side variant; this entry is the public-listener manifestation.
 
   Risks:
   - Driver-specific error wording (`rqlite: not ready: dial tcp 127.0.0.1:4001: connect: connection refused`) reveals the backend topology to anyone probing.
@@ -1161,15 +1161,15 @@ The original finding analysis (preserved below for the audit trail):
 - Category: information disclosure
 - Component: `client/static/js/package.json`, `scripts/setup/build.sh`
 - Affected files/functions:
-  - `client/static/js/package.json:23` — `"build:prod": "bun build src/app.ts --outdir dist --target browser --format iife --minify --sourcemap=external ..."`,
-  - `scripts/setup/build.sh:493` — explicitly copies `app.js.map` into the build output directory.
+  - `client/static/js/package.json:23` -- `"build:prod": "bun build src/app.ts --outdir dist --target browser --format iife --minify --sourcemap=external ..."`,
+  - `scripts/setup/build.sh:493` -- explicitly copies `app.js.map` into the build output directory.
 - Description: `build:prod` emits an external sourcemap. The deploy step copies `app.js.map` into the served `dist/` directory. Anyone can fetch `https://example.com/js/dist/app.js.map` and recover the full TypeScript source, including:
 
   - Variable names that the minifier would otherwise obfuscate.
   - File structure under `client/static/js/src/**`.
   - Comments left in the source.
 
-  Not a vulnerability in itself — the source is open-source under AGPLv3. But for a per-deployment install with operator-specific tweaks, or for any operator who has local patches not yet pushed upstream, this is an info leak. Also useful to attackers for understanding the structure of the client.
+  Not a vulnerability in itself -- the source is open-source under AGPLv3. But for a per-deployment install with operator-specific tweaks, or for any operator who has local patches not yet pushed upstream, this is an info leak. Also useful to attackers for understanding the structure of the client.
 
 - Recommendation:
   1. Switch the production build to `--sourcemap=none` (or do not copy the `.map` file into the served bundle). Keep sourcemaps in the build directory for debugging, but do not deploy them.
@@ -1195,13 +1195,13 @@ The original finding analysis (preserved below for the audit trail):
 - Category: operational / secret-handling
 - Component: `scripts/prod-deploy.sh`, `systemd/caddy.service`
 - Affected files/functions:
-  - `scripts/prod-deploy.sh:548-552` — writes `/var/lib/caddy/caddy-env` with `DESEC_TOKEN=...`, then `chmod 600`, `chown caddy:caddy`,
-  - `systemd/caddy.service:14` — `EnvironmentFile=/var/lib/caddy/caddy-env`.
-- Description: The deSEC DNS-01 challenge token is a long-lived bearer credential against the operator's DNS provider. It is stored in plaintext on disk, mode 0600, owned by `caddy:caddy`. Acceptable for now — file modes are correct, the path is on a dedicated user — but flagged for future at-rest encryption design (e.g. systemd Credentials with `LoadCredentialEncrypted=`).
+  - `scripts/prod-deploy.sh:548-552` -- writes `/var/lib/caddy/caddy-env` with `DESEC_TOKEN=...`, then `chmod 600`, `chown caddy:caddy`,
+  - `systemd/caddy.service:14` -- `EnvironmentFile=/var/lib/caddy/caddy-env`.
+- Description: The deSEC DNS-01 challenge token is a long-lived bearer credential against the operator's DNS provider. It is stored in plaintext on disk, mode 0600, owned by `caddy:caddy`. Acceptable for now -- file modes are correct, the path is on a dedicated user -- but flagged for future at-rest encryption design (e.g. systemd Credentials with `LoadCredentialEncrypted=`).
 - Recommendation:
   1. Migrate to systemd `LoadCredentialEncrypted=desec_token:/var/lib/caddy/caddy-env.cred` with `systemd-creds encrypt`. The token is then decryptable only at unit start, by the unit itself.
   2. Audit any backup tooling that includes `/var/lib/caddy/` to ensure the token does not leak via backups.
-- Cross-refs: Slice F F-09 (no `LimitCORE=0` — a Caddy coredump would also contain the token in memory).
+- Cross-refs: Slice F F-09 (no `LimitCORE=0` -- a Caddy coredump would also contain the token in memory).
 
 ---
 
@@ -1211,7 +1211,7 @@ The original finding analysis (preserved below for the audit trail):
 - Confidence: **High**
 - Category: supply-chain / hardening
 - Component: `scripts/setup/build.sh`
-- Affected files/functions: `scripts/setup/build.sh` (entire — no `govulncheck`, no `audit`, no `syft`, no SBOM emission).
+- Affected files/functions: `scripts/setup/build.sh` (entire -- no `govulncheck`, no `audit`, no `syft`, no SBOM emission).
 - Description: The build script does not run any automated CVE check against Go modules or npm packages. There is also no SBOM generation. This is a hardening recommendation rather than a vulnerability; the failure mode is "an attacker found a CVE in a transitive dep and we didn't notice".
 - Recommendation:
   1. Add `govulncheck ./...` to `build.sh` after `go mod download`. Fail the build on any high-severity finding.
@@ -1228,7 +1228,7 @@ The original finding analysis (preserved below for the audit trail):
 - Category: supply-chain (positive observation)
 - Component: `client/static/js/bun.lock`
 - Affected files/functions: `client/static/js/bun.lock` (text format, ~1.9 KB, committed).
-- Description: The Bun lockfile is the modern text-format `bun.lock` (not the legacy binary `bun.lockb`). This makes diffs reviewable in code review and CI — a clear win for supply-chain auditability. Recorded for completeness so Slice G's synthesis acknowledges what is already done well.
+- Description: The Bun lockfile is the modern text-format `bun.lock` (not the legacy binary `bun.lockb`). This makes diffs reviewable in code review and CI -- a clear win for supply-chain auditability. Recorded for completeness so Slice G's synthesis acknowledges what is already done well.
 - Recommendation: keep using `bun.lock`; do not regress to `bun.lockb`. Combine with `--frozen-lockfile` (F-13) for full effect.
 
 ---
@@ -1237,7 +1237,7 @@ The original finding analysis (preserved below for the audit trail):
 
 ### 3.1 HTTP Security Headers per environment
 
-`set` = explicitly written by the named source; `omit` = not set; `note` = condition described. CSP is identical across all environments because it is emitted exclusively by `handlers.CSPMiddleware` (Go) — the Caddyfiles deliberately do not set CSP to avoid duplicate-CSP intersection (which would break `data:` image URIs for TOTP QR codes per the comments in each Caddyfile).
+`set` = explicitly written by the named source; `omit` = not set; `note` = condition described. CSP is identical across all environments because it is emitted exclusively by `handlers.CSPMiddleware` (Go) -- the Caddyfiles deliberately do not set CSP to avoid duplicate-CSP intersection (which would break `data:` image URIs for TOTP QR codes per the comments in each Caddyfile).
 
 | Header | Caddyfile.local | Caddyfile.test | Caddyfile.prod | Go middleware (CSPMiddleware) | Go middleware (SecureWithConfig) | Notes |
 |---|---|---|---|---|---|---|
@@ -1253,7 +1253,7 @@ The original finding analysis (preserved below for the audit trail):
 | `Cross-Origin-Resource-Policy` | omit | omit | omit | omit | omit | hardening gap |
 | `Trusted-Types` (via CSP `require-trusted-types-for`) | omit | omit | omit | **omit** | omit | **F-17** |
 | `X-Forwarded-For` handling | append (no strip) | append (no strip) | append (no strip) | trusted as-is by `c.RealIP()` | trusted | **F-01** |
-| CORS allow-list | (passed by Go middleware only) | (Go) | (Go) | configured via `cfg.Server.AllowedOrigins` | — | `AllowCredentials: true` (`main.go:278`); confirm AllowedOrigins in deployed config (Open Question §5) |
+| CORS allow-list | (passed by Go middleware only) | (Go) | (Go) | configured via `cfg.Server.AllowedOrigins` | -- | `AllowCredentials: true` (`main.go:278`); confirm AllowedOrigins in deployed config (Open Question §5) |
 
 ### 3.2 systemd Hardening per unit
 
@@ -1296,19 +1296,19 @@ The original finding analysis (preserved below for the audit trail):
 | Go modules (~50 direct, ~150 transitive) | `go.sum` + module proxy | Pinned by hash | `go mod verify` (manual) | OK; F-25 (no `govulncheck`) |
 | libopaque (vendored C) | `.gitmodules` commit `6e9ac92` | Pinned | git submodule | OK |
 | liboprf (vendored C) | `.gitmodules` commit `a8c0410` | Pinned | git submodule | OK |
-| libsodium | host `pkg-config --libs --static libsodium` | **Unpinned (host package)** | — | **F-06** |
-| libopaque.js (WASM) | checked-in artifact, no hash | Built at build-time; ships in repo | — | **F-04** |
-| dist/app.js (TS bundle) | built from `client/static/js/src/**` | Built at build-time; ships in deployed `dist/` | — | F-04 (no SRI), F-22 (sourcemap exposed) |
-| npm deps (`@noble/hashes`, `zxcvbn`, dev: `bun-types`, `typescript`, `@types/zxcvbn`) | `package.json` `^` ranges + `bun.lock` | Lockfile present, but `bun install` without `--frozen-lockfile` | — | **F-13** |
-| Bun runtime itself | `command -v bun` against host install | Unpinned | — | minor (build tool only) |
+| libsodium | host `pkg-config --libs --static libsodium` | **Unpinned (host package)** | -- | **F-06** |
+| libopaque.js (WASM) | checked-in artifact, no hash | Built at build-time; ships in repo | -- | **F-04** |
+| dist/app.js (TS bundle) | built from `client/static/js/src/**` | Built at build-time; ships in deployed `dist/` | -- | F-04 (no SRI), F-22 (sourcemap exposed) |
+| npm deps (`@noble/hashes`, `zxcvbn`, dev: `bun-types`, `typescript`, `@types/zxcvbn`) | `package.json` `^` ranges + `bun.lock` | Lockfile present, but `bun install` without `--frozen-lockfile` | -- | **F-13** |
+| Bun runtime itself | `command -v bun` against host install | Unpinned | -- | minor (build tool only) |
 | SeaweedFS release | `dependency-hashes.json` SeaweedFS 4.18 by `md5_url` | Pinned to version 4.18 but verified via **MD5** | `scripts/setup/05-setup-seaweedfs.sh` | **F-11** |
-| rqlite | "built from source", no commit pin | **Unpinned** | — | **F-12** |
-| Caddy binary | downloaded by `scripts/prod-deploy.sh`, no recorded hash | Unpinned (TBD — depth-of-script-read deferred) | — | follow-up; same class as F-11/F-12 |
-| TLS upstream cert (Caddy→Arkfile) | self-signed by `04-setup-tls-certs.sh` | Pinned by `tls_insecure_skip_verify` ⇒ no verification | — | F-18 |
-| deSEC API token | `/var/lib/caddy/caddy-env` 0600 | Plaintext on disk | — | F-24 |
-| Release-artifact signing (cosign / minisign / sigstore) | — | **None** | — | F-05 |
-| SBOM | — | **None** | — | F-25 |
-| Reproducible builds | — | **Not reproducible** (F-05 + F-06 + F-12 + F-13) | — | F-05 (umbrella) |
+| rqlite | "built from source", no commit pin | **Unpinned** | -- | **F-12** |
+| Caddy binary | downloaded by `scripts/prod-deploy.sh`, no recorded hash | Unpinned (TBD -- depth-of-script-read deferred) | -- | follow-up; same class as F-11/F-12 |
+| TLS upstream cert (Caddy→Arkfile) | self-signed by `04-setup-tls-certs.sh` | Pinned by `tls_insecure_skip_verify` ⇒ no verification | -- | F-18 |
+| deSEC API token | `/var/lib/caddy/caddy-env` 0600 | Plaintext on disk | -- | F-24 |
+| Release-artifact signing (cosign / minisign / sigstore) | -- | **None** | -- | F-05 |
+| SBOM | -- | **None** | -- | F-25 |
+| Reproducible builds | -- | **Not reproducible** (F-05 + F-06 + F-12 + F-13) | -- | F-05 (umbrella) |
 
 ### 3.4 Frontend secret-adjacent storage matrix
 
@@ -1324,9 +1324,9 @@ The original finding analysis (preserved below for the audit trail):
 | `window` global | `window.totpLoginData.password` | plaintext password | same as above; scrubbed after TOTP-verify completes | **yes** | **F-08** |
 | in-memory `Uint8Array` | account-KEK after Argon2id | derived encryption key | until next file op (then in best-effort scrubbing) | yes (until GC) | Slice B, B-23 |
 | in-memory `Uint8Array` | per-file FEK | file-encryption key | per-file op | yes (until GC) | Slice B, Slice C C-19 |
-| `cookies` | (none for auth) | — | — | — | intentional design choice (per code comments); reverse of `idsrp.md` §9 recommendation |
-| IndexedDB | (none currently) | — | — | — | Slice C noted no IndexedDB usage |
-| Service Worker cache | (none currently) | — | — | — | `sw-download.js` does not cache; only intercepts |
+| `cookies` | (none for auth) | -- | -- | -- | intentional design choice (per code comments); reverse of `idsrp.md` §9 recommendation |
+| IndexedDB | (none currently) | -- | -- | -- | Slice C noted no IndexedDB usage |
+| Service Worker cache | (none currently) | -- | -- | -- | `sw-download.js` does not cache; only intercepts |
 
 ### 3.5 CLI / server binary build-flag inventory
 
@@ -1365,21 +1365,21 @@ Items the `idsrp.md` prompt asks about that do not exist in Arkfile's frontend /
 | SVG handling (§12) | N/A | No SVG upload/serve path. The favicon is a `.ico`. |
 | PDF preview risks (§12) | N/A | No PDF preview. |
 | Image metadata (EXIF) risks (§12) | N/A | Images are encrypted blobs; the browser never decodes them as images. |
-| Stored XSS through filenames (§12) | **N/A at storage** — filenames are encrypted at rest (per Slice B). However, **decrypted** filenames are rendered into the file list (F-17 sinks); see F-17. | partial |
+| Stored XSS through filenames (§12) | **N/A at storage** -- filenames are encrypted at rest (per Slice B). However, **decrypted** filenames are rendered into the file list (F-17 sinks); see F-17. | partial |
 | Stored XSS through folder names (§12) | N/A | Flat per-user file space, no folders (per `00-plan.md` §6). |
-| Stored XSS through user display names (§12) | N/A | No display names — username is the only identifier. |
-| Source-map exposure (§12) | **Confirmed** (F-22) | — |
+| Stored XSS through user display names (§12) | N/A | No display names -- username is the only identifier. |
+| Source-map exposure (§12) | **Confirmed** (F-22) | -- |
 | CDN cache poisoning for private content | N/A (no CDN deployed today; Caddy serves direct) | Hardening note: if a CDN is ever added, F-04 hash-pinning becomes essential. |
 | Container images (§13) | N/A | Arkfile does not ship a Docker / Podman image today. `docs/wip/podman.md` is WIP and outside Slice F scope. |
 | Postinstall scripts in npm deps | N/A in `package.json` | The four `devDependencies` and two `dependencies` do not declare `postinstall`. Reverify if deps are added. |
 | Build-time code generation risks (§13) | N/A | No `go:generate`, no `protoc`, no `tygo` codegen in the build pipeline. |
 | Docker images running as root | N/A | No Docker image. |
-| Vulnerability scanning (`Trivy`, etc.) (§13) | None present — F-25 | — |
+| Vulnerability scanning (`Trivy`, etc.) (§13) | None present -- F-25 | -- |
 | Service Worker scope and cache poisoning | partial N/A | `sw-download.js` (built from `src/sw-download.ts`) intercepts only same-origin `/sw-download/<uuid>` URLs and forwards already-decrypted byte streams; it does not cache. Listed in `00-plan.md` §6 (mobile constraints); detailed audit deferred to Slice G for streaming-download model. No finding here. |
 | HTTP request smuggling | N/A by deployment topology | Caddy is the only public-facing HTTP processor; the upstream is `localhost:8443` Echo with HTTP/2 disabled. Smuggling risk requires a TE / CL desync between two proxies; only one proxy is in front. |
 | Browser MathML / Mathematics rendering | N/A | None. |
-| `Trusted-Types` adoption | **In scope, missing** — F-17 | — |
-| `Cross-Origin-Opener-Policy`, `COEP`, `CORP` | In scope, missing — see §3.1, hardening §7 | — |
+| `Trusted-Types` adoption | **In scope, missing** -- F-17 | -- |
+| `Cross-Origin-Opener-Policy`, `COEP`, `CORP` | In scope, missing -- see §3.1, hardening §7 | -- |
 
 ---
 
@@ -1400,46 +1400,46 @@ Items the `idsrp.md` prompt asks about that do not exist in Arkfile's frontend /
 
 Tests that this slice's findings demand and that are missing in the present codebase. Prioritized.
 
-1. **High-priority — `X-Forwarded-For` localhost-gate bypass (F-01)**:
+1. **High-priority -- `X-Forwarded-For` localhost-gate bypass (F-01)**:
    - End-to-end: off-host `curl -H "X-Forwarded-For: 127.0.0.1" .../api/admin/users` → 403.
    - End-to-end: same for `/api/bootstrap/*`.
    - Unit: synthesize an `echo.Context` with `Request().RemoteAddr = "10.0.0.5:12345"` and `XFF = "127.0.0.1"`; call `AdminMiddleware`; expect 403.
    - Should also re-run for every Slice A / Slice E finding that depends on `c.RealIP()`.
 
-2. **Medium-priority — dev-admin build-tag separation (F-02)**:
+2. **Medium-priority -- dev-admin build-tag separation (F-02)**:
    - Post-build: `strings ./build/bin/arkfile | grep -c -E 'DevAdmin2025|ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D'` returns 0 after build-tag separation lands.
    - Integration: boot the prod-tag binary with `ADMIN_USERNAMES=arkfile-dev-admin`; the auto-create code path should not even be linked in.
    - Regression: `ValidateProductionConfig` with `ENVIRONMENT=production` + `ADMIN_USERNAMES=arkfile-dev-admin` returns the `FATAL:` startup error.
 
-3. **High-priority — WASM integrity (F-04)**:
+3. **High-priority -- WASM integrity (F-04)**:
    - Integration: tamper with `libopaque.js` post-build; next browser load fails SRI check.
    - Server-startup self-test: compare on-disk hash against `dependency-hashes.json` entry.
 
-4. **High-priority — build reproducibility (F-05)**:
+4. **High-priority -- build reproducibility (F-05)**:
    - CI: clean rebuild × 2 from same commit → `sha256sum` matches across all three binaries.
    - CI: `strings ./build/bin/arkfile | grep -E '/home/|/Users/'` → empty.
 
-5. **Medium-priority — bootstrap-token hygiene (F-03)**:
+5. **Medium-priority -- bootstrap-token hygiene (F-03)**:
    - Integration: deploy + capture journal; verify token does **not** appear after the F-03 fix lands.
    - Integration: redemption past TTL → 403.
 
-6. **Medium-priority — XSS via filename / contact-info (F-07, F-08, F-17)**:
+6. **Medium-priority -- XSS via filename / contact-info (F-07, F-08, F-17)**:
    - Playwright: upload a file with a filename containing `<img src=x onerror=alert(1)>` (filename is encrypted at rest but rendered after decrypt); verify Trusted Types blocks execution.
    - Playwright: contact-info field with the same payload; same expectation.
    - Static-analysis CI rule: ban `innerHTML =` outside the `sanitize` wrapper.
 
-7. **Medium-priority — frozen lockfile + audit (F-13, F-25)**:
+7. **Medium-priority -- frozen lockfile + audit (F-13, F-25)**:
    - CI: `bun install --frozen-lockfile`; `git diff --exit-code bun.lock`.
    - CI: `govulncheck ./...` and `bun audit` fail on high-severity.
 
-8. **Medium-priority — systemd hardening (F-09)**:
+8. **Medium-priority -- systemd hardening (F-09)**:
    - CI: `systemd-analyze security <unit>` ≤ target score.
    - Smoke: send SIGSEGV to arkfile; assert no file under `/var/lib/systemd/coredump/`.
 
-9. **Low-priority — rqlite loopback bind (F-10)**:
+9. **Low-priority -- rqlite loopback bind (F-10)**:
    - Post-deploy: `ss -ltn 'sport = :4001 or sport = :4002'` → only `127.0.0.1` bind addresses.
 
-10. **Low-priority — sourcemap exposure (F-22)**:
+10. **Low-priority -- sourcemap exposure (F-22)**:
     - HTTP probe: `GET /js/dist/app.js.map` → 404 after the fix.
 
 ---
@@ -1451,7 +1451,7 @@ Recommendations that improve security posture without being tied to a single fin
 1. **Adopt CSP Trusted Types (`require-trusted-types-for 'script'`)** alongside the F-17 refactor. Make every `innerHTML` sink a typed value or a `textContent` write.
 2. **Add `Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), accelerometer=(), gyroscope=(), magnetometer=(), ambient-light-sensor=(), display-capture=(), midi=(), encrypted-media=(), sync-xhr=()`** to the Go CSP middleware. One-line change, defense-in-depth against XSS.
 3. **Add `Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Embedder-Policy: require-corp`, `Cross-Origin-Resource-Policy: same-origin`** to enable site isolation. Required if any future Shared Array Buffer / WASM threading is added.
-4. **Move auth tokens to `HttpOnly` cookies** with `SameSite=Strict` and a CSRF double-submit token. Drop `localStorage` storage entirely (greenfield — no compatibility shim).
+4. **Move auth tokens to `HttpOnly` cookies** with `SameSite=Strict` and a CSRF double-submit token. Drop `localStorage` storage entirely (greenfield -- no compatibility shim).
 5. **Consolidate header emission.** Today HSTS is set by Caddy *and* by Go's `SecureWithConfig`, XFO is set by `SecureWithConfig` (`SAMEORIGIN`) *and* by `CSPMiddleware` (`DENY`). The Go layer wins by middleware order but the duplication invites drift. Pick one source per header.
 6. **Build reproducibly.** F-05 + F-06 + F-12 + F-13 together. Run a `make verify-reproducible` step in CI.
 7. **Sign release artifacts** via `cosign sign-blob` (or `minisign`) and publish a `cosign.pub` in the repo. Operators verify with `cosign verify-blob`.

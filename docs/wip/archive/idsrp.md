@@ -942,9 +942,9 @@ Review must explicitly cover:
 - Password lifecycle: when is the password byte buffer zeroed? Are there code paths (such as the deliberate `// NOTE: Do NOT zero password here` in `commands.go`) where the password remains in memory longer than strictly necessary, and is that justified?
 - Session file location, permissions (expect 0600), serialization of refresh token and JWT, and whether session files leak any cryptographic material (e.g. cached account KEK, OPAQUE export).
 - CLI flag-based leakage surfaces:
-  - `--totp-secret` — passing the TOTP shared secret on the command line exposes it via `/proc/<pid>/cmdline`, shell history, and process accounting. This defeats 2FA when the secret is durable. Treat as Medium or higher unless mitigated (e.g. immediate argv scrub, env-var-only).
-  - `--password-stdin` — pipe-mode password ingress; review pipe lifetime, leftover bytes, and timeout safety.
-  - `--account-key-file` — path-derived key ingestion; check file-mode requirement and any TOCTOU.
+  - `--totp-secret` -- passing the TOTP shared secret on the command line exposes it via `/proc/<pid>/cmdline`, shell history, and process accounting. This defeats 2FA when the secret is durable. Treat as Medium or higher unless mitigated (e.g. immediate argv scrub, env-var-only).
+  - `--password-stdin` -- pipe-mode password ingress; review pipe lifetime, leftover bytes, and timeout safety.
+  - `--account-key-file` -- path-derived key ingestion; check file-mode requirement and any TOCTOU.
 - The `arkfile-client` agent daemon:
   - Unix-socket path predictability and parent-directory mode.
   - Socket file mode (expect 0600 with owner-only access).
@@ -967,22 +967,22 @@ Findings against the CLIs follow the same severity rubric as backend findings (�
 
 **Enforcement model (must be verified by the audit):** Arkfile uses a two-tier JWT enforcement model:
 
-- **Tier 1 — Post-OPAQUE Temp Token.** Issued by `/api/opaque/login/finalize` after a successful OPAQUE handshake. This token authenticates "the user proved the password" but does NOT grant access to any user action. It is accepted only by the TOTP-verify endpoint(s) and any TOTP-enrollment-completion endpoint where applicable. It must:
-  - Be cryptographically distinct from the full JWT — either via separate audience claim, separate signing key, an in-DB allowlist, or a dedicated claim such as `totp_verified=false` / `purpose=totp_challenge`.
+- **Tier 1 -- Post-OPAQUE Temp Token.** Issued by `/api/opaque/login/finalize` after a successful OPAQUE handshake. This token authenticates "the user proved the password" but does NOT grant access to any user action. It is accepted only by the TOTP-verify endpoint(s) and any TOTP-enrollment-completion endpoint where applicable. It must:
+  - Be cryptographically distinct from the full JWT -- either via separate audience claim, separate signing key, an in-DB allowlist, or a dedicated claim such as `totp_verified=false` / `purpose=totp_challenge`.
   - Have a short TTL (minutes, not hours).
   - Not be refreshable into a full JWT without TOTP completion.
-- **Tier 2 — Full JWT.** Issued by the TOTP-verify endpoint after the user submits a valid TOTP code (or a valid, unused backup code). This token is the only one accepted by the TOTP middleware that gates every protected route.
+- **Tier 2 -- Full JWT.** Issued by the TOTP-verify endpoint after the user submits a valid TOTP code (or a valid, unused backup code). This token is the only one accepted by the TOTP middleware that gates every protected route.
 
-**TOTP middleware chokepoint — required audit checklist:**
+**TOTP middleware chokepoint -- required audit checklist:**
 
 - Identify the exact middleware function and route registrations.
-- Verify a single chokepoint exists — not scattered per-handler checks.
+- Verify a single chokepoint exists -- not scattered per-handler checks.
 - Verify every protected route is wired through it (no bypass in `handlers/route_config.go`).
 - Verify the middleware rejects tokens missing the "TOTP completed" claim, with constant-time comparison and a generic error response that does not differentiate "no token" / "expired token" / "missing TOTP claim" in a way that helps an attacker.
 - Verify the temp token cannot be substituted for a full JWT (separate audience/signing/allowlist as above; reject in middleware).
 - Verify the dev/test API surface (`ADMIN_DEV_TEST_API_ENABLED=true`) cannot disable the middleware in production builds.
 
-**TOTP enrollment — required audit checklist:**
+**TOTP enrollment -- required audit checklist:**
 
 - Secret entropy from CSPRNG, at least 160 bits per RFC 6238 §4.
 - Server-side at-rest encryption of the TOTP secret (with which key? where is that key? rotated how?).
@@ -991,7 +991,7 @@ Findings against the CLIs follow the same severity rubric as backend findings (�
 - Idempotency: re-enrollment overwrites or rejects safely; no race between two concurrent enrollments.
 - TOTP marked-active flag and "TOTP required" flag are server-controlled, never client-controlled.
 
-**TOTP verify — required audit checklist:**
+**TOTP verify -- required audit checklist:**
 
 - Time-step = 30 s (RFC default) unless documented otherwise.
 - Allowed skew window narrow (ideally ±1 step). Wider windows must be justified.
@@ -1000,7 +1000,7 @@ Findings against the CLIs follow the same severity rubric as backend findings (�
 - Rate limit on the TOTP-verify endpoint, keyed by user (and EntityID for unauthenticated brute force at the network layer).
 - Lockout after N failures within a time window. Lockout state must not enable account enumeration.
 
-**Backup codes — required audit checklist:**
+**Backup codes -- required audit checklist:**
 
 - Generation entropy and count.
 - Server-side storage hashed (Argon2id or comparable) and/or at-rest encrypted. Never plaintext.
@@ -1022,7 +1022,7 @@ Findings against the CLIs follow the same severity rubric as backend findings (�
 
 **Admin TOTP:**
 
-- Admin login forces TOTP — verify there is no admin path that bypasses TOTP.
+- Admin login forces TOTP -- verify there is no admin path that bypasses TOTP.
 - Admin bootstrap creates the first admin and must either (a) require immediate TOTP enrollment before any privileged action, or (b) clearly document the deferral window and constrain what the un-enrolled admin can do.
 
 **Dev/test bypass:**

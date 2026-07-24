@@ -207,7 +207,7 @@ export class ShareAccessUI {
     // event loop stays responsive during the derivation. Until then, the
     // simplest honest UX is: always show the message. Fast desktops see it
     // for <1 s before the unlock completes; slow ones see it for the
-    // entire wait. Wording is deliberately neutral — does not reveal
+    // entire wait. Wording is deliberately neutral -- does not reveal
     // cryptographic internals like "decrypting password" or "Argon2id"
     // (privacy posture) and makes no oversold speed promise.
     if (statusDiv) {
@@ -328,7 +328,7 @@ export class ShareAccessUI {
 
     // When SW streaming is unavailable, warn that Blob buffers the complete
     // plaintext and may fail under browser resource limits. No Arkfile size
-    // cap — download remains available.
+    // cap -- download remains available.
     const swNote = document.getElementById('swUnavailableNote');
     if (!isSwAvailable() && swNote) {
       swNote.textContent =

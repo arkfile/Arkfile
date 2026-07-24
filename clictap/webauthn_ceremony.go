@@ -58,7 +58,7 @@ func mapUserVerification(uv string) int {
 		return OptTrue
 	default:
 		// Arkfile policy: touch-only (discouraged). Treat missing, preferred, and
-		// unknown values as discouraged — never omit UV and let the key default to PIN.
+		// unknown values as discouraged -- never omit UV and let the key default to PIN.
 		return OptFalse
 	}
 }

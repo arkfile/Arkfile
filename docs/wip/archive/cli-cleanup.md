@@ -2,7 +2,7 @@
 
 This plan follows the same audit methodology as `docs/wip/server-cleanup.md`, applied to the Go CLI utilities: `cmd/arkfile-admin`, `cmd/arkfile-client`, the credential agent (`agent.go` and platform stubs), and the shared MFA package (`cli/mfa`). Every command handler and helper is reviewed against the Function Review Sanity Checks in `AGENTS.md`: required, correctly implemented, well placed, reachable, privacy-preserving, and free of stubs, deprecated paths, duplicated logic, and leftover placeholder code. Arkfile is greenfield; we delete unused or unreachable CLI paths rather than maintain compatibility shims. The audit was cross-checked against `scripts/testing/e2e-test.sh` and `scripts/testing/e2e-playwright.sh` so we keep what E2E actually exercises and either delete or add coverage for what it does not. Where E2E hedges (`|| true`, pass-with-warning, or multiple acceptable outcomes), we tighten tests and fix CLI or server behavior so there is one canonical expected result.
 
-Status: implementation complete — verified 2026-07-18 (`e2e-test.sh` 227/227 PASS; `go test ./...` all packages PASS with AGENTS.md CGO flags)
+Status: implementation complete -- verified 2026-07-18 (`e2e-test.sh` 227/227 PASS; `go test ./...` all packages PASS with AGENTS.md CGO flags)
 Created: 2026-07-17  
 Scope: `cmd/arkfile-admin/` (~6,200 source LOC across decomposed files), `cmd/arkfile-client/` (~6,964 source LOC plus tests), `cli/mfa/` (~973 source LOC plus tests), new shared packages under `cli/{flags,format,jsonutil,secureinput}/`. No TypeScript frontend changes in this document unless a CLI contract fix requires a matching API assertion.
 
@@ -51,16 +51,16 @@ One canonical way per operation within each binary (single upload path, single s
 
 **Highest-impact findings**
 
-1. **`arkfile-admin/main.go` is 48% of the admin package** — HTTP client, session I/O, auth, and 23 command handlers (22 wired plus one dead alias) still live inline while newer domains already have dedicated `*_commands.go` files.
-2. **Admin session enforcement is duplicated and incomplete in five handlers** — 16 billing/payments/subscriptions handlers use `requireBillingSession`, while roughly 44 others repeat an inline `ExpiresAt` check after `loadAdminSession`. Five handlers omit expiry checks: `setup-mfa`, `mfa`, `recover-mfa`, `list-user-mfa`, and `verify-storage`. Replace the duplicated checks with one `requireAdminSession()` while preserving an explicit, documented temp-token exception where MFA setup/recovery requires it.
-3. **Admin has no unit tests** — all correctness rides on e2e; client has tests for agent, crypto, offline decrypt, reregistration verifier, and upload batch helpers only.
-4. **Go `flag.Parse` silently ignores `--json` after positional args** — class of bug that caused the `billing set-price` e2e failure (fixed in e2e with `--json` before price; CLI help still documents fragile order).
-5. **Two admin handlers are unwired and one alias is dead** — `list-tasks` and `cancel-all-tasks` have live matching server routes and should be wired; `handleSetupTOTPCommand` is never registered and should be deleted.
-6. **Agent authorization is inconsistent** — four `GetAccountKey("")` call sites bypass session binding, digest-cache RPCs have no token binding, and `agent status` prints every file ID and plaintext SHA-256 digest. Active-session list/share paths should bind to the session; offline decrypt needs an explicitly separate capability.
-7. **AGENTS.md hygiene violations throughout** — decorative `===`/`---` dividers in source and stdout; `docs/wip/` references embedded in code comments.
-8. **Help text drift** — client Usage lists `share delete` (not implemented) but omits `revoke-all`; admin Usage omits `payments` and `subscriptions` groups (billing is listed) and duplicates approval-policy entries.
-9. **E2E can report false success** — MFA idempotency, refresh-token/JWT revocation prerequisites, replication skip counts, and billing failure checks contain PASS-without-assertion or pass-with-warning paths beyond the 42 `|| true` occurrences.
-10. **Canonical validation has drifted** — admin `validateAdminUsername` claims to mirror `utils.ValidateUsername` but accepts leading/trailing `._-,` that the server rejects.
+1. **`arkfile-admin/main.go` is 48% of the admin package** -- HTTP client, session I/O, auth, and 23 command handlers (22 wired plus one dead alias) still live inline while newer domains already have dedicated `*_commands.go` files.
+2. **Admin session enforcement is duplicated and incomplete in five handlers** -- 16 billing/payments/subscriptions handlers use `requireBillingSession`, while roughly 44 others repeat an inline `ExpiresAt` check after `loadAdminSession`. Five handlers omit expiry checks: `setup-mfa`, `mfa`, `recover-mfa`, `list-user-mfa`, and `verify-storage`. Replace the duplicated checks with one `requireAdminSession()` while preserving an explicit, documented temp-token exception where MFA setup/recovery requires it.
+3. **Admin has no unit tests** -- all correctness rides on e2e; client has tests for agent, crypto, offline decrypt, reregistration verifier, and upload batch helpers only.
+4. **Go `flag.Parse` silently ignores `--json` after positional args** -- class of bug that caused the `billing set-price` e2e failure (fixed in e2e with `--json` before price; CLI help still documents fragile order).
+5. **Two admin handlers are unwired and one alias is dead** -- `list-tasks` and `cancel-all-tasks` have live matching server routes and should be wired; `handleSetupTOTPCommand` is never registered and should be deleted.
+6. **Agent authorization is inconsistent** -- four `GetAccountKey("")` call sites bypass session binding, digest-cache RPCs have no token binding, and `agent status` prints every file ID and plaintext SHA-256 digest. Active-session list/share paths should bind to the session; offline decrypt needs an explicitly separate capability.
+7. **AGENTS.md hygiene violations throughout** -- decorative `===`/`---` dividers in source and stdout; `docs/wip/` references embedded in code comments.
+8. **Help text drift** -- client Usage lists `share delete` (not implemented) but omits `revoke-all`; admin Usage omits `payments` and `subscriptions` groups (billing is listed) and duplicates approval-policy entries.
+9. **E2E can report false success** -- MFA idempotency, refresh-token/JWT revocation prerequisites, replication skip counts, and billing failure checks contain PASS-without-assertion or pass-with-warning paths beyond the 42 `|| true` occurrences.
+10. **Canonical validation has drifted** -- admin `validateAdminUsername` claims to mirror `utils.ValidateUsername` but accepts leading/trailing `._-,` that the server rejects.
 
 ---
 
@@ -116,7 +116,7 @@ Pick one approach per binary and apply consistently:
 
 **Option B (robust):** Pre-scan `args` for `--json` / `-json` before `flag.Parse`, or use a small custom parser for subcommands that take both positionals and `--json`. Same fix for client if any positional+`--json` combinations are added later.
 
-**Option C (e2e guard):** Add regression tests (shell or Go) that assert `--json` after positional either works or returns a clear error — never silent human output.
+**Option C (e2e guard):** Add regression tests (shell or Go) that assert `--json` after positional either works or returns a clear error -- never silent human output.
 
 Recommended: **Option B** for admin billing/payments; **Option A** immediately as documentation fix; rename client `contact-info set --input` or `--file` in a follow-up breaking change (greenfield allows it).
 
@@ -168,7 +168,7 @@ Move normative spec pointers to `docs/scripts-guide.md` or inline a one-line for
 | `admin/main.go:748` | `For now, I'll assume it's in Data.` | Verify bootstrap response shape; write definitive comment or fix parsing |
 | `admin/main.go:934` | `kept as an alias for compatibility` | Delete alias (see dead code) |
 | `admin/main.go:735` | `fallback to top-level SessionID` | Rename to neutral "or top-level field" if behavior kept |
-| `commands.go:1725-1727` | X-Download-Token fallback on ticket failure | **Comment is wrong** — code only sets X-Share-Ticket (see share auth section) |
+| `commands.go:1725-1727` | X-Download-Token fallback on ticket failure | **Comment is wrong** -- code only sets X-Share-Ticket (see share auth section) |
 | `billing_commands.go:462-466` | `emptyOrValue(v, fallback)` param name | Rename param to `defaultVal` or `ifEmpty` |
 | `admin/main.go:1-2` | Claims the hybrid admin tool operates "without network access" | Replace with an accurate network/local description |
 | `storage_commands.go:683-684` | Comment says split alerts by comma; code splits on period | Align parsing with the server's comma-joined alert format |
@@ -195,14 +195,14 @@ Move normative spec pointers to `docs/scripts-guide.md` or inline a one-line for
 | `requireBillingSession` | `billing_commands.go:420` | N/A | Generalize to `requireAdminSession` for all admin commands |
 | Session load / expiry | 49 direct `loadAdminSession` calls; ~44 duplicate inline expiry checks | `requireSession` pattern in client | Replace with `requireAdminSession`; define explicit MFA temp-token helper |
 | `defaultString` / `emptyOrValue` | `billing_commands.go:464` | `commands.go:1610` | Same-purpose default-string helper under different names |
-| `clientMFARequester` / `adminMFARequester` | thin wrappers | thin wrappers | Already share `cli/mfa` — keep |
+| `clientMFARequester` / `adminMFARequester` | thin wrappers | thin wrappers | Already share `cli/mfa` -- keep |
 | `looksLikeDollarsAndCents` | `billing_commands.go:437` | client billing | Share if client validates amounts locally |
 | `validateAdminUsername` | `main.go:2964` | canonical helper is `utils.ValidateUsername` | Delete the partial fork and call the canonical validator |
 | `safeInt64FromAny` | `subscriptions_commands.go:277` | duplicates `safeInt64` and is unused | Delete |
 
 ### Consolidation order
 
-Extract pure functions first (format, JSON field accessors, dollar-string validation) — no behavior change, easy to unit test. Defer shared HTTP client package until admin `main.go` split reduces merge conflict surface.
+Extract pure functions first (format, JSON field accessors, dollar-string validation) -- no behavior change, easy to unit test. Defer shared HTTP client package until admin `main.go` split reduces merge conflict surface.
 
 ---
 
@@ -254,7 +254,7 @@ Unix domain socket at `~/.arkfile/agent-{uid}.sock`, mode 0600; peer credential 
 | `agent status` prints digest contents | `main.go:1311-1319` | Medium | Print only entry count by default; require an explicit diagnostic flag for file IDs/digests |
 | Windows peer auth always true | `agent_windows.go` | Medium | Document as unsupported for agent; or implement equivalent pipe ACL check |
 | Windows mlock unsupported | `agent_windows.go` | Low | Document limitation in `agent status` output |
-| Windows daemon isolation weaker | `daemon_windows.go` | Low | `daemon_unix.go` uses `Setsid: true`; Windows uses empty `SysProcAttr`. Combined with always-true peer auth, the Windows agent path is materially weaker — document as unsupported or harden |
+| Windows daemon isolation weaker | `daemon_windows.go` | Low | `daemon_unix.go` uses `Setsid: true`; Windows uses empty `SysProcAttr`. Combined with always-true peer auth, the Windows agent path is materially weaker -- document as unsupported or harden |
 | Digest cache stores plaintext SHA-256 | `agent.go` digest map | Low | Accept for dedup; document in agent help that cache is content-sensitive |
 | Auto-start on most client commands | `main.go:231-236` | Low | Keep; ensure failures are visible in non-verbose mode when agent is required |
 | Zombie scan uses Linux `/proc` | `main.go:1242-1267` | Low | Gate message by GOOS or extend |
@@ -262,7 +262,7 @@ Unix domain socket at `~/.arkfile/agent-{uid}.sock`, mode 0600; peer credential 
 
 ### E2E additions (optional)
 
-Agent session mismatch wipes key (unit test exists in `agent_test.go`); e2e could verify list-files after manual session file tamper — lower priority than fixing empty-token and digest authorization paths.
+Agent session mismatch wipes key (unit test exists in `agent_test.go`); e2e could verify list-files after manual session file tamper -- lower priority than fixing empty-token and digest authorization paths.
 
 ---
 
@@ -280,7 +280,7 @@ Agent session mismatch wipes key (unit test exists in `agent_test.go`); e2e coul
 
 | Gap | Detail |
 |-----|--------|
-| `share delete` | Documented but not implemented — only `create`, `list`, `revoke`, `download` exist |
+| `share delete` | Documented but not implemented -- only `create`, `list`, `revoke`, `download` exist |
 | `revoke-all` | Implemented and e2e-tested but omitted from Usage |
 | `billing` / `subscription` | Present in switch; verify examples match `docs/scripts-guide.md` when that doc is updated |
 
@@ -302,7 +302,7 @@ Generate Usage from a single command registry table, or audit manually so every 
 func requireAdminSession(config *AdminConfig) (*AdminSession, error)
 ```
 
-Single implementation in `session.go` (after decomposition) that loads the session and checks expiry. All access-token network commands call it at the top. MFA temp-token flows use a separately named helper that validates the state appropriate to enrollment or recovery. Dev/test-only local commands (rotation prepare/apply reading mandate files) may intentionally skip — document those exceptions in the function comment. Remove `requireBillingSession` once all callers use the general helper.
+Single implementation in `session.go` (after decomposition) that loads the session and checks expiry. All access-token network commands call it at the top. MFA temp-token flows use a separately named helper that validates the state appropriate to enrollment or recovery. Dev/test-only local commands (rotation prepare/apply reading mandate files) may intentionally skip -- document those exceptions in the function comment. Remove `requireBillingSession` once all callers use the general helper.
 
 ---
 
@@ -328,7 +328,7 @@ Extend only the human `billing show` formatter to display `transactions`, `credi
 
 ### Out of parity scope
 
-Rich DOM formatting, iframe checkout embedding, and `--watch` polling UX — CLI only needs scriptable equivalents (`--wait`, `--open-browser` already exist on top-up/subscribe).
+Rich DOM formatting, iframe checkout embedding, and `--watch` polling UX -- CLI only needs scriptable equivalents (`--wait`, `--open-browser` already exist on top-up/subscribe).
 
 ---
 
@@ -350,8 +350,8 @@ Delete the stale fallback comment. If ticket-only is the canonical path, ensure 
 
 The two binaries implement password reading with divergent signatures and behavior:
 
-- Admin: `readPassword() (string, error)` — no prompt argument, no stdin-pipe timeout (`admin/main.go:2993`)
-- Client: `readPassword(prompt string) ([]byte, error)` — takes a prompt, includes a timeout to prevent indefinite hangs when stdin is a pipe (`client/main.go:1660`)
+- Admin: `readPassword() (string, error)` -- no prompt argument, no stdin-pipe timeout (`admin/main.go:2993`)
+- Client: `readPassword(prompt string) ([]byte, error)` -- takes a prompt, includes a timeout to prevent indefinite hangs when stdin is a pipe (`client/main.go:1660`)
 
 The client's timeout-on-pipe behavior is a real robustness feature the admin version lacks. Different return types (string vs []byte) also force callers to handle memory differently. The admin string-returning implementation retains immutable password copies that cannot be explicitly zeroed, while the client clears byte buffers after use.
 
@@ -488,11 +488,11 @@ Handler-level integration tests for full upload/share flows remain e2e's job unl
 
 ## E2E coverage map
 
-### arkfile-admin — exercised
+### arkfile-admin -- exercised
 
 Auth: `login`, `logout`, bootstrap rejection. Users: `list-users`, `user-status`, `approve-user`, `unapprove-user`, `update-user`, `user-contact-info`, `reset-user-mfa`, `flag-user-reregistration`. Files/shares: `list-files`, `list-shares`, `delete-file`, `revoke-share`. System: `system-status`, `health-check --detailed`, `security-events`. Storage: `storage-status`, `storage-sync-status`, `copy-file`, `copy-all`, `verify-all --watch`, `task-status`. Billing: full `billing` suite including `set-price --json 19.99` and trailing `set-price 19.99 --json`. Payments: `list`, `show --json`. Subscriptions: `list-plans`, `show`, gift grant/cancel, bridge webhook flows. Policy: `set-approval-policy`, `reset-registration-throttle`. Meta: `version`.
 
-### arkfile-admin — not exercised
+### arkfile-admin -- not exercised
 
 | Category | Commands |
 |----------|----------|
@@ -504,11 +504,11 @@ Auth: `login`, `logout`, bootstrap rejection. Users: `list-users`, `user-status`
 | Key rotation (all) | `rotate-user-secret-master`, `rotate-envelope-master`, `rotate-jwt-keys`, `rotate-opaque-keys` |
 | Storage task listing | `list-tasks`, `cancel-all-tasks` (wired; not yet in e2e) |
 
-### arkfile-client — exercised
+### arkfile-client -- exercised
 
 Register, login (TOTP, backup, defer-MFA, re-registration), logout, MFA setup, `generate-totp`, upload (single, custom password, multi-file batch), download, list-files (`--raw`, `--json`), delete-file, share create/list/revoke/download, export + `decrypt-blob`, contact-info get/set, `revoke-all`, agent stop/status, billing show, subscription status/plans, billing top-up rejection paths. Meta: `version`.
 
-### arkfile-client — not exercised
+### arkfile-client -- not exercised
 
 | Category | Commands |
 |----------|----------|
@@ -542,7 +542,7 @@ Classify each `|| true` into: **teardown** (keep), **best-effort setup** (replac
 
 ### Remaining intentional `|| true`
 
-Agent stop polling, mock process kill/wait, idempotent teardown logout, and final agent status probe — all best-effort cleanup where the service may already be stopped.
+Agent stop polling, mock process kill/wait, idempotent teardown logout, and final agent status probe -- all best-effort cleanup where the service may already be stopped.
 
 Bootstrap protection still passes when `BOOTSTRAP_TOKEN` is unset (optional preflight input); all other assertions require exact outcomes.
 
@@ -552,21 +552,21 @@ Bootstrap protection still passes when `BOOTSTRAP_TOKEN` is unset (optional pref
 
 Work in an order that fixes silent correctness bugs before cosmetic cleanup:
 
-1. **Fail-closed correctness** — fix `--json` positional handling and share-list decode success-on-error.
-2. **Agent authorization** — bind active-session key retrieval, enforce session expiry, protect digest RPCs/status output, and define an explicit offline-decrypt capability.
-3. **Session helper consolidation** — replace ~44 inline checks and `requireBillingSession`; close the five omissions with explicit MFA temp-token semantics.
-4. **MFA correctness** — remove the double prompt, consolidate recovery and backup-code output, and clarify secret output modes.
-5. **Dead code removal and canonical validation** — dead aliases/types/helpers, dead response fallbacks, and the partial username-validator fork.
-6. **Stale comments and misleading help** — bootstrap speculation, share fallback, package header, Usage drift.
-7. **E2E false-green and sensitive-output pass** — prerequisite skips, PASS-without-assertion paths, and credential/secret logging.
-8. **Shared pure helpers** — format + JSON util extraction; unify `defaultString`/`emptyOrValue`.
-9. **Admin `main.go` decomposition** — mechanical moves after behavior fixes.
-10. **Password input helper alignment** — gain timeout protection and zeroable buffers in admin.
-11. **Client billing human-output parity** — transactions, runway, billable bytes/rate; JSON already carries raw fields.
-12. **Hygiene stdout formatting** — replace forbidden decorative dividers.
-13. **Automation output policy** — gate or justify machine-readable secrets/backup codes.
+1. **Fail-closed correctness** -- fix `--json` positional handling and share-list decode success-on-error.
+2. **Agent authorization** -- bind active-session key retrieval, enforce session expiry, protect digest RPCs/status output, and define an explicit offline-decrypt capability.
+3. **Session helper consolidation** -- replace ~44 inline checks and `requireBillingSession`; close the five omissions with explicit MFA temp-token semantics.
+4. **MFA correctness** -- remove the double prompt, consolidate recovery and backup-code output, and clarify secret output modes.
+5. **Dead code removal and canonical validation** -- dead aliases/types/helpers, dead response fallbacks, and the partial username-validator fork.
+6. **Stale comments and misleading help** -- bootstrap speculation, share fallback, package header, Usage drift.
+7. **E2E false-green and sensitive-output pass** -- prerequisite skips, PASS-without-assertion paths, and credential/secret logging.
+8. **Shared pure helpers** -- format + JSON util extraction; unify `defaultString`/`emptyOrValue`.
+9. **Admin `main.go` decomposition** -- mechanical moves after behavior fixes.
+10. **Password input helper alignment** -- gain timeout protection and zeroable buffers in admin.
+11. **Client billing human-output parity** -- transactions, runway, billable bytes/rate; JSON already carries raw fields.
+12. **Hygiene stdout formatting** -- replace forbidden decorative dividers.
+13. **Automation output policy** -- gate or justify machine-readable secrets/backup codes.
 14. **Unit tests** for session/agent/MFA behavior, shared helpers, and flag parsing.
-15. **E2E gap fill** — prioritize `get-approval-policy`, `revoke-user`, client `mfa list`, `list-tasks`/`cancel-all-tasks`, and client `subscribe`/`portal`.
+15. **E2E gap fill** -- prioritize `get-approval-policy`, `revoke-user`, client `mfa list`, `list-tasks`/`cancel-all-tasks`, and client `subscribe`/`portal`.
 
 ---
 
@@ -574,8 +574,8 @@ Work in an order that fixes silent correctness bugs before cosmetic cleanup:
 
 | Gate | Command | Result |
 |------|---------|--------|
-| Shell E2E | `bash scripts/testing/e2e-test.sh` (after `dev-reset.sh`) | **227/227 PASS** — includes auth/session/agent hardening, broader hedging removal, `version`/`--json` regressions, JSON secondary storage check, unique BTCPay mock provider IDs |
-| Go unit/integration | `source scripts/setup/build-config.sh && export CGO_ENABLED=1 CGO_CFLAGS="$(cli_fido_cgo_cflags)" CGO_LDFLAGS="$(cli_fido_cgo_ldflags "$PWD")" && go test ./... -count=1` | **All packages PASS** (~87s) — `auth`, `handlers`, `storage`, `cmd/arkfile-admin`, `cmd/arkfile-client`, `cli/mfa`, `cli/flags`, `clictap`, and the rest; packages without `_test.go` report `[no test files]` as expected |
+| Shell E2E | `bash scripts/testing/e2e-test.sh` (after `dev-reset.sh`) | **227/227 PASS** -- includes auth/session/agent hardening, broader hedging removal, `version`/`--json` regressions, JSON secondary storage check, unique BTCPay mock provider IDs |
+| Go unit/integration | `source scripts/setup/build-config.sh && export CGO_ENABLED=1 CGO_CFLAGS="$(cli_fido_cgo_cflags)" CGO_LDFLAGS="$(cli_fido_cgo_ldflags "$PWD")" && go test ./... -count=1` | **All packages PASS** (~87s) -- `auth`, `handlers`, `storage`, `cmd/arkfile-admin`, `cmd/arkfile-client`, `cli/mfa`, `cli/flags`, `clictap`, and the rest; packages without `_test.go` report `[no test files]` as expected |
 | Playwright E2E | `sudo bash scripts/testing/e2e-playwright.sh` | Not run in this verification pass |
 
 Minor test fixes applied during the unit-test gate: `clictap/webauthn_ceremony_test.go` updated for `buildAttestationObject` arity; `logging/entity_id_test.go` anonymity check no longer false-fails on hex substrings like `192`.
@@ -585,9 +585,9 @@ Minor test fixes applied during the unit-test gate: `clictap/webauthn_ceremony_t
 ## Verification checklist (final)
 
 - [x] `sudo bash scripts/dev-reset.sh` (prerequisite for e2e run reported by developer)
-- [x] `bash scripts/testing/e2e-test.sh` — 227/227 PASS on 2026-07-18
-- [ ] `sudo bash scripts/testing/e2e-playwright.sh` — all PASS
-- [x] `go test ./...` — all PASS on 2026-07-18 (AGENTS.md CGO flags; full module, not CLI-only subset)
+- [x] `bash scripts/testing/e2e-test.sh` -- 227/227 PASS on 2026-07-18
+- [ ] `sudo bash scripts/testing/e2e-playwright.sh` -- all PASS
+- [x] `go test ./...` -- all PASS on 2026-07-18 (AGENTS.md CGO flags; full module, not CLI-only subset)
 - [x] E2E preflight: `arkfile-client version` and `arkfile-admin version` emit `<binary> <version>`
 - [x] E2E billing: `billing set-price --json 19.99` and `billing set-price 19.99 --json` both emit JSON with `microcents_per_gib_per_hour=2711`
 - [ ] Manual: `arkfile-client billing show --json` retains the raw API transactions, runway, and billable bytes/rate fields when present
@@ -595,7 +595,7 @@ Minor test fixes applied during the unit-test gate: `clictap/webauthn_ceremony_t
 - [ ] Manual: expired client session cannot retrieve the account key through `requireAccountKey`
 - [ ] Manual: `share list` malformed/unexpected JSON exits non-zero unless `--raw` was requested
 - [ ] Manual: `agent status` does not print file IDs or plaintext digests by default
-- [ ] Grep `cmd/arkfile-admin`, `cmd/arkfile-client`, `cli/mfa` for `docs/wip/`, `===`, `---`, `for now`, `backward compatibility` — zero inappropriate hits in source (tests may use dividers until cleaned)
+- [ ] Grep `cmd/arkfile-admin`, `cmd/arkfile-client`, `cli/mfa` for `docs/wip/`, `===`, `---`, `for now`, `backward compatibility` -- zero inappropriate hits in source (tests may use dividers until cleaned)
 - [ ] `arkfile-admin --help` and `arkfile-client --help` match wired commands
 
 ---

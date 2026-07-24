@@ -495,7 +495,7 @@ func CookieTokenMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 			// JWTMiddleware/MFAJWTMiddleware validate it without any changes.
 			req.Header.Set("Authorization", "Bearer "+cookieJWT)
 		}
-		// CLI path (no cookie): Authorization header already set by client — nothing to do.
+		// CLI path (no cookie): Authorization header already set by client -- nothing to do.
 
 		return next(c)
 	}
@@ -540,10 +540,10 @@ func CSRFMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		// Temp-tier-only sessions are during TOTP handoff; POST to /api/mfa/*
 		// is safe here because TOTP endpoints are protected by MFAJWTMiddleware
 		// (audience=arkfile-mfa) and are not state-changing in a sensitive way
-		// that an attacker can exploit — the temp token itself is the credential.
+		// that an attacker can exploit -- the temp token itself is the credential.
 		ck, err := c.Request().Cookie(CookieFullToken)
 		if err != nil || ck.Value == "" {
-			// No full-tier cookie: CLI path or unauthenticated — no CSRF check.
+			// No full-tier cookie: CLI path or unauthenticated -- no CSRF check.
 			return next(c)
 		}
 

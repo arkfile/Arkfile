@@ -1,5 +1,5 @@
 /**
- * Unit Tests — Cryptographic Primitives
+ * Unit Tests -- Cryptographic Primitives
  *
  * Tests for: randomBytes, hash256, hash512, hashString, toBase64/fromBase64,
  * toHex/fromHex, constantTimeEqual, secureWipe, concatBytes,
@@ -325,7 +325,7 @@ describe('encryptAESGCM / decryptAESGCM', () => {
 describe('deriveKeyArgon2id', () => {
   // Use minimal params for fast tests
   const fastParams = {
-    memoryCost: 1024,  // 1 MiB — minimum allowed
+    memoryCost: 1024,  // 1 MiB -- minimum allowed
     timeCost: 1,
     parallelism: 1,
     keyLength: 32,

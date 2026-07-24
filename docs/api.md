@@ -58,7 +58,7 @@ Arkfile uses the OPAQUE PAKE (Password-Authenticated Key Exchange) protocol for 
 | POST | `/api/opaque/reregister/finalize` | OPAQUE re-registration ceremony step 2 (for flagged accounts) | Re-registration handoff token |
 | GET | `/api/opaque/health` | Health probe for OPAQUE service | Public |
 
-When an operator has flagged an account for OPAQUE credential rotation, `/api/opaque/login/response` returns HTTP `409` with stable error code `account_requires_reregistration`. The response `data` carries a short-lived `reregistration_token` (audience `arkfile-reregistration`), the authoritative `file_count`, and—when the user owns files—a single account-key-encrypted `verifier` sample (`file_id`, `owner_username`, `encrypted_filename`, `filename_nonce`). The client confirms the entered password by test-decrypting the verifier with the derived Account Key before completing the ceremony, then re-binds `opaque_user_data` via the `reregister` endpoints and continues into the normal MFA flow. Files, shares, MFA enrollment, and settings are preserved.
+When an operator has flagged an account for OPAQUE credential rotation, `/api/opaque/login/response` returns HTTP `409` with stable error code `account_requires_reregistration`. The response `data` carries a short-lived `reregistration_token` (audience `arkfile-reregistration`), the authoritative `file_count`, and--when the user owns files--a single account-key-encrypted `verifier` sample (`file_id`, `owner_username`, `encrypted_filename`, `filename_nonce`). The client confirms the entered password by test-decrypting the verifier with the derived Account Key before completing the ceremony, then re-binds `opaque_user_data` via the `reregister` endpoints and continues into the normal MFA flow. Files, shares, MFA enrollment, and settings are preserved.
 
 #### Admin Login (Multi-Step OPAQUE)
 
@@ -94,7 +94,7 @@ When an operator has flagged an account for OPAQUE credential rotation, `/api/op
 
 Arkfile requires a second factor for all accounts. Each user may enroll up to **two** methods: one authenticator app (TOTP) and one security key (WebAuthn). At login the user completes OPAQUE authentication, then satisfies **one** enrolled second factor. Every MFA-challenge response includes `mfa_methods` (an array of enrolled factors, including when only one is enrolled). When more than one factor is enrolled, the client shows a method picker.
 
-Security key labels are optional, user-private (encrypted inside `credential_data`), and never exposed to administrators. Backup codes are account-level (10 codes); they are regenerated on first enrollment, factor replacement (path B / reset), admin full reset, and explicit user regenerate — but **not** when adding the complementary second factor or when removing one factor while another remains.
+Security key labels are optional, user-private (encrypted inside `credential_data`), and never exposed to administrators. Backup codes are account-level (10 codes); they are regenerated on first enrollment, factor replacement (path B / reset), admin full reset, and explicit user regenerate -- but **not** when adding the complementary second factor or when removing one factor while another remains.
 
 #### MFA Setup and Management (Require Access or MFA Token)
 
@@ -157,7 +157,7 @@ When MFA is enabled for a user account, the authentication process involves two 
 
 1. **OPAQUE Authentication**: User performs OPAQUE login via `/api/opaque/login/*` (admins use `/api/admin/login/*`). If a second factor is still required, this returns a temporary MFA token plus the MFA-challenge fields above.
 
-2. **MFA Verification**: User completes one enrolled method — TOTP via `/api/mfa/auth`, or security key via `/api/mfa/webauthn/auth/begin` then `/api/mfa/webauthn/auth/finish`. Upon success, the server returns the full access token and refresh token.
+2. **MFA Verification**: User completes one enrolled method -- TOTP via `/api/mfa/auth`, or security key via `/api/mfa/webauthn/auth/begin` then `/api/mfa/webauthn/auth/finish`. Upon success, the server returns the full access token and refresh token.
 
 **Emergency backup code (path A):** POST `/api/mfa/auth` with `is_backup: true` and a 10-character backup code. Issues a full access token without changing the enrolled second factor.
 

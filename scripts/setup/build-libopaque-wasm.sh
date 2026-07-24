@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=build-config.sh
 source "$SCRIPT_DIR/build-config.sh"
 
-# Absolute paths — VENDOR_C_LIBOPAQUE_DIR is repo-relative; do not use it after cd.
+# Absolute paths -- VENDOR_C_LIBOPAQUE_DIR is repo-relative; do not use it after cd.
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 LIBOPAQUE_JS_DIR="$REPO_ROOT/$VENDOR_C_LIBOPAQUE_DIR/js"
 LIBSODIUM_JS_DIR="$LIBOPAQUE_JS_DIR/libsodium.js"
@@ -350,7 +350,7 @@ build_wasm_library() {
     rm -f libopaque.so  # Also clean the WASM shared library
     
     # Build libsodium.js sumo output (required by libopaque WASM link).
-    # Check the final .js artifact, not libsodium.a alone — emscripten.sh can leave
+    # Check the final .js artifact, not libsodium.a alone -- emscripten.sh can leave
     # a static archive behind while the emcc JS link step still fails.
     local sumo_js="libsodium.js/libsodium/libsodium-js-sumo/lib/libsodium.js"
     if [ ! -f "$sumo_js" ]; then

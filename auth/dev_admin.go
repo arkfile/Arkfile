@@ -203,7 +203,7 @@ func ValidateDevAdminTOTPWorkflow(db *sql.DB, user *models.User, totpSecret stri
 		return fmt.Errorf("TOTP not enabled after setup")
 	}
 
-	// Test TOTP decryption workflow — this proves the master key derivation,
+	// Test TOTP decryption workflow -- this proves the master key derivation,
 	// encryption, and database storage are all working correctly without
 	// consuming a TOTP code window in the replay log.
 	present, decryptable, totpEnabled, setupCompleted, err := CanDecryptMFASecret(db, user.Username)

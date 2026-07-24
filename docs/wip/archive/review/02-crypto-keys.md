@@ -1,4 +1,4 @@
-# Slice B — Crypto & Key Hierarchy
+# Slice B -- Crypto & Key Hierarchy
 
 Status: **Complete** (2026-05-11). This is the consolidated, definitive deliverable for Slice B of the Arkfile in-depth security review per `docs/wip/idsrp.md`. It covers Argon2id key derivation, AES-256-GCM operations, the FEK/KEK envelope format, share-envelope crypto, metadata encryption, and the padding policy. The vendored Go stdlib `crypto/aes`, `crypto/cipher`, `golang.org/x/crypto/argon2`, `golang.org/x/crypto/hkdf`, and the TS `@noble/hashes` are treated as trusted upstreams per the plan; only call-site usage is audited.
 
@@ -10,11 +10,11 @@ Findings are numbered `B-01` through `B-27`, severity-ordered, single series.
 
 ### `idsrp.md` sections covered
 
-- **§5** (Argon2id and KDF review) — full coverage.
-- **§6** (file encryption) — primitive-level only. Streaming-wire-path, chunk-reorder protection at the HTTP layer, and S3 routing are deferred to Slice C, but the crypto-side observation that no AAD is bound to file chunks IS in scope here.
-- **§11** (metadata privacy) — partial. The crypto question "is metadata encrypted/authenticated?" is in scope. The full server-visible metadata exposure matrix is finalized in Slice G with input from Slices C/D.
-- **§16** (cryptographic design / key hierarchy) — full coverage, including the canonical Key Hierarchy table.
-- **§17** (testing) — limited to the crypto test surface (`crypto/*_test.go`, `utils/padding_test.go`, TS `__tests__/{primitives,file-encryption,share-crypto,aes-gcm}.test.ts`).
+- **§5** (Argon2id and KDF review) -- full coverage.
+- **§6** (file encryption) -- primitive-level only. Streaming-wire-path, chunk-reorder protection at the HTTP layer, and S3 routing are deferred to Slice C, but the crypto-side observation that no AAD is bound to file chunks IS in scope here.
+- **§11** (metadata privacy) -- partial. The crypto question "is metadata encrypted/authenticated?" is in scope. The full server-visible metadata exposure matrix is finalized in Slice G with input from Slices C/D.
+- **§16** (cryptographic design / key hierarchy) -- full coverage, including the canonical Key Hierarchy table.
+- **§17** (testing) -- limited to the crypto test surface (`crypto/*_test.go`, `utils/padding_test.go`, TS `__tests__/{primitives,file-encryption,share-crypto,aes-gcm}.test.ts`).
 
 ### Files actually read
 
@@ -29,40 +29,40 @@ Findings are numbered `B-01` through `B-27`, severity-ordered, single series.
 | `crypto/file_operations.go` | 541 | `CreateEnvelope`/`ParseEnvelope`, `EncryptFEK`/`DecryptFEK`, `EncryptFile`/`DecryptFile`, `DecryptFileMetadata`. |
 | `crypto/chunking_constants.go` | 111 | Embedded chunking-params loader. |
 | `crypto/key_manager.go` | 279 | System-key wrap/unwrap via `ARKFILE_MASTER_KEY` + HKDF + AES-GCM. |
-| `crypto/session.go` | 105 | OPAQUE-export-key-based session-key derivation — **DEAD CODE**, no callers. |
+| `crypto/session.go` | 105 | OPAQUE-export-key-based session-key derivation -- **DEAD CODE**, no callers. |
 | `crypto/share_kdf.go` | 165 | `DeriveShareKey`, `CreateAAD`, share-envelope JSON helpers. |
 | `crypto/password_validation.go` | 246 | Server-side password policy validator. |
 | `crypto/utils.go` | 53 | `GenerateRandomBytes`, `SecureClear`, `SecureCompare`, base64 helpers. |
-| `crypto/opaque_validation.go` | 1 | Empty stub. Same Greenfield concern noted in Slice A — no new finding here. |
+| `crypto/opaque_validation.go` | 1 | Empty stub. Same Greenfield concern noted in Slice A -- no new finding here. |
 | `crypto/gcm_test.go` | 389 | GCM round-trip, AAD, tamper, key-size tests. |
 | `crypto/key_derivation_test.go` | 492 | Argon2id, salt, HKDF, ambiguous-concat tests. |
 | `crypto/share_kdf_test.go` | ~535 | Share KDF tests (read header + sampled). |
-| `crypto/file_operations_test.go` | — | Envelope/FEK round-trip tests (sampled). |
+| `crypto/file_operations_test.go` | -- | Envelope/FEK round-trip tests (sampled). |
 | `utils/padding.go` | 68 | Server-side padding policy: 2% block + ≤10% jitter, 64 KiB floor. |
 | `client/static/js/src/crypto/primitives.ts` | 576 | `deriveKeyArgon2id`, `encryptAESGCM`/`decryptAESGCM`, `deriveKeyHKDF`, `constantTimeEqual`, `secureWipe`. |
 | `client/static/js/src/crypto/constants.ts` | 281 | Runtime-fetched `getArgon2Params()` and `getChunkingParams()` from server APIs. |
 | `client/static/js/src/crypto/file-encryption.ts` | 260 | `deriveSaltFromUsername`, `deriveFileEncryptionKey{,WithCache}`. |
 | `client/static/js/src/crypto/account-key-cache.ts` | 753 | sessionStorage-backed AES-wrapped Account Key cache w/ HMAC integrity, session binding, inactivity auto-lock. |
-| `client/static/js/src/crypto/aes-gcm.ts` | 155 | `AESGCMDecryptor` for chunked downloads — **no AAD parameter**. |
+| `client/static/js/src/crypto/aes-gcm.ts` | 155 | `AESGCMDecryptor` for chunked downloads -- **no AAD parameter**. |
 | `client/static/js/src/crypto/metadata-helpers.ts` | 176 | `decryptFEK`, `decryptMetadataField`, `getAccountKey`. |
 | `client/static/js/src/crypto/password-validation.ts` | 297 | Client-side password policy validator, fetches from `/api/config/password-requirements`. |
 | `client/static/js/src/crypto/errors.ts` | 518 | Error classes; user-friendly message map. |
 | `client/static/js/src/crypto/types.ts` | 554 | TS types (one duplicate-declared interface noted). |
 | `client/static/js/src/shares/share-crypto.ts` | 417 | Share envelope encrypt/decrypt; uses AAD = `shareId + fileId` string concat. |
-| `cmd/arkfile-client/crypto_utils.go` | — | CLI re-implements FEK envelope using raw `crypto.EncryptGCM`/`DecryptGCM` (no AAD). |
-| `handlers/uploads.go` (padding usage only) | — | Server-side padding application path. |
+| `cmd/arkfile-client/crypto_utils.go` | -- | CLI re-implements FEK envelope using raw `crypto.EncryptGCM`/`DecryptGCM` (no AAD). |
+| `handlers/uploads.go` (padding usage only) | -- | Server-side padding application path. |
 
 ### Files referenced but not deep-read
 
-- `cmd/arkfile-client/commands.go`, `cmd/arkfile-client/offline_decrypt.go`, `cmd/arkfile-client/dedup.go` — confirmed they call `DeriveAccountPasswordKey`, `DeriveCustomPasswordKey`, `DeriveShareKey`, `EncryptGCM`, `DecryptGCM` directly. Deeper CLI auth-flow audit is Slice A (done).
+- `cmd/arkfile-client/commands.go`, `cmd/arkfile-client/offline_decrypt.go`, `cmd/arkfile-client/dedup.go` -- confirmed they call `DeriveAccountPasswordKey`, `DeriveCustomPasswordKey`, `DeriveShareKey`, `EncryptGCM`, `DecryptGCM` directly. Deeper CLI auth-flow audit is Slice A (done).
 
 ### Out of scope (deferred to other slices)
 
-- OPAQUE protocol / OPAQUE export-key handling — Slice A (done).
-- HTTP wire path for upload/download, streaming hash verification at network layer, IDOR on file IDs, S3 object-name predictability, signed-URL hygiene — Slice C.
-- Share-handler authorization, share-ID enumeration / rate limiting, anonymous-recipient IP hygiene — Slice D.
-- Logging hygiene around crypto errors (debug-mode hex dumps of nonces/ciphertext) — Slice E (cross-ref from B-12).
-- WASM artifact pinning / SRI for `@noble/hashes` (which ships pure JS argon2id, not WASM) and any Argon2 WASM modules — Slice F (cross-ref from B-04).
+- OPAQUE protocol / OPAQUE export-key handling -- Slice A (done).
+- HTTP wire path for upload/download, streaming hash verification at network layer, IDOR on file IDs, S3 object-name predictability, signed-URL hygiene -- Slice C.
+- Share-handler authorization, share-ID enumeration / rate limiting, anonymous-recipient IP hygiene -- Slice D.
+- Logging hygiene around crypto errors (debug-mode hex dumps of nonces/ciphertext) -- Slice E (cross-ref from B-12).
+- WASM artifact pinning / SRI for `@noble/hashes` (which ships pure JS argon2id, not WASM) and any Argon2 WASM modules -- Slice F (cross-ref from B-04).
 
 ---
 
@@ -74,12 +74,12 @@ Arkfile uses **four password contexts**, all separated cryptographically:
 
 | Context | Where | Salt construction | Argon2id params | Output |
 |---|---|---|---|---|
-| OPAQUE login password | OPAQUE protocol | n/a — OPAQUE has its own internal OPRF | not Argon2id | OPAQUE export key + session keys (Slice A) |
-| Account-file-encryption password (same as login pwd) | `DeriveAccountPasswordKey` | `SHA-256("arkfile-account-key-salt:" + username)` — deterministic | m=65536 KiB, t=3, p=1, dk=32 | Account-KEK (32 B) |
-| Custom-file-encryption password | `DeriveCustomPasswordKey` | `SHA-256("arkfile-custom-key-salt:" + username)` — deterministic | m=65536 KiB, t=3, p=1, dk=32 | Custom-KEK (32 B) |
+| OPAQUE login password | OPAQUE protocol | n/a -- OPAQUE has its own internal OPRF | not Argon2id | OPAQUE export key + session keys (Slice A) |
+| Account-file-encryption password (same as login pwd) | `DeriveAccountPasswordKey` | `SHA-256("arkfile-account-key-salt:" + username)` -- deterministic | m=65536 KiB, t=3, p=1, dk=32 | Account-KEK (32 B) |
+| Custom-file-encryption password | `DeriveCustomPasswordKey` | `SHA-256("arkfile-custom-key-salt:" + username)` -- deterministic | m=65536 KiB, t=3, p=1, dk=32 | Custom-KEK (32 B) |
 | Share password | `DeriveShareKey` | Random 32 B per share, base64-stored | m=65536 KiB, t=3, p=1, dk=32 | Share-KEK (32 B) |
 
-Domain separation between the three Argon2id contexts is achieved via salt input prefixes. The OPAQUE password path is fully separated by being a different protocol (OPAQUE does its own OPRF + KDF; nothing from OPAQUE feeds into the Argon2id paths, and nothing from the Argon2id paths feeds into OPAQUE). This separation is **enforced by code structure** — `DeriveAccountPasswordKey` only ever receives the password bytes and the username; it never receives any OPAQUE intermediate.
+Domain separation between the three Argon2id contexts is achieved via salt input prefixes. The OPAQUE password path is fully separated by being a different protocol (OPAQUE does its own OPRF + KDF; nothing from OPAQUE feeds into the Argon2id paths, and nothing from the Argon2id paths feeds into OPAQUE). This separation is **enforced by code structure** -- `DeriveAccountPasswordKey` only ever receives the password bytes and the username; it never receives any OPAQUE intermediate.
 
 The login password and the account-file-encryption password are **the same string the user types**, processed by two independent functions. The user types once; the client sends one copy down the OPAQUE path and one copy down the Argon2id path.
 
@@ -104,11 +104,11 @@ plaintext file (e.g. 1.5 GB)
         server stores nonce_f and (ct_f || tag_f) in separate DB columns
 ```
 
-**Note 1 — `metadataKey == Account-KEK`.** Filename and SHA-256 metadata are encrypted with the same Argon2id-derived key that wraps account-context FEKs. There is no separate metadata-key derivation. This is a domain-separation omission: see B-09.
+**Note 1 -- `metadataKey == Account-KEK`.** Filename and SHA-256 metadata are encrypted with the same Argon2id-derived key that wraps account-context FEKs. There is no separate metadata-key derivation. This is a domain-separation omission: see B-09.
 
-**Note 2 — no AAD anywhere on the file/metadata/FEK path.** The only AAD use in the entire Arkfile codebase is in `share-crypto.ts` for the share envelope. See B-02 / B-08.
+**Note 2 -- no AAD anywhere on the file/metadata/FEK path.** The only AAD use in the entire Arkfile codebase is in `share-crypto.ts` for the share envelope. See B-02 / B-08.
 
-**Note 3 — server-side padding.** After all chunks are encrypted client-side and uploaded, the server computes a target padded size from the unpadded total and appends random bytes to the last chunk. The server learns the unpadded ciphertext size before applying padding, so client-to-server confidentiality of file size is structurally absent. See B-13.
+**Note 3 -- server-side padding.** After all chunks are encrypted client-side and uploaded, the server computes a target padded size from the unpadded total and appends random bytes to the last chunk. The server learns the unpadded ciphertext size before applying padding, so client-to-server confidentiality of file size is structurally absent. See B-13.
 
 ### 1.3 Share envelope flow
 
@@ -153,7 +153,7 @@ The 5 GB client-side `LIMITS.MAX_FILE_SIZE` cap conflicts with the AGENTS.md con
 
 Severity-ordered. Every finding cites file:line. Confidence per finding: High = code path read and reproduced; Medium = static reasoning, plausible; Low = suggestive only.
 
-### Finding B-01: Argon2id parameters are server-controlled (parameter downgrade) — CLIENT TRUSTS `/api/config/argon2`
+### Finding B-01: Argon2id parameters are server-controlled (parameter downgrade) -- CLIENT TRUSTS `/api/config/argon2`
 
 - Severity: **High**
 - Confidence: High
@@ -165,7 +165,7 @@ Severity-ordered. Every finding cites file:line. Confidence per finding: High = 
   - `client/static/js/src/crypto/file-encryption.ts:120-127` (`deriveFileEncryptionKey` consumes server params)
   - `client/static/js/src/shares/share-crypto.ts:176-183, 301-308` (share-envelope encrypt/decrypt consumes server params)
 
-**Description.** Every Argon2id derivation in the TS client — account-KEK, custom-KEK, share-KEK, metadata key — calls `getArgon2Params()`, which fetches `/api/config/argon2` over HTTPS and returns whatever JSON the server replied with. A malicious or compromised server can return `{"memoryCostKiB":1024,"timeCost":1,"parallelism":1,"keyLength":32,"variant":2}` and the client will accept it: `validateArgon2Params` only enforces `memoryCost >= 1024 KiB` (1 MiB) and `timeCost >= 1`. At those parameters the per-guess cost is roughly six orders of magnitude lower than the embedded JSON's `m=65536, t=3` and password cracking becomes feasible on commodity hardware.
+**Description.** Every Argon2id derivation in the TS client -- account-KEK, custom-KEK, share-KEK, metadata key -- calls `getArgon2Params()`, which fetches `/api/config/argon2` over HTTPS and returns whatever JSON the server replied with. A malicious or compromised server can return `{"memoryCostKiB":1024,"timeCost":1,"parallelism":1,"keyLength":32,"variant":2}` and the client will accept it: `validateArgon2Params` only enforces `memoryCost >= 1024 KiB` (1 MiB) and `timeCost >= 1`. At those parameters the per-guess cost is roughly six orders of magnitude lower than the embedded JSON's `m=65536, t=3` and password cracking becomes feasible on commodity hardware.
 
 **Evidence.**
 
@@ -193,9 +193,9 @@ There is no signature, no embedded floor that mirrors the server's `argon2id-par
 1. Captures the encrypted FEK and encrypted file chunks from object storage.
 2. Captures the user's username (visible in DB).
 3. Changes `/api/config/argon2` to return weak params.
-4. Either waits for the user to log in (and observes the next-derived KEK is encrypting/decrypting with weak parameters — useful for future operations) or — more importantly — uses the weak params to do **offline cracking of the already-stored ciphertexts**. The salt is `SHA-256("arkfile-account-key-salt:" + username)`, fully derivable from the username, so offline cracking under weak Argon2id costs is straightforward.
+4. Either waits for the user to log in (and observes the next-derived KEK is encrypting/decrypting with weak parameters -- useful for future operations) or -- more importantly -- uses the weak params to do **offline cracking of the already-stored ciphertexts**. The salt is `SHA-256("arkfile-account-key-salt:" + username)`, fully derivable from the username, so offline cracking under weak Argon2id costs is straightforward.
 
-The "offline cracking with downgraded params" attack works **even if the user never logs in again**, because the attacker chooses the params used for cracking — the stored ciphertexts were encrypted with strong params, but the attacker is free to try guesses with whichever Argon2id config they like. This means the parameter-downgrade attack is really about **what the legitimate client trusts going forward**, not about the original ciphertexts. The narrower (and still serious) framing:
+The "offline cracking with downgraded params" attack works **even if the user never logs in again**, because the attacker chooses the params used for cracking -- the stored ciphertexts were encrypted with strong params, but the attacker is free to try guesses with whichever Argon2id config they like. This means the parameter-downgrade attack is really about **what the legitimate client trusts going forward**, not about the original ciphertexts. The narrower (and still serious) framing:
 
 - A compromised server can serve weak params to all future password derivations, so any **new** uploads, new shares, and new metadata writes from that point onward are encrypted under a trivially-crackable KEK. The user has no way to detect this.
 
@@ -217,7 +217,7 @@ The "offline cracking with downgraded params" attack works **even if the user ne
 
 ---
 
-### Finding B-02: File chunks have no AAD — server can swap entire files between user's own files undetected
+### Finding B-02: File chunks have no AAD -- server can swap entire files between user's own files undetected
 
 - Severity: **High**
 - Confidence: High
@@ -258,14 +258,14 @@ Server-side, the upload session stores `file_id`, `storage_id`, `chunk_count`, e
 **Attack scenario.** Alice owns two account-encrypted files, F1 and F2, both encrypted with the **same account-KEK** (because she uses the same account password for both). F1's chunks have FEK1, F2's chunks have FEK2. A malicious server:
 
 1. Returns F2's `encrypted_fek` row in response to Alice's request for F1. The envelope header byte 0x01 says "account-encrypted", which matches what F1 would have produced. The KEK is the same account-KEK. AES-GCM-decrypt succeeds. Alice's client now holds FEK2 thinking it's FEK1.
-2. Returns F2's chunks in response to Alice's request for F1's chunks. Each chunk is `[nonce][ct][tag]` encrypted under FEK2. The client decrypts under FEK2 — succeeds.
+2. Returns F2's chunks in response to Alice's request for F1's chunks. Each chunk is `[nonce][ct][tag]` encrypted under FEK2. The client decrypts under FEK2 -- succeeds.
 3. Returns F2's encrypted metadata row in response to Alice's request for F1's metadata. The metadata is encrypted under the same `metadataKey == Account-KEK`. Decrypts successfully and returns "filename: F2.pdf, sha256: <F2's hash>".
 
 The client now believes it downloaded F1, but actually decrypted F2 with full integrity verification successful. The SHA-256 verification at the streaming layer (`sw-streaming-download.ts`) passes because the metadata's sha256 was also swapped.
 
-The only thing the user might notice is that the filename is wrong — but if the server is in the middle of a confused-deputy attack (e.g. wants the user to publish what they think is "vacation.jpg" but is actually "trade-secrets.pdf"), or if the user is doing a bulk download, the filename mismatch may go undetected.
+The only thing the user might notice is that the filename is wrong -- but if the server is in the middle of a confused-deputy attack (e.g. wants the user to publish what they think is "vacation.jpg" but is actually "trade-secrets.pdf"), or if the user is doing a bulk download, the filename mismatch may go undetected.
 
-**Impact.** A malicious server can substitute any file the user owns for any other file the user owns. This breaks the basic E2EE guarantee that "the user gets the file they asked for". It does NOT break confidentiality of any file (the attacker is the server and already has the ciphertext), but it breaks **file-identity authenticity** — a property the architecture appears to promise but does not deliver.
+**Impact.** A malicious server can substitute any file the user owns for any other file the user owns. This breaks the basic E2EE guarantee that "the user gets the file they asked for". It does NOT break confidentiality of any file (the attacker is the server and already has the ciphertext), but it breaks **file-identity authenticity** -- a property the architecture appears to promise but does not deliver.
 
 The same attack works for cross-user files only when both files share a KEK, which they don't (KEK is derived from password + username). So the attack is **per-user, intra-user file substitution**. Severity is still High because:
 - Recipients of shares are protected by the share-envelope AAD (`share_id||file_id`) which IS bound. So this only affects the owner's own re-downloads. But that's still a privacy/correctness violation.
@@ -289,11 +289,11 @@ Cross-language: the change must land in (a) Go server tests / reference encrypti
 - "Swap two files of the same user" test: encrypt F1 and F2 with the same Account-KEK but different FEKs, both with file_id bound into AAD. Attempt to decrypt F2's chunks under F1's `file_id` AAD; assert failure.
 - Chunk reorder test: encrypt 4 chunks of one file, swap chunks 1 and 3 in the on-wire order, attempt decryption; assert that the chunk-index-bound AAD detects the swap.
 
-**Cross-refs.** B-05 (no chunk reorder protection — same root cause). B-08 (FEK envelope has no AAD — same root cause). Slice C (the wire path will need parallel work to plumb `file_id` and chunk-index to the AEAD layer).
+**Cross-refs.** B-05 (no chunk reorder protection -- same root cause). B-08 (FEK envelope has no AAD -- same root cause). Slice C (the wire path will need parallel work to plumb `file_id` and chunk-index to the AEAD layer).
 
 ---
 
-### Finding B-03: Chunking parameters are also server-controlled — server can set absurd chunk sizes
+### Finding B-03: Chunking parameters are also server-controlled -- server can set absurd chunk sizes
 
 - Severity: **High**
 - Confidence: High
@@ -306,10 +306,10 @@ Cross-language: the change must land in (a) Go server tests / reference encrypti
 
 **Description.** Exactly like B-01, but for chunking parameters. The client fetches `/api/config/chunking` to learn the plaintext chunk size, nonce size, tag size, and the envelope key-type byte values. There is **no validation** at all on the response. A malicious server can set:
 
-- `nonceSizeBytes: 4` — disastrously short nonce, repeats almost immediately under any single key.
-- `tagSizeBytes: 4` — tag-forgery probability 2^-32 instead of 2^-128.
-- `plaintextChunkSizeBytes: 2147483647` — 2 GiB chunks crash low-RAM mobile clients (the AGENTS.md mobile constraint).
-- `keyTypes.account: 0x02` and `keyTypes.custom: 0x01` — swap the envelope key-type values, causing the client to try the wrong KEK for FEK decryption (mostly self-DoS).
+- `nonceSizeBytes: 4` -- disastrously short nonce, repeats almost immediately under any single key.
+- `tagSizeBytes: 4` -- tag-forgery probability 2^-32 instead of 2^-128.
+- `plaintextChunkSizeBytes: 2147483647` -- 2 GiB chunks crash low-RAM mobile clients (the AGENTS.md mobile constraint).
+- `keyTypes.account: 0x02` and `keyTypes.custom: 0x01` -- swap the envelope key-type values, causing the client to try the wrong KEK for FEK decryption (mostly self-DoS).
 
 **Evidence.** No validation in `loadChunkingConfig`; the parsed JSON is cached and used verbatim.
 
@@ -354,7 +354,7 @@ Cross-language: the change must land in (a) Go server tests / reference encrypti
 **Evidence.** The known-issue comment in `share-access.ts` + the absence of any `Worker` instantiation in `primitives.ts` or callers.
 
 **Attack scenario.** Not a direct security attack, but it has security-relevant consequences:
-- A user who waits 5–10 seconds for a key derivation may give up and rage-quit — degrading the willingness to use strong passwords / 2FA / shares.
+- A user who waits 5–10 seconds for a key derivation may give up and rage-quit -- degrading the willingness to use strong passwords / 2FA / shares.
 - Combined with B-01, if the server can convince the client that Argon2id is "fast", users are more likely to tolerate weak params silently because they don't perceive the cost change.
 - Mobile users on constrained CPUs may experience the page being killed by the OS during long synchronous JS execution.
 
@@ -379,14 +379,14 @@ Cross-language: the change must land in (a) Go server tests / reference encrypti
 **Description.** Because chunk index is not bound into AEAD AAD (see B-02), an attacker between the client and storage backend can:
 
 1. **Reorder** chunks: serve chunk 4 first, chunk 1 last, etc. The AES-GCM decryption of each chunk succeeds individually under the FEK. The resulting plaintext stream is corrupted/jumbled but cryptographically "authentic" per-chunk.
-2. **Truncate** chunks: stop serving after chunk N of M. The client receives valid-looking plaintext for chunks 1..N but never sees N+1..M. The Service Worker streaming-download path's SHA-256 verification at the end would catch a mismatch against the metadata-stored full-file sha256 — but only after the truncated plaintext has already been streamed to disk via the browser's download manager.
+2. **Truncate** chunks: stop serving after chunk N of M. The client receives valid-looking plaintext for chunks 1..N but never sees N+1..M. The Service Worker streaming-download path's SHA-256 verification at the end would catch a mismatch against the metadata-stored full-file sha256 -- but only after the truncated plaintext has already been streamed to disk via the browser's download manager.
 3. **Duplicate** chunks: serve chunk 3 twice. Same per-chunk authenticity, but the file is now corrupted.
 
-**Evidence.** `sw-streaming-download.ts` does hash plaintext as it streams and compares to expected at completion — but the bytes have already left the WritableStream by then. The user has them on disk regardless.
+**Evidence.** `sw-streaming-download.ts` does hash plaintext as it streams and compares to expected at completion -- but the bytes have already left the WritableStream by then. The user has them on disk regardless.
 
 **Attack scenario.** Same shape as B-02. A malicious server can corrupt downloads in semi-plausible ways without breaking the per-chunk authenticator.
 
-**Impact.** Integrity loss in downloads. Severity is Medium rather than High because the SHA-256 metadata check provides a probabilistic safety net (the user is warned post-facto). But the warning is a `showWarning` toast, not a download abort — the file has already landed on disk.
+**Impact.** Integrity loss in downloads. Severity is Medium rather than High because the SHA-256 metadata check provides a probabilistic safety net (the user is warned post-facto). But the warning is a `showWarning` toast, not a download abort -- the file has already landed on disk.
 
 **Recommendation.**
 
@@ -399,20 +399,20 @@ Cross-language: the change must land in (a) Go server tests / reference encrypti
 
 ---
 
-### Finding B-06: Padding is server-applied — server sees the unpadded ciphertext size before padding is added
+### Finding B-06: Padding is server-applied -- server sees the unpadded ciphertext size before padding is added
 
 - Severity: **Medium**
 - Confidence: High
 - Category: privacy / design
 - Component: padding policy (`utils/padding.go` + `handlers/uploads.go`)
 - Affected files / functions:
-  - `utils/padding.go:25-46` (`CalculatePaddedSize` — runs on server)
+  - `utils/padding.go:25-46` (`CalculatePaddedSize` -- runs on server)
   - `handlers/uploads.go:` (server computes `paddedSize` from client-supplied `request.TotalSize`, then appends random padding to the last chunk after the client uploads it)
 
-**Description.** The privacy goal of file-size padding is to hide the original size from observers — chiefly, the server. Arkfile's padding is computed and appended **by the server**, after the client has already uploaded the unpadded encrypted blob and told the server the unpadded total size in the upload-session request. This means:
+**Description.** The privacy goal of file-size padding is to hide the original size from observers -- chiefly, the server. Arkfile's padding is computed and appended **by the server**, after the client has already uploaded the unpadded encrypted blob and told the server the unpadded total size in the upload-session request. This means:
 
 - The server always knows the unpadded ciphertext size (≈ plaintext size + small AEAD overhead).
-- The padded size that's persisted is bigger, but only to obfuscate the size from **someone who steals the S3 object** — not from the server.
+- The padded size that's persisted is bigger, but only to obfuscate the size from **someone who steals the S3 object** -- not from the server.
 
 **Evidence.**
 
@@ -429,11 +429,11 @@ The server logs the relationship: `"INSERT INTO upload_sessions ... padded_size 
 - Every user's exact ciphertext sizes for every uploaded file. With ~25 bytes of AES-GCM overhead per 16 MiB chunk and a 2-byte envelope header, the plaintext size is recoverable to within ~100 bytes from the unpadded ciphertext size.
 - Even **after** the server is reset and the only thing left is the S3 bucket, the padded size is only ~2.2% bigger than the unpadded size for files > 3.2 MiB (because the block is 2% of size + ≤10% of 2% jitter). So an external observer with bucket-only access still learns the plaintext size to within ~2.2%.
 
-**Impact.** The padding policy provides essentially no privacy from the server, and only weak privacy from an external bucket observer. Arkfile's `docs/AGENTS.md` claims that "the server must know nothing about the nature of the data belonging to clients" — this is undermined by server-visible exact ciphertext sizes.
+**Impact.** The padding policy provides essentially no privacy from the server, and only weak privacy from an external bucket observer. Arkfile's `docs/AGENTS.md` claims that "the server must know nothing about the nature of the data belonging to clients" -- this is undermined by server-visible exact ciphertext sizes.
 
 **Recommendation.**
 
-1. Move padding to the client: client pads the plaintext (or the ciphertext stream — either is fine if done before sending) to a target size from a defined size ladder, encrypts, uploads. The server never sees the unpadded length.
+1. Move padding to the client: client pads the plaintext (or the ciphertext stream -- either is fine if done before sending) to a target size from a defined size ladder, encrypts, uploads. The server never sees the unpadded length.
 2. Replace the 2%-block / 10%-jitter scheme with a more privacy-protective ladder: e.g. powers of 2, or `Padmé` (https://lbarman.ch/blog/padme/). The current 2% block leaks ~5–6 bits of size information even in the best case.
 3. Document the size-leak explicitly in `docs/privacy.md` so the threat model is honest about what padding does and does not protect.
 
@@ -443,7 +443,7 @@ The server logs the relationship: `"INSERT INTO upload_sessions ... padded_size 
 
 ---
 
-### Finding B-07: `metadataKey == Account-KEK` — same key wraps FEK *and* encrypts metadata
+### Finding B-07: `metadataKey == Account-KEK` -- same key wraps FEK *and* encrypts metadata
 
 - Severity: **Medium**
 - Confidence: High
@@ -474,9 +474,9 @@ There is no HKDF expansion to derive a separate metadata key. The raw Argon2id o
 - If a future protocol change adds AAD to one path but not the other, AAD reuse semantics can have unexpected interactions.
 - If the metadata-encryption logic ever uses a deterministic nonce (e.g. nonce = SHA-256(field_name)), and the FEK-wrap path uses a random nonce that happens to collide, same problem.
 
-The current implementation uses random nonces everywhere, so the immediate failure mode is closed. But the lack of domain separation is fragile — a single nonce-handling bug becomes catastrophic instead of localized.
+The current implementation uses random nonces everywhere, so the immediate failure mode is closed. But the lack of domain separation is fragile -- a single nonce-handling bug becomes catastrophic instead of localized.
 
-**Impact.** Currently latent — no exploit. Medium severity because the design fragility increases the blast radius of future bugs.
+**Impact.** Currently latent -- no exploit. Medium severity because the design fragility increases the blast radius of future bugs.
 
 **Recommendation.**
 
@@ -492,14 +492,14 @@ The current implementation uses random nonces everywhere, so the immediate failu
 
 ---
 
-### Finding B-08: FEK envelope (encrypted-FEK) has no AAD — see B-02
+### Finding B-08: FEK envelope (encrypted-FEK) has no AAD -- see B-02
 
 - Severity: **Medium** (subsumed by B-02 as part of the same root issue but listed separately for clarity)
 - Confidence: High
 - Category: cryptographic
 - Component: FEK envelope
 - Affected files / functions:
-  - `crypto/file_operations.go:316-353` (`EncryptFEK`: `encryptedFEK, err := EncryptGCM(fek, derivedKey)` — no AAD)
+  - `crypto/file_operations.go:316-353` (`EncryptFEK`: `encryptedFEK, err := EncryptGCM(fek, derivedKey)` -- no AAD)
   - `client/static/js/src/crypto/metadata-helpers.ts:112-139` (`decryptFEK` calls `decryptChunk` without AAD)
 
 **Description.** The FEK envelope is `[0x01][0x01 or 0x02][12-B nonce][AES-GCM(FEK, KEK, aad=∅)]`. The KEK is derived from `account_pwd + username` (or `custom_pwd + username`). There is no AAD binding to the file_id, the user_id, or anything else.
@@ -516,7 +516,7 @@ The current implementation uses random nonces everywhere, so the immediate failu
 
 ---
 
-### Finding B-09: Embedded JS comment claims Argon2id parameters of "256MB, 8 iterations" — actual production is 64MB, 3 iterations
+### Finding B-09: Embedded JS comment claims Argon2id parameters of "256MB, 8 iterations" -- actual production is 64MB, 3 iterations
 
 - Severity: **Low**
 - Confidence: High
@@ -546,10 +546,10 @@ The current implementation uses random nonces everywhere, so the immediate failu
 - Category: design / hygiene
 - Component: `crypto/session.go`
 - Affected files / functions:
-  - `crypto/session.go:1-105` — entire file
+  - `crypto/session.go:1-105` -- entire file
   - No callers anywhere in the project (verified by grep of all exported symbols)
 
-**Description.** `crypto/session.go` defines `DeriveSessionKey`, `DeriveJWTSigningMaterial`, `ValidateSessionKey`, `SessionKeyInfo`, `CreateSessionKeyInfo`, and `SecureZeroSessionKey` — all built around an "OPAQUE export key" input. Slice A established that the OPAQUE export key is **not used** by Arkfile (the export key is part of the OPAQUE protocol output but Arkfile takes the OPAQUE session keys via the libopaque server-side API, not the export key on the client). The `session.go` API has no callers. The constants `SessionKeyContext`, `JWTSigningContext`, `TOTPEncryptionContext` are also unused — JWT signing material in fact comes from `KeyManager.GetOrGenerateKey("jwt_signing_key_v1", "jwt", 64)`, and TOTP encryption material comes from `KeyManager.GetOrGenerateKey("totp_master_key_v1", "totp", 64)`. None of the `crypto/session.go` constants flow into either.
+**Description.** `crypto/session.go` defines `DeriveSessionKey`, `DeriveJWTSigningMaterial`, `ValidateSessionKey`, `SessionKeyInfo`, `CreateSessionKeyInfo`, and `SecureZeroSessionKey` -- all built around an "OPAQUE export key" input. Slice A established that the OPAQUE export key is **not used** by Arkfile (the export key is part of the OPAQUE protocol output but Arkfile takes the OPAQUE session keys via the libopaque server-side API, not the export key on the client). The `session.go` API has no callers. The constants `SessionKeyContext`, `JWTSigningContext`, `TOTPEncryptionContext` are also unused -- JWT signing material in fact comes from `KeyManager.GetOrGenerateKey("jwt_signing_key_v1", "jwt", 64)`, and TOTP encryption material comes from `KeyManager.GetOrGenerateKey("totp_master_key_v1", "totp", 64)`. None of the `crypto/session.go` constants flow into either.
 
 **Evidence.** `grep -r "DeriveSessionKey\|DeriveJWTSigningMaterial\|SessionKeyContext\|JWTSigningContext\|TOTPEncryptionContext\|ValidateSessionKey\|SessionKeyInfo\|SecureZeroSessionKey"` returns matches only inside `crypto/session.go` itself.
 
@@ -569,7 +569,7 @@ The current implementation uses random nonces everywhere, so the immediate failu
 - Confidence: High
 - Category: design / hygiene
 - Component: `crypto/opaque_validation.go`
-- Affected files / functions: `crypto/opaque_validation.go:1` — single line `package crypto`.
+- Affected files / functions: `crypto/opaque_validation.go:1` -- single line `package crypto`.
 
 **Description.** Empty stub file. Already noted in Slice A; mentioning here for crypto-package completeness.
 
@@ -597,9 +597,9 @@ fmt.Printf("GCM decrypt context: total_data=%d, nonce_size=%d, ciphertext_size=%
 fmt.Printf("GCM decrypt failure: last_16_bytes_of_ciphertext=%x (includes tag)\n", ...)
 ```
 
-**Attack scenario.** Debug mode is gated by an env var. In `dev-reset.sh` workflows it's enabled. In production it should not be, but a misconfiguration would dump per-decrypt nonce hex to stdout (and thus journald or whatever captures the server's stdout). This is not a confidentiality break — nonces are public — but logging the tag region complicates incident response: any logs shared with third parties (support, observability vendors) now contain partial cryptographic state.
+**Attack scenario.** Debug mode is gated by an env var. In `dev-reset.sh` workflows it's enabled. In production it should not be, but a misconfiguration would dump per-decrypt nonce hex to stdout (and thus journald or whatever captures the server's stdout). This is not a confidentiality break -- nonces are public -- but logging the tag region complicates incident response: any logs shared with third parties (support, observability vendors) now contain partial cryptographic state.
 
-**Impact.** Low. The bigger concern is the pattern: a `DEBUG_MODE=true` toggle should not leak cryptographic state into shared logs by default. AGENTS.md §"Privacy posture" says "no PII in logs" — nonces aren't PII, but the principle of minimal cryptographic exposure in logs is reasonable defense-in-depth.
+**Impact.** Low. The bigger concern is the pattern: a `DEBUG_MODE=true` toggle should not leak cryptographic state into shared logs by default. AGENTS.md §"Privacy posture" says "no PII in logs" -- nonces aren't PII, but the principle of minimal cryptographic exposure in logs is reasonable defense-in-depth.
 
 **Recommendation.** Replace `fmt.Printf` with structured logging at a `trace` or `debug` level that is filtered out in any non-development build. Better: never log the tag region, only lengths. Add a build flag (or config-fail-closed in `config/security_config.go`) that hard-disables these prints in production binaries regardless of env var.
 
@@ -607,7 +607,7 @@ fmt.Printf("GCM decrypt failure: last_16_bytes_of_ciphertext=%x (includes tag)\n
 
 ---
 
-### Finding B-13: `DecryptFileMetadata` hardcodes account-context for metadata decryption — no support for custom-context-encrypted metadata, but the API permits it
+### Finding B-13: `DecryptFileMetadata` hardcodes account-context for metadata decryption -- no support for custom-context-encrypted metadata, but the API permits it
 
 - Severity: **Low**
 - Confidence: Medium
@@ -615,7 +615,7 @@ fmt.Printf("GCM decrypt failure: last_16_bytes_of_ciphertext=%x (includes tag)\n
 - Component: `crypto/file_operations.go:DecryptFileMetadata`
 - Affected files / functions: `crypto/file_operations.go:477-509`
 
-**Description.** `DecryptFileMetadata` takes a `password` and a `username` and always derives the metadata-decryption key via `DeriveAccountPasswordKey`. The function has no `keyType` parameter. The comment at line 485 says "Use account password derivation (default for file metadata)". But the FEK envelope carries a key-type byte that distinguishes account-wrapped (0x01) from custom-wrapped (0x02). For custom-wrapped FEKs, the user is prompted for a different password (the custom password). What happens to **metadata for custom-wrapped files**? The current code path implies metadata is always encrypted with the **account** key regardless of whether the FEK is wrapped with account or custom — meaning the user must remember **both** passwords to access a custom-wrapped file (custom to decrypt the FEK, account to decrypt the filename). This is consistent with `client/static/js/src/crypto/metadata-helpers.ts:165` which always uses `account_key`.
+**Description.** `DecryptFileMetadata` takes a `password` and a `username` and always derives the metadata-decryption key via `DeriveAccountPasswordKey`. The function has no `keyType` parameter. The comment at line 485 says "Use account password derivation (default for file metadata)". But the FEK envelope carries a key-type byte that distinguishes account-wrapped (0x01) from custom-wrapped (0x02). For custom-wrapped FEKs, the user is prompted for a different password (the custom password). What happens to **metadata for custom-wrapped files**? The current code path implies metadata is always encrypted with the **account** key regardless of whether the FEK is wrapped with account or custom -- meaning the user must remember **both** passwords to access a custom-wrapped file (custom to decrypt the FEK, account to decrypt the filename). This is consistent with `client/static/js/src/crypto/metadata-helpers.ts:165` which always uses `account_key`.
 
 The design is internally consistent but the rationale ("metadata is always encrypted with account key, file body with FEK wrapped under account or custom") is not documented in this file's comments. A reader might mistakenly assume metadata respects the key-type byte and pass the wrong key.
 
@@ -628,21 +628,21 @@ The design is internally consistent but the rationale ("metadata is always encry
 **Recommendation.**
 
 1. Document the invariant clearly in `crypto/file_operations.go` near `DecryptFileMetadata` and `EncryptFEK`: "Metadata is always encrypted with the account-derived key, regardless of FEK key-type." Reference `docs/AGENTS.md` §"Password Contexts and Key Derivation".
-2. Add a server-side check that prevents custom-context metadata writes (defensive — the API should refuse to accept a metadata field encrypted under a non-account key).
+2. Add a server-side check that prevents custom-context metadata writes (defensive -- the API should refuse to accept a metadata field encrypted under a non-account key).
 3. Consider adding the key-type byte to the metadata structure for future flexibility.
 
 **Cross-refs.** B-07 (related: metadata key vs FEK-wrap key are the same key).
 
 ---
 
-### Finding B-14: `EncryptFile` rejects empty plaintext but `EncryptGCM` accepts it — inconsistency
+### Finding B-14: `EncryptFile` rejects empty plaintext but `EncryptGCM` accepts it -- inconsistency
 
 - Severity: **Low**
 - Confidence: High
 - Category: API consistency
 - Component: `crypto/file_operations.go:403-419` vs `crypto/gcm.go:13-39`
 
-**Description.** `EncryptFile(data, fek, keyType)` does `if len(data) == 0 { return nil, fmt.Errorf("cannot encrypt empty data") }`. The underlying `EncryptGCM(data, key)` happily encrypts empty data (the GCM test `TestEncryptDecryptGCM_EmptyPlaintext` proves this works). This means a user with a zero-byte file cannot use `EncryptFile`, even though there's no cryptographic reason to refuse — GCM authentication of an empty payload is well-defined.
+**Description.** `EncryptFile(data, fek, keyType)` does `if len(data) == 0 { return nil, fmt.Errorf("cannot encrypt empty data") }`. The underlying `EncryptGCM(data, key)` happily encrypts empty data (the GCM test `TestEncryptDecryptGCM_EmptyPlaintext` proves this works). This means a user with a zero-byte file cannot use `EncryptFile`, even though there's no cryptographic reason to refuse -- GCM authentication of an empty payload is well-defined.
 
 **Evidence.** Quoted above.
 
@@ -650,23 +650,23 @@ The design is internally consistent but the rationale ("metadata is always encry
 
 **Impact.** Minor. Most apps don't care about zero-byte uploads, but the inconsistency is surprising.
 
-**Recommendation.** Either (a) make `EncryptFile` accept empty plaintext, or (b) make `EncryptGCM` reject empty plaintext — and pick one consistent answer. Recommend (a).
+**Recommendation.** Either (a) make `EncryptFile` accept empty plaintext, or (b) make `EncryptGCM` reject empty plaintext -- and pick one consistent answer. Recommend (a).
 
-Note: in practice, neither `EncryptFile` nor `DecryptFile` are called from the production server/CLI code paths — they're test/reference helpers. Real chunked uploads call `EncryptGCM` directly. So this is mostly a hygiene issue.
+Note: in practice, neither `EncryptFile` nor `DecryptFile` are called from the production server/CLI code paths -- they're test/reference helpers. Real chunked uploads call `EncryptGCM` directly. So this is mostly a hygiene issue.
 
 **Cross-refs.** B-17 (these helpers are dead in production).
 
 ---
 
-### Finding B-15: `CreateAAD` for share envelopes concatenates `share_id || file_id` without a delimiter — theoretical AAD collision
+### Finding B-15: `CreateAAD` for share envelopes concatenates `share_id || file_id` without a delimiter -- theoretical AAD collision
 
 - Severity: **Low**
 - Confidence: Medium
 - Category: cryptographic
 - Component: `crypto/share_kdf.go:CreateAAD`, `client/static/js/src/shares/share-crypto.ts:186, 311`
 - Affected files / functions:
-  - `crypto/share_kdf.go:163-165` — `return []byte(shareID + fileID)`
-  - `client/static/js/src/shares/share-crypto.ts:186` — `const aad = new TextEncoder().encode(shareId + fileId);`
+  - `crypto/share_kdf.go:163-165` -- `return []byte(shareID + fileID)`
+  - `client/static/js/src/shares/share-crypto.ts:186` -- `const aad = new TextEncoder().encode(shareId + fileId);`
 
 **Description.** AAD is constructed as the byte concatenation of `shareID` and `fileID` strings with no separator. For two pairs of IDs to produce the same AAD, you would need `shareID_1 + fileID_1 == shareID_2 + fileID_2`. With fixed-length IDs (UUIDs, fixed-base64 token strings), this is not possible. With variable-length IDs over the same alphabet, it is. In Arkfile's current schema, both IDs are fixed-format opaque tokens (UUIDs or base64-encoded 32-byte values), so collision is **not currently exploitable**.
 
@@ -688,14 +688,14 @@ Apply identically in Go (`crypto.CreateAAD`) and TS (`share-crypto.ts`).
 
 ---
 
-### Finding B-16: Single `ARKFILE_MASTER_KEY` env-var-only master key — operator hardening gap
+### Finding B-16: Single `ARKFILE_MASTER_KEY` env-var-only master key -- operator hardening gap
 
 - Severity: **Low**
 - Confidence: High
 - Category: operational / key-management
 - Component: `crypto/key_manager.go:31-66`
 
-**Description.** All server-side system keys (JWT signing, TOTP master, OPAQUE server setup, etc.) are wrapped under HKDF-derived subkeys of a single 32-byte master key sourced from the `ARKFILE_MASTER_KEY` env var. The env var lives in `/opt/arkfile/etc/secrets.env` (per AGENTS.md / `.clinerules` — I have not read that file). If an attacker reads that env var (process listing, debugger, memory inspection, core dump), they can decrypt every system key.
+**Description.** All server-side system keys (JWT signing, TOTP master, OPAQUE server setup, etc.) are wrapped under HKDF-derived subkeys of a single 32-byte master key sourced from the `ARKFILE_MASTER_KEY` env var. The env var lives in `/opt/arkfile/etc/secrets.env` (per AGENTS.md / `.clinerules` -- I have not read that file). If an attacker reads that env var (process listing, debugger, memory inspection, core dump), they can decrypt every system key.
 
 **Evidence.**
 
@@ -708,7 +708,7 @@ No key-rotation mechanism, no KMS/HSM integration, no encrypted-rest-on-disk-wit
 
 **Attack scenario.** Server compromise that yields memory access (e.g. via `gdb attach`, `/proc/<pid>/mem`, or a memory-corruption RCE) immediately exposes the master key. From the master key + DB dump, the attacker recovers every system key.
 
-**Impact.** Low in isolation (this is standard for env-var-secrets-on-disk patterns). The reason it's even Low rather than Informational is that AGENTS.md and the threat model in `idsrp.md` §2 explicitly include "malicious or compromised server operator" as an adversary — and against that adversary, the env-var pattern is a blanket failure. There's no realistic mitigation without KMS/HSM.
+**Impact.** Low in isolation (this is standard for env-var-secrets-on-disk patterns). The reason it's even Low rather than Informational is that AGENTS.md and the threat model in `idsrp.md` §2 explicitly include "malicious or compromised server operator" as an adversary -- and against that adversary, the env-var pattern is a blanket failure. There's no realistic mitigation without KMS/HSM.
 
 **Recommendation.**
 
@@ -716,11 +716,11 @@ No key-rotation mechanism, no KMS/HSM integration, no encrypted-rest-on-disk-wit
 2. Hardening (future): support pluggable master-key sources (HashiCorp Vault, AWS KMS, etc.). The current design is fine for a single-tenant self-hosted scenario but not for the "compromised server operator" adversary listed in the threat model.
 3. Minor: add `mlock(2)` and `MADV_DONTDUMP` to the master-key buffer to keep it out of core dumps and swap. (Go's `mlock` story is awkward but feasible via syscall.)
 
-**Cross-refs.** Slice F (systemd hardening — `ProtectSystem`, `MemoryDenyWriteExecute`, `LockPersonality`).
+**Cross-refs.** Slice F (systemd hardening -- `ProtectSystem`, `MemoryDenyWriteExecute`, `LockPersonality`).
 
 ---
 
-### Finding B-17: `EncryptFile`/`DecryptFile`/`EncryptFEK`/`DecryptFEK` are unused outside tests — confusing dead-ish surface
+### Finding B-17: `EncryptFile`/`DecryptFile`/`EncryptFEK`/`DecryptFEK` are unused outside tests -- confusing dead-ish surface
 
 - Severity: **Low**
 - Confidence: High
@@ -759,14 +759,14 @@ Recommend (1): a single shared implementation across server, CLI, and tests is t
 
 ---
 
-### Finding B-19: Password requirements also fetched from server unauthenticated — same downgrade pattern as B-01/B-03
+### Finding B-19: Password requirements also fetched from server unauthenticated -- same downgrade pattern as B-01/B-03
 
 - Severity: **Medium**
 - Confidence: High
 - Category: cryptographic / policy
 - Component: `client/static/js/src/crypto/password-validation.ts:30-46`
 
-**Description.** The client fetches `/api/config/password-requirements` for length/class minima. A malicious server can return `{minAccountPasswordLength: 1, minSharePasswordLength: 1, minCharacterClassesRequired: 0, ...}`. The client will then accept weak passwords from the user during registration/share-creation, which subsequently get fed into Argon2id (which can also have been downgraded — B-01). The resulting KEK is trivially crackable.
+**Description.** The client fetches `/api/config/password-requirements` for length/class minima. A malicious server can return `{minAccountPasswordLength: 1, minSharePasswordLength: 1, minCharacterClassesRequired: 0, ...}`. The client will then accept weak passwords from the user during registration/share-creation, which subsequently get fed into Argon2id (which can also have been downgraded -- B-01). The resulting KEK is trivially crackable.
 
 **Evidence.**
 
@@ -785,7 +785,7 @@ const response = await fetch('/api/config/password-requirements');
 
 ---
 
-### Finding B-20: `password.length` (JS) vs `len(password)` (Go) — Unicode length mismatch in password validation
+### Finding B-20: `password.length` (JS) vs `len(password)` (Go) -- Unicode length mismatch in password validation
 
 - Severity: **Low**
 - Confidence: High
@@ -794,12 +794,12 @@ const response = await fetch('/api/config/password-requirements');
 
 **Description.** Go's `len(password)` returns UTF-8 byte length. JS's `password.length` returns UTF-16 code-unit count. For non-BMP characters (e.g. emojis, many CJK rare characters), these differ:
 
-- Single non-BMP code point = 1 byte (no — won't fit), actually 4 UTF-8 bytes, 2 UTF-16 code units.
+- Single non-BMP code point = 1 byte (no -- won't fit), actually 4 UTF-8 bytes, 2 UTF-16 code units.
 - A 15-emoji password is 60 bytes in Go (passes Go's `length >= 15` check) but 30 UTF-16 code units in JS (passes JS's `length >= 15` check). Consistent enough.
 - A 7-character BMP-only password is 7 bytes in Go and 7 code units in JS. Consistent.
 - A 7-character password containing 1 emoji is 6 + 4 = 10 bytes in Go and 6 + 2 = 8 code units in JS. **The client-side check `length >= 15` rejects 8; the server side gets a 10-byte string and would also reject `len >= 15`**, so the actual rejection condition is consistent here too.
 
-The mismatch DOES bite at the **other** end: `maxPasswordLength: 256` in Go means 256 bytes (≤ 256 BMP chars or ≤ 64 emojis). In JS, `length <= 256` means 256 UTF-16 code units (≤ 256 BMP chars or ≤ 128 emojis). So a 200-emoji password is 800 bytes — rejected by Go's max check but accepted by JS's. The JS client would let the user submit it, then the server would reject. This is a UX inconsistency rather than a security one (the server is the final enforcer), but it leaks an artifact about the encoding to the user.
+The mismatch DOES bite at the **other** end: `maxPasswordLength: 256` in Go means 256 bytes (≤ 256 BMP chars or ≤ 64 emojis). In JS, `length <= 256` means 256 UTF-16 code units (≤ 256 BMP chars or ≤ 128 emojis). So a 200-emoji password is 800 bytes -- rejected by Go's max check but accepted by JS's. The JS client would let the user submit it, then the server would reject. This is a UX inconsistency rather than a security one (the server is the final enforcer), but it leaks an artifact about the encoding to the user.
 
 A more practical risk: Go's character-class check uses ASCII ranges:
 ```
@@ -809,7 +809,7 @@ case char >= '0' && char <= '9':
 default:
     if strings.ContainsRune(specialChars, char) { hasSpecial = true }
 ```
-Unicode letters (e.g. "ü", "中", "α") don't match upper/lower/number; they only contribute to "special" if listed in `specialChars`. They aren't, so a Unicode-only password counts as zero character classes, fails the `minCharacterClassesRequired: 2` check. **JS has the same ASCII-only check** (`code >= 65 && code <= 90` etc), so behavior is consistent — but both treat international users as second-class.
+Unicode letters (e.g. "ü", "中", "α") don't match upper/lower/number; they only contribute to "special" if listed in `specialChars`. They aren't, so a Unicode-only password counts as zero character classes, fails the `minCharacterClassesRequired: 2` check. **JS has the same ASCII-only check** (`code >= 65 && code <= 90` etc), so behavior is consistent -- but both treat international users as second-class.
 
 **Attack scenario.** Not an attack. Honesty/UX issue. Users with international passwords get confusing errors.
 
@@ -824,7 +824,7 @@ Unicode letters (e.g. "ü", "中", "α") don't match upper/lower/number; they on
 
 ---
 
-### Finding B-21: Account-key-cache `secureWipe` overwrites with random then zero — defense-in-depth, but JS GC may have already copied
+### Finding B-21: Account-key-cache `secureWipe` overwrites with random then zero -- defense-in-depth, but JS GC may have already copied
 
 - Severity: **Informational**
 - Confidence: Medium
@@ -837,7 +837,7 @@ crypto.getRandomValues(data as unknown as Uint8Array<ArrayBuffer>);
 data.fill(0);
 ```
 
-This is good practice for the buffer in question, BUT in JS, every time a `Uint8Array` is passed to `crypto.subtle.importKey`, `crypto.subtle.encrypt`, etc., the contents may be **copied** by the runtime into internal buffers that are inaccessible from JS and not wiped. The JS heap-management is also a GC pile — there's no guarantee that intermediate string buffers (e.g. `JSON.stringify(envelope)` in `cacheAccountKey`) get wiped before being garbage-collected.
+This is good practice for the buffer in question, BUT in JS, every time a `Uint8Array` is passed to `crypto.subtle.importKey`, `crypto.subtle.encrypt`, etc., the contents may be **copied** by the runtime into internal buffers that are inaccessible from JS and not wiped. The JS heap-management is also a GC pile -- there's no guarantee that intermediate string buffers (e.g. `JSON.stringify(envelope)` in `cacheAccountKey`) get wiped before being garbage-collected.
 
 **Evidence.** Pattern is documented in many crypto-in-JS treatises; not specific to Arkfile.
 
@@ -845,13 +845,13 @@ This is good practice for the buffer in question, BUT in JS, every time a `Uint8
 
 **Impact.** Informational. The cache's design (encrypted-at-rest in sessionStorage, wrapping key in a single `let wrappingKey` variable that *is* wiped) is a sensible best-effort. Improvements would require browser-API changes Arkfile cannot make.
 
-**Recommendation.** Document the limitation in `account-key-cache.ts` comments so future readers don't believe `secureWipe` is bulletproof. Already acknowledged in code via "best-effort" comments — but a more explicit statement is warranted.
+**Recommendation.** Document the limitation in `account-key-cache.ts` comments so future readers don't believe `secureWipe` is bulletproof. Already acknowledged in code via "best-effort" comments -- but a more explicit statement is warranted.
 
 **Cross-refs.** None.
 
 ---
 
-### Finding B-22: `account-key-cache.ts` uses an emoji in `console.error` — violates AGENTS.md §"No Emojis"
+### Finding B-22: `account-key-cache.ts` uses an emoji in `console.error` -- violates AGENTS.md §"No Emojis"
 
 - Severity: **Informational**
 - Confidence: High
@@ -900,7 +900,7 @@ func DeriveAccountPasswordKey(password []byte, username string) []byte {
 }
 ```
 
-The `_` ignores any error. The only realistic error paths in `DeriveArgon2IDKey` are empty/oversized password and empty/zero-keyLen — but the salt is always 32 bytes, keyLen is set from a validated config, and the password is the caller's responsibility. If `password` is empty or > `MaxPasswordBytes`, the function returns `nil` silently. Subsequent code paths that use `key` will then call `aes.NewCipher(nil)` and panic.
+The `_` ignores any error. The only realistic error paths in `DeriveArgon2IDKey` are empty/oversized password and empty/zero-keyLen -- but the salt is always 32 bytes, keyLen is set from a validated config, and the password is the caller's responsibility. If `password` is empty or > `MaxPasswordBytes`, the function returns `nil` silently. Subsequent code paths that use `key` will then call `aes.NewCipher(nil)` and panic.
 
 **Attack scenario.** A caller bug (passing an empty password) becomes a panic rather than a clear error. Not an attack, but error-handling hygiene.
 
@@ -908,14 +908,14 @@ The `_` ignores any error. The only realistic error paths in `DeriveArgon2IDKey`
 
 ---
 
-### Finding B-25: `KeyManager.StoreKey` uses `REPLACE INTO` — silently overwrites existing keys
+### Finding B-25: `KeyManager.StoreKey` uses `REPLACE INTO` -- silently overwrites existing keys
 
 - Severity: **Informational**
 - Confidence: High
 - Category: operational
 - Component: `crypto/key_manager.go:226-244`
 
-**Description.** `REPLACE INTO system_keys ...` will silently overwrite an existing row with the same `key_id`. If somewhere in the code a programmer accidentally calls `StoreKey("jwt_signing_key_v1", "jwt", newKey)`, the old key is gone with no warning — all tokens signed under the old key become unverifiable.
+**Description.** `REPLACE INTO system_keys ...` will silently overwrite an existing row with the same `key_id`. If somewhere in the code a programmer accidentally calls `StoreKey("jwt_signing_key_v1", "jwt", newKey)`, the old key is gone with no warning -- all tokens signed under the old key become unverifiable.
 
 **Evidence.** Quoted above.
 
@@ -928,7 +928,7 @@ The `_` ignores any error. The only realistic error paths in `DeriveArgon2IDKey`
 
 ---
 
-### Finding B-26: `KeyManager.deriveWrappingKey` uses HKDF-Expand on a high-entropy master key — acceptable, but Extract+Expand would be more conventional
+### Finding B-26: `KeyManager.deriveWrappingKey` uses HKDF-Expand on a high-entropy master key -- acceptable, but Extract+Expand would be more conventional
 
 - Severity: **Informational**
 - Confidence: High
@@ -986,15 +986,15 @@ A second, very minor concern: the `keyType` substring goes directly into the inf
 
 ### 3.2 Key Hierarchy
 
-**Tier 0 — User secrets (never leave the client unless they are passwords typed into OPAQUE; passwords typed for file encryption never leave the client).**
+**Tier 0 -- User secrets (never leave the client unless they are passwords typed into OPAQUE; passwords typed for file encryption never leave the client).**
 
-- Account password — user-typed. Two purposes, cryptographically separated:
+- Account password -- user-typed. Two purposes, cryptographically separated:
   - Fed to OPAQUE (Slice A) for authentication.
   - Fed to Argon2id for Account-KEK derivation (this slice).
-- Custom password — user-typed when file uses 0x02 key-type byte. Argon2id only.
-- Share password — user-typed when creating a share; recipient types it to open. Argon2id only.
+- Custom password -- user-typed when file uses 0x02 key-type byte. Argon2id only.
+- Share password -- user-typed when creating a share; recipient types it to open. Argon2id only.
 
-**Tier 1 — Derived from Tier 0 by client-side Argon2id.**
+**Tier 1 -- Derived from Tier 0 by client-side Argon2id.**
 
 | Key | Derived how | Length | Where stored | Leaves client? | What it encrypts/authenticates | Rotation | Destruction | Compromise impact |
 |---|---|---|---|---|---|---|---|---|
@@ -1002,7 +1002,7 @@ A second, very minor concern: the `keyType` substring goes directly into the inf
 | Custom-KEK | Argon2id(custom_pwd, salt=det(username,"custom")) | 32 B | Client RAM only | No | Wraps custom-context FEKs | Per-password change | RAM-only, naturally dies on tab close | This user's custom-encrypted FEKs decryptable |
 | Share-KEK | Argon2id(share_pwd, salt=random32 per share) | 32 B | Recipient RAM only | No | The share envelope | Per share | RAM-only | Only the one share's FEK + download token |
 
-**Tier 2 — Random per-file/per-share.**
+**Tier 2 -- Random per-file/per-share.**
 
 | Key | Generated how | Length | Where stored | Leaves client? | What it encrypts | Rotation | Destruction | Compromise impact |
 |---|---|---|---|---|---|---|---|---|
@@ -1010,7 +1010,7 @@ A second, very minor concern: the `keyType` substring goes directly into the inf
 | Download Token | `crypto/rand` | 32 B | Client RAM, embedded in share envelope; **SHA-256 hash** stored on server | Only as plaintext to the recipient via the envelope, never to server in plain | Authorizes server-side delivery of the share's file chunks | Per share, regenerable | RAM-only | Anyone with the token can fetch the encrypted chunks (still need FEK to decrypt) |
 | Share-salt | `crypto/rand` | 32 B | Server (per share row), base64 | Yes (public) | Salt for Share-KEK derivation | Per share | Server-side persistent | Public, no confidentiality value |
 
-**Tier 3 — Server-managed system secrets (wrapped by `crypto/key_manager.go`).**
+**Tier 3 -- Server-managed system secrets (wrapped by `crypto/key_manager.go`).**
 
 | Key | Generated how | Length | Where stored | Leaves server? | What it encrypts/signs | Rotation | Destruction | Compromise impact |
 |---|---|---|---|---|---|---|---|---|
@@ -1081,7 +1081,7 @@ Listed in priority order; each gap maps to one or more findings.
 | 5 | No test of cross-file FEK swap within the same user | B-02, B-08 | After AAD fix: encrypt two files with same Account-KEK, swap encrypted-FEK blobs, assert decryption fails |
 | 6 | No test of "server cannot recover original plaintext size from padded ciphertext within X bits" | B-06 | Statistical / property test of `CalculatePaddedSize` over many sizes |
 | 7 | No test of Argon2id parameter mismatch between Go and TS | B-01 | Cross-language test: same password+salt+params -> same key byte-for-byte |
-| 8 | No test of "session.go is unused" — once deleted, build-fails on accidental re-import | B-10 | Just delete the file; CI catches re-import |
+| 8 | No test of "session.go is unused" -- once deleted, build-fails on accidental re-import | B-10 | Just delete the file; CI catches re-import |
 | 9 | No test that DEBUG_MODE prints nothing in production builds | B-12 | Build-tag-conditional compilation + test that asserts log output is empty when not in debug |
 | 10 | No test of AAD-concat collision resilience for `CreateAAD` | B-15 | Construct adversarial (shareID, fileID) pairs and assert different AAD outputs |
 | 11 | No fuzz test of envelope parser (`ParseEnvelope`, `DecryptFEK`) on malformed inputs | hardening | `go test -fuzz` corpus |
@@ -1104,11 +1104,11 @@ Non-finding recommendations (not security bugs, but improvements):
 
 4. **Document the file-identity authenticity gap honestly in `docs/privacy.md`.** Until B-02 is fixed, the docs should say: "Arkfile guarantees confidentiality of file *content* from the server, but does not currently guarantee that the file you download is the file you requested. We are working on file-identity authenticity (see ticket)."
 
-5. **Add a "crypto agility version" byte to every encrypted artifact** — already present as `0x01` envelope-version. When B-02 lands as `0x02`, the dispatch is automatic. Make sure the parser **rejects** unknown versions rather than treating them as 0x01.
+5. **Add a "crypto agility version" byte to every encrypted artifact** -- already present as `0x01` envelope-version. When B-02 lands as `0x02`, the dispatch is automatic. Make sure the parser **rejects** unknown versions rather than treating them as 0x01.
 
 6. **Property-test the padding ladder.** Choose a real file-size distribution from public corpora (e.g. Wikipedia file sizes, common-doc-sizes) and compute the information-theoretic leakage of the current 2%-block scheme. Document the result.
 
-7. **Consider adopting RFC 8439 ChaCha20-Poly1305 for chunks.** AES-GCM is fine on modern hardware with AES-NI but suffers a ~2x slowdown on ARM without AES extensions (some mobile chips). ChaCha20 is constant-time everywhere and faster on those devices. Not a finding — just a future consideration.
+7. **Consider adopting RFC 8439 ChaCha20-Poly1305 for chunks.** AES-GCM is fine on modern hardware with AES-NI but suffers a ~2x slowdown on ARM without AES extensions (some mobile chips). ChaCha20 is constant-time everywhere and faster on those devices. Not a finding -- just a future consideration.
 
 8. **Add explicit zeroization helpers in Go that the compiler won't optimize away.** `SecureClear` is a plain `for-range` loop; modern Go compilers may eliminate it. Use `runtime.KeepAlive` or `crypto/subtle.ConstantTimeByteEq` patterns to prevent dead-store elimination.
 
@@ -1122,7 +1122,7 @@ Non-finding recommendations (not security bugs, but improvements):
 
 | Severity | Count | Findings |
 |---|---:|---|
-| Critical | 0 | — |
+| Critical | 0 | -- |
 | High | 3 | B-01, B-02, B-03 |
 | Medium | 6 | B-04, B-05, B-06, B-07, B-08, B-19 |
 | Low | 10 | B-09, B-10, B-11, B-12, B-13, B-14, B-15, B-16, B-17, B-20 |
@@ -1133,6 +1133,6 @@ Non-finding recommendations (not security bugs, but improvements):
 
 Top three risks (Slice B contribution to the eventual executive summary):
 
-1. **B-01 / B-03 / B-19 — server-controlled crypto parameters**. A compromised server can silently weaken every future Argon2id derivation, chunk encryption, and password-policy check. Fix: embed all parameter floors in the client bundle.
-2. **B-02 / B-05 / B-08 — no AAD on file/chunk/FEK encryption**. A malicious server can swap one of a user's own files for another with full integrity verification still passing. Fix: bind `file_id` and chunk index into AEAD AAD for every file-related encryption.
-3. **B-06 — server-applied padding**. Padding policy is operationally meaningful only against bucket-only adversaries; the server itself sees the unpadded ciphertext size, which AGENTS.md implies it should not. Fix: client-side padding before upload.
+1. **B-01 / B-03 / B-19 -- server-controlled crypto parameters**. A compromised server can silently weaken every future Argon2id derivation, chunk encryption, and password-policy check. Fix: embed all parameter floors in the client bundle.
+2. **B-02 / B-05 / B-08 -- no AAD on file/chunk/FEK encryption**. A malicious server can swap one of a user's own files for another with full integrity verification still passing. Fix: bind `file_id` and chunk index into AEAD AAD for every file-related encryption.
+3. **B-06 -- server-applied padding**. Padding policy is operationally meaningful only against bucket-only adversaries; the server itself sees the unpadded ciphertext size, which AGENTS.md implies it should not. Fix: client-side padding before upload.

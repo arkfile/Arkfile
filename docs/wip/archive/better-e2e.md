@@ -501,7 +501,7 @@ Expected result:
 
 This section records what was actually implemented and where the implementation deviated from the original plan.
 
-### Priority 1: Runtime and Reliability — DONE
+### Priority 1: Runtime and Reliability -- DONE
 
 All six items implemented as planned.
 
@@ -513,47 +513,47 @@ All six items implemented as planned.
 - Summary ordering is now deterministic via a dedicated `TEST_ORDER` array (separate from the `TEST_RESULTS` associative array whose iteration order is undefined in bash).
 - Decorative `# ===` and `# ---` section separators removed throughout.
 
-### Priority 2: Structural Refactor — DONE
+### Priority 2: Structural Refactor -- DONE
 
 All helpers implemented as planned except `share_create_for_account_file`, `share_create_for_custom_file`, and `assert_command_failed`, which were not needed because the share creation blocks retained meaningful inline context specific to each share scenario.
 
-**Deviation — Phase numbering:** The original "Proposed Actor-Oriented Flow" described 9 numbered blocks. During implementation, the phases were organized into 13 numbered phases to allow clearer per-topic navigation. The actor grouping intent was preserved (user session, visitor block, user re-login, admin block) but not rewritten into exactly 9 high-level blocks. The custom-password file operations became their own Phase 9, share operations became Phase 10 (with 16 sub-sections), admin status/negative-access became Phase 11, and the original phases 12 and 13 cover cleanup and summary.
+**Deviation -- Phase numbering:** The original "Proposed Actor-Oriented Flow" described 9 numbered blocks. During implementation, the phases were organized into 13 numbered phases to allow clearer per-topic navigation. The actor grouping intent was preserved (user session, visitor block, user re-login, admin block) but not rewritten into exactly 9 high-level blocks. The custom-password file operations became their own Phase 9, share operations became Phase 10 (with 16 sub-sections), admin status/negative-access became Phase 11, and the original phases 12 and 13 cover cleanup and summary.
 
-**Deviation — `share_create_for_custom_file` helper not added:** Share creation for the custom-password file (Share D) retained its inline `bash -c "printf '%s\n%s\n' ..."` form because the stdin ordering (custom password first, share password second) is a meaningful property being tested and was clearer inline.
+**Deviation -- `share_create_for_custom_file` helper not added:** Share creation for the custom-password file (Share D) retained its inline `bash -c "printf '%s\n%s\n' ..."` form because the stdin ordering (custom password first, share password second) is a meaningful property being tested and was clearer inline.
 
-**Deviation — `TOTP_SECRET_FILE` idempotency:** The existing Phase 5 already checks for a saved TOTP secret file and skips setup if present. This was preserved rather than removed, since it makes the script more practical for iterative development use. The `dev-reset.sh` cleanup of `/tmp/arkfile-e2e-test-data` ensures this does not cause stale-state false passes after a full reset.
+**Deviation -- `TOTP_SECRET_FILE` idempotency:** The existing Phase 5 already checks for a saved TOTP secret file and skips setup if present. This was preserved rather than removed, since it makes the script more practical for iterative development use. The `dev-reset.sh` cleanup of `/tmp/arkfile-e2e-test-data` ensures this does not cause stale-state false passes after a full reset.
 
-### Priority 3: Security and Privacy Validations — DONE
+### Priority 3: Security and Privacy Validations -- DONE
 
 All items implemented.
 
-**Deviation — `GET /api/files/metadata` endpoint curl assertion removed:** The original plan called for a direct `curl` test of the `GET /api/files/metadata` endpoint. This was implemented using `curl -sk -H "Authorization: Bearer $("$CLIENT" agent token)" ...` but failed because `agent token` is not a valid CLI subcommand — the agent is an encryption key cache and does not expose or store HTTP session tokens. The assertion was removed and the equivalent privacy property is fully covered by the already-implemented `list-files --raw` check (section 8.4 and 9.3), which calls the same underlying server-side encrypted metadata store via the CLI's authenticated path.
+**Deviation -- `GET /api/files/metadata` endpoint curl assertion removed:** The original plan called for a direct `curl` test of the `GET /api/files/metadata` endpoint. This was implemented using `curl -sk -H "Authorization: Bearer $("$CLIENT" agent token)" ...` but failed because `agent token` is not a valid CLI subcommand -- the agent is an encryption key cache and does not expose or store HTTP session tokens. The assertion was removed and the equivalent privacy property is fully covered by the already-implemented `list-files --raw` check (section 8.4 and 9.3), which calls the same underlying server-side encrypted metadata store via the CLI's authenticated path.
 
-**Deviation — Priority 3.4 (compare failed share-access behavior across cases):** This item was not implemented as an explicit cross-case comparison. Each failure case (wrong password, expired, revoked, exhausted, non-existent) was individually verified to fail and to leave no output file behind. A side-by-side behavioral comparison of the exact CLI/server error strings was not added, as it would be fragile to maintain and the more important property (each case properly rejects the request) is already proven.
+**Deviation -- Priority 3.4 (compare failed share-access behavior across cases):** This item was not implemented as an explicit cross-case comparison. Each failure case (wrong password, expired, revoked, exhausted, non-existent) was individually verified to fail and to leave no output file behind. A side-by-side behavioral comparison of the exact CLI/server error strings was not added, as it would be fragile to maintain and the more important property (each case properly rejects the request) is already proven.
 
-### Priority 4: Cryptographic-Path Coverage — DONE
+### Priority 4: Cryptographic-Path Coverage -- DONE
 
 All items implemented.
 
 - Custom-password file created in Phase 9 (`phase_9_custom_password_file_operations`).
 - `list-files --raw` privacy check for custom file added (section 9.3).
-- Custom file accessibility via normal `list-files` verified (section 9.4) — this replaces the planned `GET /api/files/metadata` check, for the same reason documented under Priority 3 deviations.
+- Custom file accessibility via normal `list-files` verified (section 9.4) -- this replaces the planned `GET /api/files/metadata` check, for the same reason documented under Priority 3 deviations.
 - Owner download with correct and wrong custom password verified (sections 9.5–9.7).
 - Share D (from custom-password file) created in Phase 10 (section 10.4) with correct stdin order.
 - Visitor download of Share D verified with SHA-256 round-trip (section 10.9).
 - Share list enrichment for the custom-password file verified in section 10.5 enrichment assertions.
 
-### Priority 5: Authorization and Session Coverage — DONE
+### Priority 5: Authorization and Session Coverage -- DONE
 
 All items implemented.
 
-**Deviation — Post-logout unauthorized checks placement:** The plan described a standalone "Logged-Out Session Invalidation Block" and a separate "Admin Block 2". In the implemented script, these were merged into the tail of Phase 10 (sections 10.15–10.16) and the body of Phase 11 respectively. This avoided adding a new TOTP login cycle (which the admin block 2 would have required if done standalone after a separate logout). The total TOTP wait count stayed at 3.
+**Deviation -- Post-logout unauthorized checks placement:** The plan described a standalone "Logged-Out Session Invalidation Block" and a separate "Admin Block 2". In the implemented script, these were merged into the tail of Phase 10 (sections 10.15–10.16) and the body of Phase 11 respectively. This avoided adding a new TOTP login cycle (which the admin block 2 would have required if done standalone after a separate logout). The total TOTP wait count stayed at 3.
 
-**Deviation — Session/cache-key invalidation check scope:** The plan called for explicitly proving that `--save-session` and `--cache-key` state are invalidated on logout. In practice, the post-logout command rejections in sections 10.16.1–10.16.4 already prove this: since all commands use `--save-session` and `--cache-key` throughout, their failure after logout confirms the saved session and cached key are no longer operative. No separate test was added beyond the command-level rejection checks.
+**Deviation -- Session/cache-key invalidation check scope:** The plan called for explicitly proving that `--save-session` and `--cache-key` state are invalidated on logout. In practice, the post-logout command rejections in sections 10.16.1–10.16.4 already prove this: since all commands use `--save-session` and `--cache-key` throughout, their failure after logout confirms the saved session and cached key are no longer operative. No separate test was added beyond the command-level rejection checks.
 
-**Deviation — Post-expiry share state:** The plan called for asserting that the enriched `share list` correctly flags an expired share. In the implemented script, Share C expires during the visitor test block (sections 10.12) and the user session is logged out at that point. The post-revoke `share list` in section 10.15 only checks for revoked state (Share A). A post-expiry share state check on Share C was not added because the user was already logged out during the expiry wait period and re-logging in would add a fourth TOTP cycle. The expired state is effectively proven by the download rejection itself (section 10.12).
+**Deviation -- Post-expiry share state:** The plan called for asserting that the enriched `share list` correctly flags an expired share. In the implemented script, Share C expires during the visitor test block (sections 10.12) and the user session is logged out at that point. The post-revoke `share list` in section 10.15 only checks for revoked state (Share A). A post-expiry share state check on Share C was not added because the user was already logged out during the expiry wait period and re-logging in would add a fourth TOTP cycle. The expired state is effectively proven by the download rejection itself (section 10.12).
 
-### Priority 6: dev-reset.sh stale artifact cleanup — DONE (was already present)
+### Priority 6: dev-reset.sh stale artifact cleanup -- DONE (was already present)
 
 When the script was audited, `dev-reset.sh` already contained a step at the end of Step 2 that removes `/tmp/arkfile-e2e-test-data`. No change was needed.
 
@@ -581,22 +581,22 @@ These assertions reuse the already-captured `list_shares_output` variable at zer
 
 # ADDITIONAL ISSUES SURFACED DURING TESTING:
 
-## Issue 1: Agent shutdown failure — root cause and fix
+## Issue 1: Agent shutdown failure -- root cause and fix
 
 ### Root cause
 
 `assert_agent_not_running` uses `pgrep -x "arkfile-client"` as its primary check. This is wrong for two reasons:
 
-1. The agent daemon is a spawned subprocess of the same binary — `pgrep -x "arkfile-client"` matches any running `arkfile-client` process, including the currently executing test CLI call itself. It will almost always find at least one.
+1. The agent daemon is a spawned subprocess of the same binary -- `pgrep -x "arkfile-client"` matches any running `arkfile-client` process, including the currently executing test CLI call itself. It will almost always find at least one.
 2. After `agent stop` sends the stop socket command, the daemon goroutine closes the listener and the stopChan, but the OS process does not exit synchronously from the caller's perspective. Even without reason 1, there is a race window.
 
-The correct check is a socket ping: `"$CLIENT" agent status 2>/dev/null | grep -q "RUNNING"`. If the socket is gone or the daemon is not responding, that returns nothing — a clean, authoritative signal.
+The correct check is a socket ping: `"$CLIENT" agent status 2>/dev/null | grep -q "RUNNING"`. If the socket is gone or the daemon is not responding, that returns nothing -- a clean, authoritative signal.
 
 Additionally, `stop_agent` needs a 1-second pause after sending the stop command to allow the daemon process to fully exit before `assert_agent_not_running` pings the socket.
 
 ### Fix in e2e-test.sh
 
-**`stop_agent`** — add `sleep 1` after the stop call:
+**`stop_agent`** -- add `sleep 1` after the stop call:
 ```bash
 stop_agent() {
     info "Stopping agent (if running)..."
@@ -605,7 +605,7 @@ stop_agent() {
 }
 ```
 
-**`assert_agent_not_running`** — remove `pgrep`, use socket status only:
+**`assert_agent_not_running`** -- remove `pgrep`, use socket status only:
 ```bash
 assert_agent_not_running() {
     local test_name="$1"
@@ -618,7 +618,7 @@ assert_agent_not_running() {
 }
 ```
 
-**`assert_agent_running`** — same cleanup, use socket status only:
+**`assert_agent_running`** -- same cleanup, use socket status only:
 ```bash
 assert_agent_running() {
     local test_name="$1"
@@ -633,16 +633,16 @@ assert_agent_running() {
 
 ---
 
-## Issue 2: Storage Statistics shows "0 B" — root cause and fix
+## Issue 2: Storage Statistics shows "0 B" -- root cause and fix
 
 ### Root cause
 
 The flow is:
 
-1. Client sends `total_size: params.TotalEncSize` — the **total encrypted size**, computed by `calculateTotalEncryptedSize(plaintextSize)`.
+1. Client sends `total_size: params.TotalEncSize` -- the **total encrypted size**, computed by `calculateTotalEncryptedSize(plaintextSize)`.
 2. Server stores that value as `total_size` in the upload session.
 3. `CompleteUpload` reads it back as `totalSizeFloat` and inserts it into `file_metadata` as `size_bytes`.
-4. `AdminSystemStatus` queries `SUM(size_bytes)` — and gets `0 B`.
+4. `AdminSystemStatus` queries `SUM(size_bytes)` -- and gets `0 B`.
 
 So the question is: what is `totalSizeFloat` at step 3? Looking at the INSERT in `CompleteUpload`:
 
@@ -658,7 +658,7 @@ And the INSERT:
 INSERT INTO file_metadata (..., size_bytes, ...) VALUES (..., totalSize, ...)
 ```
 
-This should be non-zero — `TotalEncSize` for a 50 MB file would be around 50 MB + chunk overhead. So why is the DB returning 0?
+This should be non-zero -- `TotalEncSize` for a 50 MB file would be around 50 MB + chunk overhead. So why is the DB returning 0?
 
 The answer is rqlite's handling of `BIGINT` columns. When rqlite returns a very large integer (e.g., ~52 MB = 54,771,856 bytes), it may return it as a float in scientific notation (e.g., `5.477e7`). The `sql.NullFloat64` scan handles this correctly for the in-memory conversion. However, rqlite's `COALESCE(SUM(size_bytes), 0)` and `COALESCE(AVG(size_bytes), 0)` over `BIGINT` columns sometimes returns `0` when the stored value was written via a `float64` cast that got rounded or when rqlite treats the value as a floating-point `0` internally.
 
@@ -669,12 +669,12 @@ This is the most likely actual failure: rqlite is returning `NULL` or an unexpec
 ### What should `size_bytes` store?
 
 There are two reasonable interpretations:
-- **Plaintext file size** — useful to users and for storage quota accounting of logical data
-- **Encrypted blob size** — useful to sysadmins for actual storage consumption
+- **Plaintext file size** -- useful to users and for storage quota accounting of logical data
+- **Encrypted blob size** -- useful to sysadmins for actual storage consumption
 
-Right now the code attempts to store the encrypted size (`TotalEncSize`), but it is also what is used for user storage quota accounting via `user.UpdateStorageUsage(tx, totalSize)`. Using the encrypted size for quota accounting is fine and honest (you are storing the encrypted blob). For the admin system status, showing the encrypted blob size is also the right number — it's what is actually on disk.
+Right now the code attempts to store the encrypted size (`TotalEncSize`), but it is also what is used for user storage quota accounting via `user.UpdateStorageUsage(tx, totalSize)`. Using the encrypted size for quota accounting is fine and honest (you are storing the encrypted blob). For the admin system status, showing the encrypted blob size is also the right number -- it's what is actually on disk.
 
-The real fix is: **make the `total_size` scan robust in `CompleteUpload`**. Use a `sql.NullString` scan and manual parse as a fallback, or use direct `int64` scan rather than relying on `sql.NullFloat64`. Alternatively, store the total size redundantly as a plain `INTEGER` (not BIGINT) in the session if BIGINT causes rqlite type issues. But the cleaner fix is to make the server re-derive the value from what it actually knows — the sum of all uploaded chunk sizes — rather than trusting the client-provided `total_size`.
+The real fix is: **make the `total_size` scan robust in `CompleteUpload`**. Use a `sql.NullString` scan and manual parse as a fallback, or use direct `int64` scan rather than relying on `sql.NullFloat64`. Alternatively, store the total size redundantly as a plain `INTEGER` (not BIGINT) in the session if BIGINT causes rqlite type issues. But the cleaner fix is to make the server re-derive the value from what it actually knows -- the sum of all uploaded chunk sizes -- rather than trusting the client-provided `total_size`.
 
 ### Proposed server-side fix in `CompleteUpload` (`handlers/uploads.go`)
 

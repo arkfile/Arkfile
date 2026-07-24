@@ -1240,61 +1240,61 @@ The primary testing environment uses 1 local SeaweedFS instance (primary) plus r
 Run: `go test ./storage/ ./handlers/ ./models/ -count=1`
 
 **`storage/registry_test.go`** (5 new tests added to existing file):
-- `GetObjectWithFallback` — primary success, secondary fallback, tertiary fallback, all-fail error (pre-existing).
-- `GetObjectChunkWithFallback` — same three-tier patterns (pre-existing).
-- `RemoveObjectAll` — removes from all providers, handles partial failures (pre-existing).
-- `CopyObjectBetweenProviders` — small object streaming with SHA-256 (pre-existing).
-- `HeadObject_Success` / `HeadObject_NotFound` — head object metadata retrieval.
-- `CopyObjectBetweenProviders_LargeObject_Multipart` — 3-part multipart copy with progress callbacks and SHA-256 verification.
-- `CopyObjectBetweenProviders_LargeObject_PartUploadFails` — multipart abort on part upload failure.
-- `CopyObjectBetweenProviders_LargeObject_Cancellation` — context cancellation during multipart copy.
+- `GetObjectWithFallback` -- primary success, secondary fallback, tertiary fallback, all-fail error (pre-existing).
+- `GetObjectChunkWithFallback` -- same three-tier patterns (pre-existing).
+- `RemoveObjectAll` -- removes from all providers, handles partial failures (pre-existing).
+- `CopyObjectBetweenProviders` -- small object streaming with SHA-256 (pre-existing).
+- `HeadObject_Success` / `HeadObject_NotFound` -- head object metadata retrieval.
+- `CopyObjectBetweenProviders_LargeObject_Multipart` -- 3-part multipart copy with progress callbacks and SHA-256 verification.
+- `CopyObjectBetweenProviders_LargeObject_PartUploadFails` -- multipart abort on part upload failure.
+- `CopyObjectBetweenProviders_LargeObject_Cancellation` -- context cancellation during multipart copy.
 
 **`handlers/files_test.go`** (3 new tests added to existing file):
-- `DeleteFile_Success_FallbackToPrimary` — single-provider delete when no storage locations exist (falls back to `Registry.Primary()`).
-- `DeleteFile_WithMultiProviderLocations` — multi-provider delete from primary + secondary locations via `GetActiveFileStorageLocations`.
-- `DeleteFile_PartialDeleteFailure` — secondary provider delete fails, primary succeeds, file metadata still deleted.
+- `DeleteFile_Success_FallbackToPrimary` -- single-provider delete when no storage locations exist (falls back to `Registry.Primary()`).
+- `DeleteFile_WithMultiProviderLocations` -- multi-provider delete from primary + secondary locations via `GetActiveFileStorageLocations`.
+- `DeleteFile_PartialDeleteFailure` -- secondary provider delete fails, primary succeeds, file metadata still deleted.
 
 **`handlers/admin_storage_test.go`** (new file, 13 tests):
-- `AdminStorageStatus_SingleProvider` / `AdminStorageStatus_MultiProvider` — correct provider info with role/stats fields, replication status.
-- `AdminSetPrimary_WrongTier` / `AdminSetPrimary_ProviderNotFound` — role change validation.
-- `AdminTaskStatus_ReturnsProgress` / `AdminTaskStatus_NotFound` — task progress retrieval.
-- `AdminVerifyStorage_Success` — full PutObject/HeadObject/GetObject/RemoveObject verification cycle.
-- `AdminCancelTask_NotFound` — cancel non-existent task.
-- `AdminSwapProviders_NoSecondary` — swap rejected when no secondary configured.
-- `AdminCopyFile_MissingFields` / `AdminCopyFile_NoTaskRunner` — input validation and task runner initialization.
-- `AdminCopyAll_MissingFields` / `AdminCopyUserFiles_MissingFields` — required field validation.
+- `AdminStorageStatus_SingleProvider` / `AdminStorageStatus_MultiProvider` -- correct provider info with role/stats fields, replication status.
+- `AdminSetPrimary_WrongTier` / `AdminSetPrimary_ProviderNotFound` -- role change validation.
+- `AdminTaskStatus_ReturnsProgress` / `AdminTaskStatus_NotFound` -- task progress retrieval.
+- `AdminVerifyStorage_Success` -- full PutObject/HeadObject/GetObject/RemoveObject verification cycle.
+- `AdminCancelTask_NotFound` -- cancel non-existent task.
+- `AdminSwapProviders_NoSecondary` -- swap rejected when no secondary configured.
+- `AdminCopyFile_MissingFields` / `AdminCopyFile_NoTaskRunner` -- input validation and task runner initialization.
+- `AdminCopyAll_MissingFields` / `AdminCopyUserFiles_MissingFields` -- required field validation.
 
 **`handlers/admin_task_runner_test.go`** (new file, 5 tests):
-- `TaskRunner_ConcurrencyLimit` — verifies semaphore capacity, default/negative maxWorkers handling.
-- `TaskRunner_CancelTask_Success` / `TaskRunner_CancelTask_NotFound` — cancellation mechanism.
-- `GetTaskRunner_BeforeAndAfterInit` — nil before `InitTaskRunner`, non-nil after.
-- `TaskRunner_ActiveTasksMapInitialized` — active tasks map ready on creation.
+- `TaskRunner_ConcurrencyLimit` -- verifies semaphore capacity, default/negative maxWorkers handling.
+- `TaskRunner_CancelTask_Success` / `TaskRunner_CancelTask_NotFound` -- cancellation mechanism.
+- `GetTaskRunner_BeforeAndAfterInit` -- nil before `InitTaskRunner`, non-nil after.
+- `TaskRunner_ActiveTasksMapInitialized` -- active tasks map ready on creation.
 
 **`models/file_storage_location_test.go`** (new file, 10 tests):
-- `InsertFileStorageLocation` (+ DB error) — insert with all fields.
-- `GetActiveFileStorageLocations` (+ empty result) — filtered by `status='active'`.
-- `UpdateFileStorageLocationStatus` — status transitions.
-- `BackfillFileStorageLocations` (+ idempotent re-run) — INSERT...SELECT pattern.
-- `RecalculateProviderStats` — COUNT/SUM query + UPDATE flow.
-- `GetFileStorageLocations` — unfiltered retrieval.
-- `CountFilesByProvider` — aggregate count by storage_id.
+- `InsertFileStorageLocation` (+ DB error) -- insert with all fields.
+- `GetActiveFileStorageLocations` (+ empty result) -- filtered by `status='active'`.
+- `UpdateFileStorageLocationStatus` -- status transitions.
+- `BackfillFileStorageLocations` (+ idempotent re-run) -- INSERT...SELECT pattern.
+- `RecalculateProviderStats` -- COUNT/SUM query + UPDATE flow.
+- `GetFileStorageLocations` -- unfiltered retrieval.
+- `CountFilesByProvider` -- aggregate count by storage_id.
 
 **`models/storage_provider_test.go`** (new file, 9 tests):
-- `UpsertStorageProvider_Insert` / `UpsertStorageProvider_Update` — insert when no existing row, update when row exists.
-- `GetStorageProviderByID` (+ not found) — all fields scanned including `time.Time` timestamps.
-- `GetStorageProviderRole` (+ not found) — role-only retrieval.
-- `UpdateStorageProviderStats` — absolute stats update.
-- `IncrementStorageProviderStats` (+ decrement) — delta-based stats adjustment.
+- `UpsertStorageProvider_Insert` / `UpsertStorageProvider_Update` -- insert when no existing row, update when row exists.
+- `GetStorageProviderByID` (+ not found) -- all fields scanned including `time.Time` timestamps.
+- `GetStorageProviderRole` (+ not found) -- role-only retrieval.
+- `UpdateStorageProviderStats` -- absolute stats update.
+- `IncrementStorageProviderStats` (+ decrement) -- delta-based stats adjustment.
 
 **`models/admin_task_test.go`** (new file, 12 tests):
-- `CreateAdminTask` (+ DB error) — insert with returned task_id.
-- `GetAdminTask` (+ not found) — all 12 columns scanned into struct.
-- `UpdateAdminTaskStatus` / `UpdateAdminTaskProgress` / `UpdateAdminTaskDetails` — field updates.
-- `StartAdminTask` / `CompleteAdminTask` / `FailAdminTask` — lifecycle helper functions.
-- `MarkStaleTasksAsFailed` (+ no stale tasks) — bulk update of running tasks older than threshold.
+- `CreateAdminTask` (+ DB error) -- insert with returned task_id.
+- `GetAdminTask` (+ not found) -- all 12 columns scanned into struct.
+- `UpdateAdminTaskStatus` / `UpdateAdminTaskProgress` / `UpdateAdminTaskDetails` -- field updates.
+- `StartAdminTask` / `CompleteAdminTask` / `FailAdminTask` -- lifecycle helper functions.
+- `MarkStaleTasksAsFailed` (+ no stale tasks) -- bulk update of running tasks older than threshold.
 
 **`handlers/admin_test.go`** (1 test removed):
-- Removed `TestUpdateUser_RevokeAccess_SimulateTokenDeleteError` — was identical in behavior to `TestUpdateUser_RevokeAccess_RevokeDBError` (same mock setup, same assertion, misleading name).
+- Removed `TestUpdateUser_RevokeAccess_SimulateTokenDeleteError` -- was identical in behavior to `TestUpdateUser_RevokeAccess_RevokeDBError` (same mock setup, same assertion, misleading name).
 
 ### e2e Test Extensions [COMPLETE]
 

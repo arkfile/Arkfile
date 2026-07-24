@@ -48,7 +48,7 @@ const LOG_PREFIX = '[arkfile-sw]';
 let registrationPromise: Promise<boolean> | null = null;
 
 /**
- * Register the streaming-download Service Worker. Idempotent — multiple calls
+ * Register the streaming-download Service Worker. Idempotent -- multiple calls
  * return the same promise. Resolves to true once the SW is active and
  * controlling the page; false if registration is unavailable or fails.
  */
@@ -127,7 +127,7 @@ export interface SwStreamDownloadOptions {
   /**
    * Optional expected SHA-256 hex digest. If provided, plaintext bytes are
    * hashed as they stream and the result is compared at completion. Mismatch
-   * is reported via the result, never thrown — the file is on disk by then.
+   * is reported via the result, never thrown -- the file is on disk by then.
    */
   expectedSha256Hex?: string;
 }
@@ -168,7 +168,7 @@ export interface SwStreamDownloadCompletion {
  * Stream decrypted bytes to the browser's download manager via the Service Worker.
  *
  * Returns immediately after the SW has been handed the stream and the anchor
- * click has fired. The actual byte transfer happens asynchronously — await
+ * click has fired. The actual byte transfer happens asynchronously -- await
  * `result.completion` if you need to know when streaming + hash verification
  * have finished.
  */
@@ -332,7 +332,7 @@ export async function swStreamDownload(opts: SwStreamDownloadOptions): Promise<S
   //
   // We previously used `<a download>` + `a.click()`, but on Chromium-based
   // browsers (Brave/Chrome) that variant is unreliable when the anchor has
-  // `display:none` and/or `rel="noopener"` — `a.click()` may silently no-op,
+  // `display:none` and/or `rel="noopener"` -- `a.click()` may silently no-op,
   // the browser never issues a fetch for /sw-download/<uuid>, the SW never
   // sees a fetch event, and after ~32 MiB are buffered into the transferred
   // ReadableStream the page-side stream times out. The empty SW console
@@ -342,7 +342,7 @@ export async function swStreamDownload(opts: SwStreamDownloadOptions): Promise<S
   // An iframe pointed at the synthetic URL fetches reliably across browsers
   // and is the same pattern used by StreamSaver.js. The SW intercepts the
   // iframe's navigation, returns its Content-Disposition: attachment Response,
-  // and the browser turns that into a download — no main-frame navigation,
+  // and the browser turns that into a download -- no main-frame navigation,
   // no anchor click required.
   const iframe = document.createElement('iframe');
   iframe.src = `/sw-download/${uuid}`;
@@ -351,7 +351,7 @@ export async function swStreamDownload(opts: SwStreamDownloadOptions): Promise<S
   // Leave the iframe in the DOM long enough for the SW Response to fully
   // drain (large downloads can take many minutes). The SW's own grace
   // window for the entry is 30s after first match plus the stream lifetime,
-  // so removing the iframe early would not abort the download — but keeping
+  // so removing the iframe early would not abort the download -- but keeping
   // it for a generous window avoids any chance of premature teardown.
   setTimeout(() => {
     if (iframe.parentNode) iframe.parentNode.removeChild(iframe);

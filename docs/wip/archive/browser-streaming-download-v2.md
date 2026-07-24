@@ -1,13 +1,13 @@
-# Browser Streaming Download v2 — Service Worker Streaming
+# Browser Streaming Download v2 -- Service Worker Streaming
 
 **Status:** Implemented and verified end-to-end on test.arkfile.net (2026-05-08).
 
 Verified working with cryptographic SHA-256 confirmation (SW path) or
 end-to-end completion (Blob fallback path):
-- Brave regular tab — owner download, 2.47 GB AlmaLinux ISO, **SW path**.
-- Firefox private tab — shared download, 2.47 GB, **SW path** (Firefox allows
+- Brave regular tab -- owner download, 2.47 GB AlmaLinux ISO, **SW path**.
+- Firefox private tab -- shared download, 2.47 GB, **SW path** (Firefox allows
   ephemeral SWs in private windows; cleared on session close).
-- Tor Browser Safer mode — shared download, 2.47 GB, **Blob fallback path**
+- Tor Browser Safer mode -- shared download, 2.47 GB, **Blob fallback path**
   completed end-to-end. KDF stage was 3–4 minutes (Tor Browser disables
   JIT at Safer level, which makes Argon2id much slower). This prompted
   adding a 5-second-quiet-period progress indicator on the share-access
@@ -26,51 +26,51 @@ post-implementation diagnostic story (iframe-trigger fix + UI warning).
 
 ### Source files added
 
-- `client/static/js/src/sw-download.ts` — Service Worker source (TypeScript,
+- `client/static/js/src/sw-download.ts` -- Service Worker source (TypeScript,
   `lib: ["WebWorker"]` via `tsconfig.sw.json`). Bundled by Bun to
   `client/static/js/sw-download.js` (top-level so its default scope covers `/`).
-- `client/static/js/src/files/sw-streaming-download.ts` — page-side wrapper:
+- `client/static/js/src/files/sw-streaming-download.ts` -- page-side wrapper:
   registration, `swStreamDownload(...)`, streaming SHA-256 hashing via
   `@noble/hashes`, AbortSignal cancel wiring, abort-aware pull race.
-- `client/static/js/src/__tests__/sw-streaming-download.test.ts` — Bun unit
+- `client/static/js/src/__tests__/sw-streaming-download.test.ts` -- Bun unit
   tests covering registration plumbing, postMessage payload + ack, generator
   pumping, hash match/mismatch, and AbortSignal cancellation.
-- `tsconfig.sw.json` — separate type-check config for the SW source so the
+- `tsconfig.sw.json` -- separate type-check config for the SW source so the
   WebWorker lib does not clash with the DOM lib used by the rest of the app.
 
 ### Source files modified
 
-- `client/static/js/src/files/streaming-download.ts` — added SW path
+- `client/static/js/src/files/streaming-download.ts` -- added SW path
   (`isSwAvailable()` -> `swStreamDownload(...)`), removed all FSAPI code
   (`streamChunksToDisk`, `fsapiHandlePromise`, `savedViaFileSystemAPI`).
   New result fields: `streamedViaSw`, `hashVerification`. Blob path preserved
   as fallback.
-- `client/static/js/src/files/download.ts` — dropped sync FSAPI plumbing;
+- `client/static/js/src/files/download.ts` -- dropped sync FSAPI plumbing;
   surfaces `showWarning(...)` on hash mismatch.
-- `client/static/js/src/files/list.ts` — dropped sync `showSaveFilePicker()`
+- `client/static/js/src/files/list.ts` -- dropped sync `showSaveFilePicker()`
   call from the Download click handler.
-- `client/static/js/src/shares/share-access.ts` — same treatment; surfaces
+- `client/static/js/src/shares/share-access.ts` -- same treatment; surfaces
   `showWarning(...)` on hash mismatch from share downloads.
-- `client/static/js/src/app.ts` — registers the SW (best-effort) at app init.
-- `client/static/js/package.json` — second `bun build` invocation emits the SW
+- `client/static/js/src/app.ts` -- registers the SW (best-effort) at app init.
+- `client/static/js/package.json` -- second `bun build` invocation emits the SW
   to top-level; `type-check`/`lint` scripts now also run the SW config.
-- `tsconfig.json` — excludes `client/static/js/src/sw-download.ts` from the
+- `tsconfig.json` -- excludes `client/static/js/src/sw-download.ts` from the
   main DOM-lib type-check (it is checked separately via `tsconfig.sw.json`).
-- `client/static/js/src/__tests__/streaming-download.test.ts` — removed FSAPI
+- `client/static/js/src/__tests__/streaming-download.test.ts` -- removed FSAPI
   tests; new "Blob fallback path (SW unavailable)" suite.
 
 ### Server changes
 
-- `handlers/middleware.go` — CSP gains `worker-src 'self'` so the SW can be
+- `handlers/middleware.go` -- CSP gains `worker-src 'self'` so the SW can be
   registered.
-- `handlers/route_config.go` — `Echo.File("/sw-download.js", ...)` serves the
+- `handlers/route_config.go` -- `Echo.File("/sw-download.js", ...)` serves the
   bundled SW; `GET /sw-download/*` returns 404 as defense-in-depth if the SW
   is not active.
 
 ### Build/deploy scripts updated
 
 - `scripts/dev-reset.sh`, `local-deploy.sh`, `local-update.sh`,
-  `test-deploy.sh`, `test-update.sh`, `prod-deploy.sh`, `prod-update.sh` —
+  `test-deploy.sh`, `test-update.sh`, `prod-deploy.sh`, `prod-update.sh` --
   each script now also removes `client/static/js/sw-download.js{,.map}`
   before the TypeScript rebuild so the SW is regenerated fresh.
   `scripts/setup/build.sh` already copies all top-level `.js` files in
@@ -87,13 +87,13 @@ post-implementation diagnostic story (iframe-trigger fix + UI warning).
   estimated at <0.5% and almost entirely unable to run Arkfile's existing
   WebCrypto/WASM stack regardless. Adding a chunked-message fallback would
   expand the trusted code surface without delivering meaningful coverage.
-- **Streaming SHA-256 verification — implemented.** Plaintext bytes are
+- **Streaming SHA-256 verification -- implemented.** Plaintext bytes are
   hashed in-flight with `@noble/hashes` `sha256.create()` as they pass into
   the SW-bound stream. Mismatches are surfaced via `showWarning(...)` after
   the download completes (the file is on disk by then; we cannot un-write it,
   but we can loudly tell the user). No digest values, filenames, or UUIDs are
   ever logged to the console.
-- **Cancel UX — wired through.** `AbortController.abort()` causes both
+- **Cancel UX -- wired through.** `AbortController.abort()` causes both
   (a) the page-side `pull()` to error its stream (responsive even mid-await
   via a `Promise.race` against the abort signal), and (b) a
   `{type:'cancel', uuid}` message to the SW so it cancels its outgoing stream
@@ -137,7 +137,7 @@ behavior reproduced consistently.
 ### Diagnostic technique that finally cracked it
 
 The page console alone could not say what Brave was doing with the synthetic
-`/sw-download/<uuid>` URL — SW-intercepted same-origin URLs do not appear in
+`/sw-download/<uuid>` URL -- SW-intercepted same-origin URLs do not appear in
 the page Network tab. The breakthrough was:
 
 1. **Open DevTools -> Application tab -> Service Workers**, click the **inspect**
@@ -220,7 +220,7 @@ Two problems with that wording emerged from real-world testing:
    exactly the same problem (proven by the absence of the upfront save-file
    prompt that Firefox shows on the SW path).
 2. **It named "Firefox or Tor Browser" as alternatives.** Both can fail too
-   on the exact same case — old Android Firefox + 2.1 GB + private tab
+   on the exact same case -- old Android Firefox + 2.1 GB + private tab
    crashed the tab and triggered the OS low-memory killer on a real test
    device, knocking the WiFi/VPN connection offline as collateral damage.
    We named browsers that we could not actually guarantee would work.
@@ -240,7 +240,7 @@ The gate fires purely on the two facts we do know: SW could not register,
 file is >2 GiB. That is information enough.
 
 The Blob fallback path can fail in many ways depending on the user's
-specific setup — anywhere from a silent timeout to an OS-level memory
+specific setup -- anywhere from a silent timeout to an OS-level memory
 pressure cascade that has been observed (on memory-constrained mobile
 devices) to take down the user's WiFi/VPN connection while the tab dies.
 Given that the failure mode can actively harm the user's network state,
@@ -251,13 +251,13 @@ slightly paternalistic.
 
 | Browser / Tab type | Result | Path used | Hash verification |
 |---|---|---|---|
-| Brave regular tab — 2.47 GB owner download | ✓ Works | SW | match |
-| Firefox private tab (desktop) — 2.47 GB shared download | ✓ Works | SW | match |
-| **Tor Browser Safer mode (desktop) — 2.47 GB shared download** | **✓ Works** | **Blob fallback** (Firefox-base, no Chromium 2 GB ceiling) | (download completed end-to-end; SHA-256 not separately verified) |
-| **Old Android Firefox private tab — 2.1 GB shared download** | **✗ Fails** (silent; OS-OOM cascade observed taking down WiFi/VPN) | Blob fallback (Firefox-base did not register SW in private tab on this old version) | n/a |
-| Brave private tab — 2.47 GB shared download | Predicted to fail; warning UI gates with override | n/a | n/a |
-| Chrome / Edge | Untested; expected same as Brave | — | — |
-| Tor Browser Standard mode (desktop) | Untested; expected same or better than Safer | — | — |
+| Brave regular tab -- 2.47 GB owner download | ✓ Works | SW | match |
+| Firefox private tab (desktop) -- 2.47 GB shared download | ✓ Works | SW | match |
+| **Tor Browser Safer mode (desktop) -- 2.47 GB shared download** | **✓ Works** | **Blob fallback** (Firefox-base, no Chromium 2 GB ceiling) | (download completed end-to-end; SHA-256 not separately verified) |
+| **Old Android Firefox private tab -- 2.1 GB shared download** | **✗ Fails** (silent; OS-OOM cascade observed taking down WiFi/VPN) | Blob fallback (Firefox-base did not register SW in private tab on this old version) | n/a |
+| Brave private tab -- 2.47 GB shared download | Predicted to fail; warning UI gates with override | n/a | n/a |
+| Chrome / Edge | Untested; expected same as Brave | -- | -- |
+| Tor Browser Standard mode (desktop) | Untested; expected same or better than Safer | -- | -- |
 
 The "Old Android Firefox private tab" row was an observed real-world
 failure that motivated the disabled-button gate documented above.
@@ -269,7 +269,7 @@ Absence of the upfront prompt is a reliable indicator that the SW
 path was not used.
 
 Firefox private tab using the **SW path** (not just falling back to Blob) was
-a stronger result than the v2 plan §11.2 predicted — Firefox allows ephemeral
+a stronger result than the v2 plan §11.2 predicted -- Firefox allows ephemeral
 SWs in private windows that are cleared on session close. This means Firefox
 private is a fully supported large-file recipient.
 
@@ -286,7 +286,7 @@ Download complete: chunks=148, bytes_decrypted=2477869106, …
 is 4146 bytes less than `bytes_decrypted` (counted in the chunk generator).
 Both refer to the same plaintext stream. SHA-256 verification still matches
 the full file, so this is an off-by-one in our own logging accounting, not a
-data integrity issue. Investigation deferred — likely the last partial-chunk
+data integrity issue. Investigation deferred -- likely the last partial-chunk
 fragment is being counted on one side but not the other.
 
 ### Diagnostic console.log lines retained
@@ -294,7 +294,7 @@ fragment is being counted on one side but not the other.
 The `[arkfile-sw] fetch: …` log lines added during this round remain in
 `sw-download.ts`. They are privacy-preserving (no UUIDs, no filenames in
 output) and will substantially reduce the cost of diagnosing any future SW
-streaming regression. The cost is three log lines per fetch — negligible.
+streaming regression. The cost is three log lines per fetch -- negligible.
 
 ### Slow-network UX improvement (always-show progress message)
 
@@ -344,8 +344,8 @@ assumption, no leak of crypto internals. Wording deliberately doesn't
 name specific browsers; "older devices or slow networks" describes
 conditions, not tools.
 
-The proper structural fix — **moving Argon2id into a Web Worker** so the
-event loop stays responsive during the KDF — is a separate, larger piece
+The proper structural fix -- **moving Argon2id into a Web Worker** so the
+event loop stays responsive during the KDF -- is a separate, larger piece
 of work and is deferred. Once that lands, a smarter quiet-period UX would
 be possible.
 
@@ -398,13 +398,13 @@ The original `streaming-download.ts` collected all decrypted chunks into a `Uint
 
 ### Phase 2: File System Access API (DEAD CODE in target environment)
 
-After Phase 1, downloading a 2.31 GB AlmaLinux ISO via a public share link in Brave still failed at the very end with `check internet connection` — the symptom that prompted this work in 2026-05-07.
+After Phase 1, downloading a 2.31 GB AlmaLinux ISO via a public share link in Brave still failed at the very end with `check internet connection` -- the symptom that prompted this work in 2026-05-07.
 
 Diagnosis: Chromium-based browsers cannot serve blob URLs for Blobs above ~2 GB through their internal download pipeline. The blob is fully assembled, but the download manager fails to pipe it to disk.
 
 Initial fix attempt: use `showSaveFilePicker()` from the File System Access API to write chunks directly to disk, bypassing the blob URL entirely. The implementation included the critical detail of calling `showSaveFilePicker()` synchronously inside the click event (before any `await`) to satisfy browser user-gesture requirements. Implemented across `share-access.ts`, `list.ts`, `download.ts`, and `streaming-download.ts`. All 319 frontend unit tests passed.
 
-**Production result on `test.arkfile.net` (2026-05-07):** the FSAPI path was never taken. Console diagnostic confirmed `window.showSaveFilePicker` is `undefined` in Brave on the share page. Brave's privacy posture removes the FSAPI from the global `window` object on regular pages — likely because FSAPI is classified as a fingerprinting vector. The code's existence-check (`'showSaveFilePicker' in window`) correctly fell through to the Blob path, which then failed on the >2 GB file.
+**Production result on `test.arkfile.net` (2026-05-07):** the FSAPI path was never taken. Console diagnostic confirmed `window.showSaveFilePicker` is `undefined` in Brave on the share page. Brave's privacy posture removes the FSAPI from the global `window` object on regular pages -- likely because FSAPI is classified as a fingerprinting vector. The code's existence-check (`'showSaveFilePicker' in window`) correctly fell through to the Blob path, which then failed on the >2 GB file.
 
 The FSAPI path is, in our most important target environment (Brave with default settings), dead code. Firefox doesn't ship FSAPI at all. Tor Browser doesn't ship it. Even on Chrome proper, FSAPI requires user permission in some configurations. We cannot rely on it.
 
@@ -416,7 +416,7 @@ The architecturally correct fix.
 
 ## 3. Why Service Workers, and Why They Work in Tor Browser
 
-A Service Worker (SW) is a browser-managed background script registered against an origin/scope that can intercept `fetch` events from pages within that scope. The SW can return a synthetic `Response` whose body is a `ReadableStream`. The browser treats this exactly like any other HTTP response — when the response carries `Content-Disposition: attachment`, the browser streams it directly to its download manager with no involvement of blob URLs.
+A Service Worker (SW) is a browser-managed background script registered against an origin/scope that can intercept `fetch` events from pages within that scope. The SW can return a synthetic `Response` whose body is a `ReadableStream`. The browser treats this exactly like any other HTTP response -- when the response carries `Content-Disposition: attachment`, the browser streams it directly to its download manager with no involvement of blob URLs.
 
 ### Properties relevant to Arkfile's privacy and use cases
 
@@ -427,7 +427,7 @@ A Service Worker (SW) is a browser-managed background script registered against 
 
 ### Tor Browser support (first-class)
 
-Tor Browser is built on Firefox ESR. Recent versions (Tor Browser 12+, since 2023) ship with **Service Workers ENABLED by default** at both `Standard` and `Safer` security levels. Only at `Safest` does Tor Browser disable JavaScript entirely — at which point no JavaScript-based application works, not specifically Arkfile. This is a deliberate user choice.
+Tor Browser is built on Firefox ESR. Recent versions (Tor Browser 12+, since 2023) ship with **Service Workers ENABLED by default** at both `Standard` and `Safer` security levels. Only at `Safest` does Tor Browser disable JavaScript entirely -- at which point no JavaScript-based application works, not specifically Arkfile. This is a deliberate user choice.
 
 Therefore, **Tor Browser at Standard or Safer is a fully supported client for SW streaming**, with the same code path as Brave/Chrome/Firefox/etc. There is no special-casing, no "use CLI for >1.5 GB" message, no apologetic UX for Tor users.
 
@@ -500,7 +500,7 @@ The actual encrypted-chunk fetching, AES-GCM decryption, retry logic, and progre
 Top-level path (NOT inside `/js/dist/`) so its scope can cover `/sw-download/*`. Plain JavaScript (not TypeScript-compiled) to avoid build-tool complications.
 
 ```javascript
-// sw-download.js — Arkfile streaming download Service Worker
+// sw-download.js -- Arkfile streaming download Service Worker
 //
 // Intercepts /sw-download/<uuid>?filename=... requests from same-origin pages
 // and responds with a Content-Disposition: attachment Response whose body is
@@ -516,7 +516,7 @@ const SW_VERSION = '1';  // Bump on code changes to force update.
 // Map<uuid, { stream: ReadableStream, filename: string, contentLength?: number, expiresAt: number }>
 const pendingStreams = new Map();
 
-// Stale-stream cleanup (5 min TTL — page should trigger fetch within seconds)
+// Stale-stream cleanup (5 min TTL -- page should trigger fetch within seconds)
 setInterval(() => {
   const now = Date.now();
   for (const [uuid, entry] of pendingStreams) {
@@ -844,9 +844,9 @@ type AckMessage = { type: 'ack'; uuid: string };
 type PongMessage = { type: 'pong'; version: string };
 ```
 
-The page transfers the `ReadableStream` to the SW using `postMessage(message, [stream, port])` where the second argument is the transfer list. After transfer, the page no longer has access to the stream — it lives in the SW's context. This is supported in Brave/Chrome 92+, Firefox 100+, Safari 16.4+.
+The page transfers the `ReadableStream` to the SW using `postMessage(message, [stream, port])` where the second argument is the transfer list. After transfer, the page no longer has access to the stream -- it lives in the SW's context. This is supported in Brave/Chrome 92+, Firefox 100+, Safari 16.4+.
 
-For the rare browser that lacks transferable `ReadableStream` support, a chunked-message fallback would send chunks one at a time via a `MessageChannel`. This fallback is documented but deferred to a follow-up task — current target browsers (including Tor Browser 12+) all support transferable streams.
+For the rare browser that lacks transferable `ReadableStream` support, a chunked-message fallback would send chunks one at a time via a `MessageChannel`. This fallback is documented but deferred to a follow-up task -- current target browsers (including Tor Browser 12+) all support transferable streams.
 
 ---
 
@@ -855,12 +855,12 @@ For the rare browser that lacks transferable `ReadableStream` support, a chunked
 | Browser | SW Streaming (preferred) | Blob Fallback (safety net) | First-Class? |
 |---|---|---|---|
 | **Tor Browser 12+ (Standard/Safer)** | **Works** | Works to several GB (Firefox base) | **Yes** |
-| Tor Browser 12+ (Safest) | N/A — JS off by user choice | N/A — JS off by user choice | User opted out |
+| Tor Browser 12+ (Safest) | N/A -- JS off by user choice | N/A -- JS off by user choice | User opted out |
 | Brave (any modern version, shields up or down) | Works | Fails on >2 GB | Yes |
 | Chrome 89+ | Works | Fails on >2 GB | Yes |
 | Edge 89+ | Works | Fails on >2 GB | Yes |
 | Firefox 100+ | Works | Works to several GB | Yes |
-| Firefox 80–99 | Works (no transferable stream — chunked-message fallback) | Works | Yes (with fallback) |
+| Firefox 80–99 | Works (no transferable stream -- chunked-message fallback) | Works | Yes (with fallback) |
 | Safari 16.4+ | Works | Works | Yes |
 | Safari 14–16.3 | Works (chunked-message fallback) | Works | Yes (with fallback) |
 | Mobile Brave/Chrome | Works | Fails on >2 GB | Yes |
@@ -881,11 +881,11 @@ When a user loads the page after a deployment that includes a new SW, the SW dow
 
 ### 8.2 SW updates
 
-When the SW code changes, browsers detect the change by byte-comparing the script. To force updates after a deploy, the registration script can be cache-busted (e.g., `/sw-download.js?v=<git-hash>`). For a greenfield app this is overkill — `skipWaiting`/`clients.claim` plus a normal page reload after deploy is sufficient.
+When the SW code changes, browsers detect the change by byte-comparing the script. To force updates after a deploy, the registration script can be cache-busted (e.g., `/sw-download.js?v=<git-hash>`). For a greenfield app this is overkill -- `skipWaiting`/`clients.claim` plus a normal page reload after deploy is sufficient.
 
 ### 8.3 SW eviction
 
-Browsers may evict idle SWs to save memory. The page's `registerSwDownload()` is idempotent — calling it on every page load re-registers if needed.
+Browsers may evict idle SWs to save memory. The page's `registerSwDownload()` is idempotent -- calling it on every page load re-registers if needed.
 
 ### 8.4 Page closed mid-download
 
@@ -901,7 +901,7 @@ Some niche environments (private browsing modes that disable SW, browsers with p
 
 ### 8.7 Tor Browser and SW persistence
 
-Tor Browser intentionally does NOT persist Service Worker storage across browser sessions (it follows the same isolation rules as cookies and other storage). Each new Tor Browser session re-registers the SW on first page load. This is fine — registration is fast and idempotent.
+Tor Browser intentionally does NOT persist Service Worker storage across browser sessions (it follows the same isolation rules as cookies and other storage). Each new Tor Browser session re-registers the SW on first page load. This is fine -- registration is fast and idempotent.
 
 ---
 
@@ -992,7 +992,7 @@ Add a new test: register the SW, perform a small share download, verify the file
 
 ### 11.4 SHA-256 verification
 
-The page's `downloadSharedFile()` returns `sha256sum` from the share envelope. Currently the page does not verify the downloaded bytes against this hash, because hashing the full file would defeat the streaming approach. Verification should be done via a `TransformStream` that hashes plaintext chunks as they flow past, finalizing on stream close — this is a small enhancement to add as part of this work, allowing a post-download integrity check displayed in the UI without buffering. The hash result can be logged to console and optionally surfaced via a "Verify integrity" button.
+The page's `downloadSharedFile()` returns `sha256sum` from the share envelope. Currently the page does not verify the downloaded bytes against this hash, because hashing the full file would defeat the streaming approach. Verification should be done via a `TransformStream` that hashes plaintext chunks as they flow past, finalizing on stream close -- this is a small enhancement to add as part of this work, allowing a post-download integrity check displayed in the UI without buffering. The hash result can be logged to console and optionally surfaced via a "Verify integrity" button.
 
 ---
 
@@ -1000,7 +1000,7 @@ The page's `downloadSharedFile()` returns `sha256sum` from the share envelope. C
 
 1. Implement everything in a feature branch.
 2. `sudo bash scripts/dev-reset.sh` and run all unit tests; all 319+ tests must pass.
-3. Run `bash scripts/testing/e2e-test.sh` to verify the existing CLI e2e tests still pass (they should — the CLI uses no browser code).
+3. Run `bash scripts/testing/e2e-test.sh` to verify the existing CLI e2e tests still pass (they should -- the CLI uses no browser code).
 4. Run `sudo bash scripts/testing/e2e-playwright.sh` to verify the Playwright tests pass with the new SW path.
 5. Deploy to `test.arkfile.net` via `sudo bash scripts/prod-update.sh`.
 6. Manual verification across Brave (shields up), Chrome, Firefox, Tor Browser (Standard), with the original 2.3 GB AlmaLinux ISO.
@@ -1031,7 +1031,7 @@ Split the >2 GB Blob into multiple sub-2 GB Blobs, trigger N sequential download
 
 ### Server-side decryption proxy
 
-Have the server decrypt and stream plaintext to the browser via standard HTTP. Violates the privacy model — the server would see plaintext. **Rejected hard, contradicts AGENTS.md.**
+Have the server decrypt and stream plaintext to the browser via standard HTTP. Violates the privacy model -- the server would see plaintext. **Rejected hard, contradicts AGENTS.md.**
 
 ### Page reload trick
 
@@ -1081,7 +1081,7 @@ Adds a 600+ line MIT-licensed dependency for code that is genuinely small (~250 
 
 ## 17. References
 
-- StreamSaver.js: https://github.com/jimmywarting/StreamSaver.js (MIT) — canonical implementation of this pattern, used as a technique reference.
+- StreamSaver.js: https://github.com/jimmywarting/StreamSaver.js (MIT) -- canonical implementation of this pattern, used as a technique reference.
 - W3C Service Workers spec: https://w3c.github.io/ServiceWorker/
 - W3C Streams API spec: https://streams.spec.whatwg.org/
 - Tor Browser security level documentation: https://tb-manual.torproject.org/security-settings/

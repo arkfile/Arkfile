@@ -514,7 +514,7 @@ describe('StreamingDownloadManager - SW DataCloneError Fallback', () => {
 
   test('does not fall back to Blob when SW reports ack timeout', async () => {
     // Simulate ack timeout by rejecting from postMessage path with the same
-    // message swStreamDownload uses — must NOT reuse the generator for Blob.
+    // message swStreamDownload uses -- must NOT reuse the generator for Blob.
     const controller = {
       postMessage: () => {
         throw new Error('SW init ack timeout');

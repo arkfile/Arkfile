@@ -23,7 +23,7 @@ These features build on top of the existing single-file chunked upload pipeline.
 ## Current State
 
 ### Upload Flow
-- The HTML file input is `<input type="file" id="fileInput">` — single file only, no `multiple` attribute, no `webkitdirectory`.
+- The HTML file input is `<input type="file" id="fileInput">` -- single file only, no `multiple` attribute, no `webkitdirectory`.
 - The frontend `handleFileUpload()` reads `fileInput.files[0]` and calls `uploadFile(file, options)` for exactly one file.
 - The backend exposes a per-file pipeline: `POST /api/uploads/init` -> `POST /api/uploads/:sessionId/chunks/:chunkNumber` x N -> `POST /api/uploads/:sessionId/complete`. Each file is an independent upload session.
 - `arkfile-client` takes `--file FILE` (one path) on the upload command.
@@ -116,9 +116,9 @@ Helpers to add:
 - Go CLI: `BuildFolderPathAAD(fileID, username string) []byte` in a shared `cmd/arkfile-client/aad.go` (or a new `crypto/aad.go` if we want to share with server-side code later).
 
 What this prevents:
-- **Cross-file swap** (attacker or bug copies file X's folder-path blob onto file Y within the same user account — without AAD, decrypts cleanly with the wrong file).
+- **Cross-file swap** (attacker or bug copies file X's folder-path blob onto file Y within the same user account -- without AAD, decrypts cleanly with the wrong file).
 - **Cross-user confusion** (defense in depth: even if somehow a path blob is assigned to another user's row, the username AAD mismatch prevents silent successful decryption).
-- **Silent corruption propagation** — any mix-up of which blob belongs to which file surfaces as an explicit decryption error rather than silently displaying the wrong folder.
+- **Silent corruption propagation** -- any mix-up of which blob belongs to which file surfaces as an explicit decryption error rather than silently displaying the wrong folder.
 
 Does not prevent (accepted for v1):
 - Rollback attacks on the same `(file_id, username)` pair (would require a version counter in AAD; overkill for v1).
@@ -170,7 +170,7 @@ Response:
 
 Rationale:
 - Current clients infer storage info as a side-effect of `POST /api/login`, `GET /api/files`, and `POST /api/uploads/:session/complete`. For batch upload we want a cheap, purpose-built "how much room do I have?" primitive that doesn't require fetching the full file list.
-- Both web and CLI use this for **batch pre-flight**: before any hashing/encryption/upload begins, sum the client-side-computable `calculateTotalEncryptedSize(file.size) + padding` over the selected files and compare against `available_bytes`. If the batch doesn't fit, show the user "This batch needs X MB; you have Y MB available — remove N files" before any work starts.
+- Both web and CLI use this for **batch pre-flight**: before any hashing/encryption/upload begins, sum the client-side-computable `calculateTotalEncryptedSize(file.size) + padding` over the selected files and compare against `available_bytes`. If the batch doesn't fit, show the user "This batch needs X MB; you have Y MB available -- remove N files" before any work starts.
 - Padding is deterministic (size -> padded-size mapping), so the client can compute both the encrypted size and the padded size locally.
 
 ### 11. Performance Targets for Tree View
@@ -178,7 +178,7 @@ Rationale:
 - Expected cost (rough): ~3 AES-GCM-Decrypt calls per file on small blobs. On mid-range mobile (~0.5 ms/call) that is:
   - 1,000 files ≈ 1.5 s
   - 2,000 files ≈ 3 s (acceptable with a progress indicator)
-  - 10,000 files ≈ 15 s (unacceptable — triggers v1.5 work)
+  - 10,000 files ≈ 15 s (unacceptable -- triggers v1.5 work)
 - Show a visible progress indicator ("Decrypting N/M…") when total count exceeds 500.
 - Cache decrypted metadata in `sessionStorage` keyed by `file_id` so navigating away and back doesn't re-pay the cost.
 - If any real user hits >2,000 files, add lazy decryption: only decrypt folder paths when tree view is active; flat view only needs filenames. That's a v1.5 follow-up, not blocking v1.
@@ -202,7 +202,7 @@ Rationale:
 8. Extend encrypted export bundle to include folder-path fields. Round-trip test.
 9. **Verify rate-limiting posture** (`handlers/rate_limiting.go`, `handlers/route_config.go`): confirm or adjust so `POST /api/uploads/init` and chunk endpoints are not burst-limited for authenticated approved users in a way that would break sequential 100+-file batch upload.
 
-### Phase 2: Multi-File Upload — Web Frontend (Sequential)
+### Phase 2: Multi-File Upload -- Web Frontend (Sequential)
 1. Add `multiple` attribute to `<input type="file" id="fileInput">`.
 2. Refactor `handleFileUpload()` into `handleMultiFileUpload()`:
    - Read all files from `fileInput.files`.
@@ -210,7 +210,7 @@ Rationale:
    - Resolve account key once (cached after first derivation).
    - Upload files sequentially, calling existing `uploadFile()` per file.
 3. Batch progress UI:
-   - Overall: "Uploading file 3 of 17 — 45% of batch"
+   - Overall: "Uploading file 3 of 17 -- 45% of batch"
    - Per-file: current filename + chunk progress (reuse existing progress overlay component).
 4. Partial-failure handling:
    - If a file fails (network error, validation, quota), log it, continue with remaining files.
@@ -218,7 +218,7 @@ Rationale:
    - **Stop-on-fatal exceptions:** if the server returns 403 (approval revoked, quota exceeded mid-batch), stop the batch rather than continuing; the remaining files will just keep failing for the same reason.
 5. Test with both account password and custom password types, mixed within a batch.
 
-### Phase 3: Folder Upload — Web Frontend
+### Phase 3: Folder Upload -- Web Frontend
 1. Add a separate folder upload button/input using `webkitdirectory`.
 2. Update file input label to show selected count: "17 files, 3 folders selected."
 3. For each selected file:
@@ -228,7 +228,7 @@ Rationale:
    - Include `encrypted_folder_path` + `folder_path_nonce` in `CreateUploadSession` body.
 4. Round-trip test: upload a folder, verify file list API returns the expected encrypted paths, decrypt round-trips to the same canonical form.
 
-### Phase 4: Folder Display — Web Frontend
+### Phase 4: Folder Display -- Web Frontend
 1. In the files listing fetch, decrypt `encrypted_filename`, `encrypted_sha256sum`, and `encrypted_folder_path` per file.
 2. Build a client-side tree:
    - Parse canonical paths into nested objects.
@@ -252,7 +252,7 @@ Rationale:
 6. Summary at end including any rejected files and per-file failures.
 
 ### Phase 6: `arkfile-client` Tree Listing
-1. Add `--tree` flag to `list-files`. (Default remains flat — justified by UX and scripting/piping, NOT by backward compatibility.)
+1. Add `--tree` flag to `list-files`. (Default remains flat -- justified by UX and scripting/piping, NOT by backward compatibility.)
 2. Decrypt all filenames + folder paths.
 3. Build in-memory tree.
 4. Render `tree`-style output:
@@ -320,48 +320,48 @@ Not on the critical path for folder *upload*.
 
 Before Phase 1 code changes begin, read the following files and confirm the assumptions this doc makes:
 
-1. **`handlers/rate_limiting.go`** — verify `/api/uploads/*` is either unrestricted or comfortably tolerant for authed+approved users doing sequential batch uploads. Document findings; adjust if needed.
-2. **`handlers/route_config.go`** — confirm the route registration for upload endpoints doesn't attach any per-endpoint middleware that would throttle batch uploads. Confirm the new `GET /api/user/storage` route fits the existing auth-required group cleanly.
-3. **`handlers/export.go` + `client/static/js/src/files/export.ts`** — map out where folder-path fields need to be plumbed in the export bundle format and the import/restore path. Confirm the export format has a clean extension point rather than a rigid schema.
-4. **Existing AAD helper style (`handlers/file_shares.go` for share-envelope AAD construction)** — make sure the new `buildFolderPathAAD` helper matches the project's existing naming/style for AAD byte layout.
-5. **`crypto/chunking-params.json` pattern** — follow the same loading pattern for the new `crypto/folder-path-params.json` so both TS and Go read it uniformly.
+1. **`handlers/rate_limiting.go`** -- verify `/api/uploads/*` is either unrestricted or comfortably tolerant for authed+approved users doing sequential batch uploads. Document findings; adjust if needed.
+2. **`handlers/route_config.go`** -- confirm the route registration for upload endpoints doesn't attach any per-endpoint middleware that would throttle batch uploads. Confirm the new `GET /api/user/storage` route fits the existing auth-required group cleanly.
+3. **`handlers/export.go` + `client/static/js/src/files/export.ts`** -- map out where folder-path fields need to be plumbed in the export bundle format and the import/restore path. Confirm the export format has a clean extension point rather than a rigid schema.
+4. **Existing AAD helper style (`handlers/file_shares.go` for share-envelope AAD construction)** -- make sure the new `buildFolderPathAAD` helper matches the project's existing naming/style for AAD byte layout.
+5. **`crypto/chunking-params.json` pattern** -- follow the same loading pattern for the new `crypto/folder-path-params.json` so both TS and Go read it uniformly.
 
 ---
 
 ## Files That Will Be Modified
 
 ### Backend (Go)
-- `database/unified_schema.sql` — add `encrypted_folder_path`, `folder_path_nonce` columns
-- `handlers/uploads.go` — accept folder path in `CreateUploadSession`; persist through `CompleteUpload`
-- `handlers/files.go` — include folder path fields in list/meta responses; add `GetUserStorage` handler
-- `handlers/route_config.go` — wire `GET /api/user/storage`
-- `handlers/export.go` — include folder path in export bundle
-- `models/file.go` — add fields to `FileMetadata` struct
+- `database/unified_schema.sql` -- add `encrypted_folder_path`, `folder_path_nonce` columns
+- `handlers/uploads.go` -- accept folder path in `CreateUploadSession`; persist through `CompleteUpload`
+- `handlers/files.go` -- include folder path fields in list/meta responses; add `GetUserStorage` handler
+- `handlers/route_config.go` -- wire `GET /api/user/storage`
+- `handlers/export.go` -- include folder path in export bundle
+- `models/file.go` -- add fields to `FileMetadata` struct
 
 ### Frontend (TypeScript)
-- `client/static/index.html` — multi-file input (`multiple`), folder upload button (`webkitdirectory`)
-- `client/static/js/src/files/upload.ts` — multi-file loop, folder path encryption, pre-flight quota check
-- `client/static/js/src/files/list.ts` — tree building, tree rendering, flat/tree toggle
-- `client/static/js/src/files/folder-path.ts` — new file: canonicalize + validate shared helper
-- `client/static/js/src/crypto/aad.ts` — new file (or extend existing crypto helpers): `buildFolderPathAAD`
-- `client/static/js/src/files/export.ts` — plumb folder path into export bundle
-- `client/static/css/styles.css` — tree component styles
-- `client/static/js/src/types/api.d.ts` — add folder path fields to `ServerFileEntry`; add `GET /api/user/storage` response type
+- `client/static/index.html` -- multi-file input (`multiple`), folder upload button (`webkitdirectory`)
+- `client/static/js/src/files/upload.ts` -- multi-file loop, folder path encryption, pre-flight quota check
+- `client/static/js/src/files/list.ts` -- tree building, tree rendering, flat/tree toggle
+- `client/static/js/src/files/folder-path.ts` -- new file: canonicalize + validate shared helper
+- `client/static/js/src/crypto/aad.ts` -- new file (or extend existing crypto helpers): `buildFolderPathAAD`
+- `client/static/js/src/files/export.ts` -- plumb folder path into export bundle
+- `client/static/css/styles.css` -- tree component styles
+- `client/static/js/src/types/api.d.ts` -- add folder path fields to `ServerFileEntry`; add `GET /api/user/storage` response type
 
 ### CLI (Go)
-- `cmd/arkfile-client/commands.go` — `--dir` flag for upload; `--tree` and optional `--folder` flags for `list-files`
-- `cmd/arkfile-client/folderpath.go` — new file: canonicalize + validate shared helper (mirrors TS)
-- `cmd/arkfile-client/aad.go` — new file (or extend existing): `BuildFolderPathAAD` (mirrors TS)
+- `cmd/arkfile-client/commands.go` -- `--dir` flag for upload; `--tree` and optional `--folder` flags for `list-files`
+- `cmd/arkfile-client/folderpath.go` -- new file: canonicalize + validate shared helper (mirrors TS)
+- `cmd/arkfile-client/aad.go` -- new file (or extend existing): `BuildFolderPathAAD` (mirrors TS)
 
 ### Config
-- `crypto/folder-path-params.json` — new file: max depth / segment length / total length / forbidden chars
+- `crypto/folder-path-params.json` -- new file: max depth / segment length / total length / forbidden chars
 
 ### Tests
-- `scripts/testing/e2e-test.sh` — multi-file upload tests, folder path round-trip, pre-flight quota rejection
-- `scripts/testing/e2e-playwright.ts` — browser-level folder upload + tree view
-- `handlers/uploads_test.go` — folder path field handling
-- `handlers/files_test.go` — folder path in responses; `GetUserStorage` endpoint tests
-- `handlers/export_test.go` — folder path included in export bundle
+- `scripts/testing/e2e-test.sh` -- multi-file upload tests, folder path round-trip, pre-flight quota rejection
+- `scripts/testing/e2e-playwright.ts` -- browser-level folder upload + tree view
+- `handlers/uploads_test.go` -- folder path field handling
+- `handlers/files_test.go` -- folder path in responses; `GetUserStorage` endpoint tests
+- `handlers/export_test.go` -- folder path included in export bundle
 
 ---
 
@@ -397,7 +397,7 @@ See OQ-4. Requires a separate design doc covering share-envelope shape, recipien
 See OQ-5. Metadata-only endpoint + UI/CLI affordances.
 
 ### Lazy Metadata Decryption for Very Large File Counts
-If real users hit >2,000 files, add lazy folder-path decryption (only when tree view is active) and pagination of the list API. The API already accepts `limit`/`offset` — the work is on the client side.
+If real users hit >2,000 files, add lazy folder-path decryption (only when tree view is active) and pagination of the list API. The API already accepts `limit`/`offset` -- the work is on the client side.
 
 ### Extend AAD Binding to Filename + SHA256 Blobs
 See OQ-2. Independent refactor.

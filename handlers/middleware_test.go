@@ -296,7 +296,7 @@ func TestCSRFMiddleware_NoCookie_PassesThrough(t *testing.T) {
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodPost, "/api/files", nil)
 	req.Header.Set("Authorization", "Bearer cli-token")
-	// No X-CSRF-Token, no cookie — CLI path.
+	// No X-CSRF-Token, no cookie -- CLI path.
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -319,7 +319,7 @@ func TestCSRFMiddleware_SafeMethod_PassesThrough(t *testing.T) {
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/api/files", nil)
 	req.AddCookie(&http.Cookie{Name: CookieFullToken, Value: "full-jwt"})
-	// No X-CSRF-Token — GET is exempt.
+	// No X-CSRF-Token -- GET is exempt.
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 

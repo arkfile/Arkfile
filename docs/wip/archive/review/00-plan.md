@@ -1,4 +1,4 @@
-# Arkfile In-Depth Security Review — Plan & Tracker
+# Arkfile In-Depth Security Review -- Plan & Tracker
 
 This document is the master tracker for the multi-session security review of the Arkfile codebase. It defines scope, ground rules, slice decomposition, output format, status, and a preliminary list of items considered N/A for this codebase.
 
@@ -14,7 +14,7 @@ Perform an adversarial, evidence-backed security review of the Arkfile codebase 
 
 - OPAQUE authentication (Go server, CGO wrapper, vendored C libopaque/liboprf/libsodium, browser WASM client)
 - Go CLI clients (`arkfile-client`, `arkfile-admin`) including OPAQUE registration/login flows, password lifecycle, session-file hygiene, the local key-agent daemon, CLI flag-based leakage surfaces (e.g. `--totp-secret` argv exposure), and CLI binary supply chain
-- TOTP as **mandatory 2FA** for all authenticated access and user actions across browser and both CLIs — enrollment, verify, backup codes, lockout, recovery, per-endpoint TOTP gating, and the two-tier JWT model (post-OPAQUE temp token vs. post-TOTP full JWT) enforced by a dedicated TOTP middleware
+- TOTP as **mandatory 2FA** for all authenticated access and user actions across browser and both CLIs -- enrollment, verify, backup codes, lockout, recovery, per-endpoint TOTP gating, and the two-tier JWT model (post-OPAQUE temp token vs. post-TOTP full JWT) enforced by a dedicated TOTP middleware
 - Argon2id key derivation and the account / custom / share password key hierarchy
 - Client-side file encryption, chunked streaming upload/download, envelope format
 - File sharing flow (share envelope, share password, anonymous recipient access)
@@ -24,7 +24,7 @@ Perform an adversarial, evidence-backed security review of the Arkfile codebase 
 - Build, deployment, and operational security (`scripts/`, `Caddyfile*`, `systemd/`)
 - Telemetry, logging, and PII hygiene per Arkfile's "no IP, no PII" privacy posture
 
-The review must produce concrete, code-backed findings — not generic best-practice commentary.
+The review must produce concrete, code-backed findings -- not generic best-practice commentary.
 
 ---
 
@@ -102,7 +102,7 @@ The audit is split into six analysis slices (A–F) plus a synthesis slice (G). 
 
 > A -> B -> C -> D -> E -> F -> G
 
-### Slice A — Auth & OPAQUE (incl. CLI auth flows and TOTP enforcement)
+### Slice A -- Auth & OPAQUE (incl. CLI auth flows and TOTP enforcement)
 **Output:** `docs/wip/review/01-auth-opaque.md`
 **`idsrp.md` sections:** §4 (OPAQUE), §9 (session/cookie/token), §15 (password change / recovery), parts of §3 (WASM/opaque.js), parts of §14 (telemetry around auth), **§22 (CLIs + mandatory TOTP)**.
 **Code in scope (Server + Browser):**
@@ -113,7 +113,7 @@ The audit is split into six analysis slices (A–F) plus a synthesis slice (G). 
 - TypeScript: `client/static/js/src/auth/**`, WASM loading and `opaque.js` integration, browser TOTP enroll/verify UI
 - Auth tests: `auth/jwt_test.go`, `auth/totp_test.go`, `auth/totp_backup_test.go`, `auth/token_revocation_test.go`, `handlers/auth_test.go`, `handlers/auth_test_helpers.go`
 
-**Code in scope (Go CLI clients — per `idsrp.md` §22.1):**
+**Code in scope (Go CLI clients -- per `idsrp.md` §22.1):**
 - `cmd/arkfile-client/main.go` (register, login, TOTP entry, session save/load, password I/O)
 - `cmd/arkfile-client/commands.go` (the OPAQUE-bearing command paths and the deliberate password-lifetime decisions)
 - `cmd/arkfile-client/agent.go`, `cmd/arkfile-client/agent_test.go` (key-caching daemon, Unix-socket IPC, TTL, wipe logic, digest-cache integrity)
@@ -130,7 +130,7 @@ The audit is split into six analysis slices (A–F) plus a synthesis slice (G). 
 - CGO boundary: input validation, length handling, return-code checks, memory zeroing.
 - WASM pinning / SRI / build provenance.
 
-**Specifically must answer (Mandatory TOTP / two-tier JWT — per `idsrp.md` §22.2):**
+**Specifically must answer (Mandatory TOTP / two-tier JWT -- per `idsrp.md` §22.2):**
 - Two-tier JWT model: confirm post-OPAQUE temp token vs. post-TOTP full JWT are cryptographically distinct (separate audience claim, separate signing key, in-DB allowlist, or `totp_verified=true` claim). The temp token MUST be rejected by every route except TOTP-verify / TOTP-enrollment-completion.
 - TOTP middleware chokepoint: single function, applied to every protected route; verify against `handlers/route_config.go`. No per-handler ad-hoc checks.
 - TOTP enrollment: secret entropy (CSPRNG, ≥160 bits), server-side at-rest encryption of the secret (which key encrypts it? rotated how?), QR/URI not logged, finalize requires a valid first code, no race between two concurrent enrollments.
@@ -140,10 +140,10 @@ The audit is split into six analysis slices (A–F) plus a synthesis slice (G). 
 - Admin TOTP: admin login forces TOTP; admin bootstrap either requires immediate TOTP enrollment or clearly constrains the deferral window.
 - Dev/test bypass: `ADMIN_DEV_TEST_API_ENABLED=true`, `dev-reset.sh`, and debug-mode toggles must not silently disable the TOTP middleware in non-dev builds. `config/security_config.go` must fail closed on conflicting flags.
 
-**Specifically must answer (Go CLI clients — per `idsrp.md` §22.1):**
+**Specifically must answer (Go CLI clients -- per `idsrp.md` §22.1):**
 - OPAQUE protocol-state correctness parity between `arkfile-client` / `arkfile-admin` and the browser. Any divergence in `ClientCreateRegistrationRequest` / `ClientCreateCredentialRequest` / `ClientRecoverCredentials` / finalize calls.
-- Password lifecycle in CLIs: when is the password byte buffer zeroed? Justify the explicit `// NOTE: Do NOT zero password here` in `commands.go` — is it strictly necessary, and is the residual lifetime minimized?
-- Session file location, permissions (expect 0600), serialized contents — confirm no KEK / OPAQUE export / TOTP material is persisted.
+- Password lifecycle in CLIs: when is the password byte buffer zeroed? Justify the explicit `// NOTE: Do NOT zero password here` in `commands.go` -- is it strictly necessary, and is the residual lifetime minimized?
+- Session file location, permissions (expect 0600), serialized contents -- confirm no KEK / OPAQUE export / TOTP material is persisted.
 - `--totp-secret` argv exposure (`/proc/<pid>/cmdline`, shell history, process accounting). Treat as Medium+ unless mitigated.
 - `--password-stdin` pipe handling: timeout (`PasswordTimeoutPipe`), leftover bytes, EOF correctness.
 - `--account-key-file`: required file mode, TOCTOU between stat and read.
@@ -151,11 +151,11 @@ The audit is split into six analysis slices (A–F) plus a synthesis slice (G). 
   - Unix-socket path predictability, parent directory mode, socket file mode (0600).
   - Peer-credential check or shared-cookie auth for clients connecting to the agent.
   - Account-KEK cache TTL behavior; behavior under SIGTERM / SIGKILL / OOM / core dump (`madvise(MADV_DONTDUMP)` / `mlock`).
-  - `wipeAllSensitiveDataLocked` and "session mismatch" trigger correctness — can a malicious local process induce the wipe (DoS) or evade it?
+  - `wipeAllSensitiveDataLocked` and "session mismatch" trigger correctness -- can a malicious local process induce the wipe (DoS) or evade it?
   - Digest-cache integrity: can a poisoned dedup digest coerce upload/download of wrong content?
 - Admin bootstrap (`cmd/arkfile-admin/main.go` + `handlers/bootstrap.go`): single-use token enforcement, idempotency, replay resistance, TOTP enrollment expectations for the first admin.
 
-### Slice B — Crypto & Key Hierarchy
+### Slice B -- Crypto & Key Hierarchy
 **Output:** `docs/wip/review/02-crypto-keys.md`
 **`idsrp.md` sections:** §5 (Argon2id), §6 (file encryption), §16 (cryptographic design / key hierarchy), parts of §11 (metadata encryption).
 **Code in scope:**
@@ -177,7 +177,7 @@ The audit is split into six analysis slices (A–F) plus a synthesis slice (G). 
 - Zeroization of key material in Go and TS where practical.
 - Documented vs. implemented hierarchy match.
 
-### Slice C — File Upload / Download / Chunking
+### Slice C -- File Upload / Download / Chunking
 **Output:** `docs/wip/review/03-files-upload-download.md`
 **`idsrp.md` sections:** §6 (continued), §8 (backend authz & object storage, file-path), §10 (API), parts of §17 (file-handling tests).
 **Code in scope:**
@@ -199,7 +199,7 @@ The audit is split into six analysis slices (A–F) plus a synthesis slice (G). 
 - 6 GB-on-3 GB-RAM mobile constraint (per AGENTS.md): memory bounds in chunk reader, hashing, padding.
 - Multi-provider storage routing safety (`storage_provider`, location records) and trust boundary.
 
-### Slice D — Sharing
+### Slice D -- Sharing
 **Output:** `docs/wip/review/04-sharing.md`
 **`idsrp.md` sections:** §7 (sharing), §11 (metadata leakage via shares), parts of §8 (authz on share endpoints).
 **Code in scope:**
@@ -213,11 +213,11 @@ The audit is split into six analysis slices (A–F) plus a synthesis slice (G). 
 - Share password Argon2id params, random 32-byte salt, AAD = `share_id || file_id` binding correctness.
 - Share envelope tamper resistance; can server swap envelopes between shares?
 - Share ID entropy and enumeration resistance; per-IP/per-share rate limits and EntityID HMAC correctness.
-- Revocation semantics — clearly distinguish future-access revocation from "already-downloaded key" revocation in disclosure.
+- Revocation semantics -- clearly distinguish future-access revocation from "already-downloaded key" revocation in disclosure.
 - Anonymous recipient privacy: no IP logging, no recipient identifiers persisted.
 - Cross-share confusion: can a share password / envelope from share A unlock share B?
 
-### Slice E — API / Authz / Admin / Billing
+### Slice E -- API / Authz / Admin / Billing
 **Output:** `docs/wip/review/05-api-authz-admin-billing.md`
 **`idsrp.md` sections:** §8 (backend authz), §10 (API security), parts of §14 (logging hygiene for admin/billing paths).
 **Code in scope:**
@@ -234,11 +234,11 @@ The audit is split into six analysis slices (A–F) plus a synthesis slice (G). 
 - Produce an Endpoint Review Table per `idsrp.md` §20 with an explicit **"TOTP-gated?"** column. Every protected route must be marked Yes/No/N-A; any route marked No that should be Yes (per `idsrp.md` §22.2) is at minimum a High finding. This is the API-surface verification of the TOTP middleware chokepoint audited in Slice A.
 - Admin privilege boundary; cross-tenant N/A but cross-user is in scope.
 - Mass assignment, IDOR, JSON parser differentials, content-type confusion.
-- Billing math correctness: rate application, credit gift idempotency, meter overflow / negative-value / off-by-one, sweep window vs. clock skew, scheduler concurrency. Goal: be ready for payment-processor wiring (card, crypto, ACH, SEPA) — flag anything that would be unsafe once real money is involved (transaction atomicity, idempotency keys, audit trails, refund/charge-back semantics, currency rounding).
+- Billing math correctness: rate application, credit gift idempotency, meter overflow / negative-value / off-by-one, sweep window vs. clock skew, scheduler concurrency. Goal: be ready for payment-processor wiring (card, crypto, ACH, SEPA) -- flag anything that would be unsafe once real money is involved (transaction atomicity, idempotency keys, audit trails, refund/charge-back semantics, currency rounding).
 - Logging hygiene across admin/billing/credits paths (no PII, no IPs, no card-likely identifiers in future).
-- `export.go` (encrypted backup) — confirm no plaintext or KEK material is exported in cleartext.
+- `export.go` (encrypted backup) -- confirm no plaintext or KEK material is exported in cleartext.
 
-### Slice F — Frontend / WASM / Supply Chain / Ops
+### Slice F -- Frontend / WASM / Supply Chain / Ops
 **Output:** `docs/wip/review/06-frontend-supply-ops.md`
 **`idsrp.md` sections:** §3 (frontend / WASM / TS), §12 (XSS), §13 (supply chain & build), §15 (deployment & operational), residual §14 (frontend telemetry).
 **Code in scope:**
@@ -246,8 +246,8 @@ The audit is split into six analysis slices (A–F) plus a synthesis slice (G). 
 - TypeScript: all of `client/static/js/src/**` (ui, utils, types not already covered)
 - `package.json`, `tsconfig.json`, `tsconfig.sw.json`, `playwright.config.ts`
 - `go.mod`, `.gitmodules`, `config/dependency-hashes.json`
-- `Caddyfile`, `Caddyfile.local`, `Caddyfile.prod`, `Caddyfile.test` — CSP, security headers, TLS posture, deSEC DNS-01 integration
-- `systemd/arkfile.service`, `systemd/caddy.service`, `systemd/rqlite.service`, `systemd/seaweedfs.service` — sandboxing, capabilities, user isolation
+- `Caddyfile`, `Caddyfile.local`, `Caddyfile.prod`, `Caddyfile.test` -- CSP, security headers, TLS posture, deSEC DNS-01 integration
+- `systemd/arkfile.service`, `systemd/caddy.service`, `systemd/rqlite.service`, `systemd/seaweedfs.service` -- sandboxing, capabilities, user isolation
 - `scripts/dev-reset.sh`, `scripts/local-deploy.sh`, `scripts/prod-deploy.sh`, `scripts/prod-update.sh`, `scripts/test-*.sh`, `scripts/maintenance/**`, `scripts/setup/**`, `scripts/testing/**`
 - CLI binary build/supply chain (per `idsrp.md` §22.1): the portions of the above scripts and any `Makefile`/`go build` invocations that compile `arkfile-client` and `arkfile-admin`; `CGO_LDFLAGS` and static-linking of libsodium/libopaque/liboprf; `.gitmodules` for vendored crypto submodule pinning.
 - `monitoring/` (frontend-visible health endpoints)
@@ -265,7 +265,7 @@ The audit is split into six analysis slices (A–F) plus a synthesis slice (G). 
 - TLS / Caddy config: cipher suites, HSTS, OCSP, secret cert handling, deSEC token exposure surface.
 - Deployment scripts: privilege escalation surface, secret material on disk, file modes under `/opt/arkfile/etc/`.
 
-### Slice G — Synthesis
+### Slice G -- Synthesis
 **Output:** `docs/wip/review/00-executive-summary.md`
 **Sources:** Only the six finding docs above. No fresh code reads (target ~100–200k tokens).
 **Contents (per `idsrp.md` §20):**
@@ -289,7 +289,7 @@ The audit is split into six analysis slices (A–F) plus a synthesis slice (G). 
 Each slice doc follows this structure:
 
 ```
-# Slice <N> — <Title>
+# Slice <N> -- <Title>
 
 ## 0. Scope
 - idsrp.md sections covered (and which are deferred / N/A here)
@@ -346,18 +346,18 @@ Items the `idsrp.md` prompt asks about that, based on initial inspection, appear
 
 | Item from `idsrp.md` | Preliminary status | Where it would have been |
 |---|---|---|
-| Folder hierarchy / nested folder ACLs | N/A — Arkfile is a flat per-user file space, sharing is per-file | §7, §8 |
-| Recipient public-key directory / PKI sharing | N/A — sharing is password-derived share envelope | §7 |
-| Multi-tenant separation | N/A — single tenant | §8 |
-| Email verification / password reset flow | TBD — verify in Slice A; account recovery may simply not exist by design (forgotten password = lost files, accept and document) | §15 |
-| Thumbnails / previews / server-side search index | N/A — files are encrypted blobs, no preview | §6, §11, §12 |
-| Archive extraction (zip-slip etc.) | N/A — server does not extract archives | §10 |
-| SSRF on user-supplied URLs | TBD — confirm no URL-fetch endpoints exist | §10 |
-| MFA enrollment / verify / backup codes / lockout / loss-of-device recovery | **In scope** — full coverage in Slice A per `idsrp.md` §22.2 (TOTP is mandatory 2FA) | §15, §22 |
-| Device enrollment / device management | TBD — refresh tokens exist; full device mgmt likely N/A | §15 |
+| Folder hierarchy / nested folder ACLs | N/A -- Arkfile is a flat per-user file space, sharing is per-file | §7, §8 |
+| Recipient public-key directory / PKI sharing | N/A -- sharing is password-derived share envelope | §7 |
+| Multi-tenant separation | N/A -- single tenant | §8 |
+| Email verification / password reset flow | TBD -- verify in Slice A; account recovery may simply not exist by design (forgotten password = lost files, accept and document) | §15 |
+| Thumbnails / previews / server-side search index | N/A -- files are encrypted blobs, no preview | §6, §11, §12 |
+| Archive extraction (zip-slip etc.) | N/A -- server does not extract archives | §10 |
+| SSRF on user-supplied URLs | TBD -- confirm no URL-fetch endpoints exist | §10 |
+| MFA enrollment / verify / backup codes / lockout / loss-of-device recovery | **In scope** -- full coverage in Slice A per `idsrp.md` §22.2 (TOTP is mandatory 2FA) | §15, §22 |
+| Device enrollment / device management | TBD -- refresh tokens exist; full device mgmt likely N/A | §15 |
 | Recovery codes (other than TOTP backup) | TBD | §15 |
-| CDN cache-poisoning for private content | TBD — check Caddy config in Slice F | §10, §8 |
-| Payment-processor specific issues | N/A right now — no card/crypto/ACH/SEPA integrations wired in. Billing math reviewed in Slice E to be ready for that wiring. | §10 |
+| CDN cache-poisoning for private content | TBD -- check Caddy config in Slice F | §10, §8 |
+| Payment-processor specific issues | N/A right now -- no card/crypto/ACH/SEPA integrations wired in. Billing math reviewed in Slice E to be ready for that wiring. | §10 |
 
 ---
 
@@ -366,13 +366,13 @@ Items the `idsrp.md` prompt asks about that, based on initial inspection, appear
 | Slice | Output file | Status | Started | Completed | Notes |
 |---|---|---|---|---|---|
 | Plan / tracker | `00-plan.md` | Done | 2026-05-11 | 2026-05-11 | This document. |
-| A — Auth & OPAQUE | `01-auth-opaque.md` | **Done** | 2026-05-11 | 2026-05-11 | Consolidated final deliverable: 45 findings (1 Critical, 12 High, 21 Medium, 9 Low, 2 Informational) covering server OPAQUE/JWT/TOTP, both CLIs + agent daemon, browser auth flow. Single `A-NN` numbering. |
-| B — Crypto & key hierarchy | `02-crypto-keys.md` | **Done** | 2026-05-11 | 2026-05-11 | Consolidated final deliverable: 27 findings (0 Critical, 3 High, 6 Medium, 10 Low, 8 Informational) covering Argon2id KDF, AES-GCM operations, FEK/KEK envelope, share envelope crypto, metadata encryption, system-key wrapping, server-side padding policy, and the TS/Go/CLI crypto surface. Single `B-NN` numbering. Top risks: server-controlled crypto params (B-01/03/19), no AAD on file/chunk/FEK encryption (B-02/05/08), server-applied padding (B-06). |
-| C — Upload/Download/Chunking | `03-files-upload-download.md` | **Done** | 2026-05-11 | 2026-05-11 | Consolidated final deliverable: 27 findings (0 Critical, 3 High, 11 Medium, 10 Low, 3 Informational) covering the chunked upload pipeline (`handlers/uploads.go`, `streaming_hash.go`), per-chunk download (`handlers/downloads.go`), file metadata APIs (`handlers/files.go`), the multi-provider storage layer (`storage/*`), the browser TS stack (`client/static/js/src/files/**`), and the erasure-coding doc vs. code alignment. Single `C-NN` numbering. Top risks: server-side padding OOM on last chunk (C-01); no-AAD chunk reorder / DB-trusted byte-range math (C-02/C-03); plaintext username + file_id in InfoLogger (C-15). Cross-refs to Slice B `B-02`/`B-05`/`B-06`/`B-08` confirmed at the wire layer. |
-| D — Sharing | `04-sharing.md` | **Done** | 2026-05-11 | 2026-05-11 | Consolidated final deliverable: 27 findings (0 Critical, 2 High, 9 Medium, 10 Low, 6 Informational) covering `crypto/share_kdf.go` (Argon2id + envelope crypto), `handlers/file_shares.go` (create/list/revoke/page-render/anonymous envelope+metadata+chunk endpoints), `handlers/share_enumeration.go` (in-memory entity-global guard), `handlers/rate_limiting.go` (per-(share,entity) failure ladder + auth-rate-limit table reuse), `handlers/flood_guard.go`, `handlers/route_config.go` (TOTP wiring + anonymous middleware stack), `logging/entity_id.go` (HMAC daily-rotating EntityID), and the TS share surface (`share-crypto.ts`, `share-creation.ts`, `share-access.ts`, `share-list.ts`, `shared.html`). Single `D-NN` numbering. Top risks: stolen-envelope offline brute force enabled by server-controlled Argon2id params (D-10 + cross-ref B-19); `max_accesses` bypassable by skipping chunk 0 (D-01); free-form `revoked_reason` leaks owner-controlled string to anonymous recipients (D-04); race on access_count double-spend (D-02); Origin-header trust in share-URL construction (D-09). Endpoint table (§3.1), crypto-ops table (§3.2), metadata-exposure matrix (§3.3), and key-hierarchy additions (§3.4) ready for Slice E / Slice G merge. CSP / Trusted-Types deep dive correctly deferred to Slice F; obvious template-literal XSS sinks raised here as D-14. |
-| E — API/Authz/Admin/Billing | `05-api-authz-admin-billing.md` | **Done** | 2026-05-11 | 2026-05-11 | Consolidated final deliverable: 27 findings (0 Critical, 2 High, 8 Medium, 7 Low, 10 Informational) covering the admin/billing/misc API surface in `handlers/route_config.go`, `handlers/middleware.go`, `handlers/admin*.go`, `handlers/credits.go`, `handlers/billing_projection.go`, `handlers/export.go`, `handlers/contact_info.go`, `handlers/config.go`, `handlers/rate_limiting.go`, `handlers/flood_guard.go`; the `billing/*` math/scheduler/gift/sweep pipeline; `models/credits.go` and `models/admin_task.go`; `database/unified_schema.sql` schema-level authz/audit invariants; `logging/security_events.go`; and `monitoring/health_endpoints.go` + `main.go`'s public `/healthz`/`/readyz`. Single `E-NN` numbering. Top risks: SQL injection in `AdminSyncStatus` via interpolated `provider_id` (E-02); read-outside-tx race in `settleOneUser` losing gifts under concurrent settlement (E-03); `ON DELETE CASCADE` on `users` wipes the entire financial audit trail (E-21, escalates to Critical post-payment-processor); admin route group missing route-level `RequireTOTP` chokepoint required by `idsrp.md` §22.3 (E-01); missing idempotency key + duplicate-sweep across restart (E-04 + E-05, both blockers for payment-processor wiring); public `ExportFile` header-path skips TOTP claim check (E-19). Endpoint Review Table (§3.1) covers 64 endpoints with the mandatory `TOTP-gated?` column; 51 admin routes flagged as not route-level-TOTP-gated. Billing Operations Table (§3.2) and Schema Integrity Table (§3.3) ready for Slice G merge. Cross-refs into Slice A (two-tier JWT model, admin OPAQUE), Slice B (B-19 server-controlled crypto params), Slice D (D-04, D-10), Slice F (Caddy `X-Forwarded-For`, `/healthz`/`/readyz` exposure) all marked. |
-| F — Frontend/WASM/Supply/Ops | `06-frontend-supply-ops.md` | **Done** | 2026-05-11 | 2026-05-12 | Consolidated final deliverable: 26 findings (1 Critical, 5 High, 6 Medium, 6 Low, 8 Informational) covering Echo `c.RealIP()` / `X-Forwarded-For` posture, `main.go` admin-bootstrap + dev-admin seeding (`initializeAdminUser` + `utils.IsProductionEnvironment` + `config.ValidateProductionConfig` + `auth/dev_admin.go`), `handlers/middleware.go` CSP and admin localhost gate, all four `Caddyfile*` variants (CSP / HSTS / `trusted_proxies` / `tls_insecure_skip_verify`), all four systemd unit files (directive-by-directive sandboxing review including `LimitCORE=0` and the rqlite `0.0.0.0` bind), the `scripts/setup/build.sh` build pipeline for `arkfile` / `arkfile-client` / `arkfile-admin` (Go build flags as written, CGO surface, libsodium-from-host, WASM artifact emit), `scripts/prod-deploy.sh`'s secrets.env and bootstrap-token operator instructions, `config/dependency-hashes.json` (SeaweedFS MD5, rqlite unpinned), `client/static/index.html` + `shared.html` + the 12 `innerHTML`-sinks across `client/static/js/src/**`, and frontend secret-adjacent storage (`localStorage`, `window.totpLoginData`). Single `F-NN` numbering. Top risks: `X-Forwarded-For` localhost-gate bypass (F-01, escalates Slice A A-02/A-13/A-14/A-26 and Slice E E-14 into a single Critical headline); bootstrap token harvested from `journalctl` (F-03, Critical when combined with F-01); WASM artifact loaded without SRI (F-04); Go binaries built without `-trimpath`/`-buildid=`/`-ldflags='-s -w'`/`-buildvcs=false` and no release signing (F-05); libsodium pinned from host apt/dnf rather than vendored submodule (F-06); full JWT + refresh token in `localStorage` (F-07, cross-ref A-05); plaintext password on `window.totpLoginData` during TOTP step (F-08, cross-ref A-04); `LimitCORE=0` and other systemd-sandboxing gaps (F-09). Hardcoded dev-admin credentials in the production binary (F-02) is correctly gated by six layered checks across `main.go`/`auth/dev_admin.go`/`config/config.go`; rescoped to Low (greenfield code-hygiene) with build-tag separation as the primary recommendation. HTTP-headers-per-env table (§3.1), systemd-hardening-per-unit table (§3.2), supply-chain inventory (§3.3), frontend secret-adjacent storage matrix (§3.4), and CLI/server binary build-flag inventory (§3.5) ready for Slice G merge. Eight Open Questions logged for developer confirmation (runtime file modes under `/opt/arkfile/etc/**`, `bun.lock` commit status, `rotate-jwt-keys.sh` retirement, `ENVIRONMENT=production` posture today, release-artifact signing today, `AllowedOrigins` value, `/healthz` + `/readyz` external monitoring, Caddy binary supply-chain pinning). Cross-refs into Slice A (A-02/A-04/A-05/A-13/A-14/A-18/A-26), Slice B (B-23, B-25), Slice C (C-19), Slice D (D-04, D-14), Slice E (E-12, E-14, E-15, E-16, E-18, E-22) all marked. |
-| G — Synthesis | `00-executive-summary.md` | **Done** | 2026-05-12 | 2026-05-12 | Consolidated executive synthesis: 179 findings (2 Critical, 27 High, 61 Medium, 52 Low, 37 Informational) drawn ONLY from the six slice docs (no fresh code reads, per §4/§8 of this plan). §1 executive summary with top-10 ranked risks and 10-step landing-order fix campaign; §2 consolidated architecture & data-flow summary (request path, registration, login, upload, download, share, recovery N/A, key hierarchy with ASCII diagram); §3 threat-model assessment vs. `idsrp.md` §2 (13 adversaries + 13 security properties); §4 consolidated severity-ranked finding index across all 179 findings + 10 cross-slice headline risks; §5 merged endpoint review table (A+C+D+E) with mandatory `TOTP-gated?` column; §6 merged cryptographic operations table (A+B); §7 key-hierarchy entropy summary; §8 merged metadata exposure matrix (B+C+D); §9 prioritized testing gaps (63 items across 4 buckets); §10 hardening recommendations (45 items grouped architecture/crypto/operational/code-hygiene); §11 explicit answers to all 20 `idsrp.md` §19 questions with finding citations; §12 consolidated open questions (45 across pre-Slice-A + Slices A–F). Top risks: F-01 + A-01 (the two Criticals); the file-identity authenticity gap (B-02/C-02/C-19 et al.); the server-controlled-crypto-params cluster (B-01/B-03/B-19/D-10); the frontend credential-exposure cluster (A-04/A-05/F-07/F-08). |
+| A -- Auth & OPAQUE | `01-auth-opaque.md` | **Done** | 2026-05-11 | 2026-05-11 | Consolidated final deliverable: 45 findings (1 Critical, 12 High, 21 Medium, 9 Low, 2 Informational) covering server OPAQUE/JWT/TOTP, both CLIs + agent daemon, browser auth flow. Single `A-NN` numbering. |
+| B -- Crypto & key hierarchy | `02-crypto-keys.md` | **Done** | 2026-05-11 | 2026-05-11 | Consolidated final deliverable: 27 findings (0 Critical, 3 High, 6 Medium, 10 Low, 8 Informational) covering Argon2id KDF, AES-GCM operations, FEK/KEK envelope, share envelope crypto, metadata encryption, system-key wrapping, server-side padding policy, and the TS/Go/CLI crypto surface. Single `B-NN` numbering. Top risks: server-controlled crypto params (B-01/03/19), no AAD on file/chunk/FEK encryption (B-02/05/08), server-applied padding (B-06). |
+| C -- Upload/Download/Chunking | `03-files-upload-download.md` | **Done** | 2026-05-11 | 2026-05-11 | Consolidated final deliverable: 27 findings (0 Critical, 3 High, 11 Medium, 10 Low, 3 Informational) covering the chunked upload pipeline (`handlers/uploads.go`, `streaming_hash.go`), per-chunk download (`handlers/downloads.go`), file metadata APIs (`handlers/files.go`), the multi-provider storage layer (`storage/*`), the browser TS stack (`client/static/js/src/files/**`), and the erasure-coding doc vs. code alignment. Single `C-NN` numbering. Top risks: server-side padding OOM on last chunk (C-01); no-AAD chunk reorder / DB-trusted byte-range math (C-02/C-03); plaintext username + file_id in InfoLogger (C-15). Cross-refs to Slice B `B-02`/`B-05`/`B-06`/`B-08` confirmed at the wire layer. |
+| D -- Sharing | `04-sharing.md` | **Done** | 2026-05-11 | 2026-05-11 | Consolidated final deliverable: 27 findings (0 Critical, 2 High, 9 Medium, 10 Low, 6 Informational) covering `crypto/share_kdf.go` (Argon2id + envelope crypto), `handlers/file_shares.go` (create/list/revoke/page-render/anonymous envelope+metadata+chunk endpoints), `handlers/share_enumeration.go` (in-memory entity-global guard), `handlers/rate_limiting.go` (per-(share,entity) failure ladder + auth-rate-limit table reuse), `handlers/flood_guard.go`, `handlers/route_config.go` (TOTP wiring + anonymous middleware stack), `logging/entity_id.go` (HMAC daily-rotating EntityID), and the TS share surface (`share-crypto.ts`, `share-creation.ts`, `share-access.ts`, `share-list.ts`, `shared.html`). Single `D-NN` numbering. Top risks: stolen-envelope offline brute force enabled by server-controlled Argon2id params (D-10 + cross-ref B-19); `max_accesses` bypassable by skipping chunk 0 (D-01); free-form `revoked_reason` leaks owner-controlled string to anonymous recipients (D-04); race on access_count double-spend (D-02); Origin-header trust in share-URL construction (D-09). Endpoint table (§3.1), crypto-ops table (§3.2), metadata-exposure matrix (§3.3), and key-hierarchy additions (§3.4) ready for Slice E / Slice G merge. CSP / Trusted-Types deep dive correctly deferred to Slice F; obvious template-literal XSS sinks raised here as D-14. |
+| E -- API/Authz/Admin/Billing | `05-api-authz-admin-billing.md` | **Done** | 2026-05-11 | 2026-05-11 | Consolidated final deliverable: 27 findings (0 Critical, 2 High, 8 Medium, 7 Low, 10 Informational) covering the admin/billing/misc API surface in `handlers/route_config.go`, `handlers/middleware.go`, `handlers/admin*.go`, `handlers/credits.go`, `handlers/billing_projection.go`, `handlers/export.go`, `handlers/contact_info.go`, `handlers/config.go`, `handlers/rate_limiting.go`, `handlers/flood_guard.go`; the `billing/*` math/scheduler/gift/sweep pipeline; `models/credits.go` and `models/admin_task.go`; `database/unified_schema.sql` schema-level authz/audit invariants; `logging/security_events.go`; and `monitoring/health_endpoints.go` + `main.go`'s public `/healthz`/`/readyz`. Single `E-NN` numbering. Top risks: SQL injection in `AdminSyncStatus` via interpolated `provider_id` (E-02); read-outside-tx race in `settleOneUser` losing gifts under concurrent settlement (E-03); `ON DELETE CASCADE` on `users` wipes the entire financial audit trail (E-21, escalates to Critical post-payment-processor); admin route group missing route-level `RequireTOTP` chokepoint required by `idsrp.md` §22.3 (E-01); missing idempotency key + duplicate-sweep across restart (E-04 + E-05, both blockers for payment-processor wiring); public `ExportFile` header-path skips TOTP claim check (E-19). Endpoint Review Table (§3.1) covers 64 endpoints with the mandatory `TOTP-gated?` column; 51 admin routes flagged as not route-level-TOTP-gated. Billing Operations Table (§3.2) and Schema Integrity Table (§3.3) ready for Slice G merge. Cross-refs into Slice A (two-tier JWT model, admin OPAQUE), Slice B (B-19 server-controlled crypto params), Slice D (D-04, D-10), Slice F (Caddy `X-Forwarded-For`, `/healthz`/`/readyz` exposure) all marked. |
+| F -- Frontend/WASM/Supply/Ops | `06-frontend-supply-ops.md` | **Done** | 2026-05-11 | 2026-05-12 | Consolidated final deliverable: 26 findings (1 Critical, 5 High, 6 Medium, 6 Low, 8 Informational) covering Echo `c.RealIP()` / `X-Forwarded-For` posture, `main.go` admin-bootstrap + dev-admin seeding (`initializeAdminUser` + `utils.IsProductionEnvironment` + `config.ValidateProductionConfig` + `auth/dev_admin.go`), `handlers/middleware.go` CSP and admin localhost gate, all four `Caddyfile*` variants (CSP / HSTS / `trusted_proxies` / `tls_insecure_skip_verify`), all four systemd unit files (directive-by-directive sandboxing review including `LimitCORE=0` and the rqlite `0.0.0.0` bind), the `scripts/setup/build.sh` build pipeline for `arkfile` / `arkfile-client` / `arkfile-admin` (Go build flags as written, CGO surface, libsodium-from-host, WASM artifact emit), `scripts/prod-deploy.sh`'s secrets.env and bootstrap-token operator instructions, `config/dependency-hashes.json` (SeaweedFS MD5, rqlite unpinned), `client/static/index.html` + `shared.html` + the 12 `innerHTML`-sinks across `client/static/js/src/**`, and frontend secret-adjacent storage (`localStorage`, `window.totpLoginData`). Single `F-NN` numbering. Top risks: `X-Forwarded-For` localhost-gate bypass (F-01, escalates Slice A A-02/A-13/A-14/A-26 and Slice E E-14 into a single Critical headline); bootstrap token harvested from `journalctl` (F-03, Critical when combined with F-01); WASM artifact loaded without SRI (F-04); Go binaries built without `-trimpath`/`-buildid=`/`-ldflags='-s -w'`/`-buildvcs=false` and no release signing (F-05); libsodium pinned from host apt/dnf rather than vendored submodule (F-06); full JWT + refresh token in `localStorage` (F-07, cross-ref A-05); plaintext password on `window.totpLoginData` during TOTP step (F-08, cross-ref A-04); `LimitCORE=0` and other systemd-sandboxing gaps (F-09). Hardcoded dev-admin credentials in the production binary (F-02) is correctly gated by six layered checks across `main.go`/`auth/dev_admin.go`/`config/config.go`; rescoped to Low (greenfield code-hygiene) with build-tag separation as the primary recommendation. HTTP-headers-per-env table (§3.1), systemd-hardening-per-unit table (§3.2), supply-chain inventory (§3.3), frontend secret-adjacent storage matrix (§3.4), and CLI/server binary build-flag inventory (§3.5) ready for Slice G merge. Eight Open Questions logged for developer confirmation (runtime file modes under `/opt/arkfile/etc/**`, `bun.lock` commit status, `rotate-jwt-keys.sh` retirement, `ENVIRONMENT=production` posture today, release-artifact signing today, `AllowedOrigins` value, `/healthz` + `/readyz` external monitoring, Caddy binary supply-chain pinning). Cross-refs into Slice A (A-02/A-04/A-05/A-13/A-14/A-18/A-26), Slice B (B-23, B-25), Slice C (C-19), Slice D (D-04, D-14), Slice E (E-12, E-14, E-15, E-16, E-18, E-22) all marked. |
+| G -- Synthesis | `00-executive-summary.md` | **Done** | 2026-05-12 | 2026-05-12 | Consolidated executive synthesis: 179 findings (2 Critical, 27 High, 61 Medium, 52 Low, 37 Informational) drawn ONLY from the six slice docs (no fresh code reads, per §4/§8 of this plan). §1 executive summary with top-10 ranked risks and 10-step landing-order fix campaign; §2 consolidated architecture & data-flow summary (request path, registration, login, upload, download, share, recovery N/A, key hierarchy with ASCII diagram); §3 threat-model assessment vs. `idsrp.md` §2 (13 adversaries + 13 security properties); §4 consolidated severity-ranked finding index across all 179 findings + 10 cross-slice headline risks; §5 merged endpoint review table (A+C+D+E) with mandatory `TOTP-gated?` column; §6 merged cryptographic operations table (A+B); §7 key-hierarchy entropy summary; §8 merged metadata exposure matrix (B+C+D); §9 prioritized testing gaps (63 items across 4 buckets); §10 hardening recommendations (45 items grouped architecture/crypto/operational/code-hygiene); §11 explicit answers to all 20 `idsrp.md` §19 questions with finding citations; §12 consolidated open questions (45 across pre-Slice-A + Slices A–F). Top risks: F-01 + A-01 (the two Criticals); the file-identity authenticity gap (B-02/C-02/C-19 et al.); the server-controlled-crypto-params cluster (B-01/B-03/B-19/D-10); the frontend credential-exposure cluster (A-04/A-05/F-07/F-08). |
 
 
 Update the Status column at the start and end of each slice session.
@@ -386,11 +386,11 @@ At the start of each new session:
 2. Re-read `docs/AGENTS.md` and `docs/wip/idsrp.md`.
 3. Open the slice doc you are working on. If starting fresh, copy the Output Format Spec from §5 here as the skeleton.
 4. Update the Status Tracker (§7) to "In progress" with today's date.
-5. Read only the files in that slice's "Code in scope" list. Resist scope creep — cross-cutting issues get a one-liner cross-ref and live in their proper slice.
+5. Read only the files in that slice's "Code in scope" list. Resist scope creep -- cross-cutting issues get a one-liner cross-ref and live in their proper slice.
 6. Enforce the finding cap and evidence rule.
 7. At end of session, update Status Tracker, add any newly discovered N/A items to §6, and append any newly raised Open Questions there too.
 
-When all of A–F are complete, run Slice G. Slice G must not read new code — only the six slice docs.
+When all of A–F are complete, run Slice G. Slice G must not read new code -- only the six slice docs.
 
 ---
 
@@ -411,4 +411,4 @@ When all of A–F are complete, run Slice G. Slice G must not read new code — 
 - Confirm intended CSP strictness target for production (`Caddyfile.prod`).
 - Confirm whether WASM is bundled into the TS build or fetched separately (affects Slice F supply-chain analysis).
 - ~~Confirm whether `arkfile-client` (CLI) is in scope for end-user threat modeling.~~ **Answered (2026-05-11):** `arkfile-client` and `arkfile-admin` are first-class audited end-user / privileged-user surfaces. See `idsrp.md` §22.1 and Slice A scope.
-- ~~Confirm TOTP enforcement model (every-login vs step-up).~~ **Answered (2026-05-11):** Two-tier JWT — post-OPAQUE temp token gates only TOTP-verify endpoints; full JWT (post-TOTP) required for every protected route via a dedicated TOTP middleware. See `idsrp.md` §22.2 and Slice A / Slice E scope.
+- ~~Confirm TOTP enforcement model (every-login vs step-up).~~ **Answered (2026-05-11):** Two-tier JWT -- post-OPAQUE temp token gates only TOTP-verify endpoints; full JWT (post-TOTP) required for every protected route via a dedicated TOTP middleware. See `idsrp.md` §22.2 and Slice A / Slice E scope.

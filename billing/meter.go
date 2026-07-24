@@ -41,7 +41,7 @@ func TickUser(db *sql.DB, username string, rate *Rate, now time.Time, freeBaseli
 	//
 	// NOTE: rqlite returns BIGINT columns as JSON float64 (sometimes in
 	// scientific notation) when values are large. Scan into float64 first,
-	// then cast to int64 — the same pattern used elsewhere in this codebase
+	// then cast to int64 -- the same pattern used elsewhere in this codebase
 	// for rqlite float64 scanning.
 	var totalStorageBytesF float64
 	err := db.QueryRow(

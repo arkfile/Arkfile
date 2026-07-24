@@ -1,4 +1,4 @@
-# Browser Streaming Download — Large File Fix
+# Browser Streaming Download -- Large File Fix
 
 ## Problem History
 
@@ -26,7 +26,7 @@ check internet connection
 ```
 
 The symptom is: all chunks download and decrypt successfully, the Blob is fully
-assembled, `URL.createObjectURL` succeeds, the `<a download>` anchor is clicked —
+assembled, `URL.createObjectURL` succeeds, the `<a download>` anchor is clicked --
 but the browser's download manager internally fails to read the blob URL back out
 and shows a network error. The Blob data was all there; Chromium's download
 infrastructure simply cannot pipe a >2 GB blob URL through its download manager.
@@ -65,7 +65,7 @@ The correct pattern used in this codebase:
 
 ```typescript
 downloadBtn.onclick = () => {
-  // showSaveFilePicker() MUST be first — no await before this
+  // showSaveFilePicker() MUST be first -- no await before this
   let fsapiHandlePromise: Promise<FileSystemFileHandle> | null = null;
   if ('showSaveFilePicker' in window) {
     fsapiHandlePromise = (window as any).showSaveFilePicker({

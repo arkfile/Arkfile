@@ -190,7 +190,7 @@ func CreateUploadSession(c echo.Context) error {
 	// Each stored chunk is [nonce][ciphertext][tag] with span chunk_size + AesGcmOverhead().
 	// request.TotalSize is the client-declared encrypted-stream length before
 	// server padding; the server stores it as size_bytes for billing/quota and
-	// chunk byte-range math (intentional operational metadata — see docs/security.md).
+	// chunk byte-range math (intentional operational metadata -- see docs/security.md).
 	totalChunks := models.CalculateChunkCount(request.TotalSize, int64(request.ChunkSize))
 
 	// Begin transaction
@@ -289,7 +289,7 @@ func CreateUploadSession(c echo.Context) error {
 	encryptedFek := request.EncryptedFek
 
 	// Note: Encrypted metadata values arrive from client already base64-encoded.
-	// Do NOT re-encode them — store as-is to prevent double-encoding.
+	// Do NOT re-encode them -- store as-is to prevent double-encoding.
 
 	// Create upload session record with encrypted metadata. If the
 	// UNIQUE index on upload_sessions.file_id catches a race between the
@@ -780,7 +780,7 @@ func CompleteUpload(c echo.Context) error {
 	// Step 1: Get session details without a transaction first.
 	// Numeric columns are scanned as interface{} to handle rqlite returning
 	// int64 or float64 depending on value magnitude. Type switches convert
-	// them cleanly — no NullFloat64 workarounds.
+	// them cleanly -- no NullFloat64 workarounds.
 	var (
 		ownerUsername     string
 		fileID            sql.NullString

@@ -1,10 +1,10 @@
 # Chunked Upload and Download: TS and Go CLI Client Fixes Plan
 
-## Status: IN PROGRESS - Phases 1-5, 7-8 COMPLETE (all e2e tests passing 100%). Priority 1-6 from "MORE STUFF" COMPLETE. Security Enhancements COMPLETE (Go agent TTL/session-binding/mlock/access-counter + TS wrapping-key/session-binding/inactivity-lock/HMAC). Dead code cleanup COMPLETE (file-encryption.ts whole-file encrypt/decrypt removed, server handlers removed). CLI account key cache opt-in COMPLETE (`--cache-key`/`--no-cache-key` flags + interactive prompt). Server `expires_after_minutes` COMPLETE (replaced `expires_after_hours`). CLI `--expires` duration parsing COMPLETE (`2m`/`24h`/`7d` style). TS expiration UI COMPLETE (radio buttons + numeric input). TS ProgressManager wired into upload flow COMPLETE. Account key derivation UI indicator COMPLETE. Phase 7 UI polish COMPLETE (download progress + custom password toggle verified). Remaining: Phase 6 (parallel uploads — future), Phase 9 (cross-platform TS↔Go testing).
+## Status: IN PROGRESS - Phases 1-5, 7-8 COMPLETE (all e2e tests passing 100%). Priority 1-6 from "MORE STUFF" COMPLETE. Security Enhancements COMPLETE (Go agent TTL/session-binding/mlock/access-counter + TS wrapping-key/session-binding/inactivity-lock/HMAC). Dead code cleanup COMPLETE (file-encryption.ts whole-file encrypt/decrypt removed, server handlers removed). CLI account key cache opt-in COMPLETE (`--cache-key`/`--no-cache-key` flags + interactive prompt). Server `expires_after_minutes` COMPLETE (replaced `expires_after_hours`). CLI `--expires` duration parsing COMPLETE (`2m`/`24h`/`7d` style). TS expiration UI COMPLETE (radio buttons + numeric input). TS ProgressManager wired into upload flow COMPLETE. Account key derivation UI indicator COMPLETE. Phase 7 UI polish COMPLETE (download progress + custom password toggle verified). Remaining: Phase 6 (parallel uploads -- future), Phase 9 (cross-platform TS↔Go testing).
 
 ## Context
 
-Previous to this refactor, the e2e-test.sh (Go CLI to server) passed all tests (100 percent). The frontend TypeScript client needs fixes to match the working server API for encrypting files client-side and uploading them via the chunked upload API. Additionally, the Go CLI needed to be refactored to use streaming per-chunk encryption (no .enc temp files, no full-file memory buffering). This has been completed via the new-cli.md refactor — `cryptocli` has been eliminated and `arkfile-client` is now the unified CLI handling both crypto and network operations.
+Previous to this refactor, the e2e-test.sh (Go CLI to server) passed all tests (100 percent). The frontend TypeScript client needs fixes to match the working server API for encrypting files client-side and uploading them via the chunked upload API. Additionally, the Go CLI needed to be refactored to use streaming per-chunk encryption (no .enc temp files, no full-file memory buffering). This has been completed via the new-cli.md refactor -- `cryptocli` has been eliminated and `arkfile-client` is now the unified CLI handling both crypto and network operations.
 
 ---
 
@@ -368,14 +368,14 @@ Upload via Go CLI, download via TS client, then verify identical plaintext outpu
 
 **What was done:**
 - `cmd/cryptocli/` deleted (source files removed)
-- `crypto/file_operations.go` — `EncryptFileWorkflow`, `DecryptFileWorkflow`, `DecryptFileFromPath`, `EncryptFileToPath` deleted (whole-file crypto dead code)
-- `crypto/gcm.go` — `EncryptStreamGCM`, `DecryptStreamGCM` deleted
-- `cmd/arkfile-client/commands.go` — `handleUploadCommand` / `doChunkedUpload` implement streaming per-chunk AES-GCM upload (init → stream encrypt+upload → finalize). No `.enc` files. Peak memory ~32 MiB regardless of file size.
-- `cmd/arkfile-client/commands.go` — `handleDownloadCommand` / `doChunkedDownload` implement streaming per-chunk AES-GCM download + decrypt
-- `cmd/arkfile-client/commands.go` — `handleShareCreate` / `handleShareDownload` implement share envelope creation and share download (both items previously deferred from Phase 4C)
-- `cmd/arkfile-client/crypto_utils.go` — all crypto helpers using `crypto` package accessors (no hardcoded constants)
-- `cmd/arkfile-client/dedup.go` — full dedup workflow: plaintext SHA-256 check against agent digest cache, server-side storage verification for stale entries, `--force` override
-- `cmd/arkfile-client/agent.go` — digest cache extensions: `store_digest_cache`, `get_digest_cache`, `add_digest`, `remove_digest`
+- `crypto/file_operations.go` -- `EncryptFileWorkflow`, `DecryptFileWorkflow`, `DecryptFileFromPath`, `EncryptFileToPath` deleted (whole-file crypto dead code)
+- `crypto/gcm.go` -- `EncryptStreamGCM`, `DecryptStreamGCM` deleted
+- `cmd/arkfile-client/commands.go` -- `handleUploadCommand` / `doChunkedUpload` implement streaming per-chunk AES-GCM upload (init → stream encrypt+upload → finalize). No `.enc` files. Peak memory ~32 MiB regardless of file size.
+- `cmd/arkfile-client/commands.go` -- `handleDownloadCommand` / `doChunkedDownload` implement streaming per-chunk AES-GCM download + decrypt
+- `cmd/arkfile-client/commands.go` -- `handleShareCreate` / `handleShareDownload` implement share envelope creation and share download (both items previously deferred from Phase 4C)
+- `cmd/arkfile-client/crypto_utils.go` -- all crypto helpers using `crypto` package accessors (no hardcoded constants)
+- `cmd/arkfile-client/dedup.go` -- full dedup workflow: plaintext SHA-256 check against agent digest cache, server-side storage verification for stale entries, `--force` override
+- `cmd/arkfile-client/agent.go` -- digest cache extensions: `store_digest_cache`, `get_digest_cache`, `add_digest`, `remove_digest`
 - Login populates digest cache: `populateDigestCache()` called after successful auth, stores decrypted SHA-256 map in agent
 
 **New command equivalents:**
@@ -388,9 +388,9 @@ Upload via Go CLI, download via TS client, then verify identical plaintext outpu
 | `cryptocli decrypt-share` + `arkfile-client download-share` | `arkfile-client share download --share-id ID` |
 | `cryptocli generate-test-file` | `arkfile-client generate-test-file` |
 
-**Phase 4C deferred items — now complete:**
-- ~~`cryptocli create-share`: Decrypt owner metadata, include in envelope~~ DONE — `handleShareCreate` fetches metadata, unwraps FEK, builds `ShareEnvelope{fek, download_token, filename, size_bytes, sha256}`, encrypts with `crypto.EncryptGCMWithAAD`
-- ~~`cryptocli decrypt-share`: Output filename/size/sha256 from envelope~~ DONE — `handleShareDownload` decrypts envelope, displays filename/size before download, verifies SHA-256 after
+**Phase 4C deferred items -- now complete:**
+- ~~`cryptocli create-share`: Decrypt owner metadata, include in envelope~~ DONE -- `handleShareCreate` fetches metadata, unwraps FEK, builds `ShareEnvelope{fek, download_token, filename, size_bytes, sha256}`, encrypts with `crypto.EncryptGCMWithAAD`
+- ~~`cryptocli decrypt-share`: Output filename/size/sha256 from envelope~~ DONE -- `handleShareDownload` decrypts envelope, displays filename/size before download, verifies SHA-256 after
 
 **`encrypted_fek` output:** `arkfile-client upload` prints `file_id` and the upload is fully self-contained (no external JSON metadata file needed). Share create reads FEK directly from the live file metadata endpoint.
 
@@ -470,7 +470,7 @@ Critical: Phase 1 through Phase 7 are code changes. The e2e-test.sh update must 
 ### Changes Required
 
 1. ~~Remove: cryptocli encrypt-file step (no more .enc file creation)~~ → Phase 5 complete; `arkfile-client upload` is the replacement
-2. Remove: all remaining `cryptocli` invocations (currently in `scripts/testing/e2e-test.sh` — verified present via grep)
+2. Remove: all remaining `cryptocli` invocations (currently in `scripts/testing/e2e-test.sh` -- verified present via grep)
 3. Replace with `arkfile-client` single-command equivalents:
    - `arkfile-client generate-test-file --filename test.bin --size-mb 10`
    - `arkfile-client upload --file test.bin --username alice`
@@ -496,7 +496,7 @@ After Phase 8, e2e-test.sh must pass 100 percent with all existing test phases:
 
 ### Phase 8 Implementation Progress (2026-03-04)
 
-**COMPLETE** ✅ — `e2e-test.sh` has been fully rewritten to use `arkfile-client` commands (no `cryptocli` references remain). All current e2e test phases passing 100%.
+**COMPLETE** ✅ -- `e2e-test.sh` has been fully rewritten to use `arkfile-client` commands (no `cryptocli` references remain). All current e2e test phases passing 100%.
 
 ---
 
@@ -548,37 +548,37 @@ After Phase 8, e2e-test.sh must pass 100 percent with all existing test phases:
 **TS side: COMPLETE** (2026-02-23)
 
 Files created:
-- `crypto/chunking-params.json` — single source of truth JSON
-- `crypto/chunking_constants.go` — Go embed with `GetEmbeddedChunkingParamsJSON()`
-- `handlers/config.go` — `GetChunkingConfig` handler added
-- `handlers/route_config.go` — route `GET /api/config/chunking` added
+- `crypto/chunking-params.json` -- single source of truth JSON
+- `crypto/chunking_constants.go` -- Go embed with `GetEmbeddedChunkingParamsJSON()`
+- `handlers/config.go` -- `GetChunkingConfig` handler added
+- `handlers/route_config.go` -- route `GET /api/config/chunking` added
 
 Files updated (TS):
-- `client/static/js/src/crypto/constants.ts` — removed all legacy synchronous chunking constants (`DEFAULT_CHUNK_SIZE_BYTES`, `AES_GCM_NONCE_SIZE`, `AES_GCM_TAG_SIZE`, `AES_GCM_OVERHEAD`, `ENVELOPE_VERSION`, `ENVELOPE_TYPE_AES_GCM`, `LIMITS.ENCRYPTION_CHUNK_SIZE`). Added `getChunkingParams()` async fetcher with in-memory cache. Exports `ChunkingParams` type.
-- `client/static/js/src/crypto/aes-gcm.ts` — `AESGCMDecryptor.decryptChunk()` now calls `getChunkingParams()` for nonce/tag sizes instead of using module-level constants.
-- `client/static/js/src/files/streaming-download.ts` — `StreamingDownloadManager` loads config at start of `downloadFile()` and passes sizes to decryptor.
-- `client/static/js/src/files/upload.ts` — both `uploadFile()` and `uploadFileWithKey()` load config at start. `createEnvelopeHeader()` now takes `(version, keyType)` parameters from config. Chunk size calculation uses config values.
+- `client/static/js/src/crypto/constants.ts` -- removed all legacy synchronous chunking constants (`DEFAULT_CHUNK_SIZE_BYTES`, `AES_GCM_NONCE_SIZE`, `AES_GCM_TAG_SIZE`, `AES_GCM_OVERHEAD`, `ENVELOPE_VERSION`, `ENVELOPE_TYPE_AES_GCM`, `LIMITS.ENCRYPTION_CHUNK_SIZE`). Added `getChunkingParams()` async fetcher with in-memory cache. Exports `ChunkingParams` type.
+- `client/static/js/src/crypto/aes-gcm.ts` -- `AESGCMDecryptor.decryptChunk()` now calls `getChunkingParams()` for nonce/tag sizes instead of using module-level constants.
+- `client/static/js/src/files/streaming-download.ts` -- `StreamingDownloadManager` loads config at start of `downloadFile()` and passes sizes to decryptor.
+- `client/static/js/src/files/upload.ts` -- both `uploadFile()` and `uploadFileWithKey()` load config at start. `createEnvelopeHeader()` now takes `(version, keyType)` parameters from config. Chunk size calculation uses config values.
 
-Zero old constant references remain in TS (`AES_GCM_NONCE_SIZE`, `AES_GCM_TAG_SIZE`, `CHUNK_SIZE`, `DEFAULT_CHUNK_SIZE_BYTES`, `ENVELOPE_VERSION`, `ENVELOPE_TYPE_AES_GCM` — all confirmed absent via search).
+Zero old constant references remain in TS (`AES_GCM_NONCE_SIZE`, `AES_GCM_TAG_SIZE`, `CHUNK_SIZE`, `DEFAULT_CHUNK_SIZE_BYTES`, `ENVELOPE_VERSION`, `ENVELOPE_TYPE_AES_GCM` -- all confirmed absent via search).
 
 **Go side: COMPLETE** (2026-02-24)
 
 All non-test Go files updated to use `crypto.GetChunkingParams()` or convenience functions (`crypto.PlaintextChunkSize()`, `crypto.AESGCMNonceSize()`, `crypto.AESGCMTagSize()`, `crypto.EnvelopeHeaderSize()`, `crypto.EnvelopeVersion()`, `crypto.KeyTypeAccount()`, `crypto.KeyTypeCustom()`). Build verified (`go build ./...` passes).
 
 Files updated (Go):
-- `crypto/gcm.go` — removed `const ChunkSize = 16 * 1024 * 1024`. `EncryptChunks()` and `DecryptChunks()` now use `PlaintextChunkSize()`. All 3 hardcoded `tagSize := 16` replaced with `AESGCMTagSize()`. Nonce sizes use `AESGCMNonceSize()`. Envelope header sizes use `EnvelopeHeaderSize()`.
-- `models/file.go` — removed `const DefaultChunkSizeBytes = 16 * 1024 * 1024`. `CalculateChunkCount()` now uses `crypto.PlaintextChunkSize()`.
-- `handlers/uploads.go` — all 3 inline `16 * 1024 * 1024` references replaced with `crypto.PlaintextChunkSize()`. Envelope/nonce/tag sizes use crypto functions.
-- `handlers/files.go` — removed local `const chunkSize = 16 * 1024 * 1024`. `GetFileMeta` now uses `crypto.PlaintextChunkSize()`.
-- `handlers/file_shares.go` — both inline `16 * 1024 * 1024` references replaced with `crypto.PlaintextChunkSize()`.
-- `handlers/downloads.go` — already used DB value for chunk size; no hardcoded constant to replace.
-- `cmd/arkfile-client/main.go` — CLI default flag now uses `int(crypto.PlaintextChunkSize())` instead of `16*1024*1024`. Added `crypto` import.
+- `crypto/gcm.go` -- removed `const ChunkSize = 16 * 1024 * 1024`. `EncryptChunks()` and `DecryptChunks()` now use `PlaintextChunkSize()`. All 3 hardcoded `tagSize := 16` replaced with `AESGCMTagSize()`. Nonce sizes use `AESGCMNonceSize()`. Envelope header sizes use `EnvelopeHeaderSize()`.
+- `models/file.go` -- removed `const DefaultChunkSizeBytes = 16 * 1024 * 1024`. `CalculateChunkCount()` now uses `crypto.PlaintextChunkSize()`.
+- `handlers/uploads.go` -- all 3 inline `16 * 1024 * 1024` references replaced with `crypto.PlaintextChunkSize()`. Envelope/nonce/tag sizes use crypto functions.
+- `handlers/files.go` -- removed local `const chunkSize = 16 * 1024 * 1024`. `GetFileMeta` now uses `crypto.PlaintextChunkSize()`.
+- `handlers/file_shares.go` -- both inline `16 * 1024 * 1024` references replaced with `crypto.PlaintextChunkSize()`.
+- `handlers/downloads.go` -- already used DB value for chunk size; no hardcoded constant to replace.
+- `cmd/arkfile-client/main.go` -- CLI default flag now uses `int(crypto.PlaintextChunkSize())` instead of `16*1024*1024`. Added `crypto` import.
 
 **Test files: COMPLETE** (2026-02-24)
 
 All 8 hardcoded references in test files updated:
-- `handlers/chunked_upload_100mb_test.go` — 2 references replaced with `crypto.PlaintextChunkSize()`. Added `crypto` import.
-- `handlers/chunked_upload_integration_test.go` — 4 references replaced: `chunkSize`, `"chunkSize"` init value, expected chunk+tag size (now uses `crypto.PlaintextChunkSize() + crypto.AesGcmTagSize()`), and brute-force max size.
+- `handlers/chunked_upload_100mb_test.go` -- 2 references replaced with `crypto.PlaintextChunkSize()`. Added `crypto` import.
+- `handlers/chunked_upload_integration_test.go` -- 4 references replaced: `chunkSize`, `"chunkSize"` init value, expected chunk+tag size (now uses `crypto.PlaintextChunkSize() + crypto.AesGcmTagSize()`), and brute-force max size.
 
 Build verified: `go build ./...` passes with no errors.
 
@@ -588,28 +588,28 @@ Build verified: `go build ./...` passes with no errors.
 
 All four implementation steps completed and verified:
 
-**Step 1: Remove dead share key type code — DONE**
-- `crypto/envelope.go` — removed `KeyTypeShare = 0x03` constant and all `case KeyTypeShare` / `case 0x03` branches
-- `crypto/file_operations.go` — removed `case "share"` and `case 0x03` branches from `EncryptFEK()` and `DecryptFEK()`
-- `crypto/key_derivation.go` — removed `DeriveSharePasswordKey()` function entirely
-- `client/static/js/src/crypto/constants.ts` — replaced stale `SALT_DOMAINS` object (which had `account`, `custom`, `share` entries with old `arkfile.*.v1` format strings) with correct `SALT_DOMAIN_PREFIXES` containing only `account` and `custom` entries matching Go's format (`arkfile-account-key-salt:`, `arkfile-custom-key-salt:`)
-- `client/static/js/src/crypto/file-encryption.ts` — already used `SALT_DOMAIN_PREFIXES` from constants.ts with only `account` and `custom`; no share prefix present
+**Step 1: Remove dead share key type code -- DONE**
+- `crypto/envelope.go` -- removed `KeyTypeShare = 0x03` constant and all `case KeyTypeShare` / `case 0x03` branches
+- `crypto/file_operations.go` -- removed `case "share"` and `case 0x03` branches from `EncryptFEK()` and `DecryptFEK()`
+- `crypto/key_derivation.go` -- removed `DeriveSharePasswordKey()` function entirely
+- `client/static/js/src/crypto/constants.ts` -- replaced stale `SALT_DOMAINS` object (which had `account`, `custom`, `share` entries with old `arkfile.*.v1` format strings) with correct `SALT_DOMAIN_PREFIXES` containing only `account` and `custom` entries matching Go's format (`arkfile-account-key-salt:`, `arkfile-custom-key-salt:`)
+- `client/static/js/src/crypto/file-encryption.ts` -- already used `SALT_DOMAIN_PREFIXES` from constants.ts with only `account` and `custom`; no share prefix present
 
-**Step 2: Remove competing envelope functions — DONE**
-- `crypto/envelope.go` — removed `CreatePasswordKeyEnvelope()` and `ExtractFEKFromPasswordEnvelope()` (the salt-embedding variants)
+**Step 2: Remove competing envelope functions -- DONE**
+- `crypto/envelope.go` -- removed `CreatePasswordKeyEnvelope()` and `ExtractFEKFromPasswordEnvelope()` (the salt-embedding variants)
 - Kept `KeyTypeAccount = 0x01` and `KeyTypeCustom = 0x02` constants (now sourced from chunking-params.json via Phase 1)
 - The simpler `EncryptFEK()` / `DecryptFEK()` in `crypto/file_operations.go` remain as the single implementation
 
-**Step 3: Remove unused FEK salt constants — DONE**
-- `crypto/key_derivation.go` — removed `FEKAccountSalt`, `FEKCustomSalt`, and `FEKShareSalt` constants
+**Step 3: Remove unused FEK salt constants -- DONE**
+- `crypto/key_derivation.go` -- removed `FEKAccountSalt`, `FEKCustomSalt`, and `FEKShareSalt` constants
 
-**Step 4: Verify no callers reference removed functions — DONE**
+**Step 4: Verify no callers reference removed functions -- DONE**
 - `grep -r` confirmed zero references to: `CreatePasswordKeyEnvelope`, `ExtractFEKFromPasswordEnvelope`, `DeriveSharePasswordKey`, `KeyTypeShare`, `FEKAccountSalt`, `FEKCustomSalt`, `FEKShareSalt`
-- Note: `case "share":` in `cmd/arkfile-client/main.go` is the CLI share *command* (create share links), not the dead key type — this is legitimate and was correctly left in place
+- Note: `case "share":` in `cmd/arkfile-client/main.go` is the CLI share *command* (create share links), not the dead key type -- this is legitimate and was correctly left in place
 
 **Additional cleanup (TS consolidation):**
-- `client/static/js/src/crypto/types.ts` — removed duplicate `PasswordContext` type definition; now imports and re-exports from `constants.ts` (single source of truth)
-- `client/static/js/src/crypto/file-encryption.ts` — reordered import/export of `PasswordContext` (import before export)
+- `client/static/js/src/crypto/types.ts` -- removed duplicate `PasswordContext` type definition; now imports and re-exports from `constants.ts` (single source of truth)
+- `client/static/js/src/crypto/file-encryption.ts` -- reordered import/export of `PasswordContext` (import before export)
 
 **Verification:**
 - `go build ./...` passes (warnings only, no errors)
@@ -622,38 +622,38 @@ All four implementation steps completed and verified:
 
 Full rewrite of `client/static/js/src/files/upload.ts` implementing all 8 fixes:
 
-**Fix 1: API URL Paths and HTTP Methods — DONE**
+**Fix 1: API URL Paths and HTTP Methods -- DONE**
 - Init: `/api/uploads/init` (was `/api/upload/init`)
 - Chunks: `POST /api/uploads/{sessionId}/chunks/{i}` (was `PUT /api/upload/{sessionId}/chunk/{i}`)
 - Complete: `/api/uploads/{sessionId}/complete` (was `/api/upload/{sessionId}/complete`)
 
-**Fix 2: Chunk Upload Is Raw Binary — DONE**
+**Fix 2: Chunk Upload Is Raw Binary -- DONE**
 - Sends `new Blob([chunkBuffer])` with `Content-Type: application/octet-stream` and `X-Chunk-Hash` header
 - No FormData or multipart encoding
 
-**Fix 3: Complete Upload Body — DONE (was already correct)**
+**Fix 3: Complete Upload Body -- DONE (was already correct)**
 - No body sent on complete, just `method: 'POST'`
 
-**Fix 4: Chunk Hash Is SHA-256 of Encrypted Chunk Bytes — DONE**
+**Fix 4: Chunk Hash Is SHA-256 of Encrypted Chunk Bytes -- DONE**
 - `toHex(hash256(chunk))` computed on the encrypted chunk (including envelope on chunk 0)
 
-**Fix 5: Per-Chunk Encryption — DONE (was already correct)**
+**Fix 5: Per-Chunk Encryption -- DONE (was already correct)**
 - Each plaintext chunk encrypted independently with `encryptChunk(chunk, fek)` using unique random nonce
 - Chunk 0 gets 2-byte envelope header prepended after encryption
 
-**Fix 6: Envelope Key Type Byte Reflects Password Type — DONE**
+**Fix 6: Envelope Key Type Byte Reflects Password Type -- DONE**
 - `keyTypeVal` set from `chunkCfg.envelope.keyTypes.account` or `.custom` based on `passwordType`
 - Envelope header: `[envelopeVersion, keyTypeVal]`
 
-**Fix 7: password_type Only Sends account or custom — DONE**
+**Fix 7: password_type Only Sends account or custom -- DONE**
 - Validation: `if (passwordType !== 'account' && passwordType !== 'custom')` throws error early
 
-**Fix 8: encrypted_fek Includes 2-Byte Envelope Header — DONE**
+**Fix 8: encrypted_fek Includes 2-Byte Envelope Header -- DONE**
 - `concatBytes(envelopeHeader, encryptedFekResult.iv, encryptedFekResult.ciphertext, encryptedFekResult.tag)`
 - Matches `crypto.EncryptFEK()` format: `[version(1)][keyType(1)][nonce(12)][ciphertext][tag(16)]`
 
 **Additional improvements in rewrite:**
-- Removed duplicate `uploadFileWithKey()` — single `uploadFile()` entry point with `UploadOptions` interface
+- Removed duplicate `uploadFileWithKey()` -- single `uploadFile()` entry point with `UploadOptions` interface
 - Metadata (filename, SHA256) always encrypted with account key, not FEK (matches Go CLI)
 - `resolveAccountKey()` helper: checks provided key → cache → password derivation
 - All constants loaded from `getChunkingParams()` (single source of truth from Phase 1)
@@ -670,15 +670,15 @@ Full rewrite of `client/static/js/src/files/upload.ts` implementing all 8 fixes:
 Resolved the dual-endpoint problem identified in Verify 4. Chose Option A: unified on `/api/files/:fileId/meta` and removed the redundant `/api/files/:fileId/metadata` endpoint entirely.
 
 **Server-side changes:**
-- `handlers/files.go` — `GetFileMeta` now returns `chunk_count`, `chunk_size_bytes`, and `file_id` fields in addition to existing encrypted metadata fields. This single endpoint now serves both metadata needs (encrypted fields for decryption + chunking info for download coordination).
-- `handlers/downloads.go` — removed `GetFileDownloadMetadata()` function entirely (was the `/metadata` endpoint handler). Also removed the unused `DownloadFileMetaResponse` struct.
-- `handlers/route_config.go` — removed `GET /api/files/:fileId/metadata` route.
+- `handlers/files.go` -- `GetFileMeta` now returns `chunk_count`, `chunk_size_bytes`, and `file_id` fields in addition to existing encrypted metadata fields. This single endpoint now serves both metadata needs (encrypted fields for decryption + chunking info for download coordination).
+- `handlers/downloads.go` -- removed `GetFileDownloadMetadata()` function entirely (was the `/metadata` endpoint handler). Also removed the unused `DownloadFileMetaResponse` struct.
+- `handlers/route_config.go` -- removed `GET /api/files/:fileId/metadata` route.
 
 **Client-side changes (TS):**
-- `client/static/js/src/files/streaming-download.ts` — `StreamingDownloadManager.downloadFile()` now fetches from `/api/files/${fileId}/meta` instead of `/api/files/${fileId}/metadata`. Updated response field mapping: `total_chunks` → `totalChunks`, `chunk_size_bytes` → `chunkSizeBytes`, `encrypted_filename` → `encryptedFilename`, etc.
+- `client/static/js/src/files/streaming-download.ts` -- `StreamingDownloadManager.downloadFile()` now fetches from `/api/files/${fileId}/meta` instead of `/api/files/${fileId}/metadata`. Updated response field mapping: `total_chunks` → `totalChunks`, `chunk_size_bytes` → `chunkSizeBytes`, `encrypted_filename` → `encryptedFilename`, etc.
 
 **Client-side changes (Go CLI):**
-- `cmd/arkfile-client/main.go` — `handleDownloadCommand` now uses only `/api/files/{fileId}/meta` (was fetching `/metadata` separately). Removed duplicate `/meta` fetch in STEP 5 — reuses the response body from STEP 1. Parses `chunk_count` and `chunk_size_bytes` from the unified `/meta` response.
+- `cmd/arkfile-client/main.go` -- `handleDownloadCommand` now uses only `/api/files/{fileId}/meta` (was fetching `/metadata` separately). Removed duplicate `/meta` fetch in STEP 5 -- reuses the response body from STEP 1. Parses `chunk_count` and `chunk_size_bytes` from the unified `/meta` response.
 
 **Verification:**
 - `go build ./...` passes
@@ -700,57 +700,57 @@ Owner download path in `streaming-download.ts` now uses account key (not FEK) fo
 **Phase 4C (Share Envelope Metadata): COMPLETE** (2026-02-25)
 
 Go changes:
-- `crypto/share_kdf.go` — `ShareEnvelope` struct extended with `Filename`, `SizeBytes`, `SHA256` fields. `CreateShareEnvelope()` signature updated to accept metadata params.
+- `crypto/share_kdf.go` -- `ShareEnvelope` struct extended with `Filename`, `SizeBytes`, `SHA256` fields. `CreateShareEnvelope()` signature updated to accept metadata params.
 
 TS changes:
-- `shares/share-crypto.ts` — `encryptFEKForShare()` accepts optional `ShareFileMetadata` parameter and includes `filename`, `size_bytes`, `sha256` in the JSON envelope. `decryptShareEnvelope()` parses and returns metadata from decrypted envelope.
-- `shares/share-access.ts` — Uses `decryptedEnvelope.metadata?.filename` for display (instead of trying to decrypt server-side encrypted_filename which share recipients can't access)
-- `shares/share-creation.ts` — Passes file metadata when creating share envelope
+- `shares/share-crypto.ts` -- `encryptFEKForShare()` accepts optional `ShareFileMetadata` parameter and includes `filename`, `size_bytes`, `sha256` in the JSON envelope. `decryptShareEnvelope()` parses and returns metadata from decrypted envelope.
+- `shares/share-access.ts` -- Uses `decryptedEnvelope.metadata?.filename` for display (instead of trying to decrypt server-side encrypted_filename which share recipients can't access)
+- `shares/share-creation.ts` -- Passes file metadata when creating share envelope
 
 **Share Metadata Cleanup: COMPLETE** (2026-02-25)
 
 Removed dead/useless encrypted metadata that share recipients could never decrypt:
 
 Go server (`handlers/file_shares.go`):
-- `GetShareEnvelope` — removed `encrypted_filename`, `filename_nonce`, `encrypted_sha256sum`, `sha256sum_nonce` from response. Recipients get metadata from the decrypted share envelope instead.
-- `DownloadSharedFile` — removed `X-Encrypted-Filename`, `X-Filename-Nonce`, `X-Encrypted-SHA256`, `X-SHA256-Nonce` response headers. Simplified DB query to only `storage_id`, `size_bytes`.
-- `ListShares` — removed `encrypted_filename`, `filename_nonce`, `encrypted_sha256sum`, `sha256sum_nonce` from query and response. Owner already has file metadata via `/api/files` endpoints.
-- Deleted unused structs: `ShareAccessRequest`, `ShareAccessResponse`, `ShareFileInfo` — all had zero callers.
+- `GetShareEnvelope` -- removed `encrypted_filename`, `filename_nonce`, `encrypted_sha256sum`, `sha256sum_nonce` from response. Recipients get metadata from the decrypted share envelope instead.
+- `DownloadSharedFile` -- removed `X-Encrypted-Filename`, `X-Filename-Nonce`, `X-Encrypted-SHA256`, `X-SHA256-Nonce` response headers. Simplified DB query to only `storage_id`, `size_bytes`.
+- `ListShares` -- removed `encrypted_filename`, `filename_nonce`, `encrypted_sha256sum`, `sha256sum_nonce` from query and response. Owner already has file metadata via `/api/files` endpoints.
+- Deleted unused structs: `ShareAccessRequest`, `ShareAccessResponse`, `ShareFileInfo` -- all had zero callers.
 
 TS client:
-- `share-access.ts` — removed `encrypted_filename`, `filename_nonce`, `encrypted_sha256sum`, `sha256sum_nonce` from `ShareEnvelope` interface
-- `share-list.ts` — removed same 4 fields from `Share` interface
-- `share-crypto.ts` — removed dead helper functions `decryptMetadata`, `decryptData`, `decryptFileData`, `deriveKey` and their entries in the `shareCrypto` export object (zero callers confirmed)
+- `share-access.ts` -- removed `encrypted_filename`, `filename_nonce`, `encrypted_sha256sum`, `sha256sum_nonce` from `ShareEnvelope` interface
+- `share-list.ts` -- removed same 4 fields from `Share` interface
+- `share-crypto.ts` -- removed dead helper functions `decryptMetadata`, `decryptData`, `decryptFileData`, `deriveKey` and their entries in the `shareCrypto` export object (zero callers confirmed)
 
 **Verification:**
 - `go build ./...` passes
 - `bunx tsc --noEmit` passes
 
-**Verify 5 (Cross-Platform Test): NOT STARTED** — was blocked on Phase 5; now unblocked (pending live server availability)
+**Verify 5 (Cross-Platform Test): NOT STARTED** -- was blocked on Phase 5; now unblocked (pending live server availability)
 
 ### Phase 5: COMPLETE ✓ 2026-02-26 (see Phase 5 section above)
 
-### Phase 6: NOT STARTED (future enhancement — parallel/out-of-order uploads)
+### Phase 6: NOT STARTED (future enhancement -- parallel/out-of-order uploads)
 
 ### Phase 7: COMPLETE ✅ (2026-03-05)
 
 All four Phase 7 deliverables verified complete:
 
-**1. Upload progress indicators — ALREADY COMPLETE (from Priority 6 work)**
+**1. Upload progress indicators -- ALREADY COMPLETE (from Priority 6 work)**
 - `upload.ts`: ProgressManager wired in with phases: `deriving-key` (indeterminate), `encrypting` (per-chunk %), `uploading` (per-chunk %), `completing`
 - Account key derivation spinner shown during Argon2id (3-8 seconds)
 
-**2. Download progress indicators — ALREADY COMPLETE**
+**2. Download progress indicators -- ALREADY COMPLETE**
 - `download.ts`: `showProgress()` with indeterminate mode during Argon2id key derivation (both account and custom paths), `hideProgress()` after derivation
 - `streaming-download.ts` → `downloadFile()`: indeterminate progress for metadata fetch → per-chunk percentage updates with speed/remaining time → `hideProgress()` on completion
 - `streaming-download.ts` → `downloadSharedFile()`: same full progress treatment for share downloads
 - Error states handled with `updateProgress({ error })` + 3-second delay before `hideProgress()`
 
-**3. Share download progress — ALREADY COMPLETE**
+**3. Share download progress -- ALREADY COMPLETE**
 - `share-access.ts`: passes `showProgressUI: true` to `downloadSharedFileChunked()`, with `onProgress` callback updating status div
 - `StreamingDownloadManager` handles the full progress overlay for share chunk downloads
 
-**4. Custom password UI toggle — ALREADY COMPLETE**
+**4. Custom password UI toggle -- ALREADY COMPLETE**
 - `app.ts`: radio buttons `input[name="passwordType"]` have `change` event listener
 - Selecting "custom" shows `#customPasswordSection` div (removes `.hidden` class)
 - Selecting "account" hides `#customPasswordSection` and clears `#filePassword` input
@@ -805,7 +805,7 @@ All four Phase 7 deliverables verified complete:
 
 **Problem identified**: The e2e test (`scripts/testing/e2e-test.sh`) Phase 9.7 verifies share download integrity by comparing against shell variables captured during upload (Phase 8). It does NOT verify that a share recipient can access the file's metadata (filename, size, SHA256 digest) through the share mechanism itself.
 
-The server returns encrypted metadata fields (`encrypted_filename`, `filename_nonce`, `encrypted_sha256sum`, `sha256sum_nonce`) in `GetShareEnvelope`, but these are encrypted with the **owner's account key**. A share recipient has only the share password — they cannot derive the owner's account key and therefore cannot decrypt these metadata fields.
+The server returns encrypted metadata fields (`encrypted_filename`, `filename_nonce`, `encrypted_sha256sum`, `sha256sum_nonce`) in `GetShareEnvelope`, but these are encrypted with the **owner's account key**. A share recipient has only the share password -- they cannot derive the owner's account key and therefore cannot decrypt these metadata fields.
 
 **Impact**: Share recipients have no way to:
 1. See the filename before downloading
@@ -846,39 +846,39 @@ The server returns encrypted metadata fields (`encrypted_filename`, `filename_no
 **What the server knows** (unchanged by this change):
 - File size (needed for byte-range chunk serving)
 - Storage ID (internal reference to S3 object)
-- Encrypted metadata blobs (filename, sha256sum — encrypted with account key, opaque to server)
+- Encrypted metadata blobs (filename, sha256sum -- encrypted with account key, opaque to server)
 - Encrypted FEK blob (encrypted with account key, opaque to server)
 - Encrypted share envelope blob (encrypted with share key, opaque to server)
-- Download token hash (SHA-256, one-way — server cannot derive the token)
+- Download token hash (SHA-256, one-way -- server cannot derive the token)
 - Share ID, file ID, owner username, timestamps
 
 **What the server CANNOT know** (preserved):
-- Plaintext filename — still encrypted with account key in `file_metadata` table; now ALSO inside the share envelope, but the share envelope itself is AES-GCM encrypted with the share key derived from the share password. The server never has the share password.
-- Plaintext SHA256 digest — same protection as filename
-- File Encryption Key (FEK) — encrypted inside both the owner envelope (account key) and share envelope (share key). Server never has either password.
-- File contents — encrypted with FEK, which server never has
-- Share password — never transmitted; only the salt is stored; key derivation happens client-side
-- Download token — server only stores the SHA-256 hash; token itself is inside the encrypted share envelope
+- Plaintext filename -- still encrypted with account key in `file_metadata` table; now ALSO inside the share envelope, but the share envelope itself is AES-GCM encrypted with the share key derived from the share password. The server never has the share password.
+- Plaintext SHA256 digest -- same protection as filename
+- File Encryption Key (FEK) -- encrypted inside both the owner envelope (account key) and share envelope (share key). Server never has either password.
+- File contents -- encrypted with FEK, which server never has
+- Share password -- never transmitted; only the salt is stored; key derivation happens client-side
+- Download token -- server only stores the SHA-256 hash; token itself is inside the encrypted share envelope
 
-**Net effect**: Adding metadata to the share envelope does NOT degrade zero-knowledge properties. The plaintext metadata was already present on the client side during share creation (the owner decrypted it to display in the UI). The metadata simply moves from "only available to owner" to "available to anyone with the share password," which is the intended access model. The server sees only the same opaque encrypted blob — just slightly larger.
+**Net effect**: Adding metadata to the share envelope does NOT degrade zero-knowledge properties. The plaintext metadata was already present on the client side during share creation (the owner decrypted it to display in the UI). The metadata simply moves from "only available to owner" to "available to anyone with the share password," which is the intended access model. The server sees only the same opaque encrypted blob -- just slightly larger.
 
 ### Implementation Plan
 
-#### Phase 4A: Fix TS Download Basics (Verify 2, 3) — TS only, no server changes — COMPLETE
+#### Phase 4A: Fix TS Download Basics (Verify 2, 3) -- TS only, no server changes -- COMPLETE
 - [x] `download.ts` → `decryptFEK()`: strip 2-byte envelope header before AES-GCM decryption
 - [x] `streaming-download.ts` → `downloadAndDecryptChunks()`: strip 2-byte header from chunk 0
 - [x] `streaming-download.ts` → `downloadAndDecryptShareChunks()`: same chunk 0 fix
 
-#### Phase 4B: Fix Metadata Key for Owner Downloads (Verify 1) — TS only — COMPLETE
+#### Phase 4B: Fix Metadata Key for Owner Downloads (Verify 1) -- TS only -- COMPLETE
 - [x] Owner download path: use account key (not FEK) for metadata decryption
 - [x] Ensure account key is available in the download flow (from cache or prompt)
 
-#### Phase 4C: Share Envelope Metadata — Go + TS — COMPLETE
+#### Phase 4C: Share Envelope Metadata -- Go + TS -- COMPLETE
 **Go changes:**
 - [x] `crypto/share_kdf.go`: Add `Filename`, `SizeBytes`, `SHA256` fields to `ShareEnvelope` struct
 - [x] `crypto/share_kdf.go`: Update `CreateShareEnvelope()` signature to accept metadata
-- [x] `arkfile-client share create`: Decrypt owner metadata (account key), include plaintext in envelope — DONE (was deferred to Phase 5; completed in new-cli.md refactor)
-- [x] `arkfile-client share download`: Output filename/size/sha256 from decrypted envelope — DONE (was deferred to Phase 5; completed in new-cli.md refactor)
+- [x] `arkfile-client share create`: Decrypt owner metadata (account key), include plaintext in envelope -- DONE (was deferred to Phase 5; completed in new-cli.md refactor)
+- [x] `arkfile-client share download`: Output filename/size/sha256 from decrypted envelope -- DONE (was deferred to Phase 5; completed in new-cli.md refactor)
 
 **TS changes:**
 - [x] `shares/share-crypto.ts`: Include metadata in envelope JSON before encryption
@@ -893,10 +893,10 @@ The server returns encrypted metadata fields (`encrypted_filename`, `filename_no
 - [x] Removed dead TS functions: `decryptMetadata`, `decryptData`, `decryptFileData`, `deriveKey`
 
 **E2E test:**
-- [ ] Phase 9.6/9.7: Verify `arkfile-client share download` outputs correct filename and sha256 — deferred to Phase 8
-- [ ] Compare against original values from Phase 8 — deferred to Phase 8
+- [ ] Phase 9.6/9.7: Verify `arkfile-client share download` outputs correct filename and sha256 -- deferred to Phase 8
+- [ ] Compare against original values from Phase 8 -- deferred to Phase 8
 
-#### Phase 4D: Cross-Platform Test (Verify 5) — NOT STARTED (unblocked — Phase 5 complete)
+#### Phase 4D: Cross-Platform Test (Verify 5) -- NOT STARTED (unblocked -- Phase 5 complete)
 - [ ] Go CLI upload → TS browser download (owner flow)
 - [ ] TS browser upload → Go CLI download (owner flow)
 - [ ] Go CLI share create → TS browser share access
@@ -910,7 +910,7 @@ Here's the full plan, properly prioritized:
 
 ---
 
-## Priority 1: Server-side — Accept `max_accesses` in `CreateFileShare` — COMPLETE ✓ (2026-02-27)
+## Priority 1: Server-side -- Accept `max_accesses` in `CreateFileShare` -- COMPLETE ✓ (2026-02-27)
 
 **File: `handlers/file_shares.go`**
 
@@ -924,25 +924,25 @@ That was ~10 lines of Go changes.
 
 ---
 
-## Priority 2: Client-side share.ts — No hardcoded values, full feature set — COMPLETE ✓ (2026-02-27)
+## Priority 2: Client-side share.ts -- No hardcoded values, full feature set -- COMPLETE ✓ (2026-02-27)
 
 **File: `client/static/js/src/files/share.ts`**
 
 Current problems (all fixed):
-- **Hardcoded `14` for min password length** — must use `validateSharePassword()` from `password-validation.ts` which loads from `/api/config/password-requirements` (where `minSharePasswordLength` = 18)
-- **No max downloads UI** — the server will now accept it, so expose it
-- **No real-time password validation feedback** — just a dumb length check
+- **Hardcoded `14` for min password length** -- must use `validateSharePassword()` from `password-validation.ts` which loads from `/api/config/password-requirements` (where `minSharePasswordLength` = 18)
+- **No max downloads UI** -- the server will now accept it, so expose it
+- **No real-time password validation feedback** -- just a dumb length check
 
 Fix:
 1. Import `validateSharePassword` from `../crypto/password-validation`
 2. On password input, call `validateSharePassword()` and show real-time feedback (requirements met/unmet)
-3. Remove the hardcoded `pw.length < 14` check — use the validation result's `meets_requirements` instead
+3. Remove the hardcoded `pw.length < 14` check -- use the validation result's `meets_requirements` instead
 4. Add a "Max Downloads" input field to the modal (optional, defaults to unlimited)
 5. Pass `maxDownloads` through to `ShareCreator.createShare()`
 
 ---
 
-## Priority 3: ShareCreator — Pass `max_accesses` to server — COMPLETE ✓ (2026-02-27)
+## Priority 3: ShareCreator -- Pass `max_accesses` to server -- COMPLETE ✓ (2026-02-27)
 
 **File: `client/static/js/src/shares/share-creation.ts`**
 
@@ -951,34 +951,34 @@ Fix:
 
 ---
 
-## Priority 4: Fix share button in list.ts — COMPLETE ✓ (2026-02-27)
+## Priority 4: Fix share button in list.ts -- COMPLETE ✓ (2026-02-27)
 
 **File: `client/static/js/src/files/list.ts`**
 
-The share button was doing `window.location.href = '/file-share.html?...'` — that page was deleted. Changed to call `shareFile(file.file_id, file.password_type)` from the new `share.ts` module.
+The share button was doing `window.location.href = '/file-share.html?...'` -- that page was deleted. Changed to call `shareFile(file.file_id, file.password_type)` from the new `share.ts` module.
 
 ---
 
-## Priority 5: Dead code cleanup — COMPLETE ✅ (2026-03-04)
+## Priority 5: Dead code cleanup -- COMPLETE ✅ (2026-03-04)
 
 1. **Server-side dead code removed (2026-03-04):** `DownloadSharedFile()` from `file_shares.go`, `DownloadFile()` from `downloads.go`, `UploadFile()` from `handlers.go`, corresponding routes from `route_config.go`, `TestDownloadFile_Success` from `files_test.go`
-2. **`download.ts`** — `downloadFileByName()` confirmed already removed (not present in codebase)
-3. **`app.ts`** — `window.arkfile` share exports confirmed NOT dead code — they are actively used by `shared.html` (`window.arkfile.shares.ShareAccessUI`). No removal needed.
-4. **`list.ts`** — Fixed null guard bug in `renderFileList()`: added `file?.file_id` check to prevent crash when API returns null entries (2026-03-04)
-5. **`file-encryption.ts` dead code removed (2026-03-04):** Removed 4 whole-file encrypt/decrypt functions (`encryptFile`, `decryptFile`, `encryptFileToBase64`, `decryptFileFromBase64`) and their export entries — zero external callers confirmed via grep. Removed unused imports (`secureWipe`, `encryptAESGCM`, `decryptAESGCM`, `toBase64`, `fromBase64`, `LIMITS`, `FILE_ENCRYPTION_VERSION`, and 5 error/type imports from `types.ts`). Updated module doc comment to reflect new purpose (key derivation & caching only). `bunx tsc --noEmit` passes clean.
+2. **`download.ts`** -- `downloadFileByName()` confirmed already removed (not present in codebase)
+3. **`app.ts`** -- `window.arkfile` share exports confirmed NOT dead code -- they are actively used by `shared.html` (`window.arkfile.shares.ShareAccessUI`). No removal needed.
+4. **`list.ts`** -- Fixed null guard bug in `renderFileList()`: added `file?.file_id` check to prevent crash when API returns null entries (2026-03-04)
+5. **`file-encryption.ts` dead code removed (2026-03-04):** Removed 4 whole-file encrypt/decrypt functions (`encryptFile`, `decryptFile`, `encryptFileToBase64`, `decryptFileFromBase64`) and their export entries -- zero external callers confirmed via grep. Removed unused imports (`secureWipe`, `encryptAESGCM`, `decryptAESGCM`, `toBase64`, `fromBase64`, `LIMITS`, `FILE_ENCRYPTION_VERSION`, and 5 error/type imports from `types.ts`). Updated module doc comment to reflect new purpose (key derivation & caching only). `bunx tsc --noEmit` passes clean.
 
 ---
 
-## Priority 6: e2e-test.sh — max_accesses and expires_after tests — COMPLETE ✅ (2026-03-04)
+## Priority 6: e2e-test.sh -- max_accesses and expires_after tests -- COMPLETE ✅ (2026-03-04)
 
 **File: `scripts/testing/e2e-test.sh`**
 
 Phase 9 (Share Operations) fully rewritten with comprehensive share constraint testing:
 
 **3 shares created with different constraints:**
-- **Share A** — No limits (unlimited access, no expiry, `--expires 0`)
-- **Share B** — `--max-downloads 2` (access-limited)
-- **Share C** — `--expires 2m` (time-limited, 2 minutes)
+- **Share A** -- No limits (unlimited access, no expiry, `--expires 0`)
+- **Share B** -- `--max-downloads 2` (access-limited)
+- **Share C** -- `--expires 2m` (time-limited, 2 minutes)
 
 **Each share uses a unique 18+ char password** meeting all share password requirements (uppercase, digits, special chars).
 
@@ -999,10 +999,10 @@ Phase 9 (Share Operations) fully rewritten with comprehensive share constraint t
 - `--cache-key` flag added to Phase 7 login and Phase 9.10 re-login for account key caching
 
 **Also added during this session:**
-- CLI `--cache-key` / `--no-cache-key` flags (`cmd/arkfile-client/main.go`) — interactive prompt for account key caching with non-interactive override flags
-- Server `expires_after_minutes` (`handlers/file_shares.go`) — replaced `expires_after_hours` with minutes-based expiration
-- CLI `--expires` duration parsing (`cmd/arkfile-client/commands.go`) — accepts `2m`/`24h`/`7d` style, `0 = no expiry`
-- TS expiration UI (`client/static/js/src/files/share.ts`) — radio buttons for minutes/hours/days + numeric input
+- CLI `--cache-key` / `--no-cache-key` flags (`cmd/arkfile-client/main.go`) -- interactive prompt for account key caching with non-interactive override flags
+- Server `expires_after_minutes` (`handlers/file_shares.go`) -- replaced `expires_after_hours` with minutes-based expiration
+- CLI `--expires` duration parsing (`cmd/arkfile-client/commands.go`) -- accepts `2m`/`24h`/`7d` style, `0 = no expiry`
+- TS expiration UI (`client/static/js/src/files/share.ts`) -- radio buttons for minutes/hours/days + numeric input
 - TS `expiresAfterMinutes` in share-creation (`client/static/js/src/shares/share-creation.ts`)
 - TS ProgressManager wired into upload flow (`client/static/js/src/files/upload.ts`)
 - Account key derivation UI indicator (spinner during Argon2id)
@@ -1010,15 +1010,15 @@ Phase 9 (Share Operations) fully rewritten with comprehensive share constraint t
 
 ---
 
-### Dead Code Removal — Server Handlers (2026-03-04)
+### Dead Code Removal -- Server Handlers (2026-03-04)
 
 Removed functions and routes that were superseded by the chunked upload/download system:
 
-- `handlers/file_shares.go` — removed `DownloadSharedFile()` (old whole-file share download, replaced by `DownloadShareChunk`)
-- `handlers/downloads.go` — removed `DownloadFile()` (old whole-file download, replaced by `DownloadFileChunk`)
-- `handlers/handlers.go` — removed `UploadFile()` (old whole-file upload, replaced by chunked upload system)
-- `handlers/route_config.go` — removed corresponding routes: `GET /api/files/:fileId/download`, `GET /api/shares/:shareId/download`
-- `handlers/files_test.go` — removed `TestDownloadFile_Success` (tested deleted function)
+- `handlers/file_shares.go` -- removed `DownloadSharedFile()` (old whole-file share download, replaced by `DownloadShareChunk`)
+- `handlers/downloads.go` -- removed `DownloadFile()` (old whole-file download, replaced by `DownloadFileChunk`)
+- `handlers/handlers.go` -- removed `UploadFile()` (old whole-file upload, replaced by chunked upload system)
+- `handlers/route_config.go` -- removed corresponding routes: `GET /api/files/:fileId/download`, `GET /api/shares/:shareId/download`
+- `handlers/files_test.go` -- removed `TestDownloadFile_Success` (tested deleted function)
 
 ---
 
@@ -1039,7 +1039,7 @@ TypeScript only (no JS), POSIX-compatible Go (no Linux-specific syscalls like `S
 - Add `storedAt`, `expiresAt`, `username` fields alongside `accountKey` in the Agent struct
 - `store_account_key` method now accepts `{"account_key": "<b64>", "username": "alice", "ttl_hours": 1}`
 - `get_account_key` checks expiration, returns error `"account key expired"` if past TTL, auto-wipes
-- Background goroutine: check every 60s, auto-wipe if expired (POSIX-safe — just `time.NewTicker`)
+- Background goroutine: check every 60s, auto-wipe if expired (POSIX-safe -- just `time.NewTicker`)
 - `get_account_key` response now includes `username`, `stored_at`, `expires_at` (unified shape)
 - `--key-ttl` flag on `login` command (default 1, clamped 1–4)
 - On expired key error, print: `"Account key expired. Please run: arkfile-client login --username <user>"`
@@ -1056,7 +1056,7 @@ TypeScript only (no JS), POSIX-compatible Go (no Linux-specific syscalls like `S
 
 #### 3. Unified JSON Data Shape (Both Sides)
 
-**Account key structure (conceptual — adapted to each storage backend):**
+**Account key structure (conceptual -- adapted to each storage backend):**
 ```json
 {
   "account_key": "<base64 key or ciphertext>",
@@ -1076,7 +1076,7 @@ TypeScript only (no JS), POSIX-compatible Go (no Linux-specific syscalls like `S
 
 #### 4. Top 3 Additional Security Enhancements Per Platform
 
-##### Go CLI Agent — Top 3 (POSIX-compatible, ranked by security impact):
+##### Go CLI Agent -- Top 3 (POSIX-compatible, ranked by security impact):
 
 | Rank | Enhancement | Why | Implementation |
 |------|------------|-----|---------------|
@@ -1084,13 +1084,13 @@ TypeScript only (no JS), POSIX-compatible Go (no Linux-specific syscalls like `S
 | **2** | **Memory locking (`mlock`)** | Prevents account key from being swapped to disk. POSIX standard (`mlock(2)`), works on Linux, FreeBSD, OpenBSD, Alpine. Go's `syscall.Mlock()` wraps this portably. | Call `syscall.Mlock()` on the account key byte slice after storing. Call `syscall.Munlock()` before wiping. Fail gracefully if unprivileged (some BSDs require privileges). |
 | **3** | **Socket UID ownership validation + access counter** | Already validates UID/permissions. Add an access counter exposed via `agent status` so users can audit access patterns. Simple, maintainable, no platform-specific APIs. | Add `accessCount uint64` field, increment on each `get_account_key`. Include in `status` response. Log warning if >10 accesses/minute. |
 
-##### TypeScript Frontend — Top 3 (ranked by security impact):
+##### TypeScript Frontend -- Top 3 (ranked by security impact):
 
 | Rank | Enhancement | Why | Implementation |
 |------|------------|-----|---------------|
 | **1** | **Session binding** | Ties cached key to the current JWT. If token is refreshed or changes, the wrapping key is discarded, forcing re-derivation. Prevents key reuse across sessions. | On cache: store `SHA-256(accessToken)` alongside ciphertext. On retrieve: compare against current token hash. Mismatch → auto-lock. |
 | **2** | **Inactivity auto-lock** | If user walks away, key is automatically wiped after configurable idle timeout (default 15 min). Industry standard for sensitive web apps (banking, password managers). | Track last activity via `mousemove`/`keydown`/`click` events (debounced). `setInterval` every 60s checks if idle > threshold → `lockAccountKey()`. |
-| **3** | **Storage event monitoring** | Detects if another tab/context (or XSS in another tab) modifies the account key entry. Immediately locks and alerts. | `window.addEventListener('storage', ...)` — if the account key sessionStorage entry is modified externally, force lock + show security warning. Note: `storage` events fire for `localStorage` changes from *other* tabs; for `sessionStorage` this is same-tab only, so we'd add a periodic integrity check (HMAC of stored value) instead. |
+| **3** | **Storage event monitoring** | Detects if another tab/context (or XSS in another tab) modifies the account key entry. Immediately locks and alerts. | `window.addEventListener('storage', ...)` -- if the account key sessionStorage entry is modified externally, force lock + show security warning. Note: `storage` events fire for `localStorage` changes from *other* tabs; for `sessionStorage` this is same-tab only, so we'd add a periodic integrity check (HMAC of stored value) instead. |
 
 **Revised #3 for TS (since `storage` event doesn't work across tabs for sessionStorage):**
 
@@ -1100,23 +1100,23 @@ TypeScript only (no JS), POSIX-compatible Go (no Linux-specific syscalls like `S
 
 ### Implementation Order
 
-1. **Go agent TTL + unified shape** (`agent.go`, `main.go`) — ✅ COMPLETE
-2. **Go session binding** (`agent.go`, `main.go`) — ✅ COMPLETE
-3. **Go mlock** (`agent.go`) — with graceful fallback — ✅ COMPLETE
-4. **Go access counter** (`agent.go`) — ✅ COMPLETE
-5. **TS ephemeral wrapping key** (`account-key-cache.ts`) — ✅ COMPLETE
-6. **TS session binding** (`account-key-cache.ts`) — ✅ COMPLETE
-7. **TS inactivity auto-lock** (`account-key-cache.ts`) — ✅ COMPLETE
-8. **TS integrity HMAC** (`account-key-cache.ts`) — ✅ COMPLETE
-9. **TS unified shape alignment** (`account-key-cache.ts`) — ✅ COMPLETE
+1. **Go agent TTL + unified shape** (`agent.go`, `main.go`) -- ✅ COMPLETE
+2. **Go session binding** (`agent.go`, `main.go`) -- ✅ COMPLETE
+3. **Go mlock** (`agent.go`) -- with graceful fallback -- ✅ COMPLETE
+4. **Go access counter** (`agent.go`) -- ✅ COMPLETE
+5. **TS ephemeral wrapping key** (`account-key-cache.ts`) -- ✅ COMPLETE
+6. **TS session binding** (`account-key-cache.ts`) -- ✅ COMPLETE
+7. **TS inactivity auto-lock** (`account-key-cache.ts`) -- ✅ COMPLETE
+8. **TS integrity HMAC** (`account-key-cache.ts`) -- ✅ COMPLETE
+9. **TS unified shape alignment** (`account-key-cache.ts`) -- ✅ COMPLETE
 
 All security enhancements verified implemented in codebase as of 2026-03-04.
 
 ---
 
 ### Files to be modified:
-- `cmd/arkfile-client/agent.go` — TTL, session binding, mlock, access counter, unified shape
-- `cmd/arkfile-client/main.go` — `--key-ttl` flag, session token hash passing, expired key handling
-- `client/static/js/src/crypto/account-key-cache.ts` — wrapping key, session binding, inactivity lock, HMAC integrity, unified shape
+- `cmd/arkfile-client/agent.go` -- TTL, session binding, mlock, access counter, unified shape
+- `cmd/arkfile-client/main.go` -- `--key-ttl` flag, session token hash passing, expired key handling
+- `client/static/js/src/crypto/account-key-cache.ts` -- wrapping key, session binding, inactivity lock, HMAC integrity, unified shape
 
 ---

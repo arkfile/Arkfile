@@ -36,7 +36,7 @@ export SRC_SYSTEMD="systemd"
 export SRC_VENDOR_STEF="vendor_c/stef"
 
 # =============================================================================
-# C VENDOR PATHS (vendor_c/ — never modified by go mod vendor)
+# C VENDOR PATHS (vendor_c/ -- never modified by go mod vendor)
 # =============================================================================
 export VENDOR_C_ROOT="vendor_c"
 export VENDOR_C_STEF="$VENDOR_C_ROOT/stef"

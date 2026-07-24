@@ -697,7 +697,7 @@ run_preflight() {
 }
 
 run_platform_bootstrap_admin_login() {
-    group "Platform bootstrap — admin login"
+    group "Platform bootstrap -- admin login"
 
     scenario "Authenticating admin user: $ADMIN_USERNAME"
     admin_login_with_totp "Admin login"
@@ -706,7 +706,7 @@ run_platform_bootstrap_admin_login() {
 }
 
 run_platform_bootstrap_protection() {
-    group "Platform bootstrap — bootstrap protection"
+    group "Platform bootstrap -- bootstrap protection"
 
     if [ -z "$BOOTSTRAP_TOKEN" ]; then
         warning "Skipping Bootstrap Protection test (no token provided)"
@@ -738,7 +738,7 @@ run_platform_bootstrap_protection() {
 }
 
 run_user_onboarding_registration() {
-    group "User onboarding — registration"
+    group "User onboarding -- registration"
 
     scenario "Registering user: $TEST_USERNAME"
 
@@ -777,7 +777,7 @@ run_user_onboarding_registration() {
 }
 
 run_user_onboarding_mfa_enrollment() {
-    group "User onboarding — MFA enrollment"
+    group "User onboarding -- MFA enrollment"
 
     scenario "Setting up TOTP for user: $TEST_USERNAME"
 
@@ -861,7 +861,7 @@ run_user_onboarding_mfa_enrollment() {
 }
 
 run_dual_mfa_api_checks() {
-    group "Dual MFA — credential API checks"
+    group "Dual MFA -- credential API checks"
 
     scenario "List enrolled MFA credentials after admin approval"
 
@@ -912,7 +912,7 @@ run_dual_mfa_api_checks() {
 }
 
 run_user_onboarding_admin_approval() {
-    group "User onboarding — admin approval"
+    group "User onboarding -- admin approval"
     scenario "Listing all users (admin)"
 
     local list_users_output
@@ -1807,7 +1807,7 @@ run_shares() {
         error "Share C creation failed:"; echo "$create_c_output"
         record_test "Share C creation (expires_after=1m)" "FAIL"
     fi
-    # Share C expiry: run immediately after create — expires_at is 1m from creation.
+    # Share C expiry: run immediately after create -- expires_at is 1m from creation.
     scenario "Visitor share expiry enforcement"
 
     local dl_c1_file="$TEST_DATA_DIR/share_c_dl1.bin"
@@ -1865,7 +1865,7 @@ run_shares() {
         record_test "Share listing (all 4 shares)" "FAIL"
     fi
 
-    # Enrichment assertions — all reuse the already-captured list_shares_output variable
+    # Enrichment assertions -- all reuse the already-captured list_shares_output variable
 
     # Both locally decrypted filenames must appear (account-password and custom-password)
     if echo "$list_shares_output" | grep -q "test_file.bin" \
@@ -1876,9 +1876,9 @@ run_shares() {
         record_test "Share list shows locally decrypted filenames" "FAIL"
     fi
 
-    # No share should fall back to [encrypted] — all 4 must have been successfully enriched
+    # No share should fall back to [encrypted] -- all 4 must have been successfully enriched
     if echo "$list_shares_output" | grep -q "\[encrypted\]"; then
-        error "Share list shows [encrypted] for at least one share — metadata enrichment failed:"
+        error "Share list shows [encrypted] for at least one share -- metadata enrichment failed:"
         echo "$list_shares_output"
         record_test "Share list enrichment succeeded for all shares" "FAIL"
     else
@@ -2986,7 +2986,7 @@ run_storage_replication() {
 }
 
 # Requires ARKFILE_BILLING_ENABLED=true, ARKFILE_BILLING_TICK_INTERVAL=1m,
-# and ARKFILE_FREE_STORAGE_BYTES=10485760 (10 MiB) — all set by dev-reset.sh.
+# and ARKFILE_FREE_STORAGE_BYTES=10485760 (10 MiB) -- all set by dev-reset.sh.
 # The test user has ~5 uploaded files from earlier groups, well above the
 # MiB baseline, so a tick produces a non-zero accumulator immediately.
 run_billing() {
@@ -3348,7 +3348,7 @@ run_payments() {
     scenario "PAYG negative-balance upload cap"
 
     # Billing (admin-only) leaves the test user slightly negative.  User CLI
-    # steps run here — after post-admin-reset MFA re-enrollment — so upload
+    # steps run here -- after post-admin-reset MFA re-enrollment -- so upload
     # and download probes have a valid session.  Invoice top-up below restores
     # balance afterward.
     local cap_microcents=1000000000   # $10.00 in microcents

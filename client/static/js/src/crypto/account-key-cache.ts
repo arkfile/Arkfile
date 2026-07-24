@@ -42,7 +42,7 @@ import { hmac } from '@noble/hashes/hmac.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { clearDigestCache } from '../utils/digest-cache.js';
 
-// Types (Unified shape — matches Go agent's accountKeyEntry)
+// Types (Unified shape -- matches Go agent's accountKeyEntry)
 
 /**
  * Cache duration options in hours
@@ -120,7 +120,7 @@ const INACTIVITY_CHECK_INTERVAL_MS = 60_000; // 1 minute
 // Module-level ephemeral state (never persisted)
 
 /**
- * Ephemeral wrapping key — exists only in JS heap memory.
+ * Ephemeral wrapping key -- exists only in JS heap memory.
  * Used to encrypt/decrypt the account key in sessionStorage.
  * On page unload this variable is lost; on lock/clear it is securely wiped.
  */
@@ -536,7 +536,7 @@ export function cachedAccountKeyTimeRemaining(username: string): number | null {
 /**
  * Locks the Account Key cache, clearing all cached keys and wiping the wrapping key.
  * 
- * After locking, the wrapping key is destroyed — even if sessionStorage still
+ * After locking, the wrapping key is destroyed -- even if sessionStorage still
  * contains ciphertext, it cannot be decrypted without the wrapping key.
  * Users must re-enter their password for file operations.
  */
@@ -551,7 +551,7 @@ export function lockAccountKey(): void {
     // Clear all cached Account Keys from sessionStorage
     clearAllCachedAccountKeys();
     
-    // Clear digest cache (SHA-256 digests are sensitive — content fingerprinting)
+    // Clear digest cache (SHA-256 digests are sensitive -- content fingerprinting)
     clearDigestCache();
     
     // Set locked state
@@ -636,7 +636,7 @@ function startInactivityMonitor(): void {
   if (!activityListenersRegistered) {
     const events: Array<keyof WindowEventMap> = ['mousemove', 'keydown', 'click', 'touchstart', 'scroll'];
     
-    // Debounced activity recorder — update at most once per second
+    // Debounced activity recorder -- update at most once per second
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     const debouncedRecord = (): void => {
       if (debounceTimer === null) {
@@ -689,7 +689,7 @@ export function cleanupAccountKeyCache(): void {
 
     clearAllCachedAccountKeys();
 
-    // Clear digest cache (SHA-256 digests are sensitive — content fingerprinting)
+    // Clear digest cache (SHA-256 digests are sensitive -- content fingerprinting)
     clearDigestCache();
 
     sessionStorage.removeItem(ACCOUNT_KEY_CONFIG);

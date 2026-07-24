@@ -135,7 +135,7 @@ func ReplaceOpaqueServerKeys() (OpaqueKeyReplaceResult, error) {
 		}
 		if reloadOldErr := ReloadOpaqueServerKeys(); reloadOldErr != nil {
 			return result, fmt.Errorf(
-				"keys replaced in database but in-memory reload failed (%v); previous keys restored in database but reload still failed: %v — restart required",
+				"keys replaced in database but in-memory reload failed (%v); previous keys restored in database but reload still failed: %v -- restart required",
 				err, reloadOldErr,
 			)
 		}

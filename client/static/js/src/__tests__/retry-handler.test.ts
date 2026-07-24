@@ -1,7 +1,7 @@
 /**
  * Retry Handler Unit Tests
  * 
- * Tests for files/retry-handler.ts — exponential backoff retry logic
+ * Tests for files/retry-handler.ts -- exponential backoff retry logic
  * for chunked downloads. All pure logic, no DOM or WASM dependencies.
  */
 
