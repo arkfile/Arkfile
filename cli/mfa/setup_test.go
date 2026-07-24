@@ -2,26 +2,6 @@ package mfa
 
 import "testing"
 
-func TestParseMFAMethod(t *testing.T) {
-	tests := []struct {
-		name string
-		data map[string]interface{}
-		want Method
-	}{
-		{"nil", nil, MethodTOTP},
-		{"webauthn", map[string]interface{}{"mfa_method": "webauthn"}, MethodWebAuthn},
-		{"totp", map[string]interface{}{"mfa_method": "totp"}, MethodTOTP},
-		{"unknown", map[string]interface{}{"mfa_method": "sms"}, MethodTOTP},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := ParseMFAMethod(tc.data); got != tc.want {
-				t.Fatalf("ParseMFAMethod() = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestExtractOptionsJSON(t *testing.T) {
 	raw, err := extractOptionsJSON(map[string]interface{}{
 		"options": map[string]interface{}{
@@ -39,7 +19,34 @@ func TestExtractOptionsJSON(t *testing.T) {
 	if _, err := extractOptionsJSON(nil); err == nil {
 		t.Fatal("expected error for nil data")
 	}
-	if _, err := extractOptionsJSON(map[string]interface{}{}); err == nil {
-		t.Fatal("expected error for missing options")
+}
+
+func TestPickLoginMethodEmptyFailsClosed(t *testing.T) {
+	_, _, err := PickLoginMethod(false, nil, "", "")
+	if err == nil {
+		t.Fatal("expected error for empty methods")
+	}
+}
+
+func TestPickLoginMethodSingleWebAuthn(t *testing.T) {
+	methods := []map[string]string{
+		{"type": "webauthn", "credential_id": "cred-1", "label": "Key"},
+	}
+	got, cred, err := PickLoginMethod(false, methods, "", "")
+	if err != nil {
+		t.Fatalf("PickLoginMethod: %v", err)
+	}
+	if got != MethodWebAuthn || cred != "cred-1" {
+		t.Fatalf("got %q/%q", got, cred)
+	}
+}
+
+func TestPickLoginMethodExplicitMustBeEnrolled(t *testing.T) {
+	methods := []map[string]string{
+		{"type": "webauthn", "credential_id": "cred-1"},
+	}
+	_, _, err := PickLoginMethod(true, methods, MethodTOTP, "")
+	if err == nil {
+		t.Fatal("expected error when requested method is not enrolled")
 	}
 }

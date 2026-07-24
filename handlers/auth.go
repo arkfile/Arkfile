@@ -412,30 +412,31 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 		// Continue - session will expire naturally
 	}
 
-	// Generate temporary token for TOTP setup
 	tempToken, _, err := auth.GenerateTemporaryMFAToken(request.Username)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for %s: %v", request.Username, err)
+		logging.ErrorLogger.Printf("Failed to generate temporary MFA token for %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Registration succeeded but setup token creation failed")
 	}
 
-	// Issue temp cookie for browser clients.
 	issueTempCookie(c, tempToken)
 
-	// Log successful registration
-	database.LogUserAction(request.Username, "registered with OPAQUE (multi-step), TOTP setup required", "")
-	logging.InfoLogger.Printf("OPAQUE user registered (multi-step), TOTP setup required: %s", request.Username)
+	database.LogUserAction(request.Username, "registered with OPAQUE (multi-step), MFA setup required", "")
+	logging.InfoLogger.Printf("OPAQUE user registered (multi-step), MFA setup required: %s", request.Username)
 
-	pendingMethod, _ := auth.GetPendingMFAMethodType(database.DB, request.Username)
+	challenge, err := auth.BuildMFAChallenge(database.DB, request.Username)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to build MFA challenge after registration for %s: %v", request.Username, err)
+		return JSONError(c, http.StatusInternalServerError, "Registration succeeded but setup session is incomplete")
+	}
 
-	return JSONResponse(c, http.StatusCreated, "Account created successfully. Two-factor authentication setup is required to complete registration.", map[string]interface{}{
-		"requires_mfa_setup": true,
-		"requires_mfa":       true,
-		"temp_token":         tempToken,
-		"auth_method":        "OPAQUE",
-		"mfa_method":         pendingMethod,
-		"username":           request.Username,
-	})
+	resp := map[string]interface{}{
+		"temp_token":  tempToken,
+		"auth_method": "OPAQUE",
+		"username":    request.Username,
+	}
+	auth.ApplyMFAChallenge(resp, challenge)
+
+	return JSONResponse(c, http.StatusCreated, "Account created successfully. Two-factor authentication setup is required to complete registration.", resp)
 }
 
 // Multi-Step OPAQUE Authentication Endpoints
@@ -603,35 +604,10 @@ func OpaqueAuthFinalize(c echo.Context) error {
 		// Continue - session will expire naturally
 	}
 
-	// Check if user has MFA enabled
-	mfaEnabled, err := auth.IsUserMFAEnabled(database.DB, request.Username)
+	challenge, err := auth.BuildMFAChallenge(database.DB, request.Username)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to check MFA status for %s: %v", request.Username, err)
+		logging.ErrorLogger.Printf("Failed to build MFA challenge for %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
-	}
-
-	requiresSetup, mfaMethods, singleMethod, err := auth.BuildMFALoginResponse(database.DB, request.Username)
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to build MFA login response for %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
-	}
-
-	if !mfaEnabled {
-		logging.InfoLogger.Printf("User %s authenticated via OPAQUE but MFA setup is incomplete; redirecting to setup", request.Username)
-		tempToken, _, err := auth.GenerateTemporaryMFAToken(request.Username)
-		if err != nil {
-			logging.ErrorLogger.Printf("Failed to generate MFA setup token for %s: %v", request.Username, err)
-			return JSONError(c, http.StatusInternalServerError, "Authentication failed")
-		}
-		issueTempCookie(c, tempToken)
-		pendingMethod, _ := auth.GetPendingMFAMethodType(database.DB, request.Username)
-
-		return JSONResponse(c, http.StatusOK, "Two-factor authentication setup is required to complete login.", map[string]interface{}{
-			"requires_mfa":       true,
-			"requires_mfa_setup": requiresSetup,
-			"temp_token":         tempToken,
-			"mfa_method":         pendingMethod,
-		})
 	}
 
 	tempToken, _, err := auth.GenerateTemporaryMFAToken(request.Username)
@@ -639,22 +615,21 @@ func OpaqueAuthFinalize(c echo.Context) error {
 		logging.ErrorLogger.Printf("Failed to generate temporary MFA token for %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 	}
-
 	issueTempCookie(c, tempToken)
+
+	resp := map[string]interface{}{
+		"temp_token":  tempToken,
+		"auth_method": "OPAQUE",
+	}
+	auth.ApplyMFAChallenge(resp, challenge)
+
+	if challenge.RequiresSetup {
+		logging.InfoLogger.Printf("User %s authenticated via OPAQUE but MFA setup is incomplete; redirecting to setup", request.Username)
+		return JSONResponse(c, http.StatusOK, "Two-factor authentication setup is required to complete login.", resp)
+	}
 
 	database.LogUserAction(request.Username, "OPAQUE auth completed (multi-step), awaiting MFA", "")
 	logging.InfoLogger.Printf("OPAQUE user authenticated (multi-step), MFA required: %s", request.Username)
-
-	resp := map[string]interface{}{
-		"requires_mfa": true,
-		"temp_token":   tempToken,
-		"auth_method":  "OPAQUE",
-		"mfa_method":   singleMethod,
-	}
-	if len(mfaMethods) > 1 {
-		resp["mfa_methods"] = mfaMethods
-	}
-
 	return JSONResponse(c, http.StatusOK, "OPAQUE authentication successful. Second factor required.", resp)
 }
 
@@ -1046,7 +1021,7 @@ func MFAReset(c echo.Context) error {
 		methodType, _ = auth.GetUserMFAMethodType(database.DB, username)
 	}
 	if methodType == "" {
-		methodType = auth.MFAMethodTOTP
+		return JSONError(c, http.StatusBadRequest, "method_type is required when more than one MFA method is enrolled")
 	}
 
 	setup, err := auth.ResetMFAMethod(database.DB, username, methodType, request.BackupCode)

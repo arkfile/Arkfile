@@ -20,6 +20,41 @@ export interface MFALoginMethodOption {
   label?: string;
 }
 
+export type MFAChallengeRoute =
+  | { kind: 'setup'; pendingMethod: MFAMethod | '' }
+  | { kind: 'pick'; methods: MFALoginMethodOption[] }
+  | { kind: 'single'; method: MFALoginMethodOption }
+  | { kind: 'error'; message: string };
+
+/**
+ * Resolve the post-OPAQUE MFA step from the canonical server challenge fields.
+ * Clients must not invent a default factor when mfa_methods is empty.
+ */
+export function resolveMFAChallengeRoute(data: {
+  requires_mfa_setup?: boolean;
+  mfa_methods?: MFALoginMethodOption[];
+  pending_mfa_method?: string;
+}): MFAChallengeRoute {
+  if (data.requires_mfa_setup) {
+    const pending = (data.pending_mfa_method || '').trim();
+    const pendingMethod =
+      pending === 'totp' || pending === 'webauthn' ? pending : '';
+    return { kind: 'setup', pendingMethod };
+  }
+
+  const methods = Array.isArray(data.mfa_methods) ? data.mfa_methods : [];
+  if (methods.length === 0) {
+    return {
+      kind: 'error',
+      message: 'Login incomplete: server did not return enrolled second factors.',
+    };
+  }
+  if (methods.length > 1) {
+    return { kind: 'pick', methods };
+  }
+  return { kind: 'single', method: methods[0] };
+}
+
 /** True when the browser is likely Tor Browser (no reliable WebAuthn for hardware keys). */
 export function isTorBrowser(): boolean {
   if (typeof navigator === 'undefined') return false;

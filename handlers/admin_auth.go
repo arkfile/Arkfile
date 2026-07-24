@@ -188,47 +188,33 @@ func AdminOpaqueAuthFinalize(c echo.Context) error {
 		// Continue - session will expire naturally
 	}
 
-	// Check if user has TOTP enabled
-	totpEnabled, err := auth.IsUserMFAEnabled(database.DB, request.Username)
+	challenge, err := auth.BuildMFAChallenge(database.DB, request.Username)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to check TOTP status for admin %s: %v", request.Username, err)
+		logging.ErrorLogger.Printf("Failed to build MFA challenge for admin %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 	}
 
-	// MANDATORY TOTP: All admin users must have TOTP enabled to login
-	if !totpEnabled {
-		logging.InfoLogger.Printf("Admin user %s authenticated via OPAQUE but TOTP setup is incomplete; allowing setup", request.Username)
-		tempToken, _, err := auth.GenerateTemporaryMFAToken(request.Username)
-		if err != nil {
-			logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for admin %s: %v", request.Username, err)
-			return JSONError(c, http.StatusInternalServerError, "Authentication failed")
-		}
-		return JSONResponse(c, http.StatusOK, "Two-factor authentication setup is required for admin access.", map[string]interface{}{
-			"requires_mfa":       true,
-			"requires_mfa_setup": true,
-			"temp_token":          tempToken,
-			"auth_method":         "OPAQUE",
-			"is_admin":            true,
-		})
-	}
-
-	// Generate temporary token that requires TOTP completion
 	tempToken, _, err := auth.GenerateTemporaryMFAToken(request.Username)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for admin %s: %v", request.Username, err)
+		logging.ErrorLogger.Printf("Failed to generate temporary MFA token for admin %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 	}
 
-	// Log partial admin authentication
-	database.LogUserAction(request.Username, "Admin OPAQUE auth completed (multi-step), awaiting TOTP", "")
-	logging.InfoLogger.Printf("Admin OPAQUE user authenticated (multi-step), TOTP required: %s", request.Username)
+	resp := map[string]interface{}{
+		"temp_token":  tempToken,
+		"auth_method": "OPAQUE",
+		"is_admin":    true,
+	}
+	auth.ApplyMFAChallenge(resp, challenge)
 
-	return JSONResponse(c, http.StatusOK, "Admin OPAQUE authentication successful. TOTP code required.", map[string]interface{}{
-		"requires_mfa": true,
-		"temp_token":    tempToken,
-		"auth_method":   "OPAQUE",
-		"is_admin":      true,
-	})
+	if challenge.RequiresSetup {
+		logging.InfoLogger.Printf("Admin user %s authenticated via OPAQUE but MFA setup is incomplete; allowing setup", request.Username)
+		return JSONResponse(c, http.StatusOK, "Two-factor authentication setup is required for admin access.", resp)
+	}
+
+	database.LogUserAction(request.Username, "Admin OPAQUE auth completed (multi-step), awaiting MFA", "")
+	logging.InfoLogger.Printf("Admin OPAQUE user authenticated (multi-step), MFA required: %s", request.Username)
+	return JSONResponse(c, http.StatusOK, "Admin OPAQUE authentication successful. Second factor required.", resp)
 }
 
 // requireAdminWithUsername returns the admin username from the JWT. Admin routes

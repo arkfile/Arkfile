@@ -10,6 +10,15 @@ const (
 	MFAMethodWebAuthn = "webauthn"
 )
 
+// MFAChallenge is the post-OPAQUE MFA contract returned to all clients.
+// When RequiresSetup is true, Methods is empty and PendingMethod may name an in-progress enrollment.
+// When RequiresSetup is false, Methods lists every completed factor (always present, including length 1).
+type MFAChallenge struct {
+	RequiresSetup bool
+	Methods       []MFALoginMethod
+	PendingMethod string
+}
+
 // GetUserMFAMethodType returns one enrolled method when exactly one is completed.
 func GetUserMFAMethodType(db *sql.DB, username string) (string, error) {
 	methods, err := ListCompletedLoginMethods(db, username)
@@ -42,26 +51,56 @@ func GetPendingMFAMethodType(db *sql.DB, username string) (string, error) {
 	return methodType, nil
 }
 
-// BuildMFALoginResponse builds login metadata after OPAQUE password auth.
-func BuildMFALoginResponse(db *sql.DB, username string) (requiresSetup bool, methods []MFALoginMethod, singleMethod string, err error) {
+// BuildMFAChallenge builds the MFA step after successful OPAQUE password auth.
+func BuildMFAChallenge(db *sql.DB, username string) (*MFAChallenge, error) {
 	completed, err := CountCompletedMethods(db, username)
 	if err != nil {
-		return false, nil, "", err
+		return nil, err
 	}
 	if completed == 0 {
 		pending, pendingErr := GetPendingMFAMethodType(db, username)
 		if pendingErr != nil {
-			return false, nil, "", pendingErr
+			return nil, pendingErr
 		}
-		return true, nil, pending, nil
+		return &MFAChallenge{
+			RequiresSetup: true,
+			Methods:       []MFALoginMethod{},
+			PendingMethod: pending,
+		}, nil
 	}
 
-	methods, err = ListCompletedLoginMethods(db, username)
+	methods, err := ListCompletedLoginMethods(db, username)
 	if err != nil {
-		return false, nil, "", err
+		return nil, err
 	}
-	if len(methods) == 1 {
-		singleMethod = methods[0].Type
+	if methods == nil {
+		methods = []MFALoginMethod{}
 	}
-	return false, methods, singleMethod, nil
+	return &MFAChallenge{
+		RequiresSetup: false,
+		Methods:       methods,
+	}, nil
+}
+
+// ApplyMFAChallenge writes the canonical MFA fields into a JSON response data map.
+// Always sets requires_mfa, requires_mfa_setup, and mfa_methods (never null).
+// Sets pending_mfa_method only when setup is required and a pending enrollment exists.
+func ApplyMFAChallenge(dst map[string]interface{}, ch *MFAChallenge) {
+	if dst == nil || ch == nil {
+		return
+	}
+	dst["requires_mfa"] = true
+	dst["requires_mfa_setup"] = ch.RequiresSetup
+	if ch.RequiresSetup {
+		dst["mfa_methods"] = []MFALoginMethod{}
+		if ch.PendingMethod != "" {
+			dst["pending_mfa_method"] = ch.PendingMethod
+		}
+		return
+	}
+	methods := ch.Methods
+	if methods == nil {
+		methods = []MFALoginMethod{}
+	}
+	dst["mfa_methods"] = methods
 }

@@ -272,12 +272,20 @@ func ReregisterFinalize(c echo.Context) error {
 	}
 	issueTempCookie(c, tempToken)
 
-	mfaMethod, _ := auth.GetUserMFAMethodType(database.DB, username)
+	challenge, err := auth.BuildMFAChallenge(database.DB, username)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to build MFA challenge after re-registration for %s: %v", username, err)
+		return JSONError(c, http.StatusInternalServerError, "Re-registration succeeded but session setup failed")
+	}
 
-	return JSONResponse(c, http.StatusOK, "Re-registration complete. Second factor required.", map[string]interface{}{
-		"requires_mfa": true,
-		"temp_token":   tempToken,
-		"auth_method":  "OPAQUE",
-		"mfa_method":   mfaMethod,
-	})
+	resp := map[string]interface{}{
+		"temp_token":  tempToken,
+		"auth_method": "OPAQUE",
+	}
+	auth.ApplyMFAChallenge(resp, challenge)
+
+	if challenge.RequiresSetup {
+		return JSONResponse(c, http.StatusOK, "Re-registration complete. Two-factor authentication setup is required.", resp)
+	}
+	return JSONResponse(c, http.StatusOK, "Re-registration complete. Second factor required.", resp)
 }

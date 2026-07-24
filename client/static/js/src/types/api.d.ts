@@ -22,8 +22,9 @@ interface LoginResponse {
   session_key: string;
   auth_method: 'OPAQUE';
   requires_mfa?: boolean;
-  mfa_method?: 'totp' | 'webauthn' | '';
+  requires_mfa_setup?: boolean;
   mfa_methods?: MFALoginMethodOption[];
+  pending_mfa_method?: 'totp' | 'webauthn' | '';
 }
 
 interface MFALoginMethodOption {

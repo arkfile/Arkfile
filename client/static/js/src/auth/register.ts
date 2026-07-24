@@ -172,18 +172,17 @@ export class RegistrationManager {
         registrationFinalize.exportKey.fill(0);
       }
 
-      // Check if TOTP setup is required (new users need to set up 2FA)
       if (registrationData.requires_mfa_setup && registrationData.temp_token) {
         hideProgress();
         handleMFASetupFlow({
           tempToken: registrationData.temp_token,
           username: credentials.username,
-          mfaMethod: (registrationData.mfa_method || '') as 'totp' | 'webauthn' | '',
+          mfaMethod: (registrationData.pending_mfa_method || '') as 'totp' | 'webauthn' | '',
         });
         return;
       }
 
-      // Complete registration with tokens (if TOTP not required)
+      // Complete registration with tokens (if MFA setup is not required)
       await this.completeRegistration({
         token: registrationData.token,
         refresh_token: registrationData.refresh_token,

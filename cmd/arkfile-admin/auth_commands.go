@@ -168,22 +168,21 @@ EXAMPLES:
 
 	fmt.Printf("Bootstrap successful! Admin user '%s' created.\n", adminUsername)
 
-	// Handle TOTP requirement
-	requiresTOTP, _ := regFinalizeResp.Data["requires_mfa"].(bool)
+	requiresMFA, _ := regFinalizeResp.Data["requires_mfa"].(bool)
 	tempToken, _ := regFinalizeResp.Data["temp_token"].(string)
 
-	if requiresTOTP && tempToken != "" {
+	if requiresMFA && tempToken != "" {
 		session := &AdminSession{
 			Username:       adminUsername,
 			TempToken:      tempToken,
 			ServerURL:      config.ServerURL,
 			SessionCreated: time.Now(),
-			ExpiresAt:      time.Now().Add(15 * time.Minute), // Temp token usually short-lived
+			ExpiresAt:      time.Now().Add(15 * time.Minute),
 			IsAdmin:        true,
 		}
 
 		if err := saveAdminSession(session, config.TokenFile); err != nil {
-			logError("Warning: Failed to save session for TOTP setup: %v", err)
+			logError("Warning: Failed to save session for MFA setup: %v", err)
 		} else {
 			fmt.Printf("\nMFA setup required. Session saved.\n")
 			fmt.Printf("Please run 'arkfile-admin setup-mfa' to complete account setup.\n")
@@ -422,16 +421,14 @@ EXAMPLES:
 	var accessToken, refreshToken, opaqueExport string
 	var expiresAt time.Time
 
-	// Check if TOTP is required
-	requiresTOTP, _ := loginResp.Data["requires_mfa"].(bool)
-	requiresTOTPSetup, _ := loginResp.Data["requires_mfa_setup"].(bool)
+	requiresMFA, _ := loginResp.Data["requires_mfa"].(bool)
+	requiresMFASetup, _ := loginResp.Data["requires_mfa_setup"].(bool)
 
-	if requiresTOTPSetup {
+	if requiresMFASetup {
 		tempToken, _ := loginResp.Data["temp_token"].(string)
 		if tempToken == "" {
-			return fmt.Errorf("missing temporary TOTP token in response")
+			return fmt.Errorf("missing temporary MFA token in response")
 		}
-		// Save session for setup-mfa
 		session := &AdminSession{
 			Username:       *usernameFlag,
 			TempToken:      tempToken,
@@ -441,14 +438,14 @@ EXAMPLES:
 			IsAdmin:        true,
 		}
 		if err := saveAdminSession(session, config.TokenFile); err != nil {
-			return fmt.Errorf("failed to save admin session for TOTP setup: %w", err)
+			return fmt.Errorf("failed to save admin session for MFA setup: %w", err)
 		}
 		fmt.Printf("\nMFA setup required. Session saved.\n")
 		fmt.Printf("Please run 'arkfile-admin setup-mfa' to complete account setup.\n")
 		return nil
 	}
 
-	if requiresTOTP {
+	if requiresMFA {
 		tempToken, _ := loginResp.Data["temp_token"].(string)
 		if tempToken == "" {
 			return fmt.Errorf("missing temporary MFA token in response")

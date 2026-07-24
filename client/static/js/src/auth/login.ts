@@ -3,7 +3,7 @@
  *
  * Login flow:
  * 1. OPAQUE two-step authentication (password never sent to server)
- * 2. If TOTP required: hand off to TOTP modal with password carried through
+ * 2. If MFA required: route from mfa_methods (or setup via pending_mfa_method)
  * 3. After full authentication: cache opt-in, Account Key derivation, digest cache
  * 4. Show file section and load files
  */
@@ -16,7 +16,11 @@ import { loadFiles } from '../files/list.js';
 import { handleTOTPFlow } from './totp.js';
 import { handleMFASetupFlow } from './mfa-setup.js';
 import { handleWebAuthnLoginFlow, buildWebAuthnLoginFlowData } from './webauthn.js';
-import { showMFALoginMethodPicker, type MFALoginMethodOption } from './mfa-method.js';
+import {
+  showMFALoginMethodPicker,
+  resolveMFAChallengeRoute,
+  type MFALoginMethodOption,
+} from './mfa-method.js';
 import { getOpaqueClient, storeClientSecret, retrieveClientSecret, clearClientSecret } from '../crypto/opaque.js';
 import {
   deriveFileEncryptionKey,
@@ -44,8 +48,8 @@ export interface LoginResponse {
   auth_method: 'OPAQUE' | 'OPAQUE+TOTP' | 'OPAQUE+WebAuthn';
   requires_mfa?: boolean;
   requires_mfa_setup?: boolean;
-  mfa_method?: 'totp' | 'webauthn' | '';
   mfa_methods?: MFALoginMethodOption[];
+  pending_mfa_method?: 'totp' | 'webauthn' | '';
   temp_token?: string;
   is_approved?: boolean;
 }
@@ -204,47 +208,32 @@ export class LoginManager {
   private static async routeAfterOpaque(loginData: any, credentials: LoginCredentials): Promise<void> {
     // Check MFA FIRST, before any cache/digest operations
     if (loginData.requires_mfa) {
-      if (Array.isArray(loginData.mfa_methods) && loginData.mfa_methods.length > 1) {
-        document.querySelector('.modal-overlay')?.remove();
-        showMFALoginMethodPicker(loginData.mfa_methods as MFALoginMethodOption[], (choice) => {
-          LoginManager.startChosenMFALogin(choice, loginData.temp_token!, credentials);
-        });
-        return;
-      }
-
-      const mfaMethod = (loginData.mfa_method || '').trim();
-
-      if (loginData.requires_mfa_setup) {
+      const route = resolveMFAChallengeRoute(loginData);
+      if (route.kind === 'setup') {
         document.querySelector('.modal-overlay')?.remove();
         handleMFASetupFlow({
           tempToken: loginData.temp_token!,
           username: credentials.username,
           password: credentials.password,
-          mfaMethod: mfaMethod as 'totp' | 'webauthn' | '',
+          mfaMethod: route.pendingMethod,
         });
         showSuccess('Please complete two-factor authentication setup to finish logging in.');
         return;
       }
-
-      if (mfaMethod === 'webauthn') {
-        const webauthnMethod = loginData.mfa_methods?.find(
-          (m: MFALoginMethodOption) => m.type === 'webauthn',
-        );
-        handleWebAuthnLoginFlow(buildWebAuthnLoginFlowData({
-          tempToken: loginData.temp_token!,
-          username: credentials.username,
-          password: credentials.password,
-          credentialId: webauthnMethod?.credential_id,
-          label: webauthnMethod?.label,
-        }));
+      if (route.kind === 'error') {
+        hideProgress();
+        showError(route.message);
+        return;
+      }
+      if (route.kind === 'pick') {
+        document.querySelector('.modal-overlay')?.remove();
+        showMFALoginMethodPicker(route.methods, (choice) => {
+          LoginManager.startChosenMFALogin(choice, loginData.temp_token!, credentials);
+        });
         return;
       }
 
-      handleTOTPFlow({
-        tempToken: loginData.temp_token!,
-        username: credentials.username,
-        password: credentials.password,
-      });
+      LoginManager.startChosenMFALogin(route.method, loginData.temp_token!, credentials);
       return;
     }
 

@@ -65,4 +65,12 @@ func TestParseMFAMethods(t *testing.T) {
 	if len(methods) != 1 || methods[0]["credential_id"] != "abc" {
 		t.Fatalf("unexpected methods: %+v", methods)
 	}
+
+	empty := ParseMFAMethods(map[string]interface{}{"mfa_methods": []interface{}{}})
+	if len(empty) != 0 {
+		t.Fatalf("expected empty slice for empty mfa_methods, got %+v", empty)
+	}
+	if ParseMFAMethods(map[string]interface{}{}) != nil {
+		t.Fatal("expected nil when mfa_methods key missing")
+	}
 }

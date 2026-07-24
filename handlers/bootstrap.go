@@ -227,21 +227,27 @@ func BootstrapRegisterFinalize(c echo.Context) error {
 	// audit purposes; ValidateBootstrapToken rejects any future redemption
 	// because of the non-NULL consumed_at.
 
-	// 9. Generate temporary token for TOTP setup
 	tempToken, _, err := auth.GenerateTemporaryMFAToken(request.Username)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for %s: %v", request.Username, err)
+		logging.ErrorLogger.Printf("Failed to generate temporary MFA token for %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Registration succeeded but setup token creation failed")
 	}
 
 	logging.InfoLogger.Printf("BOOTSTRAP: Admin user %s created successfully via OPAQUE.", request.Username)
 
-	return JSONResponse(c, http.StatusCreated, "Admin account created successfully. Two-factor authentication setup is required.", map[string]interface{}{
-		"requires_mfa_setup": true,
-		"requires_mfa":       true,
-		"temp_token":          tempToken,
-		"auth_method":         "OPAQUE",
-		"username":            request.Username,
-		"is_admin":            true,
-	})
+	challenge, err := auth.BuildMFAChallenge(database.DB, request.Username)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to build MFA challenge after bootstrap for %s: %v", request.Username, err)
+		return JSONError(c, http.StatusInternalServerError, "Registration succeeded but setup session is incomplete")
+	}
+
+	resp := map[string]interface{}{
+		"temp_token":  tempToken,
+		"auth_method": "OPAQUE",
+		"username":    request.Username,
+		"is_admin":    true,
+	}
+	auth.ApplyMFAChallenge(resp, challenge)
+
+	return JSONResponse(c, http.StatusCreated, "Admin account created successfully. Two-factor authentication setup is required.", resp)
 }

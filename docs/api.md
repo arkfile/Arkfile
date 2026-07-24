@@ -92,7 +92,7 @@ When an operator has flagged an account for OPAQUE credential rotation, `/api/op
 
 ### 3 - Multi-Factor Authentication (MFA)
 
-Arkfile requires a second factor for all accounts. Each user may enroll up to **two** methods: one authenticator app (TOTP) and one security key (WebAuthn). At login the user completes OPAQUE authentication, then satisfies **one** enrolled second factor. When both are enrolled, the client shows a method picker (`mfa_methods` in OPAQUE finalize responses).
+Arkfile requires a second factor for all accounts. Each user may enroll up to **two** methods: one authenticator app (TOTP) and one security key (WebAuthn). At login the user completes OPAQUE authentication, then satisfies **one** enrolled second factor. Every MFA-challenge response includes `mfa_methods` (an array of enrolled factors, including when only one is enrolled). When more than one factor is enrolled, the client shows a method picker.
 
 Security key labels are optional, user-private (encrypted inside `credential_data`), and never exposed to administrators. Backup codes are account-level (10 codes); they are regenerated on first enrollment, factor replacement (path B / reset), admin full reset, and explicit user regenerate — but **not** when adding the complementary second factor or when removing one factor while another remains.
 
@@ -139,15 +139,25 @@ Security key labels are optional, user-private (encrypted inside `credential_dat
 
 **WebAuthn request bodies:** `register/finish` and `auth/finish` accept `{ "credential": <PublicKeyCredential JSON from browser> }`.
 
-**OPAQUE finalize responses:** When `requires_mfa` or `requires_mfa_setup` is true, responses include `mfa_method`: `"totp"` or `"webauthn"` when enrollment is known (empty when the user has not yet chosen a method).
+**OPAQUE / admin login finalize and re-registration complete responses** share one MFA-challenge contract when a second factor is still required:
+
+| Field | Meaning |
+|--------|---------|
+| `requires_mfa` | Always `true` for this challenge |
+| `requires_mfa_setup` | `true` when the account has no completed factor yet |
+| `mfa_methods` | Always present as an array. Enrolled factors when setup is complete; `[]` when setup is required |
+| `pending_mfa_method` | Present only during setup when an in-progress enrollment exists (`totp` or `webauthn`) |
+| `temp_token` | Temporary MFA-tier token for the next enrollment or verification step |
+
+Clients must route from `mfa_methods` (and `pending_mfa_method` for setup). They must not invent a default factor when the list is empty.
 
 #### MFA Authentication Flow
 
 When MFA is enabled for a user account, the authentication process involves two steps:
 
-1. **OPAQUE Authentication**: User performs OPAQUE login via `/api/opaque/login/*`. If MFA is required, this returns a temporary MFA token, `requires_mfa: true`, and `mfa_method` when enrolled.
+1. **OPAQUE Authentication**: User performs OPAQUE login via `/api/opaque/login/*` (admins use `/api/admin/login/*`). If a second factor is still required, this returns a temporary MFA token plus the MFA-challenge fields above.
 
-2. **MFA Verification**: User completes the enrolled method — TOTP via `/api/mfa/auth`, or security key via `/api/mfa/webauthn/auth/begin` then `/api/mfa/webauthn/auth/finish`. Upon success, the server returns the full access token and refresh token.
+2. **MFA Verification**: User completes one enrolled method — TOTP via `/api/mfa/auth`, or security key via `/api/mfa/webauthn/auth/begin` then `/api/mfa/webauthn/auth/finish`. Upon success, the server returns the full access token and refresh token.
 
 **Emergency backup code (path A):** POST `/api/mfa/auth` with `is_backup: true` and a 10-character backup code. Issues a full access token without changing the enrolled second factor.
 

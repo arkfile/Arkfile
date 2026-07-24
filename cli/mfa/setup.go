@@ -367,7 +367,13 @@ func emitBackupCodes(codes []string, cfg SetupConfig) {
 }
 
 // PickLoginMethod resolves which enrolled factor to use at login.
+// methods must come from ParseMFAMethods on the OPAQUE finalize payload (mfa_methods).
+// An empty list is an error — clients must not invent a default factor.
 func PickLoginMethod(nonInteractive bool, methods []map[string]string, methodFlag Method, credentialIDFlag string) (Method, string, error) {
+	if len(methods) == 0 {
+		return "", "", fmt.Errorf("server response missing enrolled MFA methods")
+	}
+
 	if credentialIDFlag != "" {
 		for _, m := range methods {
 			if m["credential_id"] == credentialIDFlag {
@@ -378,12 +384,21 @@ func PickLoginMethod(nonInteractive bool, methods []map[string]string, methodFla
 	}
 
 	if methodFlag == MethodTOTP || methodFlag == MethodWebAuthn {
-		return methodFlag, "", nil
+		var match map[string]string
+		for _, m := range methods {
+			if Method(strings.TrimSpace(m["type"])) == methodFlag {
+				if match != nil {
+					return "", "", fmt.Errorf("multiple %s methods enrolled; pass --credential-id", methodFlag)
+				}
+				match = m
+			}
+		}
+		if match == nil {
+			return "", "", fmt.Errorf("mfa method %q is not enrolled", methodFlag)
+		}
+		return methodFlag, match["credential_id"], nil
 	}
 
-	if len(methods) == 0 {
-		return MethodTOTP, "", nil
-	}
 	if len(methods) == 1 {
 		return Method(strings.TrimSpace(methods[0]["type"])), methods[0]["credential_id"], nil
 	}
@@ -421,10 +436,13 @@ func PickLoginMethod(nonInteractive bool, methods []map[string]string, methodFla
 	return Method(strings.TrimSpace(selected["type"])), selected["credential_id"], nil
 }
 
-// ParseMFAMethods reads mfa_methods from OPAQUE finalize responses.
+// ParseMFAMethods reads mfa_methods from OPAQUE finalize / MFA-challenge responses.
 func ParseMFAMethods(data map[string]interface{}) []map[string]string {
+	if data == nil {
+		return nil
+	}
 	raw, ok := data["mfa_methods"].([]interface{})
-	if !ok || len(raw) == 0 {
+	if !ok {
 		return nil
 	}
 	out := make([]map[string]string, 0, len(raw))
@@ -433,7 +451,11 @@ func ParseMFAMethods(data map[string]interface{}) []map[string]string {
 		if !ok {
 			continue
 		}
-		method := map[string]string{"type": strings.TrimSpace(fmt.Sprint(entry["type"]))}
+		typ := strings.TrimSpace(fmt.Sprint(entry["type"]))
+		if typ == "" || typ == "<nil>" {
+			continue
+		}
+		method := map[string]string{"type": typ}
 		if id, _ := entry["credential_id"].(string); id != "" {
 			method["credential_id"] = id
 		}
@@ -443,20 +465,4 @@ func ParseMFAMethods(data map[string]interface{}) []map[string]string {
 		out = append(out, method)
 	}
 	return out
-}
-
-// ParseMFAMethod normalizes mfa_method from OPAQUE finalize responses.
-func ParseMFAMethod(data map[string]interface{}) Method {
-	if data == nil {
-		return MethodTOTP
-	}
-	raw, _ := data["mfa_method"].(string)
-	switch strings.TrimSpace(raw) {
-	case "webauthn":
-		return MethodWebAuthn
-	case "totp":
-		return MethodTOTP
-	default:
-		return MethodTOTP
-	}
 }
