@@ -592,14 +592,16 @@ func requireAccountKey(config *ClientConfig) ([]byte, error) {
 func handleRegisterCommand(client *HTTPClient, config *ClientConfig, args []string) error {
 	fs := flag.NewFlagSet("register", flag.ExitOnError)
 	usernameFlag := fs.String("username", config.Username, "Username for registration")
+	passwordStdin := fs.Bool("password-stdin", false, "Read password and confirmation from stdin (one per line)")
 
 	fs.Usage = func() {
-		fmt.Printf("Usage: arkfile-client register --username USER\n\nRegister a new account.\n")
+		fmt.Printf("Usage: arkfile-client register --username USER [--password-stdin]\n\nRegister a new account.\n")
 	}
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	defer withPasswordStdin(*passwordStdin)()
 
 	if *usernameFlag == "" {
 		return fmt.Errorf("username is required")
@@ -826,12 +828,14 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 	credentialID := fs.String("credential-id", "", "WebAuthn credential id when multiple security keys are enrolled")
 	deferMFA := fs.Bool("defer-mfa", false, "Stop after OPAQUE login with MFA challenge pending (save temp_token only)")
 	nonInteractive := fs.Bool("non-interactive", false, "Don't prompt for input")
+	passwordStdin := fs.Bool("password-stdin", false, "Read account password from stdin")
 	cacheKey := fs.Bool("cache-key", false, "Cache account key in agent (skips prompt)")
 	noCacheKey := fs.Bool("no-cache-key", false, "Do not cache account key in agent (skips prompt)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	defer withPasswordStdin(*passwordStdin)()
 
 	if *usernameFlag == "" {
 		return fmt.Errorf("username is required")
@@ -1648,9 +1652,23 @@ func decodeBase64(s string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(s)
 }
 
-// readPassword reads a password securely from terminal (no echo) or stdin.
+// passwordFromStdin is set by commands that accept --password-stdin.
+// When true, readPassword reads from stdin; otherwise from the controlling terminal.
+var passwordFromStdin bool
+
+func withPasswordStdin(enabled bool) func() {
+	prev := passwordFromStdin
+	passwordFromStdin = enabled
+	return func() { passwordFromStdin = prev }
+}
+
+// readPassword reads a password from the controlling terminal (echo off), or from
+// stdin when the active command set --password-stdin.
 func readPassword(prompt string) ([]byte, error) {
-	return secureinput.ReadPassword(prompt, PasswordTimeoutInteractive, PasswordTimeoutPipe)
+	if passwordFromStdin {
+		return secureinput.ReadPasswordFromStdin(PasswordTimeoutPipe)
+	}
+	return secureinput.ReadPassword(prompt, PasswordTimeoutInteractive)
 }
 
 // readPasswordWithStrengthCheck prompts for password, validates strength, loops until valid.

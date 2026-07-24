@@ -175,9 +175,10 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 	passwordType := fs.String("password-type", "account", "Password type: account or custom")
 	hint := fs.String("hint", "", "Password hint (for custom password) -- one hint applies to every file in the batch")
 	force := fs.Bool("force", false, "Force upload even if a file is a duplicate")
+	passwordStdin := fs.Bool("password-stdin", false, "Read custom password from stdin")
 
 	fs.Usage = func() {
-		fmt.Printf("Usage: arkfile-client upload [--file FILE]... [PATHS...] [--dir DIR [--recursive]] [--password-type account|custom] [--hint HINT] [--force]\n\n" +
+		fmt.Printf("Usage: arkfile-client upload [--file FILE]... [PATHS...] [--dir DIR [--recursive]] [--password-type account|custom] [--hint HINT] [--force] [--password-stdin]\n\n" +
 			"Encrypt and upload one or more files sequentially using streaming per-chunk AES-GCM.\n" +
 			"Multiple files may be supplied via repeated --file flags, positional path arguments, and/or a --dir.\n" +
 			"One password (and one hint) applies to every file in the batch.\n" +
@@ -190,6 +191,7 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	defer withPasswordStdin(*passwordStdin)()
 
 	files, err := collectUploadInputs([]string(fileFlags), fs.Args(), *dir, *recursive)
 	if err != nil {
@@ -670,14 +672,16 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 	fs := flag.NewFlagSet("download", flag.ExitOnError)
 	fileID := fs.String("file-id", "", "File ID to download")
 	outputPath := fs.String("output", "", "Output file path (default: decrypted filename)")
+	passwordStdin := fs.Bool("password-stdin", false, "Read custom file password from stdin")
 
 	fs.Usage = func() {
-		fmt.Printf("Usage: arkfile-client download --file-id FILE_ID [--output PATH]\n\nDownload and decrypt a file using streaming per-chunk AES-GCM.\n")
+		fmt.Printf("Usage: arkfile-client download --file-id FILE_ID [--output PATH] [--password-stdin]\n\nDownload and decrypt a file using streaming per-chunk AES-GCM.\n")
 	}
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	defer withPasswordStdin(*passwordStdin)()
 
 	if *fileID == "" {
 		return fmt.Errorf("--file-id is required")
@@ -1149,10 +1153,12 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 	fileID := fs.String("file-id", "", "File ID to share")
 	expiresStr := fs.String("expires", "24h", "Share expiry duration (e.g. 2m, 24h, 7d; 0 = no expiry)")
 	maxDownloads := fs.Int("max-downloads", 0, "Maximum download count (0 = unlimited)")
+	passwordStdin := fs.Bool("password-stdin", false, "Read passwords from stdin (custom file password if needed, then share password)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	defer withPasswordStdin(*passwordStdin)()
 
 	// Parse duration string into minutes
 	expiresMinutes, err := parseDuration(*expiresStr)
@@ -1802,10 +1808,12 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 	fs := flag.NewFlagSet("share download", flag.ExitOnError)
 	shareID := fs.String("share-id", "", "Share ID to download")
 	outputPath := fs.String("output", "", "Output file path (default: filename from envelope)")
+	passwordStdin := fs.Bool("password-stdin", false, "Read share password from stdin")
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	defer withPasswordStdin(*passwordStdin)()
 
 	if *shareID == "" {
 		return fmt.Errorf("--share-id is required")

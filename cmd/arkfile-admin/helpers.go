@@ -100,8 +100,20 @@ func printJSON(v interface{}) error {
 	return jsonutil.PrintJSON(v)
 }
 
+// passwordFromStdin is set by commands that accept --password-stdin.
+var passwordFromStdin bool
+
+func withPasswordStdin(enabled bool) func() {
+	prev := passwordFromStdin
+	passwordFromStdin = enabled
+	return func() { passwordFromStdin = prev }
+}
+
 func readPasswordPrompt(prompt string) ([]byte, error) {
-	return secureinput.ReadPassword(prompt, secureinput.DefaultInteractiveTimeout, secureinput.DefaultPipeTimeout)
+	if passwordFromStdin {
+		return secureinput.ReadPasswordFromStdin(secureinput.DefaultPipeTimeout)
+	}
+	return secureinput.ReadPassword(prompt, secureinput.DefaultInteractiveTimeout)
 }
 
 func readPassword() (string, error) {

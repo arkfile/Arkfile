@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func TestReadPasswordPrefersControllingTTYOverStdinPipe(t *testing.T) {
+func TestReadPasswordUsesControllingTTYNotStdinPipe(t *testing.T) {
 	stdinR, stdinW, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("stdin pipe: %v", err)
@@ -19,7 +19,6 @@ func TestReadPasswordPrefersControllingTTYOverStdinPipe(t *testing.T) {
 	os.Stdin = stdinR
 	defer func() { os.Stdin = oldStdin }()
 
-	// Leftover stdin data must not be treated as the password.
 	if _, err := io.WriteString(stdinW, "from-stdin-pipe\n"); err != nil {
 		t.Fatalf("write stdin: %v", err)
 	}
@@ -48,7 +47,7 @@ func TestReadPasswordPrefersControllingTTYOverStdinPipe(t *testing.T) {
 		return []byte("from-tty"), nil
 	}
 
-	pw, err := ReadPassword("", time.Second, time.Second)
+	pw, err := ReadPassword("", time.Second)
 	if err != nil {
 		t.Fatalf("ReadPassword: %v", err)
 	}
@@ -57,7 +56,38 @@ func TestReadPasswordPrefersControllingTTYOverStdinPipe(t *testing.T) {
 	}
 }
 
-func TestReadPasswordFallsBackToStdinPipeWhenNoTTY(t *testing.T) {
+func TestReadPasswordFromStdin(t *testing.T) {
+	stdinR, stdinW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdin pipe: %v", err)
+	}
+	defer stdinR.Close()
+	defer stdinW.Close()
+
+	oldStdin := os.Stdin
+	os.Stdin = stdinR
+	defer func() { os.Stdin = oldStdin }()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := io.WriteString(stdinW, "piped-secret\n")
+		done <- err
+		_ = stdinW.Close()
+	}()
+
+	pw, err := ReadPasswordFromStdin(time.Second)
+	if writeErr := <-done; writeErr != nil {
+		t.Fatalf("write stdin: %v", writeErr)
+	}
+	if err != nil {
+		t.Fatalf("ReadPasswordFromStdin: %v", err)
+	}
+	if string(pw) != "piped-secret" {
+		t.Fatalf("got %q, want piped-secret", string(pw))
+	}
+}
+
+func TestReadPasswordErrorsWithoutTTYWhenStdinIsPipe(t *testing.T) {
 	stdinR, stdinW, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("stdin pipe: %v", err)
@@ -75,21 +105,8 @@ func TestReadPasswordFallsBackToStdinPipeWhenNoTTY(t *testing.T) {
 		return nil, os.ErrNotExist
 	}
 
-	done := make(chan error, 1)
-	go func() {
-		_, err := io.WriteString(stdinW, "piped-secret\n")
-		done <- err
-		_ = stdinW.Close()
-	}()
-
-	pw, err := ReadPassword("", time.Second, time.Second)
-	if writeErr := <-done; writeErr != nil {
-		t.Fatalf("write stdin: %v", writeErr)
-	}
-	if err != nil {
-		t.Fatalf("ReadPassword: %v", err)
-	}
-	if string(pw) != "piped-secret" {
-		t.Fatalf("got %q, want piped-secret", string(pw))
+	_, err = ReadPassword("prompt: ", time.Second)
+	if err == nil {
+		t.Fatal("expected error when no tty and stdin is a pipe")
 	}
 }

@@ -58,6 +58,7 @@ func handleDecryptBlobCommand(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	defer withPasswordStdin(*passwordStdin)()
 
 	if *bundlePath == "" {
 		return fmt.Errorf("--bundle is required")
@@ -81,7 +82,7 @@ func handleDecryptBlobCommand(args []string) error {
 		meta.FileID, meta.PasswordType, meta.ChunkCount, meta.SizeBytes)
 
 	// Step 2: Obtain account key
-	accountKey, err := obtainAccountKey(*username, *accountKeyFile, *useAgent, *passwordStdin)
+	accountKey, err := obtainAccountKey(*username, *accountKeyFile, *useAgent)
 	if err != nil {
 		return fmt.Errorf("failed to obtain account key: %w", err)
 	}
@@ -93,18 +94,9 @@ func handleDecryptBlobCommand(args []string) error {
 	case "account", "":
 		kek = accountKey
 	case "custom":
-		// Need custom password to derive custom KEK
-		var customPass []byte
-		if *passwordStdin {
-			customPass, err = readPassword("")
-			if err != nil {
-				return fmt.Errorf("failed to read custom password from stdin: %w", err)
-			}
-		} else {
-			customPass, err = readPassword("Enter the custom file password: ")
-			if err != nil {
-				return fmt.Errorf("failed to read custom password: %w", err)
-			}
+		customPass, err := readPassword("Enter the custom file password: ")
+		if err != nil {
+			return fmt.Errorf("failed to read custom password: %w", err)
 		}
 		defer clearBytes(customPass)
 		kek = crypto.DeriveCustomPasswordKey(customPass, *username)
@@ -239,7 +231,7 @@ func parseBundle(path string) (*bundleMeta, int64, error) {
 }
 
 // obtainAccountKey gets the account key from one of the supported sources
-func obtainAccountKey(username, accountKeyFile string, useAgent, passwordStdin bool) ([]byte, error) {
+func obtainAccountKey(username, accountKeyFile string, useAgent bool) ([]byte, error) {
 	if accountKeyFile != "" {
 		return readAccountKeyFromFile(accountKeyFile)
 	}
@@ -256,19 +248,9 @@ func obtainAccountKey(username, accountKeyFile string, useAgent, passwordStdin b
 		return key, nil
 	}
 
-	// Read password and derive account key
-	var password []byte
-	var err error
-	if passwordStdin {
-		password, err = readPassword("")
-		if err != nil {
-			return nil, fmt.Errorf("failed to read password from stdin: %w", err)
-		}
-	} else {
-		password, err = readPassword("Enter your account password: ")
-		if err != nil {
-			return nil, fmt.Errorf("failed to read password: %w", err)
-		}
+	password, err := readPassword("Enter your account password: ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read password: %w", err)
 	}
 	defer clearBytes(password)
 

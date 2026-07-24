@@ -26,38 +26,41 @@ var readPasswordInteractive = func(fd int) ([]byte, error) {
 	return term.ReadPassword(fd)
 }
 
-// ReadPassword reads a password with optional prompt text.
-// When a controlling terminal is available, the password is read from /dev/tty
-// (echo off) so stdin can carry other data such as --token-stdin. If /dev/tty
-// cannot be opened, falls back to stdin (interactive TTY or pipe).
+// ReadPassword reads a password from the controlling terminal with echo off.
+// Use for interactive prompts. Does not read from stdin pipes — that keeps
+// stdin free for other data (for example bootstrap --token-stdin).
 // Returns a byte slice the caller must zero after use.
-func ReadPassword(prompt string, interactiveTimeout, pipeTimeout time.Duration) ([]byte, error) {
-	if interactiveTimeout <= 0 {
-		interactiveTimeout = DefaultInteractiveTimeout
-	}
-	if pipeTimeout <= 0 {
-		pipeTimeout = DefaultPipeTimeout
+func ReadPassword(prompt string, timeout time.Duration) ([]byte, error) {
+	if timeout <= 0 {
+		timeout = DefaultInteractiveTimeout
 	}
 
 	if tty, err := openControllingTTY(); err == nil {
 		defer tty.Close()
-		return readPasswordFromTerminal(tty, prompt, interactiveTimeout)
+		return readPasswordFromTerminal(tty, prompt, timeout)
 	}
 
 	fi, err := os.Stdin.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("failed to stat stdin: %w", err)
 	}
-
+	if (fi.Mode() & os.ModeCharDevice) == 0 {
+		return nil, fmt.Errorf("no controlling terminal for password prompt; use --password-stdin to read from a pipe")
+	}
 	if prompt != "" {
 		fmt.Print(prompt)
 	}
+	return readPasswordFromTerminal(os.Stdin, "", timeout)
+}
 
-	if (fi.Mode() & os.ModeCharDevice) != 0 {
-		return readPasswordFromTerminal(os.Stdin, "", interactiveTimeout)
+// ReadPasswordFromStdin reads one password line from stdin.
+// Use only when the caller set --password-stdin (or equivalent) for scripts/tests.
+// Returns a byte slice the caller must zero after use.
+func ReadPasswordFromStdin(timeout time.Duration) ([]byte, error) {
+	if timeout <= 0 {
+		timeout = DefaultPipeTimeout
 	}
-
-	return readPasswordFromPipe(os.Stdin, pipeTimeout)
+	return readPasswordFromPipe(os.Stdin, timeout)
 }
 
 func readPasswordFromTerminal(f *os.File, prompt string, timeout time.Duration) ([]byte, error) {

@@ -150,6 +150,7 @@ admin_login_with_totp() {
         --tls-insecure \
         --username '$ADMIN_USERNAME' \
         login \
+        --password-stdin \
         --totp-secret '$ADMIN_TOTP_SECRET' \
         --save-session"
         
@@ -179,6 +180,7 @@ user_login_with_totp() {
         --tls-insecure \
         --username '$TEST_USERNAME' \
         login \
+        --password-stdin \
         --totp-secret '$TEST_USER_TOTP_SECRET' \
         --save-session \
         --cache-key"
@@ -208,6 +210,7 @@ user_login_with_backup_code() {
         --tls-insecure \
         --username '$TEST_USERNAME' \
         login \
+        --password-stdin \
         --backup-code '$TEST_USER_BACKUP_CODE' \
         --save-session \
         --cache-key"
@@ -230,6 +233,7 @@ user_login_defer_mfa() {
         --tls-insecure \
         --username '$TEST_USERNAME' \
         login \
+        --password-stdin \
         --defer-mfa \
         --non-interactive \
         --save-session"
@@ -454,6 +458,7 @@ share_download_with_password() {
         --server-url '$SERVER_URL' \
         --tls-insecure \
         share download \
+        --password-stdin \
         --share-id '$share_id' \
         --output '$output_file'"
         
@@ -719,6 +724,7 @@ run_platform_bootstrap_protection() {
         --server-url '$SERVER_URL' \
         --tls-insecure \
         bootstrap \
+        --password-stdin \
         --token '$BOOTSTRAP_TOKEN' \
         --username '$ATTACKER_ADMIN_USERNAME'"
 
@@ -744,6 +750,7 @@ run_user_onboarding_registration() {
             --server-url '$SERVER_URL' \
             --tls-insecure \
             register \
+            --password-stdin \
             --username '$TEST_USERNAME'"
 
     if [ $reg_exit_code -eq 0 ]; then
@@ -1121,14 +1128,15 @@ run_files_custom_password() {
     fi
     # Unique sentinel hint: must never appear as plaintext in API/DB/list output.
     local CUSTOM_HINT_SENTINEL="e2e-hint-sentinel-$(date +%s)-$$"
-    # CLI prompts for: custom password (once) + confirmation (once)
+    # CLI prompts once for the custom batch password
     scenario "Uploading file with custom password"
     local custom_upload_output custom_upload_exit_code
     safe_exec custom_upload_output custom_upload_exit_code \
-        bash -c "printf '%s\n%s\n' '$CUSTOM_FILE_PASSWORD' '$CUSTOM_FILE_PASSWORD' | $CLIENT \
+        bash -c "printf '%s\n' '$CUSTOM_FILE_PASSWORD' | $CLIENT \
         --server-url '$SERVER_URL' \
         --tls-insecure \
         upload \
+        --password-stdin \
         --file '$custom_test_file' \
         --password-type custom \
         --hint '$CUSTOM_HINT_SENTINEL'"
@@ -1193,6 +1201,7 @@ run_files_custom_password() {
         --server-url '$SERVER_URL' \
         --tls-insecure \
         download \
+        --password-stdin \
         --file-id '$CUSTOM_FILE_ID' \
         --output '$custom_dl_file'"
 
@@ -1212,6 +1221,7 @@ run_files_custom_password() {
         --server-url '$SERVER_URL' \
         --tls-insecure \
         download \
+        --password-stdin \
         --file-id '$CUSTOM_FILE_ID' \
         --output '$custom_dl_bad_file'"
 
@@ -1741,6 +1751,7 @@ run_shares() {
         --server-url '$SERVER_URL' \
         --tls-insecure \
         share create \
+        --password-stdin \
         --file-id '$UPLOADED_FILE_ID' \
         --expires 0"
 
@@ -1760,6 +1771,7 @@ run_shares() {
         --server-url '$SERVER_URL' \
         --tls-insecure \
         share create \
+        --password-stdin \
         --file-id '$UPLOADED_FILE_ID' \
         --expires 0 \
         --max-downloads 2"
@@ -1783,6 +1795,7 @@ run_shares() {
         --server-url '$SERVER_URL' \
         --tls-insecure \
         share create \
+        --password-stdin \
         --file-id '$UPLOADED_FILE_ID' \
         --expires 1m"
 
@@ -1823,6 +1836,7 @@ run_shares() {
         --server-url '$SERVER_URL' \
         --tls-insecure \
         share create \
+        --password-stdin \
         --file-id '$CUSTOM_FILE_ID' \
         --expires 0"
 
@@ -2416,6 +2430,7 @@ run_shares() {
         --server-url '$SERVER_URL' \
         --tls-insecure \
         share create \
+        --password-stdin \
         --file-id '$UPLOADED_FILE_ID' \
         --expires 0"
     if [ $post_logout_share_create_exit_code -ne 0 ]; then
@@ -4158,6 +4173,7 @@ run_registration_throttle() {
                 --server-url '$SERVER_URL' \
                 --tls-insecure \
                 register \
+                --password-stdin \
                 --username '${throttle_prefix}-${i}'"
         if [ $code -eq 0 ] && echo "$out" | grep -q "Registration successful"; then
             ok_count=$((ok_count + 1))
@@ -4181,6 +4197,7 @@ run_registration_throttle() {
             --server-url '$SERVER_URL' \
             --tls-insecure \
             register \
+            --password-stdin \
             --username '${throttle_prefix}-8'"
 
     if [ $eighth_code -ne 0 ] \
@@ -4352,6 +4369,7 @@ run_opaque_reregistration() {
         --tls-insecure \
         --username '$TEST_USERNAME' \
         login \
+        --password-stdin \
         --totp-secret '$TEST_USER_TOTP_SECRET' \
         --non-interactive"
     if [ $bad_code -ne 0 ] && echo "$bad_out" | grep -qi "does not match"; then
@@ -4371,6 +4389,7 @@ run_opaque_reregistration() {
         --tls-insecure \
         --username '$TEST_USERNAME' \
         login \
+        --password-stdin \
         --totp-secret '$TEST_USER_TOTP_SECRET' \
         --save-session \
         --cache-key"

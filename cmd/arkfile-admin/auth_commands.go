@@ -20,9 +20,10 @@ import (
 func handleBootstrapCommand(client *HTTPClient, config *AdminConfig, args []string) error {
 	fs := flag.NewFlagSet("bootstrap", flag.ExitOnError)
 	var (
-		tokenFlag    = fs.String("token", "", "Bootstrap token (argv exposure possible)")
-		tokenStdin   = fs.Bool("token-stdin", false, "Read bootstrap token from standard input (secure)")
-		usernameFlag = fs.String("username", "admin", "Username for admin account")
+		tokenFlag      = fs.String("token", "", "Bootstrap token (argv exposure possible)")
+		tokenStdin     = fs.Bool("token-stdin", false, "Read bootstrap token from standard input")
+		passwordStdin  = fs.Bool("password-stdin", false, "Read password and confirmation from stdin (one per line)")
+		usernameFlag   = fs.String("username", "admin", "Username for admin account")
 	)
 
 	fs.Usage = func() {
@@ -31,10 +32,11 @@ func handleBootstrapCommand(client *HTTPClient, config *AdminConfig, args []stri
 Bootstrap the first admin user using the on-disk bootstrap token.
 
 FLAGS:
-    --token TOKEN      Bootstrap token (argv exposure possible)
-    --token-stdin      Read bootstrap token from standard input
-    --username USER    Username for admin account (default: admin)
-    --help            Show this help message
+    --token TOKEN       Bootstrap token (argv exposure possible)
+    --token-stdin       Read bootstrap token from standard input; password is prompted on the terminal
+    --password-stdin    Read password and confirmation from stdin (cannot combine with --token-stdin)
+    --username USER     Username for admin account (default: admin)
+    --help             Show this help message
 
 EXAMPLES:
     sudo cat /opt/arkfile/etc/keys/bootstrap-token.bin | arkfile-admin bootstrap --token-stdin --username admin
@@ -43,6 +45,10 @@ EXAMPLES:
 
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	if *tokenStdin && *passwordStdin {
+		return fmt.Errorf("--token-stdin and --password-stdin cannot be used together")
 	}
 
 	var finalToken string
@@ -66,6 +72,8 @@ EXAMPLES:
 	if err := utils.ValidateUsername(adminUsername); err != nil {
 		return fmt.Errorf("invalid username: %w\n\nUsername requirements: 10-50 characters, allowed: a-z 0-9 _ - . ,", err)
 	}
+
+	defer withPasswordStdin(*passwordStdin)()
 
 	// Get password securely
 	fmt.Printf("Enter password for admin user %s: ", *usernameFlag)
@@ -318,6 +326,7 @@ func handleLoginCommand(client *HTTPClient, config *AdminConfig, args []string) 
 		mfaMethod      = fs.String("mfa-method", "", "Second factor method for login: totp or webauthn")
 		credentialID   = fs.String("credential-id", "", "WebAuthn credential id when multiple security keys are enrolled")
 		nonInteractive = fs.Bool("non-interactive", false, "Don't prompt for input")
+		passwordStdin  = fs.Bool("password-stdin", false, "Read admin password from stdin")
 	)
 
 	fs.Usage = func() {
@@ -328,6 +337,7 @@ Authenticate as administrator using OPAQUE protocol.
 FLAGS:
     --username USER     Admin username for authentication (required)
     --save-session      Save session for future use (default: true)
+    --password-stdin    Read admin password from stdin (for scripts/tests)
     --totp-code CODE    TOTP code for non-interactive login
     --totp-secret SEC   TOTP secret — CLI generates code internally (for scripted/test use)
     --backup-code CODE  10-character backup code for emergency login
@@ -338,14 +348,14 @@ FLAGS:
 
 EXAMPLES:
     arkfile-admin login --username admin
-    arkfile-admin login --username root --save-session=false
-    arkfile-admin login --username admin --totp-secret YOURSECRETHERE
+    printf '%%s\n' "$PASSWORD" | arkfile-admin login --username admin --password-stdin --totp-secret SECRET
 `)
 	}
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	defer withPasswordStdin(*passwordStdin)()
 
 	if *usernameFlag == "" {
 		return fmt.Errorf("admin username is required")
