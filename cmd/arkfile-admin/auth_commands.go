@@ -28,17 +28,16 @@ func handleBootstrapCommand(client *HTTPClient, config *AdminConfig, args []stri
 	fs.Usage = func() {
 		fmt.Printf(`Usage: arkfile-admin bootstrap [FLAGS]
 
-Bootstrap the first admin user using the token provided by the server logs.
+Bootstrap the first admin user using the on-disk bootstrap token.
 
 FLAGS:
-    --token TOKEN      Bootstrap token from server logs (argv exposure possible)
-    --token-stdin      Read bootstrap token from standard input (secure)
+    --token TOKEN      Bootstrap token (argv exposure possible)
+    --token-stdin      Read bootstrap token from standard input
     --username USER    Username for admin account (default: admin)
     --help            Show this help message
 
 EXAMPLES:
-    arkfile-admin bootstrap --token-stdin < /opt/arkfile/etc/keys/bootstrap-token.bin
-    sudo cat /opt/arkfile/etc/keys/bootstrap-token.bin | arkfile-admin bootstrap --token-stdin
+    sudo cat /opt/arkfile/etc/keys/bootstrap-token.bin | arkfile-admin bootstrap --token-stdin --username admin
 `)
 	}
 

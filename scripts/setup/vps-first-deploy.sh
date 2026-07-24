@@ -1087,7 +1087,7 @@ echo -e "${GREEN}  HTTPS: https://${DOMAIN}${NC}"
 echo
 echo -e "${YELLOW}NEXT: Bootstrap your admin account${NC}"
 echo
-echo "  1. Bootstrap the admin account (using --token-stdin to prevent argv credential exposure):"
+echo "  1. Bootstrap the admin account:"
 echo "     sudo cat /opt/arkfile/etc/keys/bootstrap-token.bin | /opt/arkfile/bin/arkfile-admin \\
        --server-url https://localhost:8443 --tls-insecure \\
        bootstrap --token-stdin --username ${ADMIN_USERNAME}"
