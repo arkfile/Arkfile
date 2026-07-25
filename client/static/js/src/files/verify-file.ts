@@ -8,7 +8,7 @@
 
 import { computeStreamingSHA256, normalizeSha256Hex, constantTimeHexEqual } from '../crypto/streaming-hash.js';
 import { getChunkingParams } from '../crypto/constants.js';
-import { showError, showSuccess } from '../ui/messages.js';
+import { showError } from '../ui/messages.js';
 import { showProgress, updateProgress, hideProgress } from '../ui/progress.js';
 import { closeNavInlinePanelsExcept } from '../ui/sections.js';
 
@@ -191,7 +191,6 @@ async function runVerifyFromPanel(): Promise<void> {
       resultEl.textContent = 'Match: the local file SHA-256 matches the expected digest.';
       resultEl.className = 'success-message';
     }
-    showSuccess('File digest matches.');
     return;
   }
 
