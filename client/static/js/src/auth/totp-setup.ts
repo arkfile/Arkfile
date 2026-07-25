@@ -368,6 +368,12 @@ async function completeTOTPSetupForRegistration(code: string, flowData: TOTPSetu
         // Navigate to file section
         showFileSection();
         await loadFiles();
+        try {
+          const { initializeShareList } = await import('../shares/share-list.js');
+          await initializeShareList();
+        } catch (err) {
+          console.warn('Failed to initialize share list:', err);
+        }
       }
       
     } else {

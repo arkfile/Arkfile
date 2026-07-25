@@ -117,7 +117,11 @@ export class ShareAccessUI {
         <div id="share-verify-section" style="margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--depth-4, #444);">
           <h3>Verify File</h3>
           <p style="font-size: 0.9rem;">Hash a local copy and compare it to the expected digest (works offline once you have the digest).</p>
-          <label for="share-verify-file-input">Local file</label>
+          <p><strong>Local file</strong></p>
+          <label for="share-verify-file-input" class="file-input-label" id="share-verify-file-input-label">
+            Choose File
+            <span class="file-input-name" id="share-verify-file-input-name"></span>
+          </label>
           <input type="file" id="share-verify-file-input">
           <label for="share-verify-expected" style="display:block; margin-top: 0.5rem;">Expected SHA-256</label>
           <input type="text" id="share-verify-expected" placeholder="64 hex characters" style="width: 100%; font-family: monospace; font-size: 0.85rem;">
@@ -145,6 +149,21 @@ export class ShareAccessUI {
     const runBtn = document.getElementById('share-verify-run-btn');
     if (!runBtn || (runBtn as HTMLElement).dataset['wired'] === '1') return;
     (runBtn as HTMLElement).dataset['wired'] = '1';
+
+    const fileInputEl = document.getElementById('share-verify-file-input') as HTMLInputElement | null;
+    const fileLabel = document.getElementById('share-verify-file-input-label');
+    const fileName = document.getElementById('share-verify-file-input-name');
+    if (fileInputEl && fileLabel && fileName) {
+      fileInputEl.addEventListener('change', () => {
+        if (fileInputEl.files && fileInputEl.files.length > 0) {
+          fileName.textContent = fileInputEl.files[0].name;
+          fileLabel.classList.add('has-file');
+        } else {
+          fileName.textContent = '';
+          fileLabel.classList.remove('has-file');
+        }
+      });
+    }
 
     runBtn.addEventListener('click', async (e) => {
       e.preventDefault();

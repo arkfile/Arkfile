@@ -283,7 +283,11 @@
                     <h3>Verify File</h3>
                     <p>Hash a local file with streaming SHA-256 and compare it to an expected digest. Works offline once you have the digest.</p>
                     <div class="setting-item">
-                        <label for="verify-file-input"><strong>Local file</strong></label>
+                        <p><strong>Local file</strong></p>
+                        <label for="verify-file-input" class="file-input-label" id="verify-file-input-label">
+                            Choose File
+                            <span class="file-input-name" id="verify-file-input-name"></span>
+                        </label>
                         <input type="file" id="verify-file-input">
                     </div>
                     <div class="setting-item">
@@ -383,7 +387,10 @@
                     <button type="button" id="refresh-shares-btn" class="share-list-refresh">Refresh</button>
                 </div>
                 <div id="sharesList" class="share-list-container">
-                    <div class="share-list-loading">Loading shares...</div>
+                    <div class="empty-state">
+                        <p>No shares found</p>
+                        <p class="hint">Create a share to get started</p>
+                    </div>
                 </div>
             </div>
         </div>

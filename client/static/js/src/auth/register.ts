@@ -209,9 +209,15 @@ export class RegistrationManager {
       hideProgress();
       showSuccess('Registration successful! Welcome to Arkfile.');
 
-      // Navigate to file section and load files
+      // Navigate to file section and load files + shares
       showFileSection();
       await loadFiles();
+      try {
+        const { initializeShareList } = await import('../shares/share-list.js');
+        await initializeShareList();
+      } catch (err) {
+        console.warn('Failed to initialize share list:', err);
+      }
 
     } catch (error) {
       hideProgress();

@@ -107,6 +107,21 @@ export function wireVerifyFilePanel(): void {
   if (!runBtn || (runBtn as HTMLElement).dataset['wired'] === '1') return;
   (runBtn as HTMLElement).dataset['wired'] = '1';
 
+  const fileInput = document.getElementById('verify-file-input') as HTMLInputElement | null;
+  const fileLabel = document.getElementById('verify-file-input-label');
+  const fileName = document.getElementById('verify-file-input-name');
+  if (fileInput && fileLabel && fileName) {
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files && fileInput.files.length > 0) {
+        fileName.textContent = fileInput.files[0].name;
+        fileLabel.classList.add('has-file');
+      } else {
+        fileName.textContent = '';
+        fileLabel.classList.remove('has-file');
+      }
+    });
+  }
+
   runBtn.addEventListener('click', async (e) => {
     e.preventDefault();
     await runVerifyFromPanel();

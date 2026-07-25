@@ -38,7 +38,7 @@ export interface DownloadIntegrityResult {
 /** Blob-buffer warning only when SW is unavailable and the file is this large or larger. */
 export const BLOB_BUFFER_WARN_BYTES = 250 * 1024 * 1024;
 
-const MATCH_AUTO_HIDE_MS = 8000;
+const MATCH_AUTO_HIDE_MS = 11000;
 
 const STREAMING_TIP =
   'This file streams to your download folder with chunk-bounded memory. Whole-file SHA-256 is checked as data flows, but a problem may only be detected after the file is saved. Use Verify File afterward if you need to re-check the saved copy.';

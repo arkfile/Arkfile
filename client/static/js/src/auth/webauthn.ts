@@ -283,6 +283,12 @@ async function finishWebAuthnEnrollment(
       } else {
         showFileSection();
         await loadFiles();
+        try {
+          const { initializeShareList } = await import('../shares/share-list.js');
+          await initializeShareList();
+        } catch (err) {
+          console.warn('Failed to initialize share list:', err);
+        }
       }
       return;
     }
@@ -297,6 +303,12 @@ async function finishWebAuthnEnrollment(
     showSuccess('Security key enrolled successfully.');
     showFileSection();
     await loadFiles();
+    try {
+      const { initializeShareList } = await import('../shares/share-list.js');
+      await initializeShareList();
+    } catch (err) {
+      console.warn('Failed to initialize share list:', err);
+    }
   } catch (err) {
     hideProgress();
     console.error('WebAuthn register finish error:', err);

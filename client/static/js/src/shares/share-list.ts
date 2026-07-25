@@ -73,6 +73,7 @@ export class ShareListUI {
    * Loads and displays the share list
    */
   async loadShares(): Promise<void> {
+    this.container.innerHTML = '<div class="share-list-loading">Loading shares...</div>';
     try {
       const response = await authenticatedFetch('/api/shares', { method: 'GET' });
 
@@ -417,18 +418,18 @@ export class ShareListUI {
 // Initialization Function
 
 /**
- * Initialize the share list UI
+ * Initialize the share list UI (safe to call on every auth entry to the file section).
  */
 export async function initializeShareList(): Promise<void> {
   const shareList = new ShareListUI('sharesList');
   await shareList.loadShares();
-  
-  // Set up refresh button
-  const refreshBtn = document.getElementById('refresh-shares-btn');
+
+  // Assign onclick so repeated auth entries do not stack click handlers.
+  const refreshBtn = document.getElementById('refresh-shares-btn') as HTMLButtonElement | null;
   if (refreshBtn) {
-    refreshBtn.addEventListener('click', async () => {
+    refreshBtn.onclick = async () => {
       await shareList.refresh();
-    });
+    };
   }
 }
 
