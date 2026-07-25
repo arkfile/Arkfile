@@ -197,6 +197,10 @@ export class MessageManager {
     }, 300);
   }
 
+  public static dismissToast(toast: HTMLElement): void {
+    this.removeToast(toast);
+  }
+
   public static clearAllMessages(): void {
     this.activeMessages.forEach(toast => {
       this.removeToast(toast);
@@ -239,6 +243,11 @@ export function showWarning(message: string, duration?: number): HTMLElement {
     duration: duration !== undefined ? duration : 0,
   };
   return MessageManager.showToast(options);
+}
+
+/** Dismiss a toast previously returned by showError/showWarning/etc. */
+export function dismissToast(toast: HTMLElement): void {
+  MessageManager.dismissToast(toast);
 }
 
 export function showInfo(message: string, duration?: number): HTMLElement {

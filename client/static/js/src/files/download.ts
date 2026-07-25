@@ -40,6 +40,7 @@ import {
   finalizeDownloadIntegrity,
   showSwStreamingTip,
   showBlobBufferWarning,
+  dismissBlobBufferWarning,
   showPartialDownloadWarning,
 } from './download-integrity';
 import { debugLog } from '../utils/debug-log.js';
@@ -196,85 +197,90 @@ export async function downloadFile(
     if (isSwAvailable()) {
       showSwStreamingTip();
     } else {
-      showBlobBufferWarning();
+      showBlobBufferWarning(meta.size_bytes);
     }
 
-    // Stream-decrypt all chunks via the streaming download manager.
-    // Picks the SW path when available; falls back to Blob only when safe.
-    debugLog(`${LOG_PREFIX} Beginning chunked streaming download...`);
-    const result: StreamingDownloadResult = await downloadFileChunked(
-      fileId,
-      fek,
-      null,
-      {
-        accountKey: metadataDecryptionKey,
-        showProgressUI: true,
-        onProgress: (progress) => {
-          if (progress.stage === 'error') {
-            console.error(`${LOG_PREFIX} Streaming progress error:`, progress.error);
-          }
+    try {
+      // Stream-decrypt all chunks via the streaming download manager.
+      // Picks the SW path when available; falls back to Blob only when safe.
+      debugLog(`${LOG_PREFIX} Beginning chunked streaming download...`);
+      const result: StreamingDownloadResult = await downloadFileChunked(
+        fileId,
+        fek,
+        null,
+        {
+          accountKey: metadataDecryptionKey,
+          showProgressUI: true,
+          onProgress: (progress) => {
+            if (progress.stage === 'error') {
+              console.error(`${LOG_PREFIX} Streaming progress error:`, progress.error);
+            }
+          },
         },
-      },
-    );
+      );
 
-    if (!result.success) {
-      if (result.error === 'Download cancelled') {
-        debugLog(`${LOG_PREFIX} Download cancelled by user`);
+      if (!result.success) {
+        if (result.error === 'Download cancelled') {
+          debugLog(`${LOG_PREFIX} Download cancelled by user`);
+          return;
+        }
+        console.error(`${LOG_PREFIX} Streaming download returned failure: ${result.error}`);
+        if (result.error && /partial file may already/i.test(result.error)) {
+          showPartialDownloadWarning();
+        }
+        showError(result.error || 'Download failed.');
         return;
       }
-      console.error(`${LOG_PREFIX} Streaming download returned failure: ${result.error}`);
-      if (result.error && /partial file may already/i.test(result.error)) {
-        showPartialDownloadWarning();
+
+      if (!result.filename) {
+        console.error(`${LOG_PREFIX} Result missing filename`);
+        showError('Download completed but filename is missing.');
+        return;
       }
-      showError(result.error || 'Download failed.');
-      return;
+
+      // Sanity check: server-stored expectedHash from list.ts row should match
+      // the freshly-decrypted sha256sum from this download's metadata. They are
+      // both ciphertext over the same value with the same account key, so a
+      // mismatch here indicates metadata tampering or a stale list view.
+      if (result.sha256sum && expectedHash && result.sha256sum !== expectedHash) {
+        console.warn(`${LOG_PREFIX} SHA-256 metadata mismatch -- possible tampering or stale list view`);
+      }
+
+      const integrity = {
+        filename: result.filename,
+        expectedSha256: result.sha256sum,
+        computedSha256: result.computedSha256Hex,
+        hashVerification: result.hashVerification,
+        streamedViaSw: result.streamedViaSw === true,
+      };
+
+      if (result.streamedViaSw) {
+        debugLog(`${LOG_PREFIX} File streamed via Service Worker (total elapsed ${Date.now() - t0}ms, hash_verification=${result.hashVerification ?? 'n/a'})`);
+        finalizeDownloadIntegrity(integrity, INTEGRITY_PANEL_ID);
+        return;
+      }
+
+      // Blob fallback path: check hash BEFORE trigger; revoke on mismatch.
+      if (!result.blobUrl) {
+        console.error(`${LOG_PREFIX} Result missing blobUrl on fallback path`);
+        showError('Download completed but no file data was produced.');
+        return;
+      }
+
+      const decision = finalizeDownloadIntegrity(integrity, INTEGRITY_PANEL_ID);
+      if (decision.blockBlobTrigger) {
+        console.warn(`${LOG_PREFIX} Blob download blocked due to hash mismatch; revoking Blob URL`);
+        URL.revokeObjectURL(result.blobUrl);
+        return;
+      }
+
+      debugLog(`${LOG_PREFIX} Triggering browser download from blob URL (SW unavailable, total elapsed ${Date.now() - t0}ms)`);
+      triggerBrowserDownloadFromUrl(result.blobUrl, result.filename);
+    } finally {
+      dismissBlobBufferWarning();
     }
-
-    if (!result.filename) {
-      console.error(`${LOG_PREFIX} Result missing filename`);
-      showError('Download completed but filename is missing.');
-      return;
-    }
-
-    // Sanity check: server-stored expectedHash from list.ts row should match
-    // the freshly-decrypted sha256sum from this download's metadata. They are
-    // both ciphertext over the same value with the same account key, so a
-    // mismatch here indicates metadata tampering or a stale list view.
-    if (result.sha256sum && expectedHash && result.sha256sum !== expectedHash) {
-      console.warn(`${LOG_PREFIX} SHA-256 metadata mismatch -- possible tampering or stale list view`);
-    }
-
-    const integrity = {
-      filename: result.filename,
-      expectedSha256: result.sha256sum,
-      computedSha256: result.computedSha256Hex,
-      hashVerification: result.hashVerification,
-      streamedViaSw: result.streamedViaSw === true,
-    };
-
-    if (result.streamedViaSw) {
-      debugLog(`${LOG_PREFIX} File streamed via Service Worker (total elapsed ${Date.now() - t0}ms, hash_verification=${result.hashVerification ?? 'n/a'})`);
-      finalizeDownloadIntegrity(integrity, INTEGRITY_PANEL_ID);
-      return;
-    }
-
-    // Blob fallback path: check hash BEFORE trigger; revoke on mismatch.
-    if (!result.blobUrl) {
-      console.error(`${LOG_PREFIX} Result missing blobUrl on fallback path`);
-      showError('Download completed but no file data was produced.');
-      return;
-    }
-
-    const decision = finalizeDownloadIntegrity(integrity, INTEGRITY_PANEL_ID);
-    if (decision.blockBlobTrigger) {
-      console.warn(`${LOG_PREFIX} Blob download blocked due to hash mismatch; revoking Blob URL`);
-      URL.revokeObjectURL(result.blobUrl);
-      return;
-    }
-
-    debugLog(`${LOG_PREFIX} Triggering browser download from blob URL (SW unavailable, total elapsed ${Date.now() - t0}ms)`);
-    triggerBrowserDownloadFromUrl(result.blobUrl, result.filename);
   } catch (error) {
+    dismissBlobBufferWarning();
     console.error(`${LOG_PREFIX} Unhandled download error:`, error instanceof Error ? error.message : error);
     const msg = error instanceof Error ? error.message : '';
     if (/partial file may already/i.test(msg)) {

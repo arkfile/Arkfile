@@ -35,6 +35,8 @@ import {
   finalizeDownloadIntegrity,
   showSwStreamingTip,
   showBlobBufferWarning,
+  dismissBlobBufferWarning,
+  shouldShowBlobBufferWarning,
   showPartialDownloadWarning,
 } from '../files/download-integrity';
 import { addPasswordToggle } from '../utils/password-toggle';
@@ -326,26 +328,29 @@ export class ShareAccessUI {
       }
     }
 
-    // When SW streaming is unavailable, warn that Blob buffers the complete
-    // plaintext and may fail under browser resource limits. No Arkfile size
-    // cap -- download remains available.
+    // For large files only: note that Blob buffers full plaintext when SW is
+    // unavailable. Smaller downloads skip this to avoid noisy warnings.
     const swNote = document.getElementById('swUnavailableNote');
-    if (!isSwAvailable() && swNote) {
+    if (!isSwAvailable() && swNote && shouldShowBlobBufferWarning(size)) {
       swNote.textContent =
-        'Service Worker streaming is unavailable. Download will buffer the complete decrypted file in the browser before saving. Large files may fail under browser memory or storage limits. Prefer a desktop browser with Service Worker support, or the arkfile-client CLI.';
+        'Service Worker streaming is unavailable. This large download will buffer the complete decrypted file in the browser before saving, which may fail under memory or storage limits. Prefer a desktop browser with Service Worker support, or the arkfile-client CLI.';
       swNote.style.display = '';
+    } else if (swNote) {
+      swNote.style.display = 'none';
+      swNote.textContent = '';
     }
 
     if (downloadBtn) {
       downloadBtn.onclick = () => {
         console.log('[arkfile-share] Download button clicked');
-        this.downloadFile(filename, fek, sha256);
+        this.downloadFile(filename, size, fek, sha256);
       };
     }
   }
 
   private async downloadFile(
     filename: string,
+    sizeBytes: number,
     fek: Uint8Array,
     sha256?: string,
   ): Promise<void> {
@@ -359,7 +364,7 @@ export class ShareAccessUI {
     if (isSwAvailable()) {
       showSwStreamingTip();
     } else {
-      showBlobBufferWarning();
+      showBlobBufferWarning(sizeBytes);
     }
 
     try {
@@ -473,6 +478,8 @@ export class ShareAccessUI {
         statusDiv.textContent = msg;
         statusDiv.className = 'error-message';
       }
+    } finally {
+      dismissBlobBufferWarning();
     }
   }
 }
