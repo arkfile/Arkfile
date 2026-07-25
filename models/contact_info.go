@@ -60,11 +60,9 @@ const MaxContacts = 20
 // MaxNotesLength is the maximum length for the notes field
 const MaxNotesLength = 2000
 
-// Validate checks that the contact info structure is well-formed
+// Validate checks that the contact info structure is well-formed.
+// DisplayName is optional (clients typically default it to the username).
 func (ci *ContactInfo) Validate() error {
-	if ci.DisplayName == "" {
-		return fmt.Errorf("display_name is required")
-	}
 	if len(ci.DisplayName) > MaxDisplayNameLength {
 		return fmt.Errorf("display_name must be at most %d characters", MaxDisplayNameLength)
 	}

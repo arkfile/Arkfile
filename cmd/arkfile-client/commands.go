@@ -2263,12 +2263,11 @@ func handleContactInfoSet(client *HTTPClient, config *ClientConfig, args []strin
 		// Interactive mode
 		reader := bufio.NewReader(os.Stdin)
 
-		fmt.Print("Display name (what the admin should call you): ")
+		fmt.Printf("Display name (default: %s): ", session.Username)
 		name, _ := reader.ReadString('\n')
 		info.DisplayName = strings.TrimSpace(name)
-
 		if info.DisplayName == "" {
-			return fmt.Errorf("display name is required")
+			info.DisplayName = session.Username
 		}
 
 		// Collect contact methods
@@ -2307,6 +2306,13 @@ func handleContactInfoSet(client *HTTPClient, config *ClientConfig, args []strin
 		fmt.Print("Notes for admin (optional, press Enter to skip): ")
 		notes, _ := reader.ReadString('\n')
 		info.Notes = strings.TrimSpace(notes)
+	}
+
+	if info.DisplayName == "" {
+		info.DisplayName = session.Username
+	}
+	if len(info.Contacts) == 0 && info.Notes == "" && info.DisplayName == session.Username {
+		return fmt.Errorf("add a contact method, notes, or a custom display name before saving")
 	}
 
 	// Send to server

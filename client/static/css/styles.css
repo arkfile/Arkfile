@@ -904,9 +904,6 @@ button:not(.password-toggle-btn):hover, .btn-primary:hover, .hero-btn:hover, .sh
 .danger-button {
     background-color: var(--coral);
     color: var(--salt);
-    padding: 0.6rem 1rem;
-    margin-top: 0.5rem;
-    font-size: 0.9rem;
 }
 
 .danger-button:hover {
@@ -2398,13 +2395,14 @@ button:not(.password-toggle-btn):hover, .btn-primary:hover, .hero-btn:hover, .sh
     align-items: center;
 }
 
-.pending-contact-info-section .setting-item[style*="flex"] button {
+.pending-contact-info-section .setting-item[style*="flex"] button,
+#contact-info-panel .setting-item[style*="flex"] button {
     flex: 1 1 auto;
     min-width: 130px;
     max-width: none;
     margin: 0;
-    padding: 0.5rem 1rem;
-    font-size: 0.9rem;
+    padding: 0.75rem 1.5rem;
+    font-size: 1rem;
     white-space: nowrap;
 }
 

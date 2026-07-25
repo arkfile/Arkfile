@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/arkfile/Arkfile/auth"
 	"github.com/arkfile/Arkfile/database"
@@ -65,6 +66,12 @@ func PutContactInfo(c echo.Context) error {
 	var info models.ContactInfo
 	if err := json.Unmarshal(body, &info); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid JSON format")
+	}
+
+	// Default empty display name to the account username.
+	info.DisplayName = strings.TrimSpace(info.DisplayName)
+	if info.DisplayName == "" {
+		info.DisplayName = username
 	}
 
 	// Validate
