@@ -4,32 +4,57 @@
 
 Supplement unit tests, `e2e-test.sh`, and `e2e-playwright.sh` with checks that turn Arkfile's privacy and crypto claims into regressions developers can fail on. Whole-program formal verification across Go, TypeScript, Web Crypto, CGO/libopaque, and browsers is not presently realistic. Focus on security-critical boundaries.
 
-### Orchestration: `scripts/testing/integrity-test.sh`
+The prerequisite security cleanup in `docs/wip/full-cleanup-2.md` is complete as of July 27, 2026. Go and TypeScript native suites, `dev-reset.sh`, `e2e-test.sh`, and `e2e-playwright.sh` pass. Shared cryptographic fixtures, initial parser fuzz targets, random public Account and Custom Key salts, owner FEK envelope version 2, `.arkbackup` version 2, logging allowlists, and production build-profile checks are stable. Integrity-script implementation may now begin.
 
-**Status: planned (primary vehicle).** Name: `integrity-test.sh`. Pattern: same class as `e2e-test.sh` / `e2e-playwright.sh` (preflight, ordered `run_*` groups, pass/fail accounting, final report). Does not run `dev-reset.sh` or `e2e-test.sh`. Not an `fdre2e.sh`-style wrapper (`fdre2e.sh` remains human-only).
+### Offline orchestration: `scripts/testing/offline-integrity-test.sh`
 
-Prerequisites:
+**Status: ready for implementation; build this first.** This script runs without a server or deployment. It must not invoke `dev-reset.sh`, `e2e-test.sh`, `e2e-playwright.sh`, or `fdre2e.sh`. It should use the established test-script pattern: explicit preflight checks, ordered `run_*` groups, pass/fail accounting, cleanup, and a final report.
 
-- `sudo bash scripts/dev-reset.sh` already completed (binaries under `/opt/arkfile/bin`, live server, admin bootstrap, `ADMIN_DEV_TEST_API_ENABLED`).
-- `bash scripts/testing/e2e-test.sh` already completed (shared test user, MFA secret at `/tmp/arkfile-e2e-test-data/mfa-secret`, auto-approval enabled via e2e's final group).
+Initial default groups:
 
-Playwright compatibility: integrity may run between e2e and Playwright. It must not break Playwright prerequisites: preserve `arkfile-dev-test-user` login/password/MFA, preserve `mfa-secret`, leave auto-approval enabled, and avoid deleting the shared user. Prefer `/tmp/arkfile-integrity-test-data` and dedicated canary users/files/shares over mutating e2e artifacts. Reading e2e artifacts is fine; mutating them is not.
+- Shared Go and TypeScript cryptographic conformance fixtures, including explicit-salt KDF, AAD, owner-envelope, and AES-GCM vectors.
+- Deterministic malformed-input and parser regression tests for owner FEK envelopes, share envelopes, share tickets, and `.arkbackup` bundles.
+- Short, explicitly time-bounded native Go fuzz runs seeded by the committed fixtures. Longer fuzz campaigns remain optional and must not run by default.
+- Arkfile-specific `go/analysis` checks after their focused analyzer tests pass.
+- Existing production build-profile checks that prove debug console logging, production source maps, unsafe WASM tracing, and `NORANDOM` builds are excluded.
 
-Suggested order: `dev-reset.sh` -> `e2e-test.sh` -> `integrity-test.sh` -> `e2e-playwright.sh`.
+The script must use the same CGO and vendored-library environment as the supported Go test command in `AGENTS.md`. It must fail clearly when required local build artifacts or tools are absent, without attempting a deployment or silently skipping a group. Network-dependent vulnerability databases and optional third-party scanners must not make the deterministic default suite depend on external availability.
 
-### Top three approaches (in scope for integrity-test)
+### Online orchestration: `scripts/testing/online-integrity-test.sh`
+
+**Status: ready for implementation after the offline script.** This script requires a live development deployment produced by `dev-reset.sh` and the development approval API. It must not invoke reset or E2E scripts itself. It creates dedicated integrity users, files, shares, canaries, and temporary state under `/tmp/arkfile-integrity-test-data`; it must not mutate the shared E2E or Playwright users or their MFA material.
+
+Initial default groups:
+
+- Privacy canaries through account-password, custom-password, upload, metadata, sharing, download, and `.arkbackup` flows.
+- Baseline and post-test delta inspection of service logs, security-event rows, application database fields, temporary files, and stored objects. Scan only relevant post-baseline material and report the exact surface and canary class on failure.
+- CLI streaming-memory measurements across small increasing payloads, initially 1 MiB, 20 MiB, 50 MB, and at most 100 MB. Assert a documented bounded-memory ceiling or slope appropriate to chunked processing rather than claiming zero growth.
+- CLI upload and download interruption tests proving Arkfile removes its own unusable partial plaintext and temporary state. Do not claim control over operating-system or browser download-manager partial files.
+- Selected live authorization and accounting races only where they add coverage beyond deterministic native state/concurrency tests.
+
+Canary checks must allow Arkfile's intentional operational metadata: ownership username, pre-padding encrypted size, padded size, chunk count, plaintext chunk size, encrypted-stream and stored-object digests, routing type, public Account Key salt and KDF profile, and owner-envelope version, key type, KDF profile, and public salt. Public cryptographic metadata is not a privacy-canary failure. Passwords, plaintext file contents, plaintext filenames, plaintext content digests, plaintext password hints, FEKs, KEKs, and OPAQUE outputs remain prohibited.
+
+Online integrity may run between shell E2E and Playwright only if it preserves `arkfile-dev-test-user`, its password and MFA state, `/tmp/arkfile-e2e-test-data/mfa-secret`, and auto-approval. The preferred full manual sequence is:
+
+1. `dev-reset.sh`
+2. `offline-integrity-test.sh`
+3. `e2e-test.sh`
+4. `online-integrity-test.sh`
+5. `e2e-playwright.sh`
+
+### Top three approaches
 
 #### 1. Cross-client cryptographic conformance and short fuzzing
 
-**Status: in scope (default integrity groups).** One shared corpus of fixed vectors for chunk encryption, FEK envelopes, metadata AAD, share envelopes, padding, `.arkbackup`, key-type bytes, boundary sizes, and deliberately malformed or truncated inputs. Fixed keys, nonces, salts, and expected ciphertext bytes consumed by both Go (`arkfile-client` / packages) and TypeScript. Prefer byte-exact expected outputs over encrypt/decrypt round trips alone so both clients cannot share the same mistake. Add short Go native fuzz (and TS property checks) around untrusted decoders: envelopes, headers, tokens, share path parsing. Mostly offline against built code; keep long fuzz campaigns optional later.
+**Status: core fixtures and initial fuzz targets implemented; offline orchestration pending.** The shared corpus pins explicit-salt Account and Custom Key derivation, chunk and metadata AAD, owner FEK envelope headers and wrapping, and AES-GCM behavior for Go and TypeScript consumers. Keep expected outputs fixed during routine tests so one client is not silently used as the oracle for the other. Extend cross-client fixtures only where canonical serialization is defined. Share-envelope cross-client decrypt fixtures remain useful; server padding and `.arkbackup` remain Go-only unless a TypeScript implementation exists.
 
 #### 2. Privacy-canary and streaming resource invariants
 
-**Status: in scope (default integrity groups; needs live server).** Instrument uploads, shares, and downloads with unique plaintext canaries (passwords, filenames, digests, hints, file fragments) using dedicated integrity users so Playwright's shared user is untouched. Assert canaries never appear in HTTP observations, server logs, database fields, temp files, or stored objects, while allowing only intentional operational metadata (`size_bytes`, padded size, chunk counts, username, `password_type`, FEK key-type byte). Separately run large synthetic streams and assert peak CLI (and later browser-worker) memory stays bounded independent of file size, and that interruption leaves no usable partial plaintext.
+**Status: contracts and logging protections implemented; online orchestration pending.** Use dedicated integrity identities and unique plaintext markers. Compare post-test deltas against a baseline instead of scanning unrelated historical data. Begin with server logs, security events, database fields, temporary files, and stored objects, then add CLI memory and interruption checks. Service Worker resource measurements may follow after CLI measurements are stable. Blob fallback must remain tested as a full-plaintext assembly path and must never be subjected to a false bounded-memory assertion.
 
 #### 3. Custom `go/analysis` checkers for Arkfile architectural invariants
 
-**Status: in scope (default integrity groups; offline).** Encode project-specific rules that generic linters miss: no raw IP logging (EntityID only), no plaintext filename/digest/hint reaching persistence or logs, no mixing OPAQUE session material into file-crypto paths, parameterized SQL only, and similar "server must never learn X" constraints. Package as a small module of one-purpose checkers behind a single `multichecker` driver that enables every analyzer by default (so a forgotten flag cannot silently skip a rule), following the same discipline as [SpiceDB's custom analyzers](https://github.com/authzed/spicedb/tree/main/tools/analyzers): domain invariants as analyzers, not a port of their concrete checks. Treat these as adversarial `go vet`-style architectural checks (anti-slop for Arkfile-specific forbidden patterns), not generic style lint. Invoke from an integrity group via that driver / `go vet`. Cheap and continuous. Does not prove crypto or concurrency correctness; see deferred formal work below.
+**Status: planned; implement narrowly scoped analyzers before the offline script depends on them.** Encode only forbidden patterns that can be detected reliably, beginning with raw request IP values entering logs or persisted security details, direct security-event construction outside approved helpers, and explicit mixing of OPAQUE session outputs into file-key operations. Package one-purpose analyzers behind a single `multichecker` driver with all checks enabled by default. Each analyzer requires positive and negative fixture tests. Do not claim whole-program secret taint tracking, universal SQL-injection proof, or cryptographic correctness from syntax-level analysis.
 
 ### Explicitly deferred or rejected for the default path
 
@@ -39,7 +64,17 @@ Suggested order: `dev-reset.sh` -> `e2e-test.sh` -> `integrity-test.sh` -> `e2e-
 - **Gobra / Dafny / shipping verified-generated Go** -- not feasible for near-term product confidence; overstated practicality; Dafny-to-Go shipping conflicts with Arkfile's one canonical implementation path.
 - **Differential testing against age, RFC 8188, or secretbox** -- not appropriate; Arkfile envelope and chunk formats are not implementations of those protocols.
 - **Folding integrity into `e2e-test.sh` or replacing Playwright** -- rejected; integrity sits beside them.
-- **Invoking `dev-reset.sh` from integrity** -- rejected; assume reset (and e2e) already ran.
+- **Invoking `dev-reset.sh` from either integrity script** -- rejected. Offline integrity does not require a server; online integrity assumes reset and shell E2E already ran.
+
+### Implementation order
+
+1. Define the initial analyzer package layout, exact forbidden patterns, allowed exceptions, fixture tests, and driver command.
+2. Implement and validate the narrow custom analyzers.
+3. Implement `offline-integrity-test.sh` around existing deterministic conformance, parser, fuzz, analyzer, and production-build checks.
+4. Implement `online-integrity-test.sh` with dedicated identity creation, canary generation, baseline/delta capture, cleanup, and precise failure reporting.
+5. Add CLI memory measurements and interruption cleanup to the online script after the basic canary lifecycle is reliable.
+6. Add a small number of live race checks only when they prove an invariant not already owned by native tests.
+7. Run the full manual sequence and update this document with measured thresholds, observed runtime, and any checks deliberately kept optional.
 
 ---
 
@@ -65,7 +100,7 @@ Given the security-critical nature of the codebase, layering techniques beyond e
 
 #### Race detection and memory sanitizer
 
-**Status: feasible; deferred relative to the top three.** Valuable for CGO (libopaque) and concurrent handlers. Candidates for a later integrity group or CI job (`go test -race`, `-msan`/`-asan` where workable), not required for the first integrity-test cut.
+**Status: feasible; deferred relative to the top three.** Valuable for CGO (libopaque) and concurrent handlers. Candidates for a later integrity group or CI job (`go test -race`, `-msan`/`-asan` where workable), not required for the first offline integrity cut.
 
 - Run tests with `-race` in CI; consider `-gcflags=all=-d=checkptr` for unsafe audits.
 - If you use cgo (e.g., for libopaque / related C bindings), run under **MSan/UBSan** via `go build -msan`/`-asan` where the toolchain and environment support it.
@@ -97,7 +132,7 @@ Prioritize fuzz targets around:
 - Auth token validation
 - Anything that touches untrusted bytes *before* authenticated decryption
 
-For deeper, coverage-guided fuzzing of the binary as a whole, **libFuzzer via `go fuzz` headers**, **sydr-fuzz**, or **OSS-Fuzz** integration are good options. **Status: deferred / optional** -- useful after short fuzz is wired into integrity-test; do not block the default integrity path on OSS-Fuzz-scale campaigns.
+For deeper, coverage-guided fuzzing of the binary as a whole, **libFuzzer via `go fuzz` headers**, **sydr-fuzz**, or **OSS-Fuzz** integration are good options. **Status: deferred / optional** -- useful after short fuzz is wired into offline integrity; do not block the default integrity path on OSS-Fuzz-scale campaigns.
 
 #### Property-based testing
 
@@ -110,7 +145,7 @@ Generate random plaintexts, keys, AAD, and have **both** clients encrypt with th
 
 #### Mutation testing
 
-**Status: feasible; deferred.** **`go-mutesting`** or **`gremlins`** reveal whether tests actually catch logic errors or just execute lines. Informative for access-check helpers once the integrity suite exists; not part of the first integrity-test cut.
+**Status: feasible; deferred.** **`go-mutesting`** or **`gremlins`** reveal whether tests actually catch logic errors or just execute lines. Informative for access-check helpers once the integrity suite exists; not part of the first offline integrity cut.
 
 ### Architectural / Runtime Techniques
 
@@ -148,7 +183,7 @@ These tools have been used to validate WireGuard, TLS 1.3, Signal's double ratch
 - Security properties (injective agreement, forward secrecy) are proven modularly per participant.
 - The library is almost entirely ghost code, so it imposes no runtime overhead and existing implementations need not be restructured much.
 
-Interesting research direction; do not treat as a near-term integrity-test deliverable. Prefer conformance corpus, canaries, and custom `go/analysis` for product confidence first.
+Interesting research direction; do not treat as a near-term integrity deliverable. Prefer conformance corpus, canaries, and custom `go/analysis` for product confidence first.
 
 #### 3. Verifying critical Go modules with Dafny
 
@@ -156,11 +191,11 @@ Interesting research direction; do not treat as a near-term integrity-test deliv
 
 #### 4. Whole-program nil-safety and parameter tracking with goprove
 
-**Status: watch / optional later.** **goprove** offers a CLI/GitHub Action for whole-program proofs and a `go/analysis` plugin for per-package checks. May inform custom analyzer work; not required for the first integrity-test cut. Prefer first-party `golang.org/x/tools/go/analysis` checkers encoding Arkfile-specific rules (top approach 3).
+**Status: watch / optional later.** **goprove** offers a CLI/GitHub Action for whole-program proofs and a `go/analysis` plugin for per-package checks. May inform custom analyzer work; not required for the first offline integrity cut. Prefer first-party `golang.org/x/tools/go/analysis` checkers encoding Arkfile-specific rules (top approach 3).
 
 #### 5. TLA+ for stateful server behavior
 
-**Status: deferred (highest-value formal addition after the top three).** A small TLA+ specification of upload initialization, chunk acceptance, completion, quota accounting, file deletion, share creation, ticket issuance, expiry, download limits, revocation, and concurrent requests. Model checking can establish invariants such as "an incomplete upload never becomes downloadable," "storage cannot be credited twice," "a share cannot issue new tickets after revocation," and "every successful download consumes limits exactly as specified." Selected model-generated traces can become API tests. Out of default integrity-test until conformance, canaries, and custom analyzers exist.
+**Status: deferred (highest-value formal addition after the top three).** A small TLA+ specification of upload initialization, chunk acceptance, completion, quota accounting, file deletion, share creation, ticket issuance, expiry, download limits, revocation, and concurrent requests. Model checking can establish invariants such as "an incomplete upload never becomes downloadable," "storage cannot be credited twice," "a share cannot issue new tickets after revocation," and "every successful download consumes limits exactly as specified." Selected model-generated traces can become API tests. Keep this out of the default integrity scripts until conformance, canaries, and custom analyzers exist.
 
 ---
 
@@ -213,4 +248,4 @@ In parallel, build one cross-client cryptographic conformance corpus covering ch
 
 Finally, add explicit privacy and resource-invariant testing. Instrument test deployments with unique plaintext canaries and assert that passwords, filenames, plaintext digests, hints, and file fragments never appear in HTTP server observations, logs, database fields, temporary files, or stored objects. Separately, run large synthetic streams while measuring peak browser-worker and CLI memory, asserting memory remains bounded independently of file size and that interruption leaves no usable partial plaintext. A Tamarin or ProVerif model could later formalize Arkfile’s composition of OPAQUE sessions, key-context separation, FEK wrapping, share envelopes, tickets, replay, revocation, and compromise assumptions, but pursue that after the executable conformance corpus and TLA+ state model: those two additions offer strong guarantees without pretending to verify the entire language and compiler stack.
 
-**How this maps to the locked plan:** conformance corpus + short fuzz, privacy/resource canaries, and custom `go/analysis` (domain invariants as analyzers) are the default integrity-test scope. Crypto hot-path benchmarks with baselines are a brief deferred follow-on. TLA+ and Tamarin/ProVerif remain deferred formal work. Gobra/Dafny shipping and foreign-protocol differential testing remain rejected for the reasons above.
+**How this maps to the locked plan:** conformance, parser checks, short fuzzing, custom `go/analysis`, and production build checks belong to offline integrity. Privacy canaries, resource measurements, interruption cleanup, and selected live races belong to online integrity. Crypto hot-path benchmarks with baselines are a brief deferred follow-on. TLA+ and Tamarin/ProVerif remain deferred formal work. Gobra/Dafny shipping and foreign-protocol differential testing remain rejected for the reasons above.

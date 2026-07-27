@@ -2,7 +2,7 @@
 
 ## Current implementation status
 
-The random-salt Account and Custom Key contract, owner FEK envelope version 2, authenticated account cryptographic metadata endpoint, cache binding, `.arkbackup` version 2, logging whitelist, production build-profile checks, bounded Service Worker queue, and atomic upload-completion claim are implemented. Shared Go and TypeScript cryptographic fixtures, focused parser fuzz targets, cache, export, re-registration, logging, build, download, and completion-state tests have been added. Go formatting and the complete Go and TypeScript native suites pass. The deployment rebuild and E2E workflow remain developer-run steps. The two integrity orchestration scripts remain intentionally deferred.
+This cleanup is complete as of July 27, 2026. The random-salt Account and Custom Key contract, owner FEK envelope version 2, authenticated account cryptographic metadata endpoint, cache binding, `.arkbackup` version 2, logging allowlist, production build-profile checks, bounded Service Worker queue, and atomic upload-completion claim are implemented. Shared Go and TypeScript cryptographic fixtures, focused parser fuzz targets, cache, export, re-registration, logging, build, download, and completion-state tests have been added. Go formatting, the complete Go and TypeScript native suites, `dev-reset.sh`, `e2e-test.sh`, and `e2e-playwright.sh` all pass. The implementation gate for creating the offline and online integrity orchestration scripts is now satisfied.
 
 ## Goal
 
@@ -166,7 +166,7 @@ Do not duplicate exhaustive vector cases in E2E. Unit tests own byte-level forma
 5. Update browser and CLI upload/download, metadata, sharing, and `.arkbackup` paths to use the canonical formats. Remove deterministic salt code and obsolete envelope parsing once callers are converted.
 6. Tighten structured logging and production build-profile enforcement.
 7. Complete paired crypto tests, browser route/integrity tests, server state/concurrency tests, parser fuzz targets, and documentation audits.
-8. Run the normal developer rebuild/deployment and E2E workflow appropriate to the environment. Only after behavior stabilizes should the two integrity orchestration scripts be created.
+8. Run the normal developer rebuild/deployment and E2E workflow appropriate to the environment. Completed: `dev-reset.sh`, `e2e-test.sh`, and `e2e-playwright.sh` pass against the rebuilt development deployment.
 
 ## Documentation work
 
@@ -176,18 +176,18 @@ Document the two browser download paths without presenting the Blob fallback as 
 
 Review the remainder of `docs/security.md` for aspirational commands, metrics, log locations, automated responses, or security properties that are not implemented. Either verify them against the code and deployment scripts or clearly label them as operational recommendations rather than current Arkfile behavior.
 
-## Deferred integrity scripts
+## Integrity scripts ready for implementation
 
-Do not create the scripts until the cleanup checks and fixtures above are stable.
+The cleanup checks, formats, fixtures, and E2E behavior are now stable enough to create the scripts. Their implementation is the next project and is specified in `docs/wip/more-verification.md`.
 
-`scripts/testing/offline-integrity-test.sh` will eventually orchestrate shared Go/TypeScript conformance vectors, malformed-input tests, short parser fuzzing, focused state-model tests, custom Arkfile analyzers, and selected generic static or dependency checks. It must not require a running server, `dev-reset.sh`, or completed E2E state.
+`scripts/testing/offline-integrity-test.sh` will orchestrate shared Go/TypeScript conformance vectors, malformed-input tests, short parser fuzzing, focused state/concurrency tests, custom Arkfile analyzers, and production build-profile checks. It must not require a running server, `dev-reset.sh`, or completed E2E state. Network-dependent dependency checks remain optional rather than part of its deterministic default groups.
 
-`scripts/testing/online-integrity-test.sh` will eventually require a live development deployment and use dedicated integrity users, files, and shares. It should create its own fixtures through the development approval API rather than mutate E2E or Playwright users. It will exercise privacy canaries, inspect post-test log/database/storage/temp-file deltas, measure CLI streaming memory across increasing file sizes no larger than 100 MB without explicit developer approval, verify CLI interruption cleanup, and execute selected live authorization and accounting races.
+`scripts/testing/online-integrity-test.sh` will require a live development deployment and use dedicated integrity users, files, and shares. It should create its own fixtures through the development approval API rather than mutate E2E or Playwright users. It will exercise privacy canaries, inspect post-test log/database/storage/temp-file deltas, measure CLI streaming memory across increasing file sizes no larger than 100 MB without explicit developer approval, verify CLI interruption cleanup, and execute selected live authorization and accounting races.
 
 The online script must treat Service Worker streaming and Blob fallback as different resource models. It may assert bounded memory for CLI and Service Worker paths, but it must not assert bounded memory for Blob assembly or universally claim that an operating-system download manager leaves no partial file after interruption.
 
-## Completion criteria before script creation
+## Satisfied completion criteria
 
 The security guide contains no known contradiction between OPAQUE authentication and Argon2id file-key derivation, no absolute protection claim against malicious browser-client replacement, and no claim that random public salts prevent per-record offline guessing.
 
-Both browser download routes remain functional and have explicit routing, integrity, warning, failure, and success tests. Account and per-file custom salts are random, public, format-bound, and sufficient for self-contained offline backup decryption. Deterministic username-derived salt paths have been removed. The shared Go/TypeScript fixture corpus is committed and consumed without routine regeneration. Initial parser fuzz targets and state/concurrency tests pass through their native test runners. Production build and deployment checks exclude development tracing and unsafe secret output. Logging tests cover the protected plaintext classes that the future online canaries will search for. No automated test exceeds the 100 MB approval boundary.
+Both browser download routes remain functional and have explicit routing, integrity, warning, failure, and success tests. Account and per-file custom salts are random, public, format-bound, and sufficient for self-contained offline backup decryption. Deterministic username-derived salt paths have been removed. The shared Go/TypeScript fixture corpus is present and consumed without routine regeneration. Initial parser fuzz targets and state/concurrency tests pass through their native test runners. Production build and deployment checks exclude development tracing and unsafe secret output. Logging tests cover the protected plaintext classes that the future online canaries will search for. No automated test exceeds the 100 MB approval boundary. Native suites and both E2E suites pass after a complete development reset.
