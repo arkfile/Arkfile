@@ -900,23 +900,36 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await sharedPage.click('#contact-info-toggle');
     await sharedPage.waitForSelector('#contact-info-panel', { state: 'visible', timeout: 5_000 });
 
-    // Clean up any pre-existing contact info (e.g. left by e2e-test.sh CLI tests)
-    const preExistingName = await sharedPage.inputValue('#contact-display-name');
-    if (preExistingName !== '') {
+    // Clean up any pre-existing contact info (e.g. left by e2e-test.sh CLI tests).
+    // The empty form defaults display_name to the username, so the input value
+    // cannot distinguish an existing record from the empty state.
+    const preExistingContactInfo = await sharedPage.evaluate(async () => {
+      const response = await fetch('/api/user/contact-info', { credentials: 'include' });
+      return response.json();
+    });
+    if (preExistingContactInfo.data?.has_contact_info) {
+      const preExistingName = preExistingContactInfo.data.contact_info?.display_name || '';
       logStep('share-revoke', `Contact Info: Found pre-existing data (display_name="${preExistingName}"), deleting first...`);
-      sharedPage.on('dialog', async (dialog) => {
+      sharedPage.once('dialog', async (dialog) => {
         await dialog.accept();
       });
+      const deleteResponsePromise = sharedPage.waitForResponse((response) =>
+        response.url().endsWith('/api/user/contact-info')
+        && response.request().method() === 'DELETE'
+      );
       await sharedPage.click('#delete-contact-info-btn');
-      await sharedPage.waitForTimeout(1_000);
-      sharedPage.removeAllListeners('dialog');
+      const deleteResponse = await deleteResponsePromise;
+      expect(deleteResponse.ok()).toBe(true);
     }
 
-    // Verify empty state (after cleanup)
-    const cleanName = await sharedPage.inputValue('#contact-display-name');
-    expect(cleanName).toBe('');
-    const cleanRows = await sharedPage.locator('.contact-method-row').count();
-    expect(cleanRows).toBe(0);
+    // Verify the server and form both show the canonical empty state.
+    const cleanContactInfo = await sharedPage.evaluate(async () => {
+      const response = await fetch('/api/user/contact-info', { credentials: 'include' });
+      return response.json();
+    });
+    expect(cleanContactInfo.data?.has_contact_info).toBe(false);
+    await expect(sharedPage.locator('#contact-display-name')).toHaveValue(TEST_USERNAME);
+    await expect(sharedPage.locator('.contact-method-row')).toHaveCount(0);
     console.log('[OK] Contact Info: Panel open, empty state verified');
 
     // Set initial contact info: display name + 1 email + notes
