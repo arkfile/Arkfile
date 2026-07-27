@@ -9,8 +9,10 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -119,6 +121,40 @@ func TestParseBundle_ValidBundle(t *testing.T) {
 	expectedOffset := int64(10) + int64(len(metaJSON))
 	if blobOffset != expectedOffset {
 		t.Errorf("blobOffset mismatch: got %d, expected %d", blobOffset, expectedOffset)
+	}
+}
+
+func TestDecryptBundleBlobStopsBeforeWritingWhenCanceled(t *testing.T) {
+	meta := bundleMeta{
+		FileID:         testFileID,
+		SizeBytes:      int64(crypto.AesGcmOverhead()),
+		ChunkSizeBytes: 1,
+		ChunkCount:     1,
+	}
+	bundlePath := createTestBundle(t, meta, make([]byte, meta.SizeBytes))
+	_, blobOffset, err := parseBundle(bundlePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputPath := filepath.Join(t.TempDir(), "output.tmp")
+	outFile, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outFile.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = decryptBundleBlob(ctx, bundlePath, blobOffset, &meta, make([]byte, 32), outFile)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("decryptBundleBlob error = %v, want context.Canceled", err)
+	}
+	info, err := outFile.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() != 0 {
+		t.Fatalf("canceled decryption wrote %d plaintext bytes", info.Size())
 	}
 }
 

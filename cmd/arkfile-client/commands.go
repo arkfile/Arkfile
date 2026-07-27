@@ -6,6 +6,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -767,6 +768,9 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 		return fmt.Errorf("--file-id is required")
 	}
 
+	ctx, stop := interruptContext()
+	defer stop()
+
 	session, err := requireSession(config)
 	if err != nil {
 		return err
@@ -779,7 +783,7 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 	defer clearBytes(accountKey)
 
 	// Fetch file metadata
-	metaReq, err := http.NewRequest("GET", client.baseURL+"/api/files/"+*fileID+"/meta", nil)
+	metaReq, err := http.NewRequestWithContext(ctx, "GET", client.baseURL+"/api/files/"+*fileID+"/meta", nil)
 	if err != nil {
 		return fmt.Errorf("failed to create metadata request: %w", err)
 	}
@@ -883,46 +887,44 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 
 	logVerbose("Downloading %s (%s)...", *outputPath, formatFileSize(fileMeta.SizeBytes))
 
-	// Create output file
-	outFile, err := os.OpenFile(*outputPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
-	}
-	defer outFile.Close()
+	var verifiedSHA256 string
+	if err := writeAtomicOutput(*outputPath, func(outFile *os.File) error {
+		if err := doChunkedDownload(ctx, client, session, *fileID, fek, fileMeta, outFile); err != nil {
+			return fmt.Errorf("download failed: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("download interrupted: %w", err)
+		}
 
-	// Stream download by chunks
-	if err := doChunkedDownload(client, session, *fileID, fek, fileMeta, outFile); err != nil {
-		// Clean up partial output file on error
-		outFile.Close()
-		os.Remove(*outputPath)
-		return fmt.Errorf("download failed: %w", err)
-	}
-
-	// Close file before computing SHA-256
-	outFile.Close()
-
-	fmt.Printf("Download complete!\n")
-	fmt.Printf("  Saved to: %s\n", *outputPath)
-	fmt.Printf("  Size: %s\n", formatFileSize(fileMeta.SizeBytes))
-
-	// Verify SHA-256 integrity
-	if fileMeta.EncryptedSHA256 != "" && fileMeta.SHA256Nonce != "" {
+		if fileMeta.EncryptedSHA256 == "" || fileMeta.SHA256Nonce == "" {
+			return nil
+		}
 		expectedSHA256, err := decryptMetadataField(
 			fileMeta.EncryptedSHA256, fileMeta.SHA256Nonce, accountKey,
 			*fileID, crypto.AADFieldSha256, ownerUsername,
 		)
 		if err != nil {
 			fmt.Printf("  [!] WARNING: Could not decrypt expected SHA-256: %v\n", err)
-		} else {
-			actualSHA256, err := computeStreamingSHA256(*outputPath)
-			if err != nil {
-				fmt.Printf("  [!] WARNING: Could not compute SHA-256 of output: %v\n", err)
-			} else if actualSHA256 == expectedSHA256 {
-				fmt.Printf("  [OK] SHA-256 verified: %s\n", actualSHA256)
-			} else {
-				return fmt.Errorf("[FAIL] SHA-256 mismatch!\n  Expected: %s\n  Got:      %s\n  File may be corrupt", expectedSHA256, actualSHA256)
-			}
+			return nil
 		}
+		actualSHA256, err := computeStreamingSHA256(outFile.Name())
+		if err != nil {
+			return fmt.Errorf("failed to compute SHA-256 of completed output: %w", err)
+		}
+		if actualSHA256 != expectedSHA256 {
+			return fmt.Errorf("[FAIL] SHA-256 mismatch!\n  Expected: %s\n  Got:      %s\n  File may be corrupt", expectedSHA256, actualSHA256)
+		}
+		verifiedSHA256 = actualSHA256
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	fmt.Printf("Download complete!\n")
+	fmt.Printf("  Saved to: %s\n", *outputPath)
+	fmt.Printf("  Size: %s\n", formatFileSize(fileMeta.SizeBytes))
+	if verifiedSHA256 != "" {
+		fmt.Printf("  [OK] SHA-256 verified: %s\n", verifiedSHA256)
 	}
 
 	return nil
@@ -932,16 +934,19 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 // fileID and meta.ChunkCount are bound into the per-chunk AAD so chunk
 // swap / reorder / cross-file substitution / truncation all fail at the
 // AEAD layer.
-func doChunkedDownload(client *HTTPClient, session *AuthSession, fileID string, fek []byte, meta ServerFileInfo, outFile *os.File) error {
+func doChunkedDownload(ctx context.Context, client *HTTPClient, session *AuthSession, fileID string, fek []byte, meta ServerFileInfo, outFile *os.File) error {
 	chunkCount := meta.ChunkCount
 	if chunkCount == 0 {
 		chunkCount = 1
 	}
 
 	for i := int64(0); i < chunkCount; i++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		// Download chunk
 		chunkURL := fmt.Sprintf("%s/api/files/%s/chunks/%d", client.baseURL, fileID, i)
-		chunkReq, err := http.NewRequest("GET", chunkURL, nil)
+		chunkReq, err := http.NewRequestWithContext(ctx, "GET", chunkURL, nil)
 		if err != nil {
 			return fmt.Errorf("failed to create chunk request for chunk %d: %w", i, err)
 		}
@@ -1792,6 +1797,7 @@ func handleShareRevoke(client *HTTPClient, config *ClientConfig, args []string) 
 // refreshing it on demand. It mirrors the browser ShareTicketHolder so both
 // clients use the same credential flow against /api/public/shares/:id/ticket.
 type shareTicketHolder struct {
+	ctx           context.Context
 	client        *HTTPClient
 	shareID       string
 	downloadToken string // base64 static token from the envelope (proof of decryption)
@@ -1799,8 +1805,8 @@ type shareTicketHolder struct {
 	expiresAt     time.Time
 }
 
-func newShareTicketHolder(client *HTTPClient, shareID, downloadTokenB64 string) *shareTicketHolder {
-	return &shareTicketHolder{client: client, shareID: shareID, downloadToken: downloadTokenB64}
+func newShareTicketHolder(ctx context.Context, client *HTTPClient, shareID, downloadTokenB64 string) *shareTicketHolder {
+	return &shareTicketHolder{ctx: ctx, client: client, shareID: shareID, downloadToken: downloadTokenB64}
 }
 
 // get returns a valid ticket, fetching or refreshing as needed.
@@ -1818,7 +1824,7 @@ func (h *shareTicketHolder) refresh() (string, error) {
 		return "", fmt.Errorf("failed to marshal ticket request: %w", err)
 	}
 	ticketURL := h.client.baseURL + "/api/public/shares/" + h.shareID + "/ticket"
-	req, err := http.NewRequest("POST", ticketURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(h.ctx, "POST", ticketURL, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("failed to create ticket request: %w", err)
 	}
@@ -1872,7 +1878,7 @@ func fetchShareChunkWithTicketRefresh(client *HTTPClient, h *shareTicketHolder, 
 	chunkURL := fmt.Sprintf("%s/api/public/shares/%s/chunks/%d", client.baseURL, shareID, chunkIndex)
 
 	doFetch := func() (*http.Response, error) {
-		req, err := http.NewRequest("GET", chunkURL, nil)
+		req, err := http.NewRequestWithContext(h.ctx, "GET", chunkURL, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create chunk request: %w", err)
 		}
@@ -1923,10 +1929,13 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 		return fmt.Errorf("--share-id is required")
 	}
 
+	ctx, stop := interruptContext()
+	defer stop()
+
 	// Step 1: Fetch share envelope (no auth required -- public endpoint)
 	// GET /api/public/shares/:id/envelope -> {share_id, file_id, salt, encrypted_envelope, size_bytes}
 	envelopeURL := client.baseURL + "/api/public/shares/" + *shareID + "/envelope"
-	envelopeReq, err := http.NewRequest("GET", envelopeURL, nil)
+	envelopeReq, err := http.NewRequestWithContext(ctx, "GET", envelopeURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create envelope request: %w", err)
 	}
@@ -2013,12 +2022,12 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 	// X-Share-Ticket on chunk fetches and refreshed on 403, replacing the
 	// never-rotated static token as the per-chunk credential. Mirrors the
 	// browser share-access flow.
-	ticketHolder := newShareTicketHolder(client, *shareID, downloadTokenB64)
+	ticketHolder := newShareTicketHolder(ctx, client, *shareID, downloadTokenB64)
 
 	// Step 5: Get chunk metadata
 	// GET /api/public/shares/:id/metadata -> {file_id, size_bytes, chunk_count, chunk_size_bytes}
 	chunkMetaURL := client.baseURL + "/api/public/shares/" + *shareID + "/metadata"
-	chunkMetaReq, err := http.NewRequest("GET", chunkMetaURL, nil)
+	chunkMetaReq, err := http.NewRequestWithContext(ctx, "GET", chunkMetaURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create chunk metadata request: %w", err)
 	}
@@ -2073,68 +2082,54 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 	fmt.Printf("  Size: %s\n", formatFileSize(sizeBytes))
 	fmt.Printf("  Chunks: %d\n", chunkCount)
 
-	// Step 6: Create output file
-	outFile, err := os.OpenFile(*outputPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
-	}
+	var verifiedSHA256 string
+	if err := writeAtomicOutput(*outputPath, func(outFile *os.File) error {
+		for i := int64(0); i < chunkCount; i++ {
+			if err := ctx.Err(); err != nil {
+				return fmt.Errorf("share download interrupted: %w", err)
+			}
+			encChunk, err := fetchShareChunkWithTicketRefresh(client, ticketHolder, *shareID, i, chunkCount)
+			if err != nil {
+				return err
+			}
 
-	// Step 7: Stream download + decrypt each chunk
-	// GET /api/public/shares/:id/chunks/:chunkIndex with X-Share-Ticket header.
-	// On a 403 (ticket expired mid-download), refresh the ticket once and retry.
-	downloadFailed := false
-	for i := int64(0); i < chunkCount; i++ {
-		encChunk, chunkErr := fetchShareChunkWithTicketRefresh(client, ticketHolder, *shareID, i, chunkCount)
-		if chunkErr != nil {
-			downloadFailed = true
-			err = chunkErr
-			break
+			// Anonymous share recipient chunk AAD uses the underlying file ID.
+			plaintext, err := decryptChunk(encChunk, fek, chunkMeta.FileID, i, chunkCount)
+			if err != nil {
+				return fmt.Errorf("failed to decrypt chunk %d: %w", i, err)
+			}
+			if _, err := outFile.Write(plaintext); err != nil {
+				return fmt.Errorf("failed to write chunk %d: %w", i, err)
+			}
+			if verbose {
+				progress := float64(i+1) / float64(chunkCount) * 100
+				logVerbose("  Chunk %d/%d (%.1f%%)", i+1, chunkCount, progress)
+			}
 		}
-
-		// Anonymous share recipient: chunk AAD uses the underlying
-		// file_id from the share metadata (NOT the share_id). Chunks
-		// are the same physical objects stored once for both owner and
-		// recipient paths
-		plaintext, decErr := decryptChunk(encChunk, fek, chunkMeta.FileID, i, chunkCount)
-		if decErr != nil {
-			downloadFailed = true
-			err = fmt.Errorf("failed to decrypt chunk %d: %w", i, decErr)
-			break
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("share download interrupted: %w", err)
 		}
-
-		if _, writeErr := outFile.Write(plaintext); writeErr != nil {
-			downloadFailed = true
-			err = fmt.Errorf("failed to write chunk %d: %w", i, writeErr)
-			break
+		if envelope.SHA256 == "" {
+			return nil
 		}
-
-		if verbose {
-			progress := float64(i+1) / float64(chunkCount) * 100
-			logVerbose("  Chunk %d/%d (%.1f%%)", i+1, chunkCount, progress)
+		actualSHA256, err := computeStreamingSHA256(outFile.Name())
+		if err != nil {
+			return fmt.Errorf("failed to compute SHA-256 of completed shared output: %w", err)
 		}
-	}
-
-	outFile.Close()
-
-	if downloadFailed {
-		os.Remove(*outputPath)
-		return fmt.Errorf("download failed: %w", err)
+		if actualSHA256 != envelope.SHA256 {
+			return fmt.Errorf("[FAIL] SHA-256 mismatch!\n  Expected: %s\n  Got:      %s\n  File may be corrupt or tampered", envelope.SHA256, actualSHA256)
+		}
+		verifiedSHA256 = actualSHA256
+		return nil
+	}); err != nil {
+		return fmt.Errorf("share download failed: %w", err)
 	}
 
 	fmt.Printf("Download complete!\n")
 	fmt.Printf("  Saved to: %s\n", *outputPath)
 	fmt.Printf("  Size: %s\n", formatFileSize(sizeBytes))
-
-	// Step 8: Verify SHA-256 integrity against envelope hash
-	if envelope.SHA256 != "" {
-		actualSHA256, shaErr := computeStreamingSHA256(*outputPath)
-		if shaErr != nil {
-			fmt.Printf("  [!] WARNING: Could not compute SHA-256 for verification: %v\n", shaErr)
-		} else if actualSHA256 == envelope.SHA256 {
-			fmt.Printf("  [OK] SHA-256 verified: %s\n", actualSHA256)
-		} else {
-			return fmt.Errorf("[FAIL] SHA-256 mismatch!\n  Expected: %s\n  Got:      %s\n  File may be corrupt or tampered", envelope.SHA256, actualSHA256)
-		}
+	if verifiedSHA256 != "" {
+		fmt.Printf("  [OK] SHA-256 verified: %s\n", verifiedSHA256)
 	}
 
 	return nil

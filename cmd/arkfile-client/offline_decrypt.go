@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -69,6 +70,9 @@ func handleDecryptBlobCommand(args []string) error {
 	if *outputPath == "" {
 		return fmt.Errorf("--output is required")
 	}
+
+	ctx, stop := interruptContext()
+	defer stop()
 
 	// Step 1: Parse bundle
 	meta, blobOffset, err := parseBundle(*bundlePath)
@@ -150,13 +154,6 @@ func handleDecryptBlobCommand(args []string) error {
 	}
 	defer clearBytes(fek)
 
-	// Step 4: Decrypt file data from bundle
-	err = decryptBundleBlob(*bundlePath, blobOffset, meta, fek, *outputPath)
-	if err != nil {
-		return fmt.Errorf("decryption failed: %w", err)
-	}
-
-	// Step 5: Verify and report
 	// Decrypt filename
 	filename := "[unknown]"
 	if meta.EncryptedFilename != "" && meta.FilenameNonce != "" {
@@ -170,35 +167,45 @@ func handleDecryptBlobCommand(args []string) error {
 		}
 	}
 
-	fmt.Printf("Decrypted: %s\n", filename)
+	var actualSHA256 string
+	verificationStatus := "[!] (no SHA-256 metadata available)"
+	if err := writeAtomicOutput(*outputPath, func(outFile *os.File) error {
+		if err := decryptBundleBlob(ctx, *bundlePath, blobOffset, meta, fek, outFile); err != nil {
+			return fmt.Errorf("decryption failed: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("decryption interrupted: %w", err)
+		}
 
-	// Compute SHA-256 of decrypted output
-	actualSHA256, err := computeStreamingSHA256(*outputPath)
-	if err != nil {
-		fmt.Printf("[!] WARNING: Could not compute SHA-256 of output: %v\n", err)
-		return nil
-	}
-	fmt.Printf("SHA-256: %s\n", actualSHA256)
-
-	// Decrypt expected SHA-256 from metadata
-	if meta.EncryptedSHA256Sum != "" && meta.SHA256SumNonce != "" {
-		expectedSHA256, decErr := decryptMetadataField(
+		var err error
+		actualSHA256, err = computeStreamingSHA256(outFile.Name())
+		if err != nil {
+			return fmt.Errorf("failed to compute SHA-256 of completed output: %w", err)
+		}
+		if meta.EncryptedSHA256Sum == "" || meta.SHA256SumNonce == "" {
+			return nil
+		}
+		expectedSHA256, err := decryptMetadataField(
 			meta.EncryptedSHA256Sum, meta.SHA256SumNonce, accountKey,
 			meta.FileID, crypto.AADFieldSha256, meta.OwnerUsername,
 		)
-		if decErr != nil {
-			fmt.Printf("[!] WARNING: Could not decrypt expected SHA-256: %v\n", decErr)
-		} else if actualSHA256 == expectedSHA256 {
-			fmt.Printf("Verified: [OK] (matches encrypted metadata)\n")
-		} else {
-			fmt.Printf("MISMATCH: [X]\n")
-			fmt.Printf("  Expected: %s\n", expectedSHA256)
-			fmt.Printf("  Got:      %s\n", actualSHA256)
-			return fmt.Errorf("SHA-256 verification failed")
+		if err != nil {
+			fmt.Printf("[!] WARNING: Could not decrypt expected SHA-256: %v\n", err)
+			verificationStatus = "[!] (encrypted SHA-256 unavailable)"
+			return nil
 		}
-	} else {
-		fmt.Printf("Verified: [!] (no SHA-256 metadata available)\n")
+		if actualSHA256 != expectedSHA256 {
+			return fmt.Errorf("SHA-256 verification failed: expected %s, got %s", expectedSHA256, actualSHA256)
+		}
+		verificationStatus = "[OK] (matches encrypted metadata)"
+		return nil
+	}); err != nil {
+		return err
 	}
+
+	fmt.Printf("Decrypted: %s\n", filename)
+	fmt.Printf("SHA-256: %s\n", actualSHA256)
+	fmt.Printf("Verified: %s\n", verificationStatus)
 
 	return nil
 }
@@ -337,7 +344,7 @@ func readAccountKeyFromFile(path string) ([]byte, error) {
 // Each chunk decrypts with AAD = (file_id, chunk_index, total_chunks)
 // so swap / reorder / truncation across the bundle is detected at the
 // AEAD layer.
-func decryptBundleBlob(bundlePath string, blobOffset int64, meta *bundleMeta, fek []byte, outputPath string) error {
+func decryptBundleBlob(ctx context.Context, bundlePath string, blobOffset int64, meta *bundleMeta, fek []byte, outFile *os.File) error {
 	f, err := os.Open(bundlePath)
 	if err != nil {
 		return fmt.Errorf("failed to open bundle: %w", err)
@@ -348,13 +355,6 @@ func decryptBundleBlob(bundlePath string, blobOffset int64, meta *bundleMeta, fe
 	if _, err := f.Seek(blobOffset, 0); err != nil {
 		return fmt.Errorf("failed to seek to blob: %w", err)
 	}
-
-	// Create output file
-	outFile, err := os.OpenFile(outputPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
-	}
-	defer outFile.Close()
 
 	// Uniform chunk math: every chunk adds GCM overhead (nonce + tag).
 	plaintextChunkSize := meta.ChunkSizeBytes
@@ -370,6 +370,9 @@ func decryptBundleBlob(bundlePath string, blobOffset int64, meta *bundleMeta, fe
 
 	remaining := meta.SizeBytes
 	for chunkIndex := int64(0); chunkIndex < totalChunks; chunkIndex++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		// Calculate this chunk's encrypted size. Every chunk is the
 		// uniform plaintext chunk size + GCM overhead, except possibly
 		// the last chunk which carries whatever plaintext is left.

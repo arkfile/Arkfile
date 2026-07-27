@@ -627,14 +627,40 @@ run_interruption_checks() {
     fi
 
     local upload_source="$TEST_ROOT/files/interrupted-upload.bin"
+    local upload_log="$TEST_ROOT/interrupted-upload.log"
     "$CLIENT" generate-test-file --filename "$upload_source" --size 100000000 --pattern random >/dev/null || return 1
-    if timeout -s INT 0.2s "$CLIENT" \
+    "$CLIENT" \
         --server-url "$SERVER_URL" \
         --tls-insecure \
+        --verbose \
         upload \
         --file "$upload_source" \
-        --password-type account >/dev/null 2>&1; then
-        log_error "Upload completed before interruption could be exercised"
+        --password-type account >"$upload_log" 2>&1 &
+    local upload_pid=$!
+    local upload_started=false
+    local attempt
+    for ((attempt = 1; attempt <= 100; attempt++)); do
+        if grep -q 'Uploading .* chunks' "$upload_log" 2>/dev/null; then
+            upload_started=true
+            break
+        fi
+        if ! kill -0 "$upload_pid" 2>/dev/null; then
+            break
+        fi
+        sleep 0.1
+    done
+    if [ "$upload_started" != true ]; then
+        wait "$upload_pid" 2>/dev/null || true
+        log_error "Upload did not remain active long enough to exercise SIGINT handling"
+        return 1
+    fi
+    kill -INT "$upload_pid"
+    if ! wait "$upload_pid"; then
+        log_error "Upload did not finish its active file cleanly after SIGINT"
+        return 1
+    fi
+    if ! grep -q '^\[OK\].*file_id=' "$upload_log"; then
+        log_error "Upload reported success without a completed file ID after SIGINT"
         return 1
     fi
     if find "$TEST_ROOT" -type f \( -name '*.part' -o -name '*.tmp' \) -print -quit | grep -q .; then
