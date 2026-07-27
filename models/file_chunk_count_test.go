@@ -11,10 +11,7 @@ func TestCalculateChunkCount(t *testing.T) {
 	overhead := int64(crypto.AesGcmOverhead())
 	encryptedSpan := chunkSize + overhead
 
-	sixGiB := int64(6 * 1024 * 1024 * 1024) // 6442450944
-	if sixGiB != 6442450944 {
-		t.Fatalf("expected 6GiB constant 6442450944, got %d", sixGiB)
-	}
+	fiveChunks := int64(5) * chunkSize
 
 	tests := []struct {
 		name      string
@@ -29,7 +26,7 @@ func TestCalculateChunkCount(t *testing.T) {
 		{name: "exact_one_encrypted_span", sizeBytes: encryptedSpan, want: 1},
 		{name: "one_past_encrypted_span", sizeBytes: encryptedSpan + 1, want: 2},
 		{name: "three_exact_encrypted_spans", sizeBytes: 3 * encryptedSpan, want: 3},
-		{name: "six_gib", sizeBytes: sixGiB, want: (sixGiB + encryptedSpan - 1) / encryptedSpan},
+		{name: "five_plaintext_chunks", sizeBytes: fiveChunks, want: (fiveChunks + encryptedSpan - 1) / encryptedSpan},
 	}
 
 	for _, tt := range tests {
@@ -54,19 +51,15 @@ func TestCalculateChunkCount_DefaultChunkSize(t *testing.T) {
 	}
 }
 
-func TestCalculateChunkCount_SixGiBPlaintextEncryptedStream(t *testing.T) {
-	// Representative 6 GiB plaintext is an exact multiple of the configured plaintext chunk size.
+func TestCalculateChunkCount_BoundedPlaintextEncryptedStream(t *testing.T) {
 	chunkSize := crypto.PlaintextChunkSize()
 	overhead := int64(crypto.AesGcmOverhead())
-	plaintextSize := int64(6 * 1024 * 1024 * 1024) // 6442450944
-	if plaintextSize%chunkSize != 0 {
-		t.Fatalf("expected 6GiB to be an exact multiple of plaintext chunk size %d", chunkSize)
-	}
+	plaintextSize := int64(5) * chunkSize
 	plaintextChunks := plaintextSize / chunkSize
 	encryptedSize := plaintextChunks * (chunkSize + overhead)
 
 	got := CalculateChunkCount(encryptedSize, chunkSize)
 	if got != plaintextChunks {
-		t.Fatalf("6GiB encrypted stream: got %d chunks, want %d (encryptedSize=%d)", got, plaintextChunks, encryptedSize)
+		t.Fatalf("bounded encrypted stream: got %d chunks, want %d (encryptedSize=%d)", got, plaintextChunks, encryptedSize)
 	}
 }

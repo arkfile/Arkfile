@@ -968,7 +968,7 @@ Findings against the CLIs follow the same severity rubric as backend findings (Â
 **Enforcement model (must be verified by the audit):** Arkfile uses a two-tier JWT enforcement model:
 
 - **Tier 1 -- Post-OPAQUE Temp Token.** Issued by `/api/opaque/login/finalize` after a successful OPAQUE handshake. This token authenticates "the user proved the password" but does NOT grant access to any user action. It is accepted only by the TOTP-verify endpoint(s) and any TOTP-enrollment-completion endpoint where applicable. It must:
-  - Be cryptographically distinct from the full JWT -- either via separate audience claim, separate signing key, an in-DB allowlist, or a dedicated claim such as `totp_verified=false` / `purpose=totp_challenge`.
+  - Be cryptographically distinct from the full JWT -- either via separate audience claim, separate signing key, an in-DB whitelist, or a dedicated claim such as `totp_verified=false` / `purpose=totp_challenge`.
   - Have a short TTL (minutes, not hours).
   - Not be refreshable into a full JWT without TOTP completion.
 - **Tier 2 -- Full JWT.** Issued by the TOTP-verify endpoint after the user submits a valid TOTP code (or a valid, unused backup code). This token is the only one accepted by the TOTP middleware that gates every protected route.
@@ -979,7 +979,7 @@ Findings against the CLIs follow the same severity rubric as backend findings (Â
 - Verify a single chokepoint exists -- not scattered per-handler checks.
 - Verify every protected route is wired through it (no bypass in `handlers/route_config.go`).
 - Verify the middleware rejects tokens missing the "TOTP completed" claim, with constant-time comparison and a generic error response that does not differentiate "no token" / "expired token" / "missing TOTP claim" in a way that helps an attacker.
-- Verify the temp token cannot be substituted for a full JWT (separate audience/signing/allowlist as above; reject in middleware).
+- Verify the temp token cannot be substituted for a full JWT (separate audience/signing/whitelist as above; reject in middleware).
 - Verify the dev/test API surface (`ADMIN_DEV_TEST_API_ENABLED=true`) cannot disable the middleware in production builds.
 
 **TOTP enrollment -- required audit checklist:**

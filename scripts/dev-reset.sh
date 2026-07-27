@@ -281,6 +281,7 @@ echo
 # Enable OPAQUE WASM trace logging for development (dumps crypto intermediates to browser console)
 # This is dev-only; local-deploy.sh and test-deploy.sh leave this unset for silent WASM builds
 export LIBOPAQUE_DEFINES="-DTRACE"
+export ARKFILE_ALLOW_WASM_TRACE=true
 
 # Note: libopaque.js Makefile validation is handled by build-libopaque-wasm.sh
 # The build script reads LIBOPAQUE_DEFINES env var (without -DNORANDOM) at build time

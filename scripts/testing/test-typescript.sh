@@ -76,6 +76,7 @@ run_build_tests() {
     
     # Test production build
     echo "Testing production build..."
+    rm -f dist/*.map sw-download.js.map
     if bun run build:prod; then
         echo -e "${GREEN}[OK] Production build successful${NC}"
     else
@@ -90,6 +91,24 @@ run_build_tests() {
         echo -e "${GREEN}Built app.js: ${file_size} bytes${NC}"
     else
         echo -e "${RED}[X] Built app.js not found${NC}"
+        cd ../../..
+        return 1
+    fi
+
+    if [ ! -f "sw-download.js" ]; then
+        echo -e "${RED}[X] Built sw-download.js not found${NC}"
+        cd ../../..
+        return 1
+    fi
+
+    if grep -Eq 'console\.log\(' "dist/app.js" "sw-download.js"; then
+        echo -e "${RED}[X] Production bundles retain debug console logging${NC}"
+        cd ../../..
+        return 1
+    fi
+
+    if [ -f "dist/app.js.map" ] || [ -f "sw-download.js.map" ]; then
+        echo -e "${RED}[X] Production build emitted source maps${NC}"
         cd ../../..
         return 1
     fi

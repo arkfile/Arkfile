@@ -413,6 +413,27 @@ func TestValidateProductionConfig_RejectsDevTestAPIInProduction(t *testing.T) {
 	}
 }
 
+func TestValidateProductionConfigRejectsDebugMode(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "production")
+	t.Setenv("DEBUG_MODE", "true")
+	t.Setenv("ADMIN_DEV_TEST_API_ENABLED", "false")
+	t.Setenv("ADMIN_USERNAMES", "real-admin")
+	t.Setenv("ARKFILE_DOMAIN", "prod.arkfile.net")
+	t.Setenv("STORAGE_PROVIDER_1", "generic-s3")
+	t.Setenv("STORAGE_1_ENDPOINT", "http://localhost:9332")
+	t.Setenv("STORAGE_1_ACCESS_KEY", "test")
+	t.Setenv("STORAGE_1_SECRET_KEY", "test")
+	t.Setenv("STORAGE_1_BUCKET", "test")
+	ResetConfigForTest()
+	t.Cleanup(ResetConfigForTest)
+
+	err := ValidateProductionConfig()
+	if err == nil {
+		t.Fatal("production validation accepted DEBUG_MODE=true")
+	}
+	assert.Contains(t, err.Error(), "DEBUG_MODE")
+}
+
 // TestValidateProductionConfig_RequiresDomain proves the OPAQUE idS guard:
 // production must refuse to start when the resolved domain is empty or
 // "localhost" (i.e. neither ARKFILE_DOMAIN nor BASE_URL was set to a real

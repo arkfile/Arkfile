@@ -1,7 +1,9 @@
 package models
 
 import (
+	"bytes"
 	"database/sql"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"testing"
@@ -73,6 +75,8 @@ func setupTestDB_User(t *testing.T) *sql.DB {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		username TEXT UNIQUE NOT NULL,
 		username_folded TEXT UNIQUE NOT NULL,
+		account_kdf_salt TEXT NOT NULL,
+		account_kdf_profile INTEGER NOT NULL,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		total_storage_bytes INTEGER DEFAULT 0,
 		storage_limit_bytes INTEGER NOT NULL,
@@ -86,6 +90,11 @@ func setupTestDB_User(t *testing.T) *sql.DB {
 	require.NoError(t, err, "Failed to create users table")
 
 	return db
+}
+
+func createUserForTest(db *sql.DB, username string, autoApprove bool) (*User, error) {
+	salt := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	return CreateUser(db, username, salt, 1, autoApprove)
 }
 
 func TestCreateUser(t *testing.T) {
@@ -113,7 +122,7 @@ func TestCreateUser(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Execute CreateUser
-			user, err := CreateUser(db, tc.username, tc.autoApprove)
+			user, err := createUserForTest(db, tc.username, tc.autoApprove)
 
 			assert.NoError(t, err, "Did not expect an error for "+tc.name)
 			require.NotNil(t, user, "User object should not be nil for "+tc.name)
@@ -137,16 +146,40 @@ func TestCreateUser(t *testing.T) {
 	// Test Duplicate Username specifically
 	t.Run("Duplicate Username", func(t *testing.T) {
 		// First creation should succeed
-		_, err := CreateUser(db, "duplicate.user.test", false)
+		_, err := createUserForTest(db, "duplicate.user.test", false)
 		require.NoError(t, err)
 
 		// Second creation with the same username should fail
-		_, err = CreateUser(db, "duplicate.user.test", false)
+		_, err = createUserForTest(db, "duplicate.user.test", false)
 		assert.Error(t, err, "Expected an error for duplicate username")
 		if err != nil {
 			assert.Contains(t, err.Error(), "UNIQUE constraint failed", "Error should be about uniqueness")
 		}
 	})
+}
+
+func TestCreateUserPersistsAndValidatesAccountKDFMetadata(t *testing.T) {
+	db := setupTestDB_User(t)
+	defer db.Close()
+
+	salt := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32))
+	user, err := CreateUser(db, "crypto.metadata.user", salt, 1, false)
+	require.NoError(t, err)
+	assert.Equal(t, salt, user.AccountKDFSalt)
+	assert.Equal(t, 1, user.AccountKDFProfile)
+
+	loaded, err := GetUserByUsername(db, user.Username)
+	require.NoError(t, err)
+	assert.Equal(t, user.Username, loaded.Username)
+	loadedSalt, loadedProfile, err := GetAccountCryptoMetadata(db, user.Username)
+	require.NoError(t, err)
+	assert.Equal(t, salt, loadedSalt)
+	assert.Equal(t, 1, loadedProfile)
+
+	_, err = CreateUser(db, "bad.salt.user", "not-base64", 1, false)
+	assert.Error(t, err)
+	_, err = CreateUser(db, "bad.profile.user", salt, 2, false)
+	assert.Error(t, err)
 }
 
 func TestGetUserByUsername(t *testing.T) {
@@ -155,7 +188,7 @@ func TestGetUserByUsername(t *testing.T) {
 
 	// Create a test user first
 	username := "findme.user.test"
-	createdUser, err := CreateUser(db, username, false)
+	createdUser, err := createUserForTest(db, username, false)
 	require.NoError(t, err)
 	require.NotNil(t, createdUser)
 
@@ -223,7 +256,7 @@ func TestApproveUser(t *testing.T) {
 	defer os.Setenv("ADMIN_USERNAMES", originalAdmins)
 
 	// Create a user to approve
-	userToApprove, err := CreateUser(db, "pending.user.test", false)
+	userToApprove, err := createUserForTest(db, "pending.user.test", false)
 	require.NoError(t, err)
 	require.False(t, userToApprove.IsApproved, "User should initially be unapproved")
 
@@ -276,7 +309,7 @@ func TestUpdateStorageUsage(t *testing.T) {
 	defer db.Close()
 
 	// Create user with initial storage
-	user, err := CreateUser(db, "storageuser", false)
+	user, err := createUserForTest(db, "storageuser", false)
 	require.NoError(t, err)
 	initialStorage := int64(1024 * 1024) // 1MB initial
 	_, err = db.Exec("UPDATE users SET total_storage_bytes = ? WHERE id = ?", initialStorage, user.ID)
@@ -326,17 +359,17 @@ func TestGetPendingUsers(t *testing.T) {
 	defer os.Setenv("ADMIN_USERNAMES", originalAdmins)
 
 	// Create users: 2 pending, 1 approved, 1 admin (auto-approved)
-	_, err := CreateUser(db, "pending1.user.test", false)
+	_, err := createUserForTest(db, "pending1.user.test", false)
 	require.NoError(t, err)
-	_, err = CreateUser(db, "pending2.user.test", false)
+	_, err = createUserForTest(db, "pending2.user.test", false)
 	require.NoError(t, err)
-	approvedUser, err := CreateUser(db, "approved.user.test", false)
+	approvedUser, err := createUserForTest(db, "approved.user.test", false)
 	require.NoError(t, err)
 	// Manually approve this one
 	_, err = db.Exec("UPDATE users SET is_approved = TRUE WHERE username = ?", approvedUser.Username)
 	require.NoError(t, err)
 	// Admin username should be auto-approved
-	_, err = CreateUser(db, "adminuser.test", false)
+	_, err = createUserForTest(db, "adminuser.test", false)
 	require.NoError(t, err)
 
 	// Execute GetPendingUsers

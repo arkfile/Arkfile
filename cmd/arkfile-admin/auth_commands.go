@@ -20,10 +20,10 @@ import (
 func handleBootstrapCommand(client *HTTPClient, config *AdminConfig, args []string) error {
 	fs := flag.NewFlagSet("bootstrap", flag.ExitOnError)
 	var (
-		tokenFlag      = fs.String("token", "", "Bootstrap token (argv exposure possible)")
-		tokenStdin     = fs.Bool("token-stdin", false, "Read bootstrap token from standard input")
-		passwordStdin  = fs.Bool("password-stdin", false, "Read password and confirmation from stdin (one per line)")
-		usernameFlag   = fs.String("username", "admin", "Username for admin account")
+		tokenFlag     = fs.String("token", "", "Bootstrap token (argv exposure possible)")
+		tokenStdin    = fs.Bool("token-stdin", false, "Read bootstrap token from standard input")
+		passwordStdin = fs.Bool("password-stdin", false, "Read password and confirmation from stdin (one per line)")
+		usernameFlag  = fs.String("username", "admin", "Username for admin account")
 	)
 
 	fs.Usage = func() {
@@ -160,13 +160,19 @@ EXAMPLES:
 
 	// Encode registration record for transmission
 	registrationRecordB64 := base64.StdEncoding.EncodeToString(registrationRecord)
+	accountKDFSalt, err := crypto.GeneratePasswordSalt()
+	if err != nil {
+		return fmt.Errorf("failed to generate Account Key salt: %w", err)
+	}
 
 	// Step 5: Send registration record to server to complete registration
-	finalizeReq := map[string]string{
+	finalizeReq := map[string]interface{}{
 		"bootstrap_token":     finalToken,
 		"session_id":          sessionID,
 		"username":            adminUsername,
 		"registration_record": registrationRecordB64,
+		"account_kdf_salt":    base64.StdEncoding.EncodeToString(accountKDFSalt),
+		"account_kdf_profile": int(crypto.OwnerEnvelopeKDFProfile()),
 	}
 
 	regFinalizeResp, err := client.makeRequest("POST", "/api/bootstrap/register/finalize", finalizeReq, "")
@@ -567,4 +573,3 @@ EXAMPLES:
 	fmt.Printf("Admin logout successful\n")
 	return nil
 }
-

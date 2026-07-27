@@ -5,6 +5,7 @@ import (
 	cryptoRand "crypto/rand"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -47,6 +48,38 @@ const maxInProgressUploadSessionsPerUser = 4
 // Prevents active database/session tampering from triggering an enormous memory allocation
 // on completing the last chunk upload.
 const maxPaddingPerChunk = 16 * 1024 * 1024 // 16 MiB
+
+type uploadCompletionExecer interface {
+	Exec(query string, args ...interface{}) (sql.Result, error)
+}
+
+func claimUploadCompletion(execer uploadCompletionExecer, sessionID string) (bool, error) {
+	result, err := execer.Exec(
+		`UPDATE upload_sessions
+		 SET status = 'completing', updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ? AND status = 'in_progress'`,
+		sessionID,
+	)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected == 1, nil
+}
+
+func releaseUploadCompletionClaim(execer uploadCompletionExecer, sessionID string) {
+	if _, err := execer.Exec(
+		`UPDATE upload_sessions
+		 SET status = 'in_progress', updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ? AND status = 'completing'`,
+		sessionID,
+	); err != nil {
+		logging.ErrorLogger.Printf("Failed to release upload completion claim for %s: %v", sessionID, err)
+	}
+}
 
 // CreateUploadSession initializes a new chunked upload.
 //
@@ -137,6 +170,35 @@ func CreateUploadSession(c echo.Context) error {
 	user, err := models.GetUserByUsername(database.DB, username)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get user")
+	}
+	encryptedFEK, err := base64.StdEncoding.DecodeString(request.EncryptedFek)
+	if err != nil {
+		return JSONErrorCode(c, http.StatusBadRequest, "invalid_encrypted_fek",
+			"Encrypted FEK envelope must be valid base64")
+	}
+	expectedEnvelopeSize := crypto.OwnerEnvelopeHeaderSize() + crypto.AesGcmNonceSize() + 32 + crypto.AesGcmTagSize()
+	if len(encryptedFEK) != expectedEnvelopeSize {
+		return JSONErrorCode(c, http.StatusBadRequest, "invalid_encrypted_fek",
+			"Encrypted FEK envelope has an invalid length")
+	}
+	envelopeHeader, err := crypto.ParseFEKEnvelopeHeader(encryptedFEK)
+	if err != nil {
+		return JSONErrorCode(c, http.StatusBadRequest, "invalid_encrypted_fek", err.Error())
+	}
+	if envelopeHeader.PasswordType() != request.PasswordType {
+		return JSONErrorCode(c, http.StatusBadRequest, "invalid_encrypted_fek",
+			"Encrypted FEK key type does not match password_type")
+	}
+	if request.PasswordType == "account" {
+		accountKDFSalt, _, metadataErr := models.GetAccountCryptoMetadata(database.DB, username)
+		if metadataErr != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get account cryptographic metadata")
+		}
+		accountSalt, decodeErr := base64.StdEncoding.DecodeString(accountKDFSalt)
+		if decodeErr != nil || !bytes.Equal(envelopeHeader.Salt, accountSalt) {
+			return JSONErrorCode(c, http.StatusBadRequest, "invalid_encrypted_fek",
+				"Account FEK envelope salt does not match account metadata")
+		}
 	}
 
 	// Check if user is approved for file operations
@@ -874,8 +936,6 @@ func CompleteUpload(c echo.Context) error {
 
 	logging.InfoLogger.Printf("CompleteUpload: session %s read OK. Status: '%s', declared size: %d, padded size: %d", sessionID, status, declaredSize, paddedSize)
 
-	// Step 2: Envelope handling removed - envelope is now part of chunk 0
-
 	// Step 3: Perform validation checks on the retrieved data.
 	if ownerUsername != username {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized for this upload session")
@@ -914,6 +974,20 @@ func CompleteUpload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Error reading chunk data")
 	}
 
+	claimed, err := claimUploadCompletion(database.DB, sessionID)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to claim upload completion")
+	}
+	if !claimed {
+		return echo.NewHTTPError(http.StatusConflict, "Upload completion is already in progress")
+	}
+	storageCompleted := false
+	defer func() {
+		if !storageCompleted {
+			releaseUploadCompletionClaim(database.DB, sessionID)
+		}
+	}()
+
 	// Step 4: Get the streaming hashes calculated during chunk uploads
 	hashStateMutex.RLock()
 	hashState, hashExists := streamingHashStates[sessionID]
@@ -938,12 +1012,6 @@ func CompleteUpload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Blob hash calculation failed - no streaming state found")
 	}
 
-	// Clean up both hash states since upload is completing
-	hashStateMutex.Lock()
-	delete(streamingHashStates, sessionID)
-	delete(storedBlobHashStates, sessionID)
-	hashStateMutex.Unlock()
-
 	// Step 5: Complete the multipart upload in storage.
 	// Padding was already appended to the last chunk during UploadChunk,
 	// so no separate padding part is needed here.
@@ -952,6 +1020,7 @@ func CompleteUpload(c echo.Context) error {
 		logging.ErrorLogger.Printf("Failed to complete storage upload via storage provider: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to complete storage upload: %v", err))
 	}
+	storageCompleted = true
 
 	// Step 6: Begin the final, short-lived transaction now that I/O is complete.
 	tx, err := database.DB.Begin()
@@ -961,9 +1030,19 @@ func CompleteUpload(c echo.Context) error {
 	}
 	defer tx.Rollback()
 
-	// Update session status.
-	if _, err := tx.Exec("UPDATE upload_sessions SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", "completed", sessionID); err != nil {
+	// Complete only the state claimed by this request.
+	statusResult, err := tx.Exec(
+		`UPDATE upload_sessions
+		 SET status = 'completed', updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ? AND status = 'completing'`,
+		sessionID,
+	)
+	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update session status")
+	}
+	affected, err := statusResult.RowsAffected()
+	if err != nil || affected != 1 {
+		return echo.NewHTTPError(http.StatusConflict, "Upload completion state changed unexpectedly")
 	}
 
 	// Compute actual stored size from the server's own chunk records.
@@ -1052,6 +1131,11 @@ func CompleteUpload(c echo.Context) error {
 	if err := tx.Commit(); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to commit transaction")
 	}
+
+	hashStateMutex.Lock()
+	delete(streamingHashStates, sessionID)
+	delete(storedBlobHashStates, sessionID)
+	hashStateMutex.Unlock()
 
 	logging.InfoLogger.Printf("Upload completed: %s, file_id: %s (size: %d bytes)", sessionID, fileID.String, actualStoredSize)
 	database.LogUserAction(username, "uploaded", fileID.String)

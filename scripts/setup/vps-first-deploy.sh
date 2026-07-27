@@ -153,6 +153,8 @@ build_application() {
     fix_go_ownership
 
     decide_skip_c_libs_for_first_deploy
+    # Rebuild WASM so no development trace artifact can enter deployment.
+    SKIP_C_LIBS=false
 
     unset LIBOPAQUE_DEFINES
     print_status "INFO" "WASM trace logging disabled for ${VERSION_PREFIX} deployment"

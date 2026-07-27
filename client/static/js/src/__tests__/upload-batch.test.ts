@@ -201,8 +201,10 @@ const CHUNK_PARAMS_RESPONSE = JSON.stringify({
   plaintextChunkSizeBytes: 4096,
   aesGcm: { nonceSizeBytes: 12, tagSizeBytes: 16 },
   envelope: {
-    version: 1,
-    headerSizeBytes: 2,
+    version: 2,
+    headerSizeBytes: 35,
+    saltSizeBytes: 32,
+    kdfProfile: 1,
     keyTypes: { account: 1, custom: 2 },
   },
 });
@@ -235,6 +237,18 @@ type FetchMockEntry = { status: number; body: string };
 function installFetchMock(routes: Record<string, FetchMockEntry>): void {
   (globalThis as any).fetch = async (url: string, opts?: RequestInit): Promise<Response> => {
     const path = new URL(url, 'http://localhost').pathname;
+    if (path.includes('/api/auth/crypto-metadata')) {
+      return new Response(JSON.stringify({
+        data: {
+          username: 'testuser',
+          account_kdf_salt: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+          account_kdf_profile: 1,
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
 
     for (const [pattern, entry] of Object.entries(routes)) {
       if (path.includes(pattern)) {

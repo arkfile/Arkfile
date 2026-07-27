@@ -480,6 +480,8 @@ echo "============================="
 fix_go_ownership
 
 decide_skip_c_libs_for_first_deploy
+# Rebuild WASM so a prior development trace build cannot be reused.
+SKIP_C_LIBS=false
 
 # Do NOT set LIBOPAQUE_DEFINES (no WASM trace logging for local deployment)
 unset LIBOPAQUE_DEFINES

@@ -15,7 +15,7 @@
  *     [4-byte BE uint32 length][UTF-8 bytes].
  *   - Fixed-width integer fields (chunkIndex, totalChunks) are encoded as
  *     [8-byte BE uint64] with no length prefix.
- *   - Single-byte fields (keyTypeByte) are encoded as [1 byte] directly.
+ *   - The fixed-width owner-envelope header is appended directly.
  *
  * This is the byte-for-byte counterpart of crypto/aad.go. A hardcoded
  * cross-language conformance vector lives in both aad_test.go and
@@ -28,8 +28,8 @@
  *     [4B len(fileID)][fileID bytes]
  *     [8B chunkIndex][8B totalChunks]
  *
- *   buildFEKEnvelopeAAD(fileID, keyTypeByte)
- *     [4B len(fileID)][fileID bytes][1B keyTypeByte]
+ *   buildFEKEnvelopeAAD(fileID, envelopeHeader)
+ *     [4B len(fileID)][fileID bytes][35B envelopeHeader]
  *
  *   buildMetadataFieldAAD(fileID, fieldName, ownerUsername)
  *     [4B len(fileID)][fileID bytes]
@@ -96,30 +96,20 @@ export function buildChunkAAD(
  * Binding fileID prevents cross-file FEK swap: an attacker that
  * substitutes file A's encrypted_fek into file B's metadata row cannot
  * trick the client into decrypting file B's chunks with file A's FEK.
- * Binding keyTypeByte prevents an attacker from flipping the 0x01/0x02
- * indicator byte to mis-route the client to the wrong KEK derivation.
- *
- * keyTypeByte values: 0x01 = account password, 0x02 = custom password.
- * See crypto/chunking-params.json envelope.keyTypes.
+ * Binding the complete header prevents an attacker from changing its version,
+ * key type, KDF profile, or salt without invalidating the authentication tag.
  */
 export function buildFEKEnvelopeAAD(
   fileID: string,
-  keyTypeByte: number,
+  envelopeHeader: Uint8Array,
 ): Uint8Array {
-  if (!Number.isInteger(keyTypeByte) || keyTypeByte < 0 || keyTypeByte > 0xff) {
-    throw new Error(
-      `buildFEKEnvelopeAAD: keyTypeByte must be an integer in [0, 255], got ${keyTypeByte}`,
-    );
-  }
-
   const fidBytes = encodeUtf8(fileID);
-  // 4 (len(fileID)) + len(fileID) + 1 (keyTypeByte)
-  const out = new Uint8Array(4 + fidBytes.length + 1);
+  const out = new Uint8Array(4 + fidBytes.length + envelopeHeader.length);
   const view = new DataView(out.buffer);
 
   let offset = 0;
   offset = writeLenPrefixed(out, view, offset, fidBytes);
-  out[offset] = keyTypeByte;
+  out.set(envelopeHeader, offset);
 
   return out;
 }

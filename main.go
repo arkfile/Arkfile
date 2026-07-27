@@ -98,16 +98,6 @@ func main() {
 		log.Fatalf("Production configuration validation failed: %v", err)
 	}
 
-	// CRITICAL SECURITY: Prevent DEBUG_MODE in production
-	if utils.IsProductionEnvironment() {
-		debugMode := strings.ToLower(os.Getenv("DEBUG_MODE"))
-		if debugMode == "true" || debugMode == "1" {
-			log.Fatal("CRITICAL SECURITY: DEBUG_MODE cannot be enabled in production environment. " +
-				"Debug mode exposes sensitive cryptographic information in logs and enables admin endpoints. " +
-				"Set DEBUG_MODE=false or remove it from environment variables.")
-		}
-	}
-
 	log.Printf("Arkfile %s starting", config.Version)
 	log.Printf("Configuration loaded successfully")
 

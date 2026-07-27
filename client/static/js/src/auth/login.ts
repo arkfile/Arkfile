@@ -31,6 +31,8 @@ import { AAD_FIELD_FILENAME } from '../crypto/aad.js';
 import { promptForCacheOptIn } from '../ui/password-modal.js';
 import { populateDigestCache, type RawFileEntry } from '../utils/digest-cache.js';
 import type { ReregistrationVerifier, ReregistrationRequiredData } from '../types/api.js';
+import { fromBase64 } from '../crypto/primitives.js';
+import { FLOOR_CHUNKING } from '../crypto/floors.js';
 
 // Stable error code the server returns (HTTP 409) when an account has been
 // flagged for a one-time OPAQUE re-registration after an operator-initiated
@@ -291,7 +293,7 @@ export class LoginManager {
 
       if (fileCount > 0) {
         showProgressMessage('Verifying your password against your existing files...');
-        const verified = await LoginManager.verifyReregistrationPassword(credentials, data.verifier);
+        const verified = await LoginManager.verifyReregistrationPassword(credentials, data);
         if (!verified) {
           hideProgress();
           showError('The password you entered does not match this account\'s existing files. Re-registration was cancelled and no changes were made.');
@@ -389,8 +391,9 @@ export class LoginManager {
    */
   private static async verifyReregistrationPassword(
     credentials: LoginCredentials,
-    verifier?: ReregistrationVerifier,
+    data: ReregistrationRequiredData,
   ): Promise<boolean> {
+    const verifier: ReregistrationVerifier | undefined = data.verifier;
     if (!verifier || !verifier.file_id || !verifier.encrypted_filename || !verifier.filename_nonce) {
       // Server reported files but provided no usable verifier sample; fail safe.
       return false;
@@ -398,7 +401,17 @@ export class LoginManager {
 
     let accountKey: Uint8Array | undefined;
     try {
-      accountKey = await deriveFileEncryptionKey(credentials.password, credentials.username, 'account');
+      if (
+        !data.account_kdf_salt ||
+        data.account_kdf_profile !== FLOOR_CHUNKING.envelope.kdfProfile
+      ) {
+        return false;
+      }
+      accountKey = await deriveFileEncryptionKey(
+        credentials.password,
+        fromBase64(data.account_kdf_salt),
+        'account',
+      );
       const owner = verifier.owner_username || credentials.username;
       await decryptMetadataField(
         verifier.encrypted_filename,

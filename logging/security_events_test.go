@@ -300,13 +300,15 @@ func TestSecurityEventSensitiveDataExclusion(t *testing.T) {
 
 	// Test that sensitive data is never logged
 	sensitiveDetails := map[string]interface{}{
-		"password":        "secret123",
-		"private_key":     "-----BEGIN PRIVATE KEY-----",
-		"jwt_token":       "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
-		"session_id":      "abc123def456",
-		"opaque_envelope": "base64encodeddata==",
-		"safe_data":       "this should be logged",
-		"user_preference": "dark_mode",
+		"password":    "secret123",
+		"private_key": "-----BEGIN PRIVATE KEY-----",
+		"jwt_token":   "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
+		"session_id":  "abc123def456",
+		"message":     "plaintext-filename-canary.txt",
+		"reason":      "share-password-canary",
+		"details":     "fek-account-key-opaque-output-canary",
+		"operation":   "login_complete",
+		"status":      "rejected",
 	}
 
 	// Use correct function signature
@@ -329,9 +331,17 @@ func TestSecurityEventSensitiveDataExclusion(t *testing.T) {
 		t.Errorf("Sensitive data should not be present in stored details: %s", detailsJSON)
 	}
 
-	// Verify safe data is preserved
-	if !contains(detailsJSON, "this should be logged") || !contains(detailsJSON, "dark_mode") {
-		t.Errorf("Safe data should be preserved in stored details: %s", detailsJSON)
+	for _, canary := range []string{
+		"plaintext-filename-canary.txt",
+		"share-password-canary",
+		"fek-account-key-opaque-output-canary",
+	} {
+		if contains(detailsJSON, canary) {
+			t.Fatalf("generic detail field retained protected canary %q: %s", canary, detailsJSON)
+		}
+	}
+	if !contains(detailsJSON, "login_complete") || !contains(detailsJSON, "rejected") {
+		t.Errorf("approved operational fields should be preserved: %s", detailsJSON)
 	}
 }
 

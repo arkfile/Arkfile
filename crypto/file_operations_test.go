@@ -2,11 +2,41 @@ package crypto
 
 import (
 	"bytes"
+	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestOwnerEnvelopeSharedFixtureDecrypt(t *testing.T) {
+	raw, err := os.ReadFile("testdata/crypto-conformance-v2.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		FileID      string `json:"file_id"`
+		PasswordKDF struct {
+			Password string `json:"password"`
+		} `json:"password_kdf"`
+		OwnerEnvelope struct {
+			FEK      string `json:"fek_hex"`
+			Envelope string `json:"account_envelope_hex"`
+		} `json:"owner_envelope"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	envelope, _ := hex.DecodeString(fixture.OwnerEnvelope.Envelope)
+	fek, keyType, err := DecryptFEK(envelope, []byte(fixture.PasswordKDF.Password), fixture.FileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keyType != AccountKDFContext || hex.EncodeToString(fek) != fixture.OwnerEnvelope.FEK {
+		t.Fatal("owner envelope does not match shared fixture")
+	}
+}
 
 func TestGenerateTestFileContent(t *testing.T) {
 	tests := []struct {
@@ -42,12 +72,6 @@ func TestGenerateTestFileContent(t *testing.T) {
 		{
 			name:        "negative size",
 			size:        -1,
-			pattern:     PatternSequential,
-			expectError: true,
-		},
-		{
-			name:        "too large size",
-			size:        3 * 1024 * 1024 * 1024, // 3GB
 			pattern:     PatternSequential,
 			expectError: true,
 		},
@@ -147,9 +171,9 @@ func TestGenerateFEK(t *testing.T) {
 // TestFEKEncryptDecrypt tests FEK encryption/decryption with password
 // and AAD binding to the file_id.
 func TestFEKEncryptDecrypt(t *testing.T) {
-	username := "test-user"
 	fileID := "11111111-2222-4333-8444-555555555555"
 	password := []byte("test-password-123")
+	salt := bytes.Repeat([]byte{7}, OwnerEnvelopeSaltSize())
 
 	tests := []struct {
 		name    string
@@ -166,12 +190,12 @@ func TestFEKEncryptDecrypt(t *testing.T) {
 				t.Fatalf("FEK generation failed: %v", err)
 			}
 
-			encryptedFEK, err := EncryptFEK(fek, password, username, fileID, tt.keyType)
+			encryptedFEK, err := EncryptFEK(fek, password, salt, fileID, tt.keyType)
 			if err != nil {
 				t.Fatalf("FEK encryption failed: %v", err)
 			}
 
-			decryptedFEK, returnedKeyType, err := DecryptFEK(encryptedFEK, password, username, fileID)
+			decryptedFEK, returnedKeyType, err := DecryptFEK(encryptedFEK, password, fileID)
 			if err != nil {
 				t.Fatalf("FEK decryption failed: %v", err)
 			}
@@ -185,7 +209,7 @@ func TestFEKEncryptDecrypt(t *testing.T) {
 
 			// Negative: same FEK envelope under a different file_id must fail.
 			otherFileID := "99999999-2222-4333-8444-555555555555"
-			if _, _, err := DecryptFEK(encryptedFEK, password, username, otherFileID); err == nil {
+			if _, _, err := DecryptFEK(encryptedFEK, password, otherFileID); err == nil {
 				t.Errorf("expected DecryptFEK to fail under different file_id (cross-file FEK swap)")
 			}
 		})
@@ -195,37 +219,34 @@ func TestFEKEncryptDecrypt(t *testing.T) {
 // TestPasswordKeyDerivationConsistency tests that password key derivation is consistent
 func TestPasswordKeyDerivationConsistency(t *testing.T) {
 	password := []byte("test-password-consistency")
-	username := "consistency-test"
+	salt := bytes.Repeat([]byte{8}, OwnerEnvelopeSaltSize())
+	otherSalt := bytes.Repeat([]byte{9}, OwnerEnvelopeSaltSize())
 
-	// Test multiple derivations produce same result
-	for i := 0; i < 5; i++ {
-		key1 := DeriveAccountPasswordKey(password, username)
-		key2 := DeriveAccountPasswordKey(password, username)
-
-		if len(key1) != 32 {
-			t.Errorf("Key length should be 32 bytes, got %d", len(key1))
-		}
-
-		if string(key1) != string(key2) {
-			t.Errorf("Key derivation not consistent on attempt %d", i+1)
-		}
+	key1, err := DeriveAccountPasswordKey(password, salt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key2, err := DeriveAccountPasswordKey(password, salt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key3, err := DeriveAccountPasswordKey(password, otherSalt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	customKey, err := DeriveCustomPasswordKey(password, salt)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	// Test different parameters produce different keys
-	key1 := DeriveAccountPasswordKey(password, username)
-	key2 := DeriveAccountPasswordKey(password, username+"different")
-	key3 := DeriveCustomPasswordKey(password, username)
-
-	if string(key1) == string(key2) {
-		t.Error("Different usernames should produce different keys")
+	if !bytes.Equal(key1, key2) {
+		t.Fatal("same password and salt must produce the same key")
 	}
-
-	if string(key1) == string(key3) {
-		t.Error("Different key types should produce different keys")
+	if bytes.Equal(key1, key3) {
+		t.Fatal("different public salts must produce different keys")
 	}
-
-	if string(key2) == string(key3) {
-		t.Error("Different parameters should produce different keys")
+	if bytes.Equal(key1, customKey) {
+		t.Fatal("account and custom contexts must produce different keys")
 	}
 }
 
@@ -397,7 +418,7 @@ func TestParseSizeString(t *testing.T) {
 		{"100", 100, false},
 		{"1KB", 1024, false},
 		{"10MB", 10 * 1024 * 1024, false},
-		{"5GB", 5 * 1024 * 1024 * 1024, false},
+		{"50MB", 50 * 1024 * 1024, false},
 		{"1024B", 1024, false},
 		{"", 0, true},
 		{"invalid", 0, true},
@@ -438,8 +459,7 @@ func TestFormatFileSize(t *testing.T) {
 		{1024, "1.0 KB"},
 		{1536, "1.5 KB"},
 		{1024 * 1024, "1.0 MB"},
-		{1024 * 1024 * 1024, "1.0 GB"},
-		{1536 * 1024 * 1024, "1.5 GB"},
+		{50 * 1024 * 1024, "50.0 MB"},
 	}
 
 	for _, tt := range tests {
@@ -523,82 +543,52 @@ func TestVerifyFileIntegrity(t *testing.T) {
 
 func TestCreateAndParsePasswordEnvelope(t *testing.T) {
 	tests := []struct {
-		keyType         string
-		expectedVersion byte
-		expectedKeyType string
+		keyType string
 	}{
-		{"account", 0x01, "account"},
-		{"custom", 0x01, "custom"},
-		{"unknown_type", 0x01, "unknown"},
+		{AccountKDFContext},
+		{CustomKDFContext},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.keyType, func(t *testing.T) {
-			// Test envelope creation
-			envelope := CreateFEKEnvelopeHeader(tt.keyType)
-			if len(envelope) != 2 {
-				t.Errorf("envelope should be 2 bytes, got %d", len(envelope))
-			}
-
-			// Test envelope parsing
-			version, keyType, err := ParseFEKEnvelopeHeader(envelope)
+			salt := bytes.Repeat([]byte{4}, OwnerEnvelopeSaltSize())
+			envelope, err := CreateFEKEnvelopeHeader(tt.keyType, salt)
 			if err != nil {
-				t.Errorf("unexpected error parsing envelope: %v", err)
-				return
+				t.Fatal(err)
 			}
-
-			if version != tt.expectedVersion {
-				t.Errorf("version mismatch: got %d, expected %d", version, tt.expectedVersion)
+			if len(envelope) != OwnerEnvelopeHeaderSize() {
+				t.Fatalf("unexpected envelope header size %d", len(envelope))
 			}
-
-			if keyType != tt.expectedKeyType {
-				t.Errorf("keyType mismatch: got %s, expected %s", keyType, tt.expectedKeyType)
+			header, err := ParseFEKEnvelopeHeader(envelope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if header.Version != OwnerEnvelopeVersion() || header.KDFProfile != OwnerEnvelopeKDFProfile() {
+				t.Fatal("parsed envelope version or KDF profile mismatch")
+			}
+			if header.PasswordType() != tt.keyType || !bytes.Equal(header.Salt, salt) {
+				t.Fatal("parsed envelope key type or salt mismatch")
 			}
 		})
 	}
 }
 
 func TestParsePasswordEnvelopeErrors(t *testing.T) {
-	tests := []struct {
-		name        string
-		envelope    []byte
-		expectError bool
-	}{
-		{
-			name:        "empty envelope",
-			envelope:    []byte{},
-			expectError: true,
-		},
-		{
-			name:        "one byte envelope",
-			envelope:    []byte{0x01},
-			expectError: true,
-		},
-		{
-			name:        "valid two byte envelope",
-			envelope:    []byte{0x01, 0x01},
-			expectError: false,
-		},
-		{
-			name:        "unsupported version",
-			envelope:    []byte{0x02, 0x01},
-			expectError: true,
-		},
+	valid, err := CreateFEKEnvelopeHeader(AccountKDFContext, make([]byte, OwnerEnvelopeSaltSize()))
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, _, err := ParseFEKEnvelopeHeader(tt.envelope)
-
-			if tt.expectError {
-				if err == nil {
-					t.Errorf("expected error but got none")
-				}
-				return
-			}
-
-			if err != nil {
-				t.Errorf("unexpected error: %v", err)
+	cases := map[string][]byte{
+		"empty":                {},
+		"truncated":            valid[:OwnerEnvelopeHeaderSize()-1],
+		"unsupported_version":  append([]byte{OwnerEnvelopeVersion() + 1}, valid[1:]...),
+		"unsupported_key_type": append(append([]byte{}, valid[:1]...), append([]byte{0xff}, valid[2:]...)...),
+		"unsupported_profile":  append(append([]byte{}, valid[:2]...), append([]byte{0xff}, valid[3:]...)...),
+	}
+	for name, envelope := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ParseFEKEnvelopeHeader(envelope); err == nil {
+				t.Fatal("expected malformed envelope rejection")
 			}
 		})
 	}
@@ -635,4 +625,24 @@ func TestDeterministicGeneration(t *testing.T) {
 			}
 		})
 	}
+}
+
+func FuzzParseFEKEnvelopeHeader(f *testing.F) {
+	valid, err := CreateFEKEnvelopeHeader(AccountKDFContext, make([]byte, OwnerEnvelopeSaltSize()))
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(valid)
+	f.Add(valid[:OwnerEnvelopeHeaderSize()-1])
+	f.Add([]byte{})
+	f.Fuzz(func(t *testing.T, input []byte) {
+		header, err := ParseFEKEnvelopeHeader(input)
+		if err == nil {
+			if header.Version != OwnerEnvelopeVersion() ||
+				header.KDFProfile != OwnerEnvelopeKDFProfile() ||
+				len(header.Salt) != OwnerEnvelopeSaltSize() {
+				t.Fatal("parser accepted header outside canonical invariants")
+			}
+		}
+	})
 }

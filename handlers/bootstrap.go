@@ -27,6 +27,8 @@ type BootstrapRegisterFinalizeRequest struct {
 	SessionID          string `json:"session_id"`
 	Username           string `json:"username"`
 	RegistrationRecord string `json:"registration_record"` // base64 encoded
+	AccountKDFSalt     string `json:"account_kdf_salt"`
+	AccountKDFProfile  int    `json:"account_kdf_profile"`
 }
 
 // BootstrapRegisterResponse handles the first step of OPAQUE registration for the bootstrap admin.
@@ -44,7 +46,6 @@ func BootstrapRegisterResponse(c echo.Context) error {
 	if err := c.Bind(&request); err != nil {
 		return JSONError(c, http.StatusBadRequest, "Invalid request format")
 	}
-
 	// 1. Validate Bootstrap Token
 	isValid, err := auth.ValidateBootstrapToken(request.BootstrapToken)
 	if err != nil {
@@ -117,6 +118,9 @@ func BootstrapRegisterFinalize(c echo.Context) error {
 	if err := c.Bind(&request); err != nil {
 		return JSONError(c, http.StatusBadRequest, "Invalid request format")
 	}
+	if err := validateAccountKDFMetadata(request.AccountKDFSalt, request.AccountKDFProfile); err != nil {
+		return JSONError(c, http.StatusBadRequest, "Invalid Account Key derivation metadata")
+	}
 
 	// 1. Validate Bootstrap Token
 	isValid, err := auth.ValidateBootstrapToken(request.BootstrapToken)
@@ -188,7 +192,13 @@ func BootstrapRegisterFinalize(c echo.Context) error {
 
 	// Create user. Bootstrap accounts are always admins and always approved;
 	// autoApprove=true is redundant for admins but makes intent explicit.
-	user, err := models.CreateUser(tx, request.Username, true)
+	user, err := models.CreateUser(
+		tx,
+		request.Username,
+		request.AccountKDFSalt,
+		request.AccountKDFProfile,
+		true,
+	)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create user %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "User creation failed")

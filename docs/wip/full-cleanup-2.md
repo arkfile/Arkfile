@@ -1,5 +1,9 @@
 # Security Cleanup and Integrity-Test Preparation
 
+## Current implementation status
+
+The random-salt Account and Custom Key contract, owner FEK envelope version 2, authenticated account cryptographic metadata endpoint, cache binding, `.arkbackup` version 2, logging whitelist, production build-profile checks, bounded Service Worker queue, and atomic upload-completion claim are implemented. Shared Go and TypeScript cryptographic fixtures, focused parser fuzz targets, cache, export, re-registration, logging, build, download, and completion-state tests have been added. Go formatting and the complete Go and TypeScript native suites pass. The deployment rebuild and E2E workflow remain developer-run steps. The two integrity orchestration scripts remain intentionally deferred.
+
 ## Goal
 
 Improve Arkfile's current security posture and the accuracy of its security claims without beginning a months-long refactor. Add focused tests and shared cryptographic vectors while the implementation is being tightened. Defer creation of `offline-integrity-test.sh` and `online-integrity-test.sh` until these changes stabilize, so the scripts orchestrate established checks rather than encoding moving assumptions.

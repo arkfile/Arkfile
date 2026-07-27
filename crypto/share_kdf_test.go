@@ -395,7 +395,7 @@ func TestShareEnvelopeEncryptDecrypt_FullCycle(t *testing.T) {
 	}
 
 	filename := "vacation-photos.zip"
-	sizeBytes := int64(6442450944) // 6GB
+	sizeBytes := int64(50_000_000)
 	sha256hex := "deadbeef01234567deadbeef01234567deadbeef01234567deadbeef01234567"
 
 	envelopeJSON, err := CreateShareEnvelope(fek, downloadToken, filename, sizeBytes, sha256hex)
@@ -609,5 +609,17 @@ func TestValidateShareKDFParams(t *testing.T) {
 				t.Error("ValidateShareKDFParams should fail on key length below floor")
 			}
 		}
+	})
+}
+
+func FuzzParseShareEnvelope(f *testing.F) {
+	f.Add([]byte(`{"version":1,"salt":"","nonce":"","ciphertext":"","kdf":{}}`))
+	f.Add([]byte{})
+	f.Add([]byte(`{"version":`))
+	f.Fuzz(func(t *testing.T, input []byte) {
+		if len(input) > 1<<20 {
+			t.Skip()
+		}
+		_, _ = ParseShareEnvelope(input)
 	})
 }

@@ -131,7 +131,7 @@ The audit is split into six analysis slices (A–F) plus a synthesis slice (G). 
 - WASM pinning / SRI / build provenance.
 
 **Specifically must answer (Mandatory TOTP / two-tier JWT -- per `idsrp.md` §22.2):**
-- Two-tier JWT model: confirm post-OPAQUE temp token vs. post-TOTP full JWT are cryptographically distinct (separate audience claim, separate signing key, in-DB allowlist, or `totp_verified=true` claim). The temp token MUST be rejected by every route except TOTP-verify / TOTP-enrollment-completion.
+- Two-tier JWT model: confirm post-OPAQUE temp token vs. post-TOTP full JWT are cryptographically distinct (separate audience claim, separate signing key, in-DB whitelist, or `totp_verified=true` claim). The temp token MUST be rejected by every route except TOTP-verify / TOTP-enrollment-completion.
 - TOTP middleware chokepoint: single function, applied to every protected route; verify against `handlers/route_config.go`. No per-handler ad-hoc checks.
 - TOTP enrollment: secret entropy (CSPRNG, ≥160 bits), server-side at-rest encryption of the secret (which key encrypts it? rotated how?), QR/URI not logged, finalize requires a valid first code, no race between two concurrent enrollments.
 - TOTP verify: 30 s step, narrow skew window (±1 step), constant-time comparison, one-time use per step per user, rate limit, lockout after N failures (and the lockout state must not enable account enumeration).

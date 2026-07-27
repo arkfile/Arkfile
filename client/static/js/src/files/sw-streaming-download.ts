@@ -39,6 +39,7 @@
  */
 
 import { sha256 } from '@noble/hashes/sha2.js';
+import { debugLog } from '../utils/debug-log.js';
 
 const SW_URL = '/sw-download.js';
 const SW_SCOPE = '/';
@@ -190,7 +191,7 @@ export async function swStreamDownload(opts: SwStreamDownloadOptions): Promise<S
     resolveCompletion = resolve;
   });
 
-  // Build the ReadableStream from the async generator, hashing as we go.
+  // Keep at most one decrypted chunk queued on the page side.
   const stream = new ReadableStream<Uint8Array>({
     async pull(streamCtrl) {
       try {
@@ -243,6 +244,9 @@ export async function swStreamDownload(opts: SwStreamDownloadOptions): Promise<S
       try { await opts.chunks.return?.(undefined); } catch (_) { /* ignore */ }
       finalizeCompletion();
     },
+  }, {
+    highWaterMark: 1,
+    size: () => 1,
   });
 
   function finalizeCompletion(): void {
@@ -357,7 +361,7 @@ export async function swStreamDownload(opts: SwStreamDownloadOptions): Promise<S
     if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
   }, 60_000);
 
-  console.log(`${LOG_PREFIX} download initiated via SW (bytes_expected=${opts.contentLength})`);
+  debugLog(`${LOG_PREFIX} download initiated via SW (bytes_expected=${opts.contentLength})`);
 
   return {
     initiated: true,

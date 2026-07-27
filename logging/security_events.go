@@ -328,37 +328,81 @@ func (sel *SecurityEventLogger) getSeverityForEventType(eventType SecurityEventT
 	}
 }
 
-// sanitizeDetails removes or masks sensitive information from event details
+var approvedSecurityDetailKeys = map[string]struct{}{
+	"action":              {},
+	"approved_by":         {},
+	"authentication_type": {},
+	"chunk_index":         {},
+	"component":           {},
+	"credential":          {},
+	"detection_type":      {},
+	"effective_tier":      {},
+	"endpoint":            {},
+	"events_count":        {},
+	"force_logout":        {},
+	"key_type":            {},
+	"limit":               {},
+	"method":              {},
+	"operation":           {},
+	"overall_status":      {},
+	"password_type":       {},
+	"peak_tier":           {},
+	"penalty_seconds":     {},
+	"penalty_until":       {},
+	"previous":            {},
+	"reason_code":         {},
+	"request_count":       {},
+	"require_approval":    {},
+	"revoke_failures":     {},
+	"share_id_prefix":     {},
+	"status":              {},
+	"success":             {},
+	"tables_cleaned":      {},
+	"target_username":     {},
+	"total_rows_affected": {},
+	"user_count":          {},
+	"username":            {},
+	"users_flagged":       {},
+	"violation_count":     {},
+	"violation_ratio":     {},
+	"was_approved":        {},
+	"window_hits":         {},
+	"window_type":         {},
+}
+
+// sanitizeDetails retains only fields with approved operational semantics.
+// Unknown and generic fields are redacted even when their names do not look
+// sensitive, preventing protected plaintext from being hidden under names such
+// as message, reason, or details.
 func (sel *SecurityEventLogger) sanitizeDetails(details map[string]interface{}) map[string]interface{} {
 	if details == nil {
 		return make(map[string]interface{})
 	}
 
 	sanitized := make(map[string]interface{})
-	sensitiveKeys := []string{"password", "token", "secret", "key", "ip", "ip_address", "client_ip"}
-
 	for key, value := range details {
 		keyLower := strings.ToLower(key)
-		isSensitive := false
-
-		// Check if key contains sensitive terms
-		for _, sensitiveKey := range sensitiveKeys {
-			if strings.Contains(keyLower, sensitiveKey) {
-				isSensitive = true
-				break
-			}
-		}
-
-		if isSensitive {
-			// Mask sensitive values
-			sanitized[key] = "[REDACTED]"
-		} else {
-			// Keep non-sensitive values
+		if _, approved := approvedSecurityDetailKeys[keyLower]; approved && isSecurityDetailScalar(value) {
 			sanitized[key] = value
+			continue
 		}
+		sanitized[key] = "[REDACTED]"
 	}
 
 	return sanitized
+}
+
+func isSecurityDetailScalar(value interface{}) bool {
+	switch value.(type) {
+	case nil, bool, string,
+		int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64,
+		time.Time:
+		return true
+	default:
+		return false
+	}
 }
 
 // logToFile logs the security event to the appropriate log file based on severity

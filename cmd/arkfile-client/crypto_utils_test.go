@@ -38,6 +38,19 @@ const (
 	testTotalChunks = int64(3)
 )
 
+func testOwnerSalt() []byte {
+	return bytes.Repeat([]byte{0x5a}, crypto.OwnerEnvelopeSaltSize())
+}
+
+func deriveTestPasswordKey(t *testing.T, password []byte, context string) []byte {
+	t.Helper()
+	key, err := crypto.DerivePasswordKey(password, testOwnerSalt(), context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
 // -- encryptChunk / decryptChunk: positive and negative AAD tests --
 
 // TestEncryptDecryptChunk_WithAAD_RoundTrip verifies chunk encrypt-then-decrypt
@@ -294,9 +307,10 @@ func TestWrapUnwrapFEK_AccountKey_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateFEK failed: %v", err)
 	}
-	kek := crypto.DeriveAccountPasswordKey([]byte("TestAccountPassword2025!"), "testuser")
+	salt := testOwnerSalt()
+	kek := deriveTestPasswordKey(t, []byte("TestAccountPassword2025!"), crypto.AccountKDFContext)
 
-	wrappedB64, err := wrapFEK(fek, kek, "account", testFileID)
+	wrappedB64, err := wrapFEK(fek, kek, salt, "account", testFileID)
 	if err != nil {
 		t.Fatalf("wrapFEK failed: %v", err)
 	}
@@ -323,9 +337,10 @@ func TestWrapUnwrapFEK_CustomKey_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateFEK failed: %v", err)
 	}
-	kek := crypto.DeriveCustomPasswordKey([]byte("TestCustomPassword2025!"), "testuser")
+	salt := testOwnerSalt()
+	kek := deriveTestPasswordKey(t, []byte("TestCustomPassword2025!"), crypto.CustomKDFContext)
 
-	wrappedB64, err := wrapFEK(fek, kek, "custom", testFileID)
+	wrappedB64, err := wrapFEK(fek, kek, salt, "custom", testFileID)
 	if err != nil {
 		t.Fatalf("wrapFEK failed: %v", err)
 	}
@@ -348,9 +363,10 @@ func TestUnwrapFEK_WrongFileID_Fails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateFEK failed: %v", err)
 	}
-	kek := crypto.DeriveAccountPasswordKey([]byte("WrongFileIDPassword2025"), "testuser")
+	salt := testOwnerSalt()
+	kek := deriveTestPasswordKey(t, []byte("WrongFileIDPassword2025"), crypto.AccountKDFContext)
 
-	wrappedB64, err := wrapFEK(fek, kek, "account", testFileID)
+	wrappedB64, err := wrapFEK(fek, kek, salt, "account", testFileID)
 	if err != nil {
 		t.Fatalf("wrapFEK failed: %v", err)
 	}
@@ -365,10 +381,11 @@ func TestUnwrapFEK_WrongKEK_Fails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateFEK failed: %v", err)
 	}
-	correctKEK := crypto.DeriveAccountPasswordKey([]byte("CorrectPassword2025!Key"), "testuser")
-	wrongKEK := crypto.DeriveAccountPasswordKey([]byte("WrongPassword2025!Key!!"), "testuser")
+	salt := testOwnerSalt()
+	correctKEK := deriveTestPasswordKey(t, []byte("CorrectPassword2025!Key"), crypto.AccountKDFContext)
+	wrongKEK := deriveTestPasswordKey(t, []byte("WrongPassword2025!Key!!"), crypto.AccountKDFContext)
 
-	wrappedB64, err := wrapFEK(fek, correctKEK, "account", testFileID)
+	wrappedB64, err := wrapFEK(fek, correctKEK, salt, "account", testFileID)
 	if err != nil {
 		t.Fatalf("wrapFEK failed: %v", err)
 	}
@@ -381,7 +398,7 @@ func TestUnwrapFEK_WrongKEK_Fails(t *testing.T) {
 func TestWrapFEK_InvalidKeyType(t *testing.T) {
 	fek, _ := generateFEK()
 	kek, _ := crypto.GenerateAESKey()
-	if _, err := wrapFEK(fek, kek, "invalid", testFileID); err == nil {
+	if _, err := wrapFEK(fek, kek, testOwnerSalt(), "invalid", testFileID); err == nil {
 		t.Error("wrapFEK should reject invalid key type")
 	}
 }
@@ -390,7 +407,7 @@ func TestWrapFEK_InvalidKeyType(t *testing.T) {
 func TestWrapFEK_EmptyFileID(t *testing.T) {
 	fek, _ := generateFEK()
 	kek, _ := crypto.GenerateAESKey()
-	if _, err := wrapFEK(fek, kek, "account", ""); err == nil {
+	if _, err := wrapFEK(fek, kek, testOwnerSalt(), "account", ""); err == nil {
 		t.Error("wrapFEK should reject empty fileID")
 	}
 }
@@ -580,14 +597,15 @@ func TestMultiChunkEncryptDecrypt(t *testing.T) {
 func TestFullEncryptDecryptCycle(t *testing.T) {
 	username := "cycle-test-user"
 	password := []byte("CycleTestPassword2025!Secure")
-	kek := crypto.DeriveAccountPasswordKey(password, username)
+	salt := testOwnerSalt()
+	kek := deriveTestPasswordKey(t, password, crypto.AccountKDFContext)
 
 	fek, err := generateFEK()
 	if err != nil {
 		t.Fatalf("generateFEK failed: %v", err)
 	}
 
-	wrapped, err := wrapFEK(fek, kek, "account", testFileID)
+	wrapped, err := wrapFEK(fek, kek, salt, "account", testFileID)
 	if err != nil {
 		t.Fatalf("wrapFEK failed: %v", err)
 	}
@@ -607,7 +625,7 @@ func TestFullEncryptDecryptCycle(t *testing.T) {
 
 	// -- Simulated download side: re-derive everything from scratch. --
 
-	kek2 := crypto.DeriveAccountPasswordKey(password, username)
+	kek2 := deriveTestPasswordKey(t, password, crypto.AccountKDFContext)
 	unwrapped, keyType, err := unwrapFEK(wrapped, kek2, testFileID)
 	if err != nil {
 		t.Fatalf("unwrapFEK failed: %v", err)

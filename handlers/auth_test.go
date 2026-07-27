@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/arkfile/Arkfile/auth"
 	"github.com/arkfile/Arkfile/models"
-	"github.com/DATA-DOG/go-sqlmock"
 	jwt "github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -189,7 +189,7 @@ func TestTOTPAuth_EmptyCode(t *testing.T) {
 
 	// Set up token that requires TOTP (RequiresMFA is a claim field, not a header)
 	claims := &auth.Claims{
-		Username:     username,
+		Username:    username,
 		RequiresMFA: true,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
@@ -215,7 +215,7 @@ func TestTOTPAuth_InvalidCodeLength(t *testing.T) {
 	c, rec, _, _ := setupTestEnv(t, http.MethodPost, "/api/mfa/auth", bytes.NewReader(body))
 
 	claims := &auth.Claims{
-		Username:     username,
+		Username:    username,
 		RequiresMFA: true,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
@@ -244,7 +244,7 @@ func TestTOTPAuth_InvalidBackupCodeLength(t *testing.T) {
 	c, rec, _, _ := setupTestEnv(t, http.MethodPost, "/api/mfa/auth", bytes.NewReader(body))
 
 	claims := &auth.Claims{
-		Username:     username,
+		Username:    username,
 		RequiresMFA: true,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
@@ -663,6 +663,14 @@ func TestRefreshToken_UnapprovedUser(t *testing.T) {
 	assert.Equal(t, "Account pending approval", resp["message"])
 
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestValidateAccountKDFMetadata(t *testing.T) {
+	const validSalt = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	assert.NoError(t, validateAccountKDFMetadata(validSalt, 1))
+	assert.Error(t, validateAccountKDFMetadata("not-base64", 1))
+	assert.Error(t, validateAccountKDFMetadata("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==", 1))
+	assert.Error(t, validateAccountKDFMetadata(validSalt, 2))
 }
 
 // Suppress unused import warnings

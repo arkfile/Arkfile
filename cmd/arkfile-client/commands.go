@@ -44,6 +44,64 @@ func (m *multiStringFlag) Set(v string) error {
 	return nil
 }
 
+type accountKDFMetadata struct {
+	Salt    []byte
+	SaltB64 string
+	Profile int
+}
+
+func fetchAccountKDFMetadata(client *HTTPClient, session *AuthSession) (*accountKDFMetadata, error) {
+	resp, err := client.makeRequest("GET", "/api/auth/crypto-metadata", nil, session.AccessToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load Account Key metadata: %w", err)
+	}
+	saltB64, ok := resp.Data["account_kdf_salt"].(string)
+	if !ok {
+		return nil, fmt.Errorf("account response missing account_kdf_salt")
+	}
+	profile, ok := resp.Data["account_kdf_profile"].(float64)
+	if !ok || int(profile) != int(crypto.OwnerEnvelopeKDFProfile()) {
+		return nil, fmt.Errorf("account response has unsupported account_kdf_profile")
+	}
+	salt, err := crypto.DecodeBase64(saltB64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid account KDF salt: %w", err)
+	}
+	if err := crypto.ValidatePasswordSalt(salt); err != nil {
+		return nil, fmt.Errorf("invalid account KDF salt: %w", err)
+	}
+	return &accountKDFMetadata{
+		Salt:    salt,
+		SaltB64: saltB64,
+		Profile: int(profile),
+	}, nil
+}
+
+func fetchAccountKDFSalt(client *HTTPClient, session *AuthSession) ([]byte, error) {
+	metadata, err := fetchAccountKDFMetadata(client, session)
+	if err != nil {
+		return nil, err
+	}
+	return metadata.Salt, nil
+}
+
+func getOptionalAccountKey(client *HTTPClient, session *AuthSession) []byte {
+	metadata, err := fetchAccountKDFMetadata(client, session)
+	if err != nil {
+		return nil
+	}
+	agentClient, err := NewAgentClient()
+	if err != nil {
+		return nil
+	}
+	accountKey, _ := agentClient.GetAccountKey(
+		session.AccessToken,
+		metadata.SaltB64,
+		metadata.Profile,
+	)
+	return accountKey
+}
+
 // collectUploadInputs builds the deduplicated, deterministically-ordered
 // list of files to upload from the various input sources:
 //   - repeatable --file flag values
@@ -207,21 +265,22 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 		return err
 	}
 
-	accountKey, err := requireAccountKey(config)
+	accountKey, err := requireAccountKey(client, config)
 	if err != nil {
 		return err
 	}
 	defer clearBytes(accountKey)
+	accountKDFSalt, err := fetchAccountKDFSalt(client, session)
+	if err != nil {
+		return err
+	}
 
-	// Determine KEK once for the whole batch. Same password applies to
-	// every file -- this matches the documented UX (one prompt per
-	// multi-select). Per-file custom passwords are still trivially
-	// achievable by uploading one file at a time.
-	var kek []byte
+	// A custom password is prompted once for the batch, while each file gets
+	// its own random public salt and therefore its own Custom Key.
+	var customPassword []byte
 	var finalPasswordType string
 	switch *passwordType {
 	case "account":
-		kek = accountKey
 		finalPasswordType = "account"
 	case "custom":
 		customPass, err := readPasswordWithStrengthCheck(
@@ -232,8 +291,7 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 			return fmt.Errorf("failed to read custom password: %w", err)
 		}
 		defer clearBytes(customPass)
-		kek = crypto.DeriveCustomPasswordKey(customPass, config.Username)
-		defer clearBytes(kek)
+		customPassword = customPass
 		finalPasswordType = "custom"
 	default:
 		return fmt.Errorf("invalid --password-type: must be 'account' or 'custom'")
@@ -282,7 +340,10 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 			break
 		}
 
-		fileID, err := uploadOneFile(client, session, config, accountKey, kek, finalPasswordType, *hint, path, *force)
+		fileID, err := uploadOneFile(
+			client, session, accountKey, accountKDFSalt, customPassword,
+			finalPasswordType, *hint, path, *force,
+		)
 		if err == nil {
 			succeeded++
 			fmt.Printf("[OK] %s (file_id=%s)\n", filepath.Base(path), fileID)
@@ -335,7 +396,13 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 // envelope, and the metadata fields. On HTTP 409 / file_id_conflict from
 // the server (vanishingly rare in practice), the client retries with a
 // freshly minted UUID up to 3 times, then surfaces a hard error.
-func uploadOneFile(client *HTTPClient, session *AuthSession, config *ClientConfig, accountKey, kek []byte, finalPasswordType, hint, filePath string, force bool) (string, error) {
+func uploadOneFile(
+	client *HTTPClient,
+	session *AuthSession,
+	accountKey, accountKDFSalt, customPassword []byte,
+	finalPasswordType, hint, filePath string,
+	force bool,
+) (string, error) {
 	if err := isSeekableFile(filePath); err != nil {
 		return "", err
 	}
@@ -385,6 +452,19 @@ func uploadOneFile(client *HTTPClient, session *AuthSession, config *ClientConfi
 		chunkCount = 1
 	}
 	totalEncSize := calculateTotalEncryptedSize(fileSizeBytes)
+	ownerEnvelopeSalt := accountKDFSalt
+	kek := accountKey
+	if finalPasswordType == "custom" {
+		ownerEnvelopeSalt, err = crypto.GeneratePasswordSalt()
+		if err != nil {
+			return "", fmt.Errorf("failed to generate Custom Key salt: %w", err)
+		}
+		kek, err = crypto.DeriveCustomPasswordKey(customPassword, ownerEnvelopeSalt)
+		if err != nil {
+			return "", fmt.Errorf("failed to derive Custom Key: %w", err)
+		}
+		defer clearBytes(kek)
+	}
 
 	keyTypeByte := byte(0x01)
 	if finalPasswordType == "custom" {
@@ -410,7 +490,7 @@ func uploadOneFile(client *HTTPClient, session *AuthSession, config *ClientConfi
 			return "", fmt.Errorf("failed to generate file encryption key: %w", ferr)
 		}
 
-		encryptedFEKB64, werr := wrapFEK(fek, kek, finalPasswordType, fileID)
+		encryptedFEKB64, werr := wrapFEK(fek, kek, ownerEnvelopeSalt, finalPasswordType, fileID)
 		if werr != nil {
 			clearBytes(fek)
 			return "", fmt.Errorf("failed to wrap FEK: %w", werr)
@@ -430,23 +510,23 @@ func uploadOneFile(client *HTTPClient, session *AuthSession, config *ClientConfi
 		}
 
 		returnedFileID, derr := doChunkedUpload(client, session, &ChunkedUploadParams{
-			FilePath:              filePath,
-			FileID:                fileID,
-			OwnerUsername:         ownerUsername,
-			FEK:                   fek,
-			KeyTypeByte:           keyTypeByte,
-			EncryptedFEKB64:       encryptedFEKB64,
-			EncFilenameB64:        encFilenameB64,
-			FnNonceB64:            fnNonceB64,
-			EncSHA256B64:          encSHA256B64,
-			ShaNonceB64:           shaNonceB64,
-			PasswordType:          finalPasswordType,
-			EncPasswordHintB64:    encHintB64,
-			PasswordHintNonceB64:  hintNonceB64,
-			FileSizeBytes:         fileSizeBytes,
-			TotalEncSize:          totalEncSize,
-			ChunkCount:            chunkCount,
-			ChunkSizeBytes:        chunkSizeBytes,
+			FilePath:             filePath,
+			FileID:               fileID,
+			OwnerUsername:        ownerUsername,
+			FEK:                  fek,
+			KeyTypeByte:          keyTypeByte,
+			EncryptedFEKB64:      encryptedFEKB64,
+			EncFilenameB64:       encFilenameB64,
+			FnNonceB64:           fnNonceB64,
+			EncSHA256B64:         encSHA256B64,
+			ShaNonceB64:          shaNonceB64,
+			PasswordType:         finalPasswordType,
+			EncPasswordHintB64:   encHintB64,
+			PasswordHintNonceB64: hintNonceB64,
+			FileSizeBytes:        fileSizeBytes,
+			TotalEncSize:         totalEncSize,
+			ChunkCount:           chunkCount,
+			ChunkSizeBytes:       chunkSizeBytes,
 		})
 		// Clear FEK as soon as the upload returns (success or failure).
 		clearBytes(fek)
@@ -692,7 +772,7 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 		return err
 	}
 
-	accountKey, err := requireAccountKey(config)
+	accountKey, err := requireAccountKey(client, config)
 	if err != nil {
 		return err
 	}
@@ -747,9 +827,23 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 
 	// Determine KEK based on password type
 	var kek []byte
+	envelopeHeader, err := parseFEKEnvelopeHeader(fileMeta.EncryptedFEK)
+	if err != nil {
+		return fmt.Errorf("invalid owner FEK envelope: %w", err)
+	}
+	if fileMeta.PasswordType != "" && envelopeHeader.PasswordType() != fileMeta.PasswordType {
+		return fmt.Errorf("owner FEK envelope key type does not match file metadata")
+	}
 	switch fileMeta.PasswordType {
 	case "account", "":
 		kek = accountKey
+		accountSalt, saltErr := fetchAccountKDFSalt(client, session)
+		if saltErr != nil {
+			return saltErr
+		}
+		if !bytes.Equal(accountSalt, envelopeHeader.Salt) {
+			return fmt.Errorf("owner FEK envelope salt does not match account metadata")
+		}
 	case "custom":
 		if fileMeta.EncryptedPasswordHint != "" && fileMeta.PasswordHintNonce != "" {
 			if hintText, herr := decryptMetadataField(
@@ -767,7 +861,10 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 		}
 		defer clearBytes(customPass)
 
-		kek = crypto.DeriveCustomPasswordKey(customPass, config.Username)
+		kek, err = crypto.DeriveCustomPasswordKey(customPass, envelopeHeader.Salt)
+		if err != nil {
+			return fmt.Errorf("failed to derive Custom Key: %w", err)
+		}
 		defer clearBytes(kek)
 	default:
 		return fmt.Errorf("unsupported password type: %s", fileMeta.PasswordType)
@@ -951,11 +1048,7 @@ func handleListFilesCommand(client *HTTPClient, config *ClientConfig, args []str
 			ChunkCount   int64  `json:"chunk_count"`
 		}
 
-		var accountKey []byte
-		agentClient, agentErr := NewAgentClient()
-		if agentErr == nil {
-			accountKey, _ = agentClient.GetAccountKey(session.AccessToken)
-		}
+		accountKey := getOptionalAccountKey(client, session)
 
 		decryptedFiles := make([]DecryptedFile, 0, len(fileList.Files))
 		for _, f := range fileList.Files {
@@ -997,11 +1090,7 @@ func handleListFilesCommand(client *HTTPClient, config *ClientConfig, args []str
 		return nil
 	}
 
-	var accountKey []byte
-	agentClient, agentErr := NewAgentClient()
-	if agentErr == nil {
-		accountKey, _ = agentClient.GetAccountKey(session.AccessToken)
-	}
+	accountKey := getOptionalAccountKey(client, session)
 
 	sep := strings.Repeat("-", 80)
 	for i, f := range fileList.Files {
@@ -1175,7 +1264,7 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 		return err
 	}
 
-	accountKey, err := requireAccountKey(config)
+	accountKey, err := requireAccountKey(client, config)
 	if err != nil {
 		return err
 	}
@@ -1212,9 +1301,23 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 
 	// Determine source KEK to unwrap the FEK
 	var sourceKEK []byte
+	envelopeHeader, err := parseFEKEnvelopeHeader(fileMeta.EncryptedFEK)
+	if err != nil {
+		return fmt.Errorf("invalid owner FEK envelope: %w", err)
+	}
+	if fileMeta.PasswordType != "" && envelopeHeader.PasswordType() != fileMeta.PasswordType {
+		return fmt.Errorf("owner FEK envelope key type does not match file metadata")
+	}
 	switch fileMeta.PasswordType {
 	case "account", "":
 		sourceKEK = accountKey
+		accountSalt, saltErr := fetchAccountKDFSalt(client, session)
+		if saltErr != nil {
+			return saltErr
+		}
+		if !bytes.Equal(accountSalt, envelopeHeader.Salt) {
+			return fmt.Errorf("owner FEK envelope salt does not match account metadata")
+		}
 	case "custom":
 		if fileMeta.EncryptedPasswordHint != "" && fileMeta.PasswordHintNonce != "" {
 			if hintText, herr := decryptMetadataField(
@@ -1231,8 +1334,13 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 			return fmt.Errorf("failed to read custom password: %w", err)
 		}
 		defer clearBytes(customPass)
-		sourceKEK = crypto.DeriveCustomPasswordKey(customPass, config.Username)
+		sourceKEK, err = crypto.DeriveCustomPasswordKey(customPass, envelopeHeader.Salt)
+		if err != nil {
+			return fmt.Errorf("failed to derive Custom Key: %w", err)
+		}
 		defer clearBytes(sourceKEK)
+	default:
+		return fmt.Errorf("unsupported password type: %s", fileMeta.PasswordType)
 	}
 
 	// Unwrap FEK. fileID is bound into the FEK envelope AAD
@@ -1505,11 +1613,7 @@ func enrichShareList(client *HTTPClient, session *AuthSession, shares []ShareInf
 		return nil, err
 	}
 
-	var accountKey []byte
-	agentClient, agentErr := NewAgentClient()
-	if agentErr == nil {
-		accountKey, _ = agentClient.GetAccountKey(session.AccessToken)
-	}
+	accountKey := getOptionalAccountKey(client, session)
 
 	enriched := make([]EnrichedShareInfo, 0, len(shares))
 	for _, share := range shares {

@@ -386,7 +386,6 @@ func RateLimitMiddleware(endpointConfig config.EndpointConfig) echo.MiddlewareFu
 						"method":      endpointConfig.Method,
 						"limit":       endpointConfig.Limit,
 						"window_type": endpointConfig.WindowType,
-						"description": endpointConfig.Description,
 					},
 				)
 
@@ -568,9 +567,9 @@ func CSRFMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 				nil,
 				nil,
 				map[string]interface{}{
-					"reason":   "CSRF token mismatch",
-					"endpoint": c.Request().URL.Path,
-					"method":   method,
+					"reason_code": "csrf_token_mismatch",
+					"endpoint":    c.Request().URL.Path,
+					"method":      method,
 				},
 			)
 			return echo.NewHTTPError(http.StatusForbidden, "CSRF token invalid")
@@ -718,9 +717,9 @@ func RequireMFA(next echo.HandlerFunc) echo.HandlerFunc {
 				&username,
 				nil,
 				map[string]interface{}{
-					"reason":   "TOTP not enabled",
-					"endpoint": c.Request().URL.Path,
-					"method":   c.Request().Method,
+					"reason_code": "totp_not_enabled",
+					"endpoint":    c.Request().URL.Path,
+					"method":      c.Request().Method,
 				},
 			)
 
@@ -769,7 +768,7 @@ func AdminMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 					nil,
 					map[string]interface{}{
 						"endpoint":    "/api/admin",
-						"description": "Admin API rate limit exceeded",
+						"reason_code": "admin_api_rate_limit_exceeded",
 					},
 				)
 				return echo.NewHTTPError(http.StatusTooManyRequests, "Admin rate limit exceeded")

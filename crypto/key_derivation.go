@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
@@ -80,40 +81,16 @@ func GetEmbeddedArgon2ParamsJSON() []byte {
 	return embeddedArgon2Params
 }
 
-// SECURITY NOTE on deterministic salts:
-//
-// GenerateUserKeySalt() produces deterministic salts from username + key type.
-// This design is SAFE because:
-//
-// 1. Security Model: Password → Argon2ID → KEK → wraps random FEK → encrypts file
-//   - User passwords are processed through Argon2ID (see crypto/argon2id-params.json)
-//   - This derives a Key Encryption Key (KEK) which wraps the File Encryption Key (FEK)
-//   - Each file has a randomly-generated FEK (true entropy, not password-derived)
-//   - The FEK is what actually encrypts the file data
-//
-// 2. Why Deterministic Salts Are Safe Here:
-//   - These salts are used for KEY WRAPPING, not password storage
-//   - Argon2ID provides strong protection even with known salts due to its memory-hard properties
-//   - An attacker would need to break Argon2ID to derive the KEK (computationally infeasible)
-//   - The actual file encryption uses randomly-generated FEKs with unique nonces per file
-//
-// 3. Benefits of This Design:
-//   - Allows password changes without re-encrypting all files
-//   - Each user gets a unique KEK via username-based salt derivation (see Derive*PasswordKey functions)
-//   - Maintains separation between account and custom password contexts
-//
-// 4. Defense in Depth:
-//   - Even if an attacker knows the salt, they still face Argon2ID's memory-hard function
-//   - The high memory requirement makes parallel attacks expensive
-//   - The randomly-generated FEKs provide an additional layer of security
-//
-// This is a well-established pattern in cryptographic key management systems.
-
 // MaxPasswordBytes is the defense-in-depth limit for password inputs to Argon2id.
 // This prevents absurdly long inputs from wasting memory on string allocation.
 // The primary enforcement is in the validation layer (password_validation.go);
 // this is a safety net in case validation is bypassed.
 const MaxPasswordBytes = 1024
+
+const (
+	AccountKDFContext = "account"
+	CustomKDFContext  = "custom"
+)
 
 // DeriveArgon2IDKey derives a key using Argon2ID with specified parameters
 func DeriveArgon2IDKey(password, salt []byte, keyLen uint32, memory, time uint32, threads uint8) ([]byte, error) {
@@ -133,24 +110,52 @@ func DeriveArgon2IDKey(password, salt []byte, keyLen uint32, memory, time uint32
 	return argon2.IDKey(password, salt, time, memory, threads, keyLen), nil
 }
 
-// GenerateUserKeySalt generates a deterministic salt based on username and key type
-func GenerateUserKeySalt(username, keyType string) []byte {
-	salt := sha256.Sum256([]byte(fmt.Sprintf("arkfile-%s-key-salt:%s", keyType, username)))
-	return salt[:]
+func GeneratePasswordSalt() ([]byte, error) {
+	salt := make([]byte, OwnerEnvelopeSaltSize())
+	if _, err := rand.Read(salt); err != nil {
+		return nil, fmt.Errorf("generate password salt: %w", err)
+	}
+	return salt, nil
 }
 
-// DeriveAccountPasswordKey derives a key from an account password
-func DeriveAccountPasswordKey(password []byte, username string) []byte {
-	salt := GenerateUserKeySalt(username, "account")
-	key, _ := DeriveArgon2IDKey(password, salt, UnifiedArgonSecure.KeyLen, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Time, UnifiedArgonSecure.Threads)
-	return key
+func ValidatePasswordSalt(salt []byte) error {
+	if len(salt) != OwnerEnvelopeSaltSize() {
+		return fmt.Errorf("password salt must be %d bytes, got %d", OwnerEnvelopeSaltSize(), len(salt))
+	}
+	return nil
 }
 
-// DeriveCustomPasswordKey derives a key from a custom file password
-func DeriveCustomPasswordKey(password []byte, username string) []byte {
-	salt := GenerateUserKeySalt(username, "custom")
-	key, _ := DeriveArgon2IDKey(password, salt, UnifiedArgonSecure.KeyLen, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Time, UnifiedArgonSecure.Threads)
-	return key
+func deriveContextSalt(publicSalt []byte, context string) ([]byte, error) {
+	if err := ValidatePasswordSalt(publicSalt); err != nil {
+		return nil, err
+	}
+	if context != AccountKDFContext && context != CustomKDFContext {
+		return nil, fmt.Errorf("unsupported password context: %s", context)
+	}
+
+	h := sha256.New()
+	h.Write([]byte("arkfile-owner-kdf-v1"))
+	h.Write([]byte{0})
+	h.Write([]byte(context))
+	h.Write([]byte{0})
+	h.Write(publicSalt)
+	return h.Sum(nil), nil
+}
+
+func DerivePasswordKey(password, publicSalt []byte, context string) ([]byte, error) {
+	salt, err := deriveContextSalt(publicSalt, context)
+	if err != nil {
+		return nil, err
+	}
+	return DeriveArgon2IDKey(password, salt, UnifiedArgonSecure.KeyLen, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Time, UnifiedArgonSecure.Threads)
+}
+
+func DeriveAccountPasswordKey(password, publicSalt []byte) ([]byte, error) {
+	return DerivePasswordKey(password, publicSalt, AccountKDFContext)
+}
+
+func DeriveCustomPasswordKey(password, publicSalt []byte) ([]byte, error) {
+	return DerivePasswordKey(password, publicSalt, CustomKDFContext)
 }
 
 // hkdfExpand performs HKDF-Expand operation

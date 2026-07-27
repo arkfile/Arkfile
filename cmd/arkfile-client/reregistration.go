@@ -114,7 +114,19 @@ func verifyReregistrationPassword(password []byte, username string, reregResp *R
 		owner = username
 	}
 
-	accountKey := crypto.DeriveAccountPasswordKey(password, username)
+	saltB64, _ := reregResp.Data["account_kdf_salt"].(string)
+	profile, _ := reregResp.Data["account_kdf_profile"].(float64)
+	if saltB64 == "" || int(profile) != int(crypto.OwnerEnvelopeKDFProfile()) {
+		return fmt.Errorf("the server did not provide valid Account Key metadata; aborting re-registration")
+	}
+	accountSalt, err := crypto.DecodeBase64(saltB64)
+	if err != nil {
+		return fmt.Errorf("the server provided an invalid Account Key salt; aborting re-registration")
+	}
+	accountKey, err := crypto.DeriveAccountPasswordKey(password, accountSalt)
+	if err != nil {
+		return fmt.Errorf("failed to derive Account Key: %w", err)
+	}
 	defer clearBytes(accountKey)
 
 	if _, err := decryptMetadataField(encFilename, filenameNonce, accountKey, fileID, crypto.AADFieldFilename, owner); err != nil {

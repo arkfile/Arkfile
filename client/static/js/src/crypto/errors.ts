@@ -176,31 +176,6 @@ export class InvalidOpaqueStateError extends OpaqueError {
   }
 }
 
-// Salt Derivation Errors
-
-/**
- * Error during salt derivation
- */
-export class SaltDerivationError extends CryptoError {
-  constructor(message: string, context?: Record<string, unknown>) {
-    super(message, 'SALT_DERIVATION_ERROR', context);
-    this.name = 'SaltDerivationError';
-  }
-}
-
-/**
- * Error when username is invalid for salt derivation
- */
-export class InvalidUsernameError extends SaltDerivationError {
-  constructor(reason: string) {
-    super(
-      `Invalid username for salt derivation: ${reason}`,
-      { reason }
-    );
-    this.name = 'InvalidUsernameError';
-  }
-}
-
 // Key Management Errors
 
 /**

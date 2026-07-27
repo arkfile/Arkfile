@@ -1,7 +1,8 @@
 /**
  * Account Key Cache Module
  *
- * Manages caching of the user's Account Key (derived from account password + username)
+ * Manages caching of the user's Account Key derived from the account password,
+ * public account salt, and pinned KDF profile.
  * in sessionStorage for convenient file encryption/decryption operations.
  *
  * Security model (browser / HttpOnly cookie auth):
@@ -41,6 +42,7 @@ import {
 import { hmac } from '@noble/hashes/hmac.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { clearDigestCache } from '../utils/digest-cache.js';
+import { clearAccountCryptoMetadata, getAccountCryptoMetadata } from './account-crypto.js';
 
 // Types (Unified shape -- matches Go agent's accountKeyEntry)
 
@@ -81,6 +83,10 @@ interface AccountKeyCache {
   token_hash: string;
   /** Username this key belongs to */
   username: string;
+  /** Base64 public salt used to derive this key */
+  account_kdf_salt: string;
+  /** KDF profile used to derive this key */
+  account_kdf_profile: number;
   /** Context (always 'account' for Account Keys) */
   context: 'account';
   /** ISO 8601 timestamp when the key was stored */
@@ -242,6 +248,7 @@ export async function cacheAccountKey(
   durationHours?: CacheDurationHours
 ): Promise<void> {
   try {
+    const cryptoMetadata = await getAccountCryptoMetadata(username);
     // Get configured duration or use provided override
     const config = getAccountKeyCacheConfig();
     const duration = durationHours ?? config.durationHours;
@@ -278,6 +285,8 @@ export async function cacheAccountKey(
       // Cookie auth: no readable JWT; empty hash and binding check skipped.
       token_hash: accessToken ? hashToken(accessToken) : '',
       username: username.trim(),
+      account_kdf_salt: toBase64(cryptoMetadata.salt),
+      account_kdf_profile: cryptoMetadata.kdfProfile,
       context: 'account',
       stored_at: now.toISOString(),
       expires_at: expiresAt.toISOString(),
@@ -341,6 +350,7 @@ export async function getCachedAccountKey(
     }
     
     const cached: AccountKeyCache = JSON.parse(stored);
+    const cryptoMetadata = await getAccountCryptoMetadata(username);
     
     // Check if expired
     const expiresAt = new Date(cached.expires_at).getTime();
@@ -358,6 +368,14 @@ export async function getCachedAccountKey(
     
     // Verify context is 'account'
     if (cached.context !== 'account') {
+      sessionStorage.removeItem(storageKey);
+      return null;
+    }
+
+    if (
+      cached.account_kdf_salt !== toBase64(cryptoMetadata.salt) ||
+      cached.account_kdf_profile !== cryptoMetadata.kdfProfile
+    ) {
       sessionStorage.removeItem(storageKey);
       return null;
     }
@@ -550,6 +568,7 @@ export function lockAccountKey(): void {
     
     // Clear all cached Account Keys from sessionStorage
     clearAllCachedAccountKeys();
+    clearAccountCryptoMetadata();
     
     // Clear digest cache (SHA-256 digests are sensitive -- content fingerprinting)
     clearDigestCache();

@@ -37,7 +37,7 @@ func createTestBundle(t *testing.T, meta bundleMeta, blobData []byte) string {
 	}
 	// Version
 	versionBytes := make([]byte, 2)
-	binary.BigEndian.PutUint16(versionBytes, 1)
+	binary.BigEndian.PutUint16(versionBytes, 2)
 	if _, err := f.Write(versionBytes); err != nil {
 		t.Fatalf("failed to write version: %v", err)
 	}
@@ -67,7 +67,7 @@ func createTestBundle(t *testing.T, meta bundleMeta, blobData []byte) string {
 // self-describing fields populated.
 func TestParseBundle_ValidBundle(t *testing.T) {
 	meta := bundleMeta{
-		Version:            1,
+		Version:            2,
 		FileID:             testFileID,
 		OwnerUsername:      testOwner,
 		EncryptedFEK:       "ZW5jcnlwdGVkLWZlaw==",
@@ -80,7 +80,9 @@ func TestParseBundle_ValidBundle(t *testing.T) {
 		SHA256SumNonce:     "c2hhbm9uY2U=",
 		ChunkSizeBytes:     16777216,
 		ChunkCount:         1,
-		EnvelopeVersion:    1,
+		AccountKDFSalt:     crypto.EncodeBase64(testOwnerSalt()),
+		AccountKDFProfile:  int(crypto.OwnerEnvelopeKDFProfile()),
+		EnvelopeVersion:    int(crypto.OwnerEnvelopeVersion()),
 		CreatedAt:          "2025-01-01T00:00:00Z",
 	}
 
@@ -126,7 +128,7 @@ func TestParseBundle_InvalidMagic(t *testing.T) {
 	f, _ := os.Create(bundlePath)
 	f.Write([]byte("NOTB"))
 	versionBytes := make([]byte, 2)
-	binary.BigEndian.PutUint16(versionBytes, 1)
+	binary.BigEndian.PutUint16(versionBytes, 2)
 	f.Write(versionBytes)
 	headerLenBytes := make([]byte, 4)
 	binary.BigEndian.PutUint32(headerLenBytes, 2)
@@ -163,7 +165,7 @@ func TestParseBundle_InvalidJSON(t *testing.T) {
 	f, _ := os.Create(bundlePath)
 	f.Write([]byte("ARKB"))
 	versionBytes := make([]byte, 2)
-	binary.BigEndian.PutUint16(versionBytes, 1)
+	binary.BigEndian.PutUint16(versionBytes, 2)
 	f.Write(versionBytes)
 	headerLenBytes := make([]byte, 4)
 	binary.BigEndian.PutUint32(headerLenBytes, uint32(len(badJSON)))
@@ -198,7 +200,7 @@ func TestParseBundle_HeaderTooLarge(t *testing.T) {
 	f, _ := os.Create(bundlePath)
 	f.Write([]byte("ARKB"))
 	versionBytes := make([]byte, 2)
-	binary.BigEndian.PutUint16(versionBytes, 1)
+	binary.BigEndian.PutUint16(versionBytes, 2)
 	f.Write(versionBytes)
 	headerLenBytes := make([]byte, 4)
 	binary.BigEndian.PutUint32(headerLenBytes, 2*1024*1024)
@@ -222,14 +224,15 @@ func TestOfflineArkbackupDecrypt_WithAAD_RoundTrip(t *testing.T) {
 	username := "bundle-test-user"
 	password := []byte("BundleTestPassword2025!Secure")
 
-	kek := crypto.DeriveAccountPasswordKey(password, username)
+	salt := testOwnerSalt()
+	kek := deriveTestPasswordKey(t, password, crypto.AccountKDFContext)
 	fek, err := generateFEK()
 	if err != nil {
 		t.Fatalf("generateFEK failed: %v", err)
 	}
 	fileID := testFileID
 
-	wrappedFEKB64, err := wrapFEK(fek, kek, "account", fileID)
+	wrappedFEKB64, err := wrapFEK(fek, kek, salt, "account", fileID)
 	if err != nil {
 		t.Fatalf("wrapFEK failed: %v", err)
 	}
@@ -242,15 +245,17 @@ func TestOfflineArkbackupDecrypt_WithAAD_RoundTrip(t *testing.T) {
 	}
 
 	meta := bundleMeta{
-		Version:         1,
-		FileID:          fileID,
-		OwnerUsername:   username,
-		EncryptedFEK:    wrappedFEKB64,
-		PasswordType:    "account",
-		SizeBytes:       int64(len(encryptedChunk)),
-		ChunkSizeBytes:  int64(crypto.PlaintextChunkSize()),
-		ChunkCount:      1,
-		EnvelopeVersion: 1,
+		Version:           2,
+		FileID:            fileID,
+		OwnerUsername:     username,
+		EncryptedFEK:      wrappedFEKB64,
+		PasswordType:      "account",
+		SizeBytes:         int64(len(encryptedChunk)),
+		ChunkSizeBytes:    int64(crypto.PlaintextChunkSize()),
+		ChunkCount:        1,
+		AccountKDFSalt:    crypto.EncodeBase64(salt),
+		AccountKDFProfile: int(crypto.OwnerEnvelopeKDFProfile()),
+		EnvelopeVersion:   int(crypto.OwnerEnvelopeVersion()),
 	}
 
 	bundlePath := createTestBundle(t, meta, encryptedChunk)
@@ -302,23 +307,26 @@ func TestOfflineArkbackupDecrypt_WrongFileID_Fails(t *testing.T) {
 	username := "bundle-wrong-fileid-user"
 	password := []byte("BundleWrongFileIDPassword2025")
 
-	kek := crypto.DeriveAccountPasswordKey(password, username)
+	salt := testOwnerSalt()
+	kek := deriveTestPasswordKey(t, password, crypto.AccountKDFContext)
 	fek, _ := generateFEK()
-	wrappedFEKB64, _ := wrapFEK(fek, kek, "account", testFileID)
+	wrappedFEKB64, _ := wrapFEK(fek, kek, salt, "account", testFileID)
 	encryptedChunk, _ := encryptChunk([]byte("payload"), fek, testFileID, 0, 1)
 
 	// Bundle metadata claims testFileID2 but FEK + chunk were encrypted
 	// under testFileID. unwrapFEK must fail at the AEAD layer.
 	tamperedMeta := bundleMeta{
-		Version:         1,
-		FileID:          testFileID2, // mismatched
-		OwnerUsername:   username,
-		EncryptedFEK:    wrappedFEKB64,
-		PasswordType:    "account",
-		SizeBytes:       int64(len(encryptedChunk)),
-		ChunkSizeBytes:  int64(crypto.PlaintextChunkSize()),
-		ChunkCount:      1,
-		EnvelopeVersion: 1,
+		Version:           2,
+		FileID:            testFileID2, // mismatched
+		OwnerUsername:     username,
+		EncryptedFEK:      wrappedFEKB64,
+		PasswordType:      "account",
+		SizeBytes:         int64(len(encryptedChunk)),
+		ChunkSizeBytes:    int64(crypto.PlaintextChunkSize()),
+		ChunkCount:        1,
+		AccountKDFSalt:    crypto.EncodeBase64(salt),
+		AccountKDFProfile: int(crypto.OwnerEnvelopeKDFProfile()),
+		EnvelopeVersion:   int(crypto.OwnerEnvelopeVersion()),
 	}
 	bundlePath := createTestBundle(t, tamperedMeta, encryptedChunk)
 
@@ -334,15 +342,15 @@ func TestOfflineArkbackupDecrypt_WrongFileID_Fails(t *testing.T) {
 // TestOfflineArkbackupDecrypt_WrongPassword_Fails verifies wrong-password
 // path fails cleanly.
 func TestOfflineArkbackupDecrypt_WrongPassword_Fails(t *testing.T) {
-	username := "bundle-wrong-pw-user"
 	correct := []byte("CorrectPassword2025!Secure")
 	wrong := []byte("WrongPassword2025!Insecure")
 
-	kek := crypto.DeriveAccountPasswordKey(correct, username)
+	salt := testOwnerSalt()
+	kek := deriveTestPasswordKey(t, correct, crypto.AccountKDFContext)
 	fek, _ := generateFEK()
-	wrappedFEKB64, _ := wrapFEK(fek, kek, "account", testFileID)
+	wrappedFEKB64, _ := wrapFEK(fek, kek, salt, "account", testFileID)
 
-	wrongKEK := crypto.DeriveAccountPasswordKey(wrong, username)
+	wrongKEK := deriveTestPasswordKey(t, wrong, crypto.AccountKDFContext)
 	if _, _, err := unwrapFEK(wrappedFEKB64, wrongKEK, testFileID); err == nil {
 		t.Fatal("unwrapFEK with wrong password must fail")
 	}
@@ -357,22 +365,25 @@ func TestOfflineArkbackupDecrypt_WrongPassword_Fails(t *testing.T) {
 func TestDecryptBlobCommand_RejectsBundleMissingOwnerUsername(t *testing.T) {
 	username := "bundle-missing-owner-user"
 	password := []byte("BundleMissingOwnerPassword2025")
-	kek := crypto.DeriveAccountPasswordKey(password, username)
+	salt := testOwnerSalt()
+	kek := deriveTestPasswordKey(t, password, crypto.AccountKDFContext)
 
 	fek, _ := generateFEK()
-	wrappedFEKB64, _ := wrapFEK(fek, kek, "account", testFileID)
+	wrappedFEKB64, _ := wrapFEK(fek, kek, salt, "account", testFileID)
 	encryptedChunk, _ := encryptChunk([]byte("payload"), fek, testFileID, 0, 1)
 
 	// OwnerUsername deliberately omitted.
 	staleMeta := bundleMeta{
-		Version:         1,
-		FileID:          testFileID,
-		EncryptedFEK:    wrappedFEKB64,
-		PasswordType:    "account",
-		SizeBytes:       int64(len(encryptedChunk)),
-		ChunkSizeBytes:  int64(crypto.PlaintextChunkSize()),
-		ChunkCount:      1,
-		EnvelopeVersion: 1,
+		Version:           2,
+		FileID:            testFileID,
+		EncryptedFEK:      wrappedFEKB64,
+		PasswordType:      "account",
+		SizeBytes:         int64(len(encryptedChunk)),
+		ChunkSizeBytes:    int64(crypto.PlaintextChunkSize()),
+		ChunkCount:        1,
+		AccountKDFSalt:    crypto.EncodeBase64(salt),
+		AccountKDFProfile: int(crypto.OwnerEnvelopeKDFProfile()),
+		EnvelopeVersion:   int(crypto.OwnerEnvelopeVersion()),
 	}
 	bundlePath := createTestBundle(t, staleMeta, encryptedChunk)
 
@@ -394,4 +405,45 @@ func TestDecryptBlobCommand_RejectsBundleMissingOwnerUsername(t *testing.T) {
 	if err == nil {
 		t.Fatal("handleDecryptBlobCommand must reject a bundle missing owner_username")
 	}
+}
+
+func TestReadAccountKeyFromFileRejectsBroadPermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "account.key")
+	if err := os.WriteFile(path, bytes.Repeat([]byte{'a'}, 64), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readAccountKeyFromFile(path); err == nil {
+		t.Fatal("accepted account key file readable by group or others")
+	}
+}
+
+func FuzzParseBundle(f *testing.F) {
+	validMeta, _ := json.Marshal(bundleMeta{
+		Version:           2,
+		FileID:            testFileID,
+		OwnerUsername:     testOwner,
+		AccountKDFSalt:    crypto.EncodeBase64(testOwnerSalt()),
+		AccountKDFProfile: int(crypto.OwnerEnvelopeKDFProfile()),
+		EnvelopeVersion:   int(crypto.OwnerEnvelopeVersion()),
+		PasswordType:      "account",
+		ChunkCount:        1,
+		ChunkSizeBytes:    int64(crypto.PlaintextChunkSize()),
+	})
+	valid := make([]byte, 10+len(validMeta))
+	copy(valid, []byte("ARKB"))
+	binary.BigEndian.PutUint16(valid[4:6], 2)
+	binary.BigEndian.PutUint32(valid[6:10], uint32(len(validMeta)))
+	copy(valid[10:], validMeta)
+	f.Add(valid)
+	f.Add([]byte("ARKB"))
+	f.Fuzz(func(t *testing.T, input []byte) {
+		if len(input) > 1<<20 {
+			t.Skip()
+		}
+		path := filepath.Join(t.TempDir(), "fuzz.arkbackup")
+		if err := os.WriteFile(path, input, 0600); err != nil {
+			t.Fatal(err)
+		}
+		_, _, _ = parseBundle(path)
+	})
 }

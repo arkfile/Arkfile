@@ -1,17 +1,40 @@
 package handlers
 
 import (
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/arkfile/Arkfile/auth"
+	"github.com/arkfile/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/models"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBuildBundleMetadataIncludesAccountKDFMetadata(t *testing.T) {
+	file := &models.File{
+		FileID:         "00112233-4455-6677-8899-aabbccddeeff",
+		OwnerUsername:  "export-owner",
+		PasswordType:   "account",
+		EncryptedFEK:   "encrypted-fek",
+		SizeBytes:      1024,
+		PaddedSize:     sql.NullInt64{Int64: 2048, Valid: true},
+		ChunkCount:     1,
+		ChunkSizeBytes: int64(crypto.PlaintextChunkSize()),
+	}
+	salt := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	metadata := buildBundleMetadata(file, salt, int(crypto.OwnerEnvelopeKDFProfile()))
+	assert.Equal(t, 2, metadata.Version)
+	assert.Equal(t, salt, metadata.AccountKDFSalt)
+	assert.Equal(t, int(crypto.OwnerEnvelopeKDFProfile()), metadata.AccountKDFProfile)
+	assert.Equal(t, int(crypto.OwnerEnvelopeVersion()), metadata.EnvelopeVersion)
+	assert.Equal(t, file.OwnerUsername, metadata.OwnerUsername)
+}
 
 // TestResolveExportAuth_QueryTokenAcrossRotation verifies that a browser
 // export token (signed with the full-tier key, aud=arkfile-export) issued

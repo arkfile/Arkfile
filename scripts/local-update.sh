@@ -200,6 +200,8 @@ echo -e "${CYAN}Step 1: Build${NC}"
 fix_go_ownership
 
 decide_skip_c_libs_for_update
+# Rebuild WASM so a prior development trace build cannot be reused.
+SKIP_C_LIBS=false
 
 # Always do a fresh TypeScript build
 clear_frontend_build_caches

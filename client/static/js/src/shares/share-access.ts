@@ -26,6 +26,7 @@ import { shareCrypto } from './share-crypto';
 import { showError, showSuccess } from '../ui/messages';
 import { isSwAvailable } from '../files/sw-streaming-download';
 import { formatBytes } from '../utils/format.js';
+import { debugLog } from '../utils/debug-log.js';
 import {
   downloadSharedFileWithTicket,
   triggerBrowserDownloadFromUrl,
@@ -237,7 +238,7 @@ export class ShareAccessUI {
       statusDiv.className = '';
       statusDiv.removeAttribute('data-testid');
     }
-    console.log('[arkfile-share] Verifying share access…');
+    debugLog('[arkfile-share] Verifying share access...');
 
     try {
       // 1. Get share envelope (public metadata + encrypted FEK)
@@ -361,7 +362,7 @@ export class ShareAccessUI {
 
     if (downloadBtn) {
       downloadBtn.onclick = () => {
-        console.log('[arkfile-share] Download button clicked');
+        debugLog('[arkfile-share] Download button clicked');
         this.downloadFile(filename, size, fek, sha256);
       };
     }
@@ -449,7 +450,7 @@ export class ShareAccessUI {
       };
 
       if (result.streamedViaSw) {
-        console.log('[arkfile-share] File streamed via Service Worker');
+        debugLog('[arkfile-share] File streamed via Service Worker');
         const decision = finalizeDownloadIntegrity(integrity, 'share-integrity-panel');
         if (statusDiv) {
           if (decision.allowSuccess) {
@@ -479,7 +480,7 @@ export class ShareAccessUI {
         return;
       }
 
-      console.log('[arkfile-share] Triggering browser download from blob URL (SW unavailable)');
+      debugLog('[arkfile-share] Triggering browser download from blob URL (SW unavailable)');
       triggerBrowserDownloadFromUrl(result.blobUrl, downloadFilename);
 
       if (statusDiv) {

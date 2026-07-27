@@ -2,12 +2,14 @@ package models
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	arkcrypto "github.com/arkfile/Arkfile/crypto"
 	"github.com/arkfile/Arkfile/logging"
 	"github.com/arkfile/Arkfile/utils"
 )
@@ -23,6 +25,8 @@ type DBTX interface {
 type User struct {
 	ID                int64          `json:"id"`
 	Username          string         `json:"username"`
+	AccountKDFSalt    string         `json:"-"`
+	AccountKDFProfile int            `json:"-"`
 	CreatedAt         time.Time      `json:"created_at"`
 	TotalStorageBytes int64          `json:"total_storage_bytes"`
 	StorageLimitBytes int64          `json:"storage_limit_bytes"`
@@ -74,10 +78,23 @@ func isAdminUsername(username string) bool {
 // from explicit admin approval. Admin usernames are always approved regardless
 // of autoApprove; their approved_by is left NULL to preserve the existing
 // bootstrap self-approval provenance.
-func CreateUser(dbtx DBTX, username string, autoApprove bool) (*User, error) {
+func CreateUser(dbtx DBTX, username, accountKDFSalt string, accountKDFProfile int, autoApprove bool) (*User, error) {
 	// Validate username
 	if err := validateUsername(username); err != nil {
 		return nil, fmt.Errorf("invalid username: %w", err)
+	}
+	decodedSalt, err := base64.StdEncoding.DecodeString(accountKDFSalt)
+	if err != nil {
+		return nil, fmt.Errorf("invalid account KDF salt encoding")
+	}
+	if base64.StdEncoding.EncodeToString(decodedSalt) != accountKDFSalt {
+		return nil, fmt.Errorf("account KDF salt must use canonical base64 encoding")
+	}
+	if err := arkcrypto.ValidatePasswordSalt(decodedSalt); err != nil {
+		return nil, fmt.Errorf("invalid account KDF salt: %w", err)
+	}
+	if accountKDFProfile != int(arkcrypto.OwnerEnvelopeKDFProfile()) {
+		return nil, fmt.Errorf("unsupported account KDF profile: %d", accountKDFProfile)
 	}
 
 	isAdmin := isAdminUsername(username)
@@ -102,9 +119,11 @@ func CreateUser(dbtx DBTX, username string, autoApprove bool) (*User, error) {
 
 	result, err := dbtx.Exec(
 		`INSERT INTO users (
-			username, username_folded, storage_limit_bytes, is_admin, is_approved, approved_by, approved_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		username, folded, DefaultStorageLimit, isAdmin, approved, approvedByVal, approvedAtVal,
+			username, username_folded, account_kdf_salt, account_kdf_profile,
+			storage_limit_bytes, is_admin, is_approved, approved_by, approved_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		username, folded, accountKDFSalt, accountKDFProfile,
+		DefaultStorageLimit, isAdmin, approved, approvedByVal, approvedAtVal,
 	)
 	if err != nil {
 		return nil, err
@@ -118,6 +137,8 @@ func CreateUser(dbtx DBTX, username string, autoApprove bool) (*User, error) {
 	return &User{
 		ID:                id,
 		Username:          username,
+		AccountKDFSalt:    accountKDFSalt,
+		AccountKDFProfile: accountKDFProfile,
 		StorageLimitBytes: DefaultStorageLimit,
 		CreatedAt:         time.Now(),
 		IsApproved:        approved,
@@ -147,14 +168,12 @@ func GetUserByUsername(dbtx DBTX, username string) (*User, error) {
 	var totalStorageInterface interface{}
 	var storageLimitInterface interface{}
 
-	query := `SELECT id, username, created_at,
-		       total_storage_bytes, storage_limit_bytes,
+	query := `SELECT id, username, created_at, total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE username = ? AND deleted_at IS NULL`
 
 	err := dbtx.QueryRow(query, username).Scan(
-		&user.ID, &user.Username, &createdAtStr,
-		&totalStorageInterface, &storageLimitInterface,
+		&user.ID, &user.Username, &createdAtStr, &totalStorageInterface, &storageLimitInterface,
 		&user.IsApproved, &user.ApprovedBy, &approvedAtStr, &user.IsAdmin,
 	)
 
@@ -209,6 +228,20 @@ func GetUserByUsername(dbtx DBTX, username string) (*User, error) {
 	}
 
 	return user, nil
+}
+
+func GetAccountCryptoMetadata(dbtx DBTX, username string) (string, int, error) {
+	var salt string
+	var profile int
+	err := dbtx.QueryRow(
+		`SELECT account_kdf_salt, account_kdf_profile
+		 FROM users WHERE username = ? AND deleted_at IS NULL`,
+		username,
+	).Scan(&salt, &profile)
+	if err != nil {
+		return "", 0, err
+	}
+	return salt, profile, nil
 }
 
 // UserExists checks if a user exists by username

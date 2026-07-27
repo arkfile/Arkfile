@@ -4,113 +4,65 @@
  * Provides Argon2id-based key derivation and Account Key caching for the
  * chunked encryption system. This module is completely independent from
  * OPAQUE authentication and enables:
- * - Offline decryption (no server required)
- * - Data portability (decrypt anywhere with password + username)
- * - Deterministic key derivation (same password always produces same key)
+ * - Offline decryption from self-describing backup metadata
+ * - Data portability across browser and CLI clients
+ * - Explicit random public salts with account/custom domain separation
  * 
  */
 
 import {
   deriveKeyArgon2id,
-  hashString,
+  generateSalt,
+  hash256,
 } from './primitives';
 import {
   KEY_SIZES,
   getArgon2Params,
-  SALT_DOMAIN_PREFIXES,
 } from './constants';
 import type { PasswordContext } from './constants';
 export type { PasswordContext } from './constants';
-import {
-  InvalidUsernameError,
-  SaltDerivationError,
-  wrapError,
-} from './errors';
+import { wrapError } from './errors';
 
-// Salt Derivation
+// Salt handling
 
-/**
- * Derives a deterministic salt from username with domain separation
- * 
- * This ensures the same username + context always produces the same salt,
- * which is critical for deterministic key derivation and cross-platform compatibility.
- * 
- * IMPORTANT: This implementation MUST match the Go implementation in crypto/key_derivation.go
- * to ensure files encrypted by the browser can be decrypted by CLI tools and vice versa.
- * 
- * Security note: The salt is derived from the username using SHA-256 with domain separation.
- * While this makes the salt predictable for a given username + context, it's acceptable because:
- * 1. Argon2id is designed to be secure even with known salts
- * 2. The high memory/time cost (256MB, 8 iterations) makes brute force attacks impractical
- * 3. Domain separation ensures different contexts produce different keys
- * 4. This enables offline decryption without server-stored salts
- * 
- * @param username - The user's username
- * @param context - The password context (account or custom)
- * @returns A deterministic 32-byte salt
- */
-export function deriveSaltFromUsername(username: string, context: PasswordContext = 'account'): Uint8Array {
-  // Validate username
-  if (!username || username.trim().length === 0) {
-    throw new InvalidUsernameError('Username cannot be empty');
-  }
-  
-  // Canonicalize: trim whitespace, then lowercase (see.
-  // Valid usernames are already lowercase-only; this keeps salts stable if mixed
-  // case is ever passed programmatically.
-  const normalizedUsername = username.trim().toLowerCase();
-  
-  if (normalizedUsername.length < 10) {
-    throw new InvalidUsernameError('Username must be at least 10 characters');
-  }
-  
-  if (normalizedUsername.length > 50) {
-    throw new InvalidUsernameError('Username must be at most 50 characters');
-  }
-  
-  try {
-    // Get domain prefix for this context
-    const domainPrefix = SALT_DOMAIN_PREFIXES[context];
-    
-    // Construct salt input: "arkfile-{context}-key-salt:{username}"
-    // This MUST match Go's implementation exactly
-    const saltInput = domainPrefix + normalizedUsername;
-    
-    // Hash the salt input to get a deterministic salt
-    const hash = hashString(saltInput);
-    
-    // Take the first 32 bytes as the salt
-    return hash.slice(0, KEY_SIZES.SALT);
-  } catch (error) {
-    throw new SaltDerivationError(
-      'Failed to derive salt from username',
-      { username: normalizedUsername, context, error: String(error) }
-    );
+export function generatePasswordSalt(): Uint8Array {
+  return generateSalt();
+}
+
+export function validatePasswordSalt(salt: Uint8Array): void {
+  if (salt.length !== KEY_SIZES.SALT) {
+    throw new Error(`Password salt must be ${KEY_SIZES.SALT} bytes, got ${salt.length}`);
   }
 }
 
-// Key Derivation
+function deriveContextSalt(publicSalt: Uint8Array, context: PasswordContext): Uint8Array {
+  validatePasswordSalt(publicSalt);
+  const encoder = new TextEncoder();
+  const prefix = encoder.encode('arkfile-owner-kdf-v1');
+  const contextBytes = encoder.encode(context);
+  const input = new Uint8Array(prefix.length + 1 + contextBytes.length + 1 + publicSalt.length);
+  let offset = 0;
+  input.set(prefix, offset);
+  offset += prefix.length + 1;
+  input.set(contextBytes, offset);
+  offset += contextBytes.length + 1;
+  input.set(publicSalt, offset);
+  return hash256(input);
+}
 
 /**
- * Derives a file encryption key from password and username
- * 
- * This is the core function that enables offline decryption.
- * The same password + username + context will always produce the same key.
- * 
- * IMPORTANT: This must match the Go implementation for cross-platform compatibility.
- * 
+ * Derives an Account or Custom Key from a password and explicit public salt.
  * @param password - The user's password
- * @param username - The user's username
+ * @param publicSalt - Random 32-byte public salt
  * @param context - The password context (account or custom)
  * @returns A 32-byte encryption key
  */
 export async function deriveFileEncryptionKey(
   password: string,
-  username: string,
+  publicSalt: Uint8Array,
   context: PasswordContext = 'account'
 ): Promise<Uint8Array> {
-  // Derive deterministic salt from username with domain separation
-  const salt = deriveSaltFromUsername(username, context);
+  const salt = deriveContextSalt(publicSalt, context);
   
   try {
     // Get Argon2id parameters from config
@@ -145,6 +97,7 @@ import {
   cleanupAccountKeyCache,
   type CacheDurationHours,
 } from './account-key-cache.js';
+import { getAccountCryptoMetadata } from './account-crypto.js';
 
 // Re-export Account Key cache functions for convenience
 export {
@@ -182,10 +135,12 @@ export async function deriveFileEncryptionKeyWithCache(
   username: string,
   context: PasswordContext = 'account',
   accessToken?: string,
-  cacheDuration?: CacheDurationHours
+  cacheDuration?: CacheDurationHours,
+  publicSalt?: Uint8Array,
 ): Promise<Uint8Array> {
   // Only cache 'account' context keys
   if (context === 'account') {
+    const metadata = await getAccountCryptoMetadata(username);
     // Try to get cached Account Key
     const cachedKey = await getCachedAccountKey(username, accessToken);
     if (cachedKey) {
@@ -193,7 +148,7 @@ export async function deriveFileEncryptionKeyWithCache(
     }
     
     // Derive new key
-    const key = await deriveFileEncryptionKey(password, username, context);
+    const key = await deriveFileEncryptionKey(password, metadata.salt, context);
     
     // Cache it with the specified duration whenever the user opted in.
     if (cacheDuration !== undefined) {
@@ -204,7 +159,10 @@ export async function deriveFileEncryptionKeyWithCache(
   }
   
   // For 'custom' context, always derive fresh (no caching)
-  return deriveFileEncryptionKey(password, username, context);
+  if (!publicSalt) {
+    throw new Error('Custom Key derivation requires an explicit public salt');
+  }
+  return deriveFileEncryptionKey(password, publicSalt, context);
 }
 
 /**

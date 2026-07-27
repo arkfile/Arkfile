@@ -3,6 +3,8 @@ package crypto
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
+	"os"
 	"testing"
 )
 
@@ -71,6 +73,48 @@ func TestBuildChunkAAD_CrossLanguageVector(t *testing.T) {
 	}
 }
 
+func TestAADSharedFixture(t *testing.T) {
+	raw, err := os.ReadFile("testdata/crypto-conformance-v2.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		FileID        string `json:"file_id"`
+		OwnerUsername string `json:"owner_username"`
+		OwnerHeaders  struct {
+			AccountHex string `json:"account_hex"`
+		} `json:"owner_headers"`
+		AAD struct {
+			Chunk        string `json:"chunk_zero_of_three_hex"`
+			FEK          string `json:"account_fek_envelope_hex"`
+			Filename     string `json:"encrypted_filename_hex"`
+			SHA256       string `json:"encrypted_sha256sum_hex"`
+			PasswordHint string `json:"encrypted_password_hint_hex"`
+		} `json:"aad"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	header, _ := hex.DecodeString(fixture.OwnerHeaders.AccountHex)
+	cases := map[string]struct {
+		got  []byte
+		want string
+	}{
+		"chunk":         {BuildChunkAAD(fixture.FileID, 0, 3), fixture.AAD.Chunk},
+		"fek":           {BuildFEKEnvelopeAAD(fixture.FileID, header), fixture.AAD.FEK},
+		"filename":      {BuildMetadataFieldAAD(fixture.FileID, AADFieldFilename, fixture.OwnerUsername), fixture.AAD.Filename},
+		"sha256":        {BuildMetadataFieldAAD(fixture.FileID, AADFieldSha256, fixture.OwnerUsername), fixture.AAD.SHA256},
+		"password_hint": {BuildMetadataFieldAAD(fixture.FileID, AADFieldPasswordHint, fixture.OwnerUsername), fixture.AAD.PasswordHint},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if hex.EncodeToString(tc.got) != tc.want {
+				t.Fatalf("%s AAD does not match shared fixture", name)
+			}
+		})
+	}
+}
+
 // =============================================================================
 // DETERMINISM + UNIQUENESS -- BuildChunkAAD
 // =============================================================================
@@ -112,24 +156,32 @@ func TestBuildChunkAAD_UniqueByTotalChunks(t *testing.T) {
 // =============================================================================
 
 func TestBuildFEKEnvelopeAAD_Deterministic(t *testing.T) {
-	a := BuildFEKEnvelopeAAD("file-x", 0x01)
-	b := BuildFEKEnvelopeAAD("file-x", 0x01)
+	header, err := CreateFEKEnvelopeHeader(AccountKDFContext, make([]byte, OwnerEnvelopeSaltSize()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := BuildFEKEnvelopeAAD("file-x", header)
+	b := BuildFEKEnvelopeAAD("file-x", header)
 	if !bytes.Equal(a, b) {
 		t.Errorf("not deterministic: a=%x b=%x", a, b)
 	}
 }
 
 func TestBuildFEKEnvelopeAAD_KeyTypeDistinction(t *testing.T) {
-	account := BuildFEKEnvelopeAAD("file-x", 0x01)
-	custom := BuildFEKEnvelopeAAD("file-x", 0x02)
+	salt := make([]byte, OwnerEnvelopeSaltSize())
+	accountHeader, _ := CreateFEKEnvelopeHeader(AccountKDFContext, salt)
+	customHeader, _ := CreateFEKEnvelopeHeader(CustomKDFContext, salt)
+	account := BuildFEKEnvelopeAAD("file-x", accountHeader)
+	custom := BuildFEKEnvelopeAAD("file-x", customHeader)
 	if bytes.Equal(account, custom) {
 		t.Errorf("account (0x01) and custom (0x02) FEK envelope AADs collided: %x", account)
 	}
 }
 
 func TestBuildFEKEnvelopeAAD_FileIDDistinction(t *testing.T) {
-	a := BuildFEKEnvelopeAAD("file-a", 0x01)
-	b := BuildFEKEnvelopeAAD("file-b", 0x01)
+	header, _ := CreateFEKEnvelopeHeader(AccountKDFContext, make([]byte, OwnerEnvelopeSaltSize()))
+	a := BuildFEKEnvelopeAAD("file-a", header)
+	b := BuildFEKEnvelopeAAD("file-b", header)
 	if bytes.Equal(a, b) {
 		t.Errorf("FEK envelope AAD collided across fileID change: %x", a)
 	}
@@ -292,7 +344,8 @@ func TestFEKEnvelopeAAD_RoundTrip(t *testing.T) {
 		t.Fatalf("GenerateAESKey: %v", err)
 	}
 
-	aad := BuildFEKEnvelopeAAD("file-x", 0x01)
+	header, _ := CreateFEKEnvelopeHeader(AccountKDFContext, make([]byte, OwnerEnvelopeSaltSize()))
+	aad := BuildFEKEnvelopeAAD("file-x", header)
 	wrapped, err := EncryptGCMWithAAD(fek, kek, aad)
 	if err != nil {
 		t.Fatalf("EncryptGCMWithAAD: %v", err)
@@ -311,8 +364,9 @@ func TestFEKEnvelopeAAD_CrossFileSwap_Fails(t *testing.T) {
 	fek, _ := GenerateFEK()
 	kek, _ := GenerateAESKey()
 
-	aadA := BuildFEKEnvelopeAAD("file-A", 0x01)
-	aadB := BuildFEKEnvelopeAAD("file-B", 0x01)
+	header, _ := CreateFEKEnvelopeHeader(AccountKDFContext, make([]byte, OwnerEnvelopeSaltSize()))
+	aadA := BuildFEKEnvelopeAAD("file-A", header)
+	aadB := BuildFEKEnvelopeAAD("file-B", header)
 
 	wrappedA, err := EncryptGCMWithAAD(fek, kek, aadA)
 	if err != nil {
@@ -330,8 +384,11 @@ func TestFEKEnvelopeAAD_KeyTypeFlip_Fails(t *testing.T) {
 	fek, _ := GenerateFEK()
 	kek, _ := GenerateAESKey()
 
-	aadAccount := BuildFEKEnvelopeAAD("file-x", 0x01)
-	aadCustom := BuildFEKEnvelopeAAD("file-x", 0x02)
+	salt := make([]byte, OwnerEnvelopeSaltSize())
+	accountHeader, _ := CreateFEKEnvelopeHeader(AccountKDFContext, salt)
+	customHeader, _ := CreateFEKEnvelopeHeader(CustomKDFContext, salt)
+	aadAccount := BuildFEKEnvelopeAAD("file-x", accountHeader)
+	aadCustom := BuildFEKEnvelopeAAD("file-x", customHeader)
 
 	wrapped, err := EncryptGCMWithAAD(fek, kek, aadAccount)
 	if err != nil {

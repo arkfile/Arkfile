@@ -11,7 +11,7 @@
  *
  * Encryption helper here mirrors the on-the-wire layout produced by the
  * Go server (crypto.EncryptFEK / crypto.EncryptGCMWithAAD):
- *   FEK envelope: [0x01][keyType][nonce][ciphertext][tag]   AAD = fek-envelope-AAD
+ *   FEK envelope: [version][keyType][KDF profile][salt][nonce][ciphertext][tag]
  *   Metadata     :  nonce_b64 + (ciphertext||tag)_b64       AAD = metadata-field-AAD
  */
 
@@ -28,6 +28,7 @@ import {
   AAD_FIELD_SHA256,
   AAD_FIELD_PASSWORD_HINT,
 } from '../crypto/aad';
+import { createOwnerEnvelopeHeader } from '../crypto/owner-envelope';
 
 // ----------------------------------------------------------------------------
 // Fetch mock for getChunkingParams() -- AESGCMDecryptor.fromRawKey calls
@@ -39,8 +40,10 @@ const originalFetch = globalThis.fetch;
 const CHUNKING_CONFIG = {
   plaintextChunkSizeBytes: 16777216,
   envelope: {
-    version: 1,
-    headerSizeBytes: 2,
+    version: 2,
+    headerSizeBytes: 35,
+    saltSizeBytes: 32,
+    kdfProfile: 1,
     keyTypes: { account: 1, custom: 2 },
   },
   aesGcm: {
@@ -94,8 +97,7 @@ async function aesGcmEncrypt(
 
 /**
  * Build the wire-format encrypted FEK exactly as the Go server emits it:
- *   [0x01][keyType][nonce(12)][ciphertext][tag(16)]
- * encrypted under AAD = BuildFEKEnvelopeAAD(fileID, keyType).
+ *   [version][keyType][KDF profile][salt(32)][nonce][ciphertext][tag]
  */
 async function buildEncryptedFEK(
   fek: Uint8Array,
@@ -103,14 +105,15 @@ async function buildEncryptedFEK(
   fileID: string,
   keyTypeByte: number,
 ): Promise<string> {
-  const aad = buildFEKEnvelopeAAD(fileID, keyTypeByte);
+  const keyType: 'account' | 'custom' = keyTypeByte === 1 ? 'account' : 'custom';
+  const header = createOwnerEnvelopeHeader(keyType, new Uint8Array(32).fill(7));
+  const aad = buildFEKEnvelopeAAD(fileID, header);
   const { nonce, ciphertextWithTag } = await aesGcmEncrypt(fek, kek, aad);
 
-  const out = new Uint8Array(2 + nonce.length + ciphertextWithTag.length);
-  out[0] = 0x01;
-  out[1] = keyTypeByte;
-  out.set(nonce, 2);
-  out.set(ciphertextWithTag, 2 + nonce.length);
+  const out = new Uint8Array(header.length + nonce.length + ciphertextWithTag.length);
+  out.set(header, 0);
+  out.set(nonce, header.length);
+  out.set(ciphertextWithTag, header.length + nonce.length);
   return toBase64(out);
 }
 
@@ -199,24 +202,23 @@ describe('decryptFEK', () => {
     const kek = randomBytes(32);
     const wrapped = await buildEncryptedFEK(fek, kek, FILE_ID, 0x01);
 
-    // Flip the version byte (0x01 -> 0x02). decryptFEK should refuse at
+    // Flip the version byte. decryptFEK should refuse at
     // header-parse time, before attempting AEAD.
     const bin = atob(wrapped);
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    bytes[0] = 0x02;
+    bytes[0] = 0x03;
     let bad = '';
     for (let i = 0; i < bytes.length; i++) bad += String.fromCharCode(bytes[i]);
     const badB64 = btoa(bad);
 
-    await expect(decryptFEK(badB64, kek, FILE_ID)).rejects.toThrow('Unsupported envelope version');
+    await expect(decryptFEK(badB64, kek, FILE_ID)).rejects.toThrow('Unsupported owner envelope version');
   });
 
   test('rejects too-short input', async () => {
     const kek = randomBytes(32);
-    // Anything <31 bytes is below the minimum (2 envelope + 12 nonce + 16 tag + 1 ct).
     const shortB64 = toBase64(new Uint8Array(20));
-    await expect(decryptFEK(shortB64, kek, FILE_ID)).rejects.toThrow('Encrypted FEK too short');
+    await expect(decryptFEK(shortB64, kek, FILE_ID)).rejects.toThrow('Owner envelope requires');
   });
 });
 

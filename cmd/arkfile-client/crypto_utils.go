@@ -8,8 +8,8 @@
 //
 // Chunk layout (uniform chunks):
 //   Every chunk: [nonce (12)][ciphertext][tag (16)]
-//   No per-chunk envelope header. The FEK envelope keeps its 2-byte
-//   [0x01][key_type] prefix; only the redundant per-chunk header is gone.
+//   No per-chunk envelope header. The owner FEK envelope carries its version,
+//   key type, KDF profile, and public salt in an authenticated fixed header.
 //
 // All crypto parameters are sourced from centralized JSON configs via the
 // crypto package accessors.
@@ -175,30 +175,27 @@ func decryptMetadataField(encDataB64, nonceB64 string, accountKey []byte, fileID
 	return string(plaintext), nil
 }
 
-// wrapFEK encrypts the FEK with a KEK (account key or custom key) under
-// AAD = BuildFEKEnvelopeAAD(fileID, keyTypeByte), then prepends the
-// 2-byte envelope header [0x01][keyTypeByte]. Returns the base64-encoded
-// result suitable for the server API.
+// wrapFEK encrypts the FEK with a KEK and authenticates the complete owner
+// envelope header together with the file ID.
 //
 // Cross-file FEK substitution fails at unwrap time because the AAD
 // was bound to a different fileID.
-func wrapFEK(fek, kek []byte, keyType, fileID string) (string, error) {
+func wrapFEK(fek, kek, salt []byte, keyType, fileID string) (string, error) {
 	if fileID == "" {
 		return "", fmt.Errorf("fileID cannot be empty")
 	}
 
-	keyTypeByte, err := crypto.KeyTypeForContext(keyType)
+	header, err := crypto.CreateFEKEnvelopeHeader(keyType, salt)
 	if err != nil {
-		return "", fmt.Errorf("invalid key type: %w", err)
+		return "", fmt.Errorf("create FEK envelope header: %w", err)
 	}
 
-	aad := crypto.BuildFEKEnvelopeAAD(fileID, keyTypeByte)
+	aad := crypto.BuildFEKEnvelopeAAD(fileID, header)
 	encryptedFEK, err := crypto.EncryptGCMWithAAD(fek, kek, aad)
 	if err != nil {
 		return "", fmt.Errorf("failed to encrypt FEK: %w", err)
 	}
 
-	header := []byte{0x01, keyTypeByte}
 	result := make([]byte, 0, len(header)+len(encryptedFEK))
 	result = append(result, header...)
 	result = append(result, encryptedFEK...)
@@ -206,10 +203,7 @@ func wrapFEK(fek, kek []byte, keyType, fileID string) (string, error) {
 	return base64.StdEncoding.EncodeToString(result), nil
 }
 
-// unwrapFEK decrypts an encrypted FEK. Strips the 2-byte envelope header,
-// determines the key type, reconstructs the AAD that was used at encrypt
-// time, and decrypts with the provided KEK. Returns the plaintext FEK and
-// the key type string ("account" or "custom").
+// unwrapFEK decrypts an encrypted FEK with a pre-derived KEK.
 func unwrapFEK(encryptedFEKB64 string, kek []byte, fileID string) ([]byte, string, error) {
 	if fileID == "" {
 		return nil, "", fmt.Errorf("fileID cannot be empty")
@@ -220,35 +214,38 @@ func unwrapFEK(encryptedFEKB64 string, kek []byte, fileID string) ([]byte, strin
 		return nil, "", fmt.Errorf("failed to decode encrypted FEK: %w", err)
 	}
 
-	const headerSize = 2
-	if len(encryptedFEK) < headerSize {
-		return nil, "", fmt.Errorf("encrypted FEK too short for envelope header")
+	headerSize := crypto.OwnerEnvelopeHeaderSize()
+	expectedSize := headerSize + crypto.AesGcmNonceSize() + 32 + crypto.AesGcmTagSize()
+	if len(encryptedFEK) != expectedSize {
+		return nil, "", fmt.Errorf("encrypted FEK must be %d bytes, got %d", expectedSize, len(encryptedFEK))
 	}
 
-	version := encryptedFEK[0]
-	keyTypeByte := encryptedFEK[1]
-
-	if version != 0x01 {
-		return nil, "", fmt.Errorf("unsupported envelope version: 0x%02x", version)
+	headerBytes := encryptedFEK[:headerSize]
+	header, err := crypto.ParseFEKEnvelopeHeader(headerBytes)
+	if err != nil {
+		return nil, "", err
 	}
+	keyType := header.PasswordType()
 
-	var keyType string
-	switch keyTypeByte {
-	case 0x01:
-		keyType = "account"
-	case 0x02:
-		keyType = "custom"
-	default:
-		return nil, "", fmt.Errorf("unsupported key type: 0x%02x", keyTypeByte)
-	}
-
-	aad := crypto.BuildFEKEnvelopeAAD(fileID, keyTypeByte)
+	aad := crypto.BuildFEKEnvelopeAAD(fileID, headerBytes)
 	fek, err := crypto.DecryptGCMWithAAD(encryptedFEK[headerSize:], kek, aad)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to decrypt FEK: %w", err)
 	}
+	if len(fek) != 32 {
+		clearBytes(fek)
+		return nil, "", fmt.Errorf("decrypted FEK must be 32 bytes")
+	}
 
 	return fek, keyType, nil
+}
+
+func parseFEKEnvelopeHeader(encryptedFEKB64 string) (*crypto.FEKEnvelopeHeader, error) {
+	encryptedFEK, err := base64.StdEncoding.DecodeString(encryptedFEKB64)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode encrypted FEK: %w", err)
+	}
+	return crypto.ParseFEKEnvelopeHeader(encryptedFEK)
 }
 
 // computeStreamingSHA256 computes SHA-256 of a file using streaming reads.

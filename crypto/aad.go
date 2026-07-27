@@ -16,7 +16,7 @@
 //     [4-byte BE uint32 length][UTF-8 bytes].
 //   - Fixed-width integer fields (chunkIndex, totalChunks) are encoded as
 //     [8-byte BE uint64] with no length prefix.
-//   - Single-byte fields (keyTypeByte) are encoded as [1 byte] directly.
+//   - The fixed-width owner-envelope header is appended directly.
 //
 // This convention is unambiguous: each call site produces a byte string
 // determined solely by its inputs, and the same encoding is implemented
@@ -30,8 +30,8 @@
 //     [4B len(fileID)][fileID bytes]
 //     [8B chunkIndex][8B totalChunks]
 //
-//   BuildFEKEnvelopeAAD(fileID, keyTypeByte)
-//     [4B len(fileID)][fileID bytes][1B keyTypeByte]
+//   BuildFEKEnvelopeAAD(fileID, envelopeHeader)
+//     [4B len(fileID)][fileID bytes][35B envelopeHeader]
 //
 //   BuildMetadataFieldAAD(fileID, fieldName, ownerUsername)
 //     [4B len(fileID)][fileID bytes]
@@ -86,18 +86,16 @@ func BuildChunkAAD(fileID string, chunkIndex, totalChunks int64) []byte {
 // Binding fileID prevents cross-file FEK swap: an attacker that
 // substitutes file A's encrypted_fek into file B's metadata row cannot
 // trick the client into decrypting file B's chunks with file A's FEK.
-// Binding keyTypeByte prevents an attacker from flipping the 0x01/0x02
-// indicator byte to mis-route the client to the wrong KEK derivation.
+// Binding the complete header prevents an attacker from changing the version,
+// key type, KDF profile, or salt without invalidating the authentication tag.
 //
-// keyTypeByte values: 0x01 = account password, 0x02 = custom password.
-// See crypto/chunking-params.json envelope.keyTypes.
-func BuildFEKEnvelopeAAD(fileID string, keyTypeByte byte) []byte {
+// The caller must pass the canonical fixed-width owner-envelope header.
+func BuildFEKEnvelopeAAD(fileID string, envelopeHeader []byte) []byte {
 	fidBytes := []byte(fileID)
-	// 4 (len(fileID)) + len(fileID) + 1 (keyTypeByte)
-	out := make([]byte, 0, 4+len(fidBytes)+1)
+	out := make([]byte, 0, 4+len(fidBytes)+len(envelopeHeader))
 
 	out = appendLenPrefixedString(out, fidBytes)
-	out = append(out, keyTypeByte)
+	out = append(out, envelopeHeader...)
 
 	return out
 }

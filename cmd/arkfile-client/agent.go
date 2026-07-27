@@ -24,6 +24,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/arkfile/Arkfile/crypto"
 )
 
 // Default and limits for account key TTL
@@ -42,14 +44,16 @@ const (
 // accountKeyEntry holds the account key along with metadata for TTL, session binding, and auditing.
 // This structure uses the unified JSON shape shared with the TypeScript frontend.
 type accountKeyEntry struct {
-	key       []byte    // raw key material (mlock'd when possible)
-	username  string    // username this key belongs to
-	context   string    // always "account"
-	tokenHash string    // SHA-256 hex of the session access token (session binding)
-	storedAt  time.Time // when the key was stored
-	expiresAt time.Time // when the key expires
-	ttlHours  int       // configured TTL in hours
-	mlocked   bool      // whether mlock succeeded on the key slice
+	key               []byte // raw key material (mlock'd when possible)
+	username          string // username this key belongs to
+	context           string // always "account"
+	accountKDFSalt    string
+	accountKDFProfile int
+	tokenHash         string    // SHA-256 hex of the session access token (session binding)
+	storedAt          time.Time // when the key was stored
+	expiresAt         time.Time // when the key expires
+	ttlHours          int       // configured TTL in hours
+	mlocked           bool      // whether mlock succeeded on the key slice
 }
 
 // Agent holds the AccountKey and digest cache in memory and serves requests via Unix socket
@@ -304,7 +308,7 @@ func (a *Agent) handleConnection(conn net.Conn) {
 	case "get_account_key":
 		a.handleGetAccountKey(conn, req.Params)
 	case "get_offline_account_key":
-		a.handleGetOfflineAccountKey(conn)
+		a.handleGetOfflineAccountKey(conn, req.Params)
 	case "store_digest_cache":
 		a.handleStoreDigestCache(conn, req.Params)
 	case "get_digest_cache":
@@ -364,6 +368,24 @@ func (a *Agent) handleStoreAccountKey(conn net.Conn, params map[string]interface
 		}
 		return
 	}
+	accountKDFSalt, _ := params["account_kdf_salt"].(string)
+	accountKDFProfileRaw, profileOK := params["account_kdf_profile"].(float64)
+	if accountKDFSalt == "" || !profileOK {
+		a.sendError(conn, "account KDF metadata required")
+		for i := range accountKey {
+			accountKey[i] = 0
+		}
+		return
+	}
+	decodedSalt, saltErr := base64.StdEncoding.DecodeString(accountKDFSalt)
+	if saltErr != nil || crypto.ValidatePasswordSalt(decodedSalt) != nil ||
+		int(accountKDFProfileRaw) != int(crypto.OwnerEnvelopeKDFProfile()) {
+		a.sendError(conn, "invalid account KDF metadata")
+		for i := range accountKey {
+			accountKey[i] = 0
+		}
+		return
+	}
 
 	// Extract session token hash (required for session binding)
 	tokenHash, _ := params["token_hash"].(string)
@@ -389,14 +411,16 @@ func (a *Agent) handleStoreAccountKey(conn net.Conn, params map[string]interface
 
 	now := time.Now()
 	entry := &accountKeyEntry{
-		key:       accountKey,
-		username:  username,
-		context:   "account",
-		tokenHash: tokenHash,
-		storedAt:  now,
-		expiresAt: now.Add(time.Duration(ttlHours) * time.Hour),
-		ttlHours:  ttlHours,
-		mlocked:   false,
+		key:               accountKey,
+		username:          username,
+		context:           "account",
+		accountKDFSalt:    accountKDFSalt,
+		accountKDFProfile: int(accountKDFProfileRaw),
+		tokenHash:         tokenHash,
+		storedAt:          now,
+		expiresAt:         now.Add(time.Duration(ttlHours) * time.Hour),
+		ttlHours:          ttlHours,
+		mlocked:           false,
 	}
 
 	// Attempt to mlock the key to prevent swapping to disk (POSIX mlock(2))
@@ -459,14 +483,24 @@ func (a *Agent) handleGetAccountKey(conn net.Conn, params map[string]interface{}
 	if !a.validateBoundSession(conn, params) {
 		return
 	}
+	expectedSalt, _ := params["account_kdf_salt"].(string)
+	expectedProfile, profileOK := params["account_kdf_profile"].(float64)
+	if expectedSalt == "" || !profileOK ||
+		expectedSalt != a.keyEntry.accountKDFSalt ||
+		int(expectedProfile) != a.keyEntry.accountKDFProfile {
+		a.sendError(conn, "cached Account Key does not match account KDF metadata")
+		return
+	}
 
 	result := map[string]interface{}{
-		"account_key": base64.StdEncoding.EncodeToString(a.keyEntry.key),
-		"username":    a.keyEntry.username,
-		"context":     a.keyEntry.context,
-		"stored_at":   a.keyEntry.storedAt.Format(time.RFC3339),
-		"expires_at":  a.keyEntry.expiresAt.Format(time.RFC3339),
-		"ttl_hours":   a.keyEntry.ttlHours,
+		"account_key":         base64.StdEncoding.EncodeToString(a.keyEntry.key),
+		"username":            a.keyEntry.username,
+		"context":             a.keyEntry.context,
+		"account_kdf_salt":    a.keyEntry.accountKDFSalt,
+		"account_kdf_profile": a.keyEntry.accountKDFProfile,
+		"stored_at":           a.keyEntry.storedAt.Format(time.RFC3339),
+		"expires_at":          a.keyEntry.expiresAt.Format(time.RFC3339),
+		"ttl_hours":           a.keyEntry.ttlHours,
 	}
 
 	a.sendSuccess(conn, result)
@@ -474,7 +508,7 @@ func (a *Agent) handleGetAccountKey(conn net.Conn, params map[string]interface{}
 
 // handleGetOfflineAccountKey returns the account key without session binding.
 // Intended for offline decrypt-blob when no active login session exists.
-func (a *Agent) handleGetOfflineAccountKey(conn net.Conn) {
+func (a *Agent) handleGetOfflineAccountKey(conn net.Conn, params map[string]interface{}) {
 	count := a.accessCount.Add(1)
 	resetTime := time.Unix(a.accessCountReset.Load(), 0)
 	elapsed := time.Since(resetTime)
@@ -498,14 +532,24 @@ func (a *Agent) handleGetOfflineAccountKey(conn net.Conn) {
 		a.sendError(conn, fmt.Sprintf("account key expired (after %d hours). Please login again", ttl))
 		return
 	}
+	expectedSalt, _ := params["account_kdf_salt"].(string)
+	expectedProfile, profileOK := params["account_kdf_profile"].(float64)
+	if expectedSalt == "" || !profileOK ||
+		expectedSalt != a.keyEntry.accountKDFSalt ||
+		int(expectedProfile) != a.keyEntry.accountKDFProfile {
+		a.sendError(conn, "cached Account Key does not match bundle KDF metadata")
+		return
+	}
 
 	result := map[string]interface{}{
-		"account_key": base64.StdEncoding.EncodeToString(a.keyEntry.key),
-		"username":    a.keyEntry.username,
-		"context":     a.keyEntry.context,
-		"stored_at":   a.keyEntry.storedAt.Format(time.RFC3339),
-		"expires_at":  a.keyEntry.expiresAt.Format(time.RFC3339),
-		"ttl_hours":   a.keyEntry.ttlHours,
+		"account_key":         base64.StdEncoding.EncodeToString(a.keyEntry.key),
+		"username":            a.keyEntry.username,
+		"context":             a.keyEntry.context,
+		"account_kdf_salt":    a.keyEntry.accountKDFSalt,
+		"account_kdf_profile": a.keyEntry.accountKDFProfile,
+		"stored_at":           a.keyEntry.storedAt.Format(time.RFC3339),
+		"expires_at":          a.keyEntry.expiresAt.Format(time.RFC3339),
+		"ttl_hours":           a.keyEntry.ttlHours,
 	}
 
 	a.sendSuccess(conn, result)
@@ -766,12 +810,20 @@ func (c *AgentClient) Ping() error {
 }
 
 // StoreAccountKey stores the account key in the agent with TTL, session binding, and metadata.
-func (c *AgentClient) StoreAccountKey(accountKey []byte, username string, accessToken string, ttlHours int) error {
+func (c *AgentClient) StoreAccountKey(
+	accountKey []byte,
+	username, accountKDFSalt string,
+	accountKDFProfile int,
+	accessToken string,
+	ttlHours int,
+) error {
 	resp, err := c.sendRequest("store_account_key", map[string]interface{}{
-		"account_key": base64.StdEncoding.EncodeToString(accountKey),
-		"username":    username,
-		"token_hash":  hashToken(accessToken),
-		"ttl_hours":   ttlHours,
+		"account_key":         base64.StdEncoding.EncodeToString(accountKey),
+		"username":            username,
+		"account_kdf_salt":    accountKDFSalt,
+		"account_kdf_profile": accountKDFProfile,
+		"token_hash":          hashToken(accessToken),
+		"ttl_hours":           ttlHours,
 	})
 	if err != nil {
 		return err
@@ -785,12 +837,17 @@ func (c *AgentClient) StoreAccountKey(accountKey []byte, username string, access
 }
 
 // GetAccountKey retrieves the account key from the agent with session binding validation.
-func (c *AgentClient) GetAccountKey(accessToken string) ([]byte, error) {
+func (c *AgentClient) GetAccountKey(
+	accessToken, accountKDFSalt string,
+	accountKDFProfile int,
+) ([]byte, error) {
 	if accessToken == "" {
 		return nil, fmt.Errorf("access token required for session-bound key retrieval")
 	}
 	resp, err := c.sendRequest("get_account_key", map[string]interface{}{
-		"token_hash": hashToken(accessToken),
+		"token_hash":          hashToken(accessToken),
+		"account_kdf_salt":    accountKDFSalt,
+		"account_kdf_profile": accountKDFProfile,
 	})
 	if err != nil {
 		return nil, err
@@ -809,8 +866,11 @@ func (c *AgentClient) GetAccountKey(accessToken string) ([]byte, error) {
 }
 
 // GetOfflineAccountKey retrieves the account key without session binding (offline decrypt-blob).
-func (c *AgentClient) GetOfflineAccountKey() ([]byte, error) {
-	resp, err := c.sendRequest("get_offline_account_key", nil)
+func (c *AgentClient) GetOfflineAccountKey(accountKDFSalt string, accountKDFProfile int) ([]byte, error) {
+	resp, err := c.sendRequest("get_offline_account_key", map[string]interface{}{
+		"account_kdf_salt":    accountKDFSalt,
+		"account_kdf_profile": accountKDFProfile,
+	})
 	if err != nil {
 		return nil, err
 	}

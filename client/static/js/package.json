@@ -12,7 +12,7 @@
     "clean": "rm -rf dist/* && rm -f sw-download.js sw-download.js.map",
     "lint": "bun tsc --noEmit && bun tsc --noEmit -p ../../../tsconfig.sw.json && echo '[OK] TypeScript checks passed'",
     "build:dev": "bun build src/app.ts --outdir dist --target browser --format iife --sourcemap --define ARKFILE_DEBUG_LOG=true && bun build src/sw-download.ts --outfile sw-download.js --target browser --format esm --define ARKFILE_DEBUG_LOG=true",
-    "build:prod": "bun build src/app.ts --outdir dist --target browser --format iife --minify --sourcemap=external --define ARKFILE_DEBUG_LOG=false && bun build src/sw-download.ts --outfile sw-download.js --target browser --format esm --minify --define ARKFILE_DEBUG_LOG=false"
+    "build:prod": "bun build src/app.ts --outdir dist --target browser --format iife --minify --drop=console.log --define ARKFILE_DEBUG_LOG=false && bun build src/sw-download.ts --outfile sw-download.js --target browser --format esm --minify --drop=console.log --define ARKFILE_DEBUG_LOG=false"
   },
   "devDependencies": {
     "@types/zxcvbn": "4.4.5",

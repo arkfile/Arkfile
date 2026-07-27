@@ -22,6 +22,7 @@ import {
   getAccountKey,
   decryptFEK,
   decryptMetadataField,
+  parseEncryptedFEKHeader,
 } from '../crypto/metadata-helpers';
 import { AAD_FIELD_FILENAME, AAD_FIELD_SHA256, AAD_FIELD_PASSWORD_HINT } from '../crypto/aad';
 import { ShareCreator, type FileInfo } from '../shares/share-creation';
@@ -318,6 +319,10 @@ export async function shareFile(fileId: string, passwordType: string): Promise<v
       return;
     }
     const meta: FileMetaResponse = await metaResp.json();
+    const envelopeHeader = parseEncryptedFEKHeader(meta.encrypted_fek);
+    if (envelopeHeader.keyType !== meta.password_type) {
+      throw new Error('Owner envelope key type does not match file metadata');
+    }
 
     // 2. Get Account Key
     const accountKey = await getAccountKey(username);
@@ -365,7 +370,7 @@ export async function shareFile(fileId: string, passwordType: string): Promise<v
           message: 'Running Argon2id key derivation -- this may take a few seconds...',
           indeterminate: true,
         });
-        const customKey = await deriveFileEncryptionKey(customPw, username, 'custom');
+        const customKey = await deriveFileEncryptionKey(customPw, envelopeHeader.salt, 'custom');
         hideProgress();
         fek = await decryptFEK(meta.encrypted_fek, customKey, meta.file_id);
       } catch (err) {

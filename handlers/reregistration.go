@@ -51,6 +51,11 @@ func respondAccountRequiresReregistration(c echo.Context, username string) error
 		logging.ErrorLogger.Printf("Failed to count files for %s during re-registration: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 	}
+	accountKDFSalt, accountKDFProfile, err := models.GetAccountCryptoMetadata(database.DB, username)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to load Account Key metadata for %s during re-registration: %v", username, err)
+		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
+	}
 
 	// Browser clients carry the handoff token automatically via the temp cookie
 	// (CookieTokenMiddleware copies it into the Authorization header). Clear any
@@ -64,6 +69,8 @@ func respondAccountRequiresReregistration(c echo.Context, username string) error
 		"reregistration_token": handoffToken,
 		"expires_at":           expiresAt.UTC().Format(time.RFC3339),
 		"file_count":           fileCount,
+		"account_kdf_salt":     accountKDFSalt,
+		"account_kdf_profile":  accountKDFProfile,
 	}
 
 	if fileCount > 0 {

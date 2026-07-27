@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/arkfile/Arkfile/auth"
+	arkcrypto "github.com/arkfile/Arkfile/crypto"
 )
 
 // validTestFileID is a canonical lowercase UUIDv4 with RFC4122 variant
@@ -25,13 +27,22 @@ const validTestFileID = "f1f1f1f1-2222-4333-8444-555555555555"
 // fields populated, parameterized only by the file_id. Tests override
 // individual fields before marshaling.
 func buildValidInitPayload(fileID string) map[string]interface{} {
+	header, err := arkcrypto.CreateFEKEnvelopeHeader(
+		arkcrypto.AccountKDFContext,
+		make([]byte, arkcrypto.OwnerEnvelopeSaltSize()),
+	)
+	if err != nil {
+		panic(err)
+	}
+	envelope := make([]byte, arkcrypto.OwnerEnvelopeHeaderSize()+arkcrypto.AesGcmNonceSize()+32+arkcrypto.AesGcmTagSize())
+	copy(envelope, header)
 	return map[string]interface{}{
 		"file_id":             fileID,
 		"encrypted_filename":  "ZW5jcnlwdGVkLWZpbGVuYW1l",
 		"filename_nonce":      "MTIzNDU2Nzg5MDEy",
 		"encrypted_sha256sum": "ZW5jcnlwdGVkLXNoYTI1Ng==",
 		"sha256sum_nonce":     "MDk4NzY1NDMyMTAw",
-		"encrypted_fek":       "ZW5jcnlwdGVkLWZlay1lbnZlbG9wZQ==",
+		"encrypted_fek":       base64.StdEncoding.EncodeToString(envelope),
 		"total_size":          int64(1024),
 		"chunk_size":          int64(16777216),
 		"password_type":       "account",
@@ -103,9 +114,7 @@ func TestCreateUploadSession_FileIDConflictStableError(t *testing.T) {
 	// uniqueness check: user lookup (approval + storage limit) and the
 	// per-user in-progress sweep + count. Each sub-test reuses this.
 	mockStorageGate := func(mock sqlmock.Sqlmock) {
-		// CreateUploadSession reads the user once for approval, then
-		// CheckStorageAvailable reads it twice to determine usage and limit.
-		for range 3 {
+		expectUser := func() {
 			userRows := sqlmock.NewRows([]string{
 				"id", "username", "created_at", "total_storage_bytes",
 				"storage_limit_bytes", "is_approved", "approved_by", "approved_at",
@@ -119,6 +128,13 @@ func TestCreateUploadSession_FileIDConflictStableError(t *testing.T) {
 			mock.ExpectQuery(`SELECT id, username, created_at,\s+total_storage_bytes, storage_limit_bytes,\s+is_approved, approved_by, approved_at, is_admin\s+FROM users WHERE username = \?`).
 				WithArgs(username).WillReturnRows(userRows)
 		}
+		expectUser()
+		mock.ExpectQuery(`SELECT account_kdf_salt, account_kdf_profile\s+FROM users WHERE username = \?`).
+			WithArgs(username).
+			WillReturnRows(sqlmock.NewRows([]string{"account_kdf_salt", "account_kdf_profile"}).
+				AddRow(base64.StdEncoding.EncodeToString(make([]byte, arkcrypto.OwnerEnvelopeSaltSize())), int(arkcrypto.OwnerEnvelopeKDFProfile())))
+		expectUser()
+		expectUser()
 
 		// BEGIN transaction
 		mock.ExpectBegin()
@@ -299,5 +315,41 @@ func TestUploadChunk_RejectsChunkHashMismatch(t *testing.T) {
 	assert.False(t, resp.Success)
 	assert.Equal(t, "chunk_hash_mismatch", resp.Error)
 
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestClaimUploadCompletionIsSingleWinner(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	const sessionID = "completion-session"
+	query := `UPDATE upload_sessions\s+SET status = 'completing', updated_at = CURRENT_TIMESTAMP\s+WHERE id = \? AND status = 'in_progress'`
+	mock.ExpectExec(query).
+		WithArgs(sessionID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(query).
+		WithArgs(sessionID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	first, err := claimUploadCompletion(db, sessionID)
+	require.NoError(t, err)
+	second, err := claimUploadCompletion(db, sessionID)
+	require.NoError(t, err)
+	assert.True(t, first)
+	assert.False(t, second)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestReleaseUploadCompletionClaimOnlyReopensCompletingState(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	const sessionID = "completion-session"
+	mock.ExpectExec(`UPDATE upload_sessions\s+SET status = 'in_progress', updated_at = CURRENT_TIMESTAMP\s+WHERE id = \? AND status = 'completing'`).
+		WithArgs(sessionID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	releaseUploadCompletionClaim(db, sessionID)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

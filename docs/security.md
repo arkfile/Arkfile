@@ -193,13 +193,9 @@ Arkfile implements OPAQUE (Oblivious Pseudorandom Functions for Key Exchange), a
 - Password-blind key exchange prevents server learning passwords
 - Mutual authentication ensures both parties are legitimate
 - Forward secrecy through ephemeral session keys
-- No password-derived salts stored server-side
+- OPAQUE authentication state is independent of the public Account Key salt stored with each account
 
-**Resistance Properties:**
-- Offline dictionary attack resistance
-- Server compromise protection
-- Pre-computation attack immunity
-- Side-channel attack mitigation
+**Resistance Properties:** OPAQUE is designed to prevent a stolen server authentication record from becoming an ordinary password hash that can be tested offline. Its guarantees depend on the authentic protocol implementation and its assumptions; they do not protect passwords entered into a replaced browser client or make a fully compromised running host harmless.
 
 ### Multi-Factor Authentication (TOTP)
 
@@ -237,7 +233,7 @@ Arkfile enforces different password requirements based on the authentication con
 
 **Share Password Requirements:**
 - Minimum 20 characters with at least 2 of 4 character classes (uppercase, lowercase, number, special character)
-- Uses Argon2id with 128 MiB memory cost for anonymous access
+- Uses the unified Argon2id profile with a 64 MiB memory cost
 - Limited attack surface affecting only shared files
 
 **Validation Approach:**
@@ -249,23 +245,29 @@ Arkfile uses the same account password for two completely independent purposes: 
 
 **Account Password for Authentication (OPAQUE).** The account password is used with the OPAQUE protocol to authenticate the user. OPAQUE performs a password-authenticated key exchange in which an authentic client proves knowledge of the password without transmitting it in the protocol messages. The server does not learn the password during an authentic registration or login exchange. A compromised web origin can replace the browser client and capture the password before the OPAQUE exchange begins. OPAQUE has its own internal key derivation and does not use Argon2id. The output of a successful OPAQUE authentication is a set of session keys used for JWT token issuance and session management.
 
-**Account Password for File Encryption (Argon2id -> Account Key).** The same account password is used separately, entirely on the client side, to derive an Account Key via Argon2id. This Account Key serves as a Key Encryption Key (KEK). For each file, a cryptographically random 256-bit File Encryption Key (FEK) is generated, and the FEK is wrapped (encrypted) by the KEK using AES-256-GCM. The file data itself is encrypted with the FEK. The salt for this derivation is deterministic, computed as `SHA-256("arkfile-account-key-salt:{username}")`. The salt is public and does not prevent offline password guesses against a captured authenticated FEK envelope; AES-GCM authentication lets an attacker recognize a successful guess. Security against such guessing depends on password strength and the per-guess cost imposed by Argon2id. The username-derived salt provides domain separation and differs across usernames, but it does not provide the precomputation resistance of a random per-account salt.
+**Account Password for File Encryption (Argon2id -> Account Key).** The same account password is used separately, entirely on the client side, to derive an Account Key via Argon2id. The client generates a random 32-byte public Account Key salt during registration; the server stores that salt and KDF profile as account cryptographic metadata. Authenticated clients retrieve the metadata before deriving the Account Key. The Account Key serves as a Key Encryption Key (KEK). For each file, a cryptographically random 256-bit File Encryption Key (FEK) is generated, and the FEK is wrapped by the KEK using AES-256-GCM. The file payload itself is encrypted with the FEK. The public salt prevents deterministic reuse across deployments, but it does not prevent offline password guesses against a captured authenticated FEK envelope. AES-GCM authentication lets an attacker recognize a successful guess, so security against guessing depends on password strength and Argon2id cost.
 
-**Custom Password for File Encryption (Argon2id -> Custom Key).** Users may optionally provide a custom password instead of using their account key to encrypt a file. This custom password goes through the same Argon2id derivation with a different deterministic salt (`SHA-256("arkfile-custom-key-salt:{username}")`), producing a Custom Key (KEK) that wraps the FEK. The same offline-guessing limitation described for the Account Key applies to captured custom-wrapped FEK envelopes. The encrypted envelope format distinguishes account-wrapped from custom-wrapped FEKs via a key type byte (0x01 for account, 0x02 for custom), so the client knows which password to request at decryption time.
+**Custom Password for File Encryption (Argon2id -> Custom Key).** Users may optionally provide a custom password instead of using their Account Key to wrap a file's FEK. The client generates a new random 32-byte public salt for every custom-password file and derives a Custom Key under a separate KDF context. Reusing the same custom password for two files therefore does not reuse the Custom Key. The salt is carried in the authenticated owner FEK envelope. The same offline-guessing limitation described for the Account Key applies to captured custom-wrapped FEK envelopes.
 
 **Share Password for Secure Sharing (Argon2id -> Share Key).** When a user creates a share link, a separate share password is required. Unlike account and custom passwords, share passwords use a random 32-byte salt (not deterministic). The share password is processed through Argon2id to derive a Share Key, which encrypts a Share Envelope containing the FEK, a download token, and file metadata (filename, size, SHA-256 hash). The encryption uses AES-GCM with Additional Authenticated Data (AAD = share_id + file_id) to cryptographically bind the envelope to a specific share. Recipients enter the share password, derive the same key, decrypt the envelope, extract the FEK, and decrypt the file. The share password is never sent to the server.
+
+### Owner FEK Envelope and Offline Backup
+
+Owner FEK envelope version 2 has a fixed 35-byte authenticated header: one version byte (`0x02`), one key-type byte (`0x01` account or `0x02` custom), one KDF-profile byte (`0x01`), and the 32-byte public salt. The header is followed by the 12-byte AES-GCM nonce and the wrapped 32-byte FEK with its 16-byte tag. AAD binds the file ID and complete header. Account envelopes must use the account's stored salt; custom envelopes use the per-file salt.
+
+`.arkbackup` version 2 is self-describing. Its JSON metadata includes `owner_username`, `account_kdf_salt`, `account_kdf_profile`, file identifiers, encrypted owner metadata, the owner FEK envelope, and chunk parameters. The salt and profile are public, not secret key material. Offline decryption derives the Account Key from the password and bundle metadata without contacting the server. `owner_username` remains required inside the bundle because it is part of metadata AAD; a caller-supplied username is optional and must match.
 
 ### Argon2id Key Derivation Parameters
 
 All password-based key derivation contexts (account key, custom key, and share key) use the same unified Argon2id profile, defined as a single source of truth in `crypto/argon2id-params.json` and embedded at build time into both the Go server and the TypeScript client:
 
 - **Variant:** Argon2id (resistant to both side-channel and GPU-based attacks)
-- **Memory cost:** 128 MiB (131,072 KiB)
-- **Time cost:** 4 iterations
+- **Memory cost:** 64 MiB (65,536 KiB)
+- **Time cost:** 3 iterations
 - **Parallelism:** 1 thread
 - **Output key length:** 32 bytes (256 bits)
 
-These parameters exceed the strongest OWASP-recommended configuration for Argon2id (m=47,104 KiB / 46 MiB, t=1, p=1) as of 2026 by using significantly more memory and more iterations. Parallelism is set to 1 because the client-side key derivation runs in a browser WebAssembly context, which is single-threaded. Setting parallelism higher than 1 would not actually parallelize the computation in a browser -- it would instead multiply the sequential work. With p=1 and t=4 at 128 MiB, derivation is intended to remain practical on supported clients while substantially raising the cost of offline guesses. Actual latency and attacker cost depend on hardware and implementation, so these parameters require measurement across representative constrained and desktop devices.
+Parallelism is set to 1 because the client-side key derivation runs in a browser WebAssembly context that does not currently parallelize this operation. The profile is intended to remain practical on constrained supported clients while raising the cost of offline guesses. Actual latency and attacker cost depend on hardware and implementation, so the profile requires measurement across representative constrained and desktop devices rather than relying on an absolute strength claim.
 
 ## Session Management
 
@@ -357,8 +359,7 @@ Root Security
 # Directory structure
 /opt/arkfile/etc/keys/
 ├── opaque/               # OPAQUE server keys (guided user re-registration rotation)
-├── jwt/                  # JWT signing keys (rotatable)
-└── backup/               # Encrypted key backups
+└── jwt/                  # JWT signing keys (rotatable)
 ```
 
 **File Permissions:**
@@ -389,8 +390,6 @@ sudo systemctl start arkfile
 # Or use the runbook wrapper (delegates to arkfile-admin only):
 sudo ./scripts/maintenance/rotate-envelope-master.sh
 
-# OPAQUE key backup (monthly)
-./scripts/maintenance/backup-keys.sh
 ```
 
 The envelope master key (`ARKFILE_MASTER_KEY` in `secrets.env`) wraps every secret in the `system_keys` table. Its rotation is fully server-side with no user impact: with the service stopped, the apply step decrypts each `system_keys` row under the old master and re-encrypts it under a freshly generated master in a single transaction, then rewrites the `ARKFILE_MASTER_KEY` line in `secrets.env`. Before committing, the new master is written to a root-only (0400) recovery file under `/opt/arkfile/backups/envelope-rotation/` and the whole `secrets.env` is backed up, so a failed swap is always recoverable. After the swap the entire table is verified to decrypt under the new master. The EntityID master is regenerated as part of the same rotation rather than carried forward, which resets the daily rate-limiting/correlation windows (a privacy improvement); no file data, sessions beyond the restart, or user secrets are affected.
@@ -416,23 +415,12 @@ Arkfile partitions system secrets into separate trust layers (envelope master, o
 **OPAQUE Protocol Security:**
 - Pure OPAQUE registration and authentication flow
 - OPAQUE blinding prevents password transmission
-- No client-side password hardening needed
+- OPAQUE authentication does not use the file-encryption Argon2id path
 - Mutual authentication with replay protection
-
-**Session Validation:**
-```bash
-# Monitor active sessions
-curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://localhost:8080/admin/sessions
-
-# Revoke specific session
-curl -X DELETE -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://localhost:8080/admin/sessions/$SESSION_ID
-```
 
 ## Monitoring and Alerting
 
-Arkfile records security events without storing client IP addresses. Instead, each log entry contains an anonymised *entity ID* derived daily from a server-side HMAC key (see `logging/entity_id.go`). Events are written to the `security_events` table in the rqlite database and to structured JSON logs under `/var/log/arkfile/`. Administrators can stream or export these records into any external monitoring or alerting system as needed.
+Arkfile records security events without persisting client IP addresses. Instead, each event contains an anonymised entity ID derived from a server-side HMAC key (see `logging/entity_id.go`). Structured event records are written to the `security_events` table; concise event summaries and application logs are emitted to the service logger and normally collected by systemd-journald. Arkfile does not currently provide a complete automated alerting or incident-response system. The event categories and response intervals below are operational recommendations for deployers.
 
 ### Security Event Categories
 
@@ -519,18 +507,14 @@ rqlite -H localhost:4001 \
 # Stop service if compromise suspected
 sudo systemctl stop arkfile
 
-# Backup current state
-./scripts/maintenance/backup-keys.sh
-
 # Capture logs
 sudo journalctl -u arkfile --since "1 hour ago" > incident-logs.txt
 ```
 
+Preserve a read-only copy of the deployment's data, key files, and configuration using the operator's established backup procedure before changing state.
+
 **Assessment Phase:**
 ```bash
-# Run security audit
-./scripts/maintenance/security-audit.sh
-
 # Check file integrity
 find /opt/arkfile/etc/keys -type f -exec sha256sum {} \; > file-hashes.txt
 
@@ -546,20 +530,18 @@ rqlite -H localhost:4001 \
 # Rotate JWT keys immediately
 # User-secret master rotation only -- see Key Rotation Procedures above
 
-# Revoke all active sessions
-curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://localhost:8080/admin/revoke-all-sessions
-
 # Enable enhanced monitoring
 sudo systemctl edit arkfile
 # Add: [Service] Environment="LOG_LEVEL=debug"
 ```
 
+Debug logging may reveal additional operational context and should be enabled only for a bounded incident investigation, never as a normal production setting. Session revocation should use the implemented administrator CLI operation appropriate to the affected account or key rotation; Arkfile does not expose an unauthenticated generic incident endpoint.
+
 ### OPAQUE Server Key Rotation (admin-initiated re-registration)
 
 OPAQUE server keys are the one key layer that cannot be re-wrapped in place: each `opaque_user_data` record is bound to the server key and OPRF seed present at registration, and the server never holds the password needed to re-wrap it. Rotating these keys is therefore a deliberate, guided operation in which affected users transparently re-register their OPAQUE record on their next sign-in. This is a routine administrative task suitable for periodic rotation (for example every 1–2 years); the same procedure also covers the rare case of a suspected key issue.
 
-Re-registration never deletes the `users` row or any child rows. Files, shares, MFA enrollment, credits, contact info, and settings are all preserved: identity is the username (unchanged), and the Account Key is a deterministic function of username + password, so a user who re-registers with the same password regenerates a byte-identical Account Key and all account-wrapped files and metadata continue to decrypt. The clients confirm the password locally (by test-decrypting an account-key-encrypted metadata sample) before finalizing, so a mismatched password is never bound to the account.
+Re-registration never deletes the `users` row or any child rows. Files, shares, MFA enrollment, credits, contact info, settings, and the public Account Key salt and KDF profile are preserved. A user who re-registers with the same password therefore regenerates the same Account Key, so account-wrapped files and metadata continue to decrypt. The clients confirm the password locally by test-decrypting an Account-Key-encrypted metadata sample before finalizing, so a mismatched password is never bound to the account.
 
 **Rotate for the whole deployment (recommended atomic flow):**
 
@@ -615,29 +597,16 @@ The features below describe on-disk logging and in-app event tracking only.
 
 ### Regular Audit Procedures
 
+The following SQL is an example manual review. Arkfile does not currently ship the referenced audit, health-check, or key-backup automation scripts, so deployers must supply and validate their own operational backup and alerting procedures.
+
 **Weekly Tasks:**
 ```bash
-# Security event review
-./scripts/maintenance/security-audit.sh
-
-# Key health verification
-./scripts/maintenance/health-check.sh
-
 # Authentication pattern analysis
 rqlite -H localhost:4001 \
   "SELECT date(timestamp) as day, count(*) as attempts
    FROM security_events 
    WHERE timestamp > datetime('now', '-7 days')
    GROUP BY date(timestamp);"
-```
-
-**Monthly Tasks:**
-```bash
-# Comprehensive security assessment
-./scripts/maintenance/security-audit.sh --comprehensive
-
-# Key backup verification
-./scripts/maintenance/backup-keys.sh --verify
 ```
 
 ## Threat Detection
@@ -793,11 +762,8 @@ sudo systemctl stop arkfile
 # Emergency key rotation
 # User-secret master rotation only -- see Key Rotation Procedures above
 
-# Security audit
-./scripts/security-audit.sh
-
 # Health check
-curl http://localhost:8080/health
+curl http://localhost:8080/healthz
 
 # View recent critical events
 rqlite -H localhost:4001 \
@@ -814,8 +780,7 @@ rqlite -H localhost:4001 \
 ### Log Locations
 - **Application Logs**: `sudo journalctl -u arkfile`
 - **Security Events**: rqlite database table `security_events`
-- **System Logs**: `/var/log/arkfile/`
-- **Audit Logs**: Comprehensive event tracking in database
+- **Audit Scope**: Implemented structured security events and administrator action records in the database; this is not a formal compliance audit system
 
 This security guide should be reviewed quarterly and updated based on emerging threats, security research, and operational experience.
 

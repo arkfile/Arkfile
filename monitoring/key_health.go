@@ -497,8 +497,8 @@ func (khm *KeyHealthMonitor) escalateCriticalIssues() {
 		nil,
 		nil,
 		map[string]interface{}{
-			"reason": "critical_key_health_issues",
-			"action": "escalation_triggered",
+			"reason_code": "critical_key_health_issues",
+			"action":      "escalation_triggered",
 		},
 	)
 

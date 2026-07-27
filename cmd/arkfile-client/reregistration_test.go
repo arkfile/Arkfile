@@ -7,18 +7,24 @@ import (
 )
 
 // buildVerifierResponse encrypts a filename sample under the Account Key derived
-// from (password, owner) and packages it as the server's 409 re-registration
+// from the password and stored account salt and packages the server response
 // payload, mirroring respondAccountRequiresReregistration on the server.
 func buildVerifierResponse(t *testing.T, password, owner string) *Response {
 	t.Helper()
-	accountKey := crypto.DeriveAccountPasswordKey([]byte(password), owner)
+	salt := testOwnerSalt()
+	accountKey, err := crypto.DeriveAccountPasswordKey([]byte(password), salt)
+	if err != nil {
+		t.Fatal(err)
+	}
 	encFn, fnNonce, _, _, err := encryptMetadata("quarterly-report.pdf", "deadbeef", accountKey, testFileID, owner)
 	if err != nil {
 		t.Fatalf("encryptMetadata failed: %v", err)
 	}
 	return &Response{
 		Data: map[string]interface{}{
-			"file_count": float64(1),
+			"file_count":          float64(1),
+			"account_kdf_salt":    crypto.EncodeBase64(salt),
+			"account_kdf_profile": float64(crypto.OwnerEnvelopeKDFProfile()),
 			"verifier": map[string]interface{}{
 				"file_id":            testFileID,
 				"owner_username":     owner,

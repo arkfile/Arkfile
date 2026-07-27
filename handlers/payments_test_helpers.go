@@ -51,6 +51,8 @@ func setupPaymentsSQLiteDB(t *testing.T) *sql.DB {
 			approved_by TEXT,
 			approved_at TIMESTAMP,
 			is_admin BOOLEAN NOT NULL DEFAULT 0,
+			account_kdf_salt TEXT NOT NULL DEFAULT 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+			account_kdf_profile INTEGER NOT NULL DEFAULT 1,
 			deleted_at TIMESTAMP DEFAULT NULL
 		);
 		CREATE TABLE user_credits (

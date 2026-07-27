@@ -31,6 +31,20 @@ func createTestAgent(t *testing.T) *Agent {
 // sendAgentRequest sends a JSON request to the agent and returns the response
 func sendAgentRequest(t *testing.T, socketPath string, req AgentRequest) AgentResponse {
 	t.Helper()
+	if req.Method == "store_account_key" ||
+		req.Method == "get_account_key" ||
+		req.Method == "get_offline_account_key" {
+		omitMetadata, _ := req.Params["omit_kdf_metadata"].(bool)
+		delete(req.Params, "omit_kdf_metadata")
+		if !omitMetadata {
+			if _, ok := req.Params["account_kdf_salt"]; !ok {
+				req.Params["account_kdf_salt"] = base64.StdEncoding.EncodeToString(make([]byte, 32))
+			}
+			if _, ok := req.Params["account_kdf_profile"]; !ok {
+				req.Params["account_kdf_profile"] = float64(1)
+			}
+		}
+	}
 	conn, err := net.Dial("unix", socketPath)
 	if err != nil {
 		t.Fatalf("failed to connect to agent: %v", err)
@@ -612,5 +626,26 @@ func TestIsPeerAuthorized_Success(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Error("test timed out waiting for peer authorization check")
+	}
+}
+
+func TestAgent_RejectsAccountKDFMetadataMismatch(t *testing.T) {
+	agent := createTestAgent(t)
+	if err := agent.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer agent.Stop()
+
+	tokenHash := storeTestAccountKey(t, agent, "metadata-token")
+	response := sendAgentRequest(t, agent.socketPath, AgentRequest{
+		Method: "get_account_key",
+		Params: map[string]interface{}{
+			"token_hash":          tokenHash,
+			"account_kdf_salt":    base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)),
+			"account_kdf_profile": float64(1),
+		},
+	})
+	if response.Success {
+		t.Fatal("agent returned an Account Key for mismatched KDF metadata")
 	}
 }

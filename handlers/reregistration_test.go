@@ -28,6 +28,8 @@ func setupReregDB(t *testing.T) *sql.DB {
 		CREATE TABLE users (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			username TEXT UNIQUE NOT NULL,
+			account_kdf_salt TEXT NOT NULL DEFAULT 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+			account_kdf_profile INTEGER NOT NULL DEFAULT 1,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			total_storage_bytes INTEGER DEFAULT 0,
 			storage_limit_bytes INTEGER NOT NULL DEFAULT 1073741824,
@@ -126,6 +128,14 @@ func TestAdminFlagUserReregistration_DeletesOpaqueAndSetsFlag(t *testing.T) {
 	var userCount int
 	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM users WHERE username = ?`, target).Scan(&userCount))
 	assert.Equal(t, 1, userCount, "users row must be preserved")
+	var salt string
+	var profile int
+	require.NoError(t, db.QueryRow(
+		`SELECT account_kdf_salt, account_kdf_profile FROM users WHERE username = ?`,
+		target,
+	).Scan(&salt, &profile))
+	assert.Equal(t, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", salt)
+	assert.Equal(t, 1, profile)
 }
 
 func TestAdminFlagUserReregistration_RequiresConfirm(t *testing.T) {
@@ -208,6 +218,8 @@ func TestRespondAccountRequiresReregistration_WithFiles_IncludesVerifier(t *test
 	data := resp["data"].(map[string]interface{})
 	assert.NotEmpty(t, data["reregistration_token"])
 	assert.Equal(t, float64(1), data["file_count"])
+	assert.Equal(t, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", data["account_kdf_salt"])
+	assert.Equal(t, float64(1), data["account_kdf_profile"])
 
 	verifier, ok := data["verifier"].(map[string]interface{})
 	require.True(t, ok, "verifier sample must be present when the user owns files")

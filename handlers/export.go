@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/arkfile/Arkfile/auth"
+	"github.com/arkfile/Arkfile/crypto"
 	"github.com/arkfile/Arkfile/database"
 	"github.com/arkfile/Arkfile/logging"
 	"github.com/arkfile/Arkfile/models"
@@ -27,7 +28,7 @@ import (
 var arkbackupMagic = []byte{'A', 'R', 'K', 'B'}
 
 // arkbackupVersion is the current bundle format version
-const arkbackupVersion uint16 = 1
+const arkbackupVersion uint16 = 2
 
 // ExportTokenClaims holds claims for short-lived export download tokens
 type ExportTokenClaims struct {
@@ -48,6 +49,8 @@ type bundleMetadata struct {
 	Version            int    `json:"version"`
 	FileID             string `json:"file_id"`
 	OwnerUsername      string `json:"owner_username"`
+	AccountKDFSalt     string `json:"account_kdf_salt"`
+	AccountKDFProfile  int    `json:"account_kdf_profile"`
 	EncryptedFEK       string `json:"encrypted_fek"`
 	PasswordType       string `json:"password_type"`
 	SizeBytes          int64  `json:"size_bytes"`
@@ -261,8 +264,13 @@ func resolveExportAuthFromHeader(c echo.Context) (string, error) {
 // streamExportBundle writes the .arkbackup binary bundle to the HTTP response.
 // Memory usage is O(1): only the JSON metadata header is buffered; the S3 blob is streamed.
 func streamExportBundle(c echo.Context, file *models.File) error {
+	accountKDFSalt, accountKDFProfile, err := models.GetAccountCryptoMetadata(database.DB, file.OwnerUsername)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to load account crypto metadata for export: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to build export metadata")
+	}
 	// Build JSON metadata
-	meta := buildBundleMetadata(file)
+	meta := buildBundleMetadata(file, accountKDFSalt, accountKDFProfile)
 	metaJSON, err := json.Marshal(meta)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to marshal export metadata: %v", err)
@@ -334,19 +342,20 @@ func streamExportBundle(c echo.Context, file *models.File) error {
 }
 
 // buildBundleMetadata constructs the JSON metadata from a file record
-func buildBundleMetadata(file *models.File) *bundleMetadata {
+func buildBundleMetadata(file *models.File, accountKDFSalt string, accountKDFProfile int) *bundleMetadata {
 	paddedSize := file.SizeBytes
 	if file.PaddedSize.Valid && file.PaddedSize.Int64 > 0 {
 		paddedSize = file.PaddedSize.Int64
 	}
 
-	// Parse envelope version from first byte of encrypted FEK (if available)
-	envelopeVersion := 1
+	envelopeVersion := int(crypto.OwnerEnvelopeVersion())
 
 	return &bundleMetadata{
-		Version:            1,
+		Version:            2,
 		FileID:             file.FileID,
 		OwnerUsername:      file.OwnerUsername,
+		AccountKDFSalt:     accountKDFSalt,
+		AccountKDFProfile:  accountKDFProfile,
 		EncryptedFEK:       file.EncryptedFEK,
 		PasswordType:       file.PasswordType,
 		SizeBytes:          file.SizeBytes,

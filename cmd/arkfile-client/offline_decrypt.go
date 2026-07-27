@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -25,6 +26,8 @@ type bundleMeta struct {
 	Version            int    `json:"version"`
 	FileID             string `json:"file_id"`
 	OwnerUsername      string `json:"owner_username"`
+	AccountKDFSalt     string `json:"account_kdf_salt"`
+	AccountKDFProfile  int    `json:"account_kdf_profile"`
 	EncryptedFEK       string `json:"encrypted_fek"`
 	PasswordType       string `json:"password_type"`
 	SizeBytes          int64  `json:"size_bytes"`
@@ -42,14 +45,14 @@ type bundleMeta struct {
 func handleDecryptBlobCommand(args []string) error {
 	fs := flag.NewFlagSet("decrypt-blob", flag.ExitOnError)
 	bundlePath := fs.String("bundle", "", "Path to .arkbackup bundle file")
-	username := fs.String("username", "", "Username (required for key derivation)")
+	username := fs.String("username", "", "Optional username assertion (bundle contains the owner username)")
 	outputPath := fs.String("output", "", "Output file path for decrypted data")
 	passwordStdin := fs.Bool("password-stdin", false, "Read password(s) from stdin (one per line)")
 	accountKeyFile := fs.String("account-key-file", "", "Path to hex-encoded 32-byte account key file")
 	useAgent := fs.Bool("use-agent", false, "Read account key from running agent")
 
 	fs.Usage = func() {
-		fmt.Printf("Usage: arkfile-client decrypt-blob --bundle FILE --username USER --output PATH\n\n")
+		fmt.Printf("Usage: arkfile-client decrypt-blob --bundle FILE --output PATH [--username USER]\n\n")
 		fmt.Printf("Decrypt a .arkbackup bundle offline using only local computation.\n\n")
 		fmt.Printf("Options:\n")
 		fs.PrintDefaults()
@@ -67,11 +70,6 @@ func handleDecryptBlobCommand(args []string) error {
 		return fmt.Errorf("--output is required")
 	}
 
-	// Username is required unless using --account-key-file or --use-agent
-	if *username == "" && *accountKeyFile == "" && !*useAgent {
-		return fmt.Errorf("--username is required (needed for key derivation)")
-	}
-
 	// Step 1: Parse bundle
 	meta, blobOffset, err := parseBundle(*bundlePath)
 	if err != nil {
@@ -80,9 +78,28 @@ func handleDecryptBlobCommand(args []string) error {
 
 	logVerbose("Bundle parsed: file_id=%s password_type=%s chunks=%d size=%d",
 		meta.FileID, meta.PasswordType, meta.ChunkCount, meta.SizeBytes)
+	if meta.OwnerUsername == "" {
+		return fmt.Errorf("bundle metadata missing owner_username")
+	}
+	if *username != "" && *username != meta.OwnerUsername {
+		return fmt.Errorf("--username does not match bundle owner_username")
+	}
+	if meta.AccountKDFProfile != int(crypto.OwnerEnvelopeKDFProfile()) {
+		return fmt.Errorf("unsupported Account Key KDF profile: %d", meta.AccountKDFProfile)
+	}
+	accountSalt, err := crypto.DecodeBase64(meta.AccountKDFSalt)
+	if err != nil {
+		return fmt.Errorf("invalid account KDF salt: %w", err)
+	}
 
 	// Step 2: Obtain account key
-	accountKey, err := obtainAccountKey(*username, *accountKeyFile, *useAgent)
+	accountKey, err := obtainAccountKey(
+		accountSalt,
+		meta.AccountKDFSalt,
+		meta.AccountKDFProfile,
+		*accountKeyFile,
+		*useAgent,
+	)
 	if err != nil {
 		return fmt.Errorf("failed to obtain account key: %w", err)
 	}
@@ -90,16 +107,29 @@ func handleDecryptBlobCommand(args []string) error {
 
 	// Step 3: Unwrap FEK
 	var kek []byte
+	envelopeHeader, err := parseFEKEnvelopeHeader(meta.EncryptedFEK)
+	if err != nil {
+		return fmt.Errorf("invalid owner FEK envelope: %w", err)
+	}
+	if meta.PasswordType != "" && envelopeHeader.PasswordType() != meta.PasswordType {
+		return fmt.Errorf("owner FEK envelope key type does not match bundle metadata")
+	}
 	switch meta.PasswordType {
 	case "account", "":
 		kek = accountKey
+		if !bytes.Equal(envelopeHeader.Salt, accountSalt) {
+			return fmt.Errorf("account FEK envelope salt does not match bundle Account Key salt")
+		}
 	case "custom":
 		customPass, err := readPassword("Enter the custom file password: ")
 		if err != nil {
 			return fmt.Errorf("failed to read custom password: %w", err)
 		}
 		defer clearBytes(customPass)
-		kek = crypto.DeriveCustomPasswordKey(customPass, *username)
+		kek, err = crypto.DeriveCustomPasswordKey(customPass, envelopeHeader.Salt)
+		if err != nil {
+			return fmt.Errorf("failed to derive Custom Key: %w", err)
+		}
 		defer clearBytes(kek)
 	default:
 		return fmt.Errorf("unsupported password type: %s", meta.PasswordType)
@@ -197,8 +227,8 @@ func parseBundle(path string) (*bundleMeta, int64, error) {
 		return nil, 0, fmt.Errorf("failed to read version: %w", err)
 	}
 	version := binary.BigEndian.Uint16(versionBytes)
-	if version != 1 {
-		return nil, 0, fmt.Errorf("unsupported bundle version: %d (expected 1)", version)
+	if version != 2 {
+		return nil, 0, fmt.Errorf("unsupported bundle version: %d (expected 2)", version)
 	}
 
 	// Read 4-byte header length (big-endian)
@@ -231,7 +261,13 @@ func parseBundle(path string) (*bundleMeta, int64, error) {
 }
 
 // obtainAccountKey gets the account key from one of the supported sources
-func obtainAccountKey(username, accountKeyFile string, useAgent bool) ([]byte, error) {
+func obtainAccountKey(
+	accountSalt []byte,
+	accountKDFSaltB64 string,
+	accountKDFProfile int,
+	accountKeyFile string,
+	useAgent bool,
+) ([]byte, error) {
 	if accountKeyFile != "" {
 		return readAccountKeyFromFile(accountKeyFile)
 	}
@@ -241,7 +277,7 @@ func obtainAccountKey(username, accountKeyFile string, useAgent bool) ([]byte, e
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to agent: %w", err)
 		}
-		key, err := agentClient.GetOfflineAccountKey()
+		key, err := agentClient.GetOfflineAccountKey(accountKDFSaltB64, accountKDFProfile)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get account key from agent: %w", err)
 		}
@@ -254,16 +290,26 @@ func obtainAccountKey(username, accountKeyFile string, useAgent bool) ([]byte, e
 	}
 	defer clearBytes(password)
 
-	if username == "" {
-		return nil, fmt.Errorf("username is required for key derivation")
+	accountKey, err := crypto.DeriveAccountPasswordKey(password, accountSalt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive Account Key: %w", err)
 	}
-
-	accountKey := crypto.DeriveAccountPasswordKey(password, username)
 	return accountKey, nil
 }
 
 // readAccountKeyFromFile reads a hex-encoded 32-byte key from a file
 func readAccountKeyFromFile(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect key file: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("account key file must be a regular file")
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("account key file permissions must not grant group or other access")
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read key file: %w", err)

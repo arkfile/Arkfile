@@ -44,11 +44,14 @@ import { debugLog } from '../utils/debug-log.js';
 import {
   deriveFileEncryptionKey,
   deriveFileEncryptionKeyWithCache,
+  generatePasswordSalt,
   getCachedAccountKey,
   isAccountKeyCached,
   isAccountKeyLocked,
   type PasswordContext,
 } from '../crypto/file-encryption.js';
+import { getAccountCryptoMetadata } from '../crypto/account-crypto.js';
+import { createOwnerEnvelopeHeader } from '../crypto/owner-envelope.js';
 import { promptForAccountKeyPassword } from '../ui/password-modal.js';
 import {
   KEY_SIZES,
@@ -367,42 +370,34 @@ async function encryptMetadata(
 }
 
 /**
- * Creates the 2-byte FEK envelope header.
- * Format: [version (1 byte)][keyType (1 byte)]
- *
- * This header is used ONLY on the FEK envelope (stored in
- * file_metadata.encrypted_fek). File-data chunks no longer carry a
- * per-chunk envelope header (uniform chunks).
- */
-function createEnvelopeHeader(envelopeVersion: number, keyType: number): Uint8Array {
-  return new Uint8Array([envelopeVersion, keyType]);
-}
-
-/**
  * Resolves the account key from the available sources.
  * Priority: provided key > cached key > derive from password
  */
 async function resolveAccountKey(
   options: Pick<UploadOptions, 'accountKey' | 'accountPassword' | 'username'>
-): Promise<Uint8Array> {
+): Promise<{ key: Uint8Array; salt: Uint8Array }> {
   const { accountKey, accountPassword, username } = options;
+  const metadata = await getAccountCryptoMetadata(username);
 
   // 1. Use provided key directly
   if (accountKey && accountKey.length === KEY_SIZES.FILE_ENCRYPTION_KEY) {
-    return accountKey;
+    return { key: accountKey, salt: metadata.salt };
   }
 
   // 2. Check cache (token no longer needed as param; cache lookup is by username)
   if (isAccountKeyCached(username) && !isAccountKeyLocked()) {
     const cached = await getCachedAccountKey(username, undefined);
     if (cached) {
-      return cached;
+      return { key: cached, salt: metadata.salt };
     }
   }
 
   // 3. Derive from password
   if (accountPassword) {
-    return deriveFileEncryptionKey(accountPassword, username, 'account');
+    return {
+      key: await deriveFileEncryptionKey(accountPassword, metadata.salt, 'account'),
+      salt: metadata.salt,
+    };
   }
 
   throw new Error('Account key required: provide accountKey, ensure key is cached, or provide accountPassword');
@@ -510,10 +505,6 @@ export async function uploadFile(
     const nonceSize = chunkCfg.aesGcm.nonceSizeBytes;
     const tagSize = chunkCfg.aesGcm.tagSizeBytes;
     const aesGcmOverhead = nonceSize + tagSize; // 12 + 16 = 28
-    const envelopeVersion = 1; // Immutable protocol FEK envelope version (finding E1c)
-    const keyTypeVal = passwordType === 'account'
-      ? chunkCfg.envelope.keyTypes.account
-      : chunkCfg.envelope.keyTypes.custom;
     logTiming('Config loaded', stepStart);
 
     debugLog(`[upload] File: ${logName}, size: ${(file.size / 1024 / 1024).toFixed(1)} MB, chunk size: ${(CHUNK_SIZE / 1024 / 1024).toFixed(0)} MB`);
@@ -523,17 +514,20 @@ export async function uploadFile(
     stepStart = performance.now();
 
     // Account key -- always needed for metadata encryption
-    const accountKey = await resolveAccountKey(options);
+    const account = await resolveAccountKey(options);
+    const accountKey = account.key;
     logTiming('Step 1: Account key resolved', stepStart);
 
     // FEK encryption key -- depends on password type
     let fekEncryptionKey: Uint8Array;
+    let ownerEnvelopeSalt: Uint8Array;
     if (passwordType === 'account') {
       fekEncryptionKey = accountKey;
+      ownerEnvelopeSalt = account.salt;
     } else {
       stepStart = performance.now();
-      // Custom: derive separate key from custom password
-      fekEncryptionKey = await deriveFileEncryptionKey(customPassword!, username, 'custom');
+      ownerEnvelopeSalt = generatePasswordSalt();
+      fekEncryptionKey = await deriveFileEncryptionKey(customPassword!, ownerEnvelopeSalt, 'custom');
       logTiming('Step 1b: Custom key derived', stepStart);
     }
 
@@ -619,11 +613,10 @@ export async function uploadFile(
       }
 
       // Encrypt FEK with the appropriate KEK + FEK-envelope AAD.
-      // Wire layout: [version(1)][keyType(1)][nonce(12)][ciphertext][tag(16)]
+      // Wire layout: [version][keyType][KDF profile][salt][nonce][ciphertext][tag]
       // (matches crypto.EncryptFEK() in Go).
-      const fekEnvelopeHeader = createEnvelopeHeader(envelopeVersion, keyTypeVal);
-      const fekKeyTypeByte = fekEnvelopeHeader[1];
-      const fekAad = buildFEKEnvelopeAAD(candidateFileID, fekKeyTypeByte);
+      const fekEnvelopeHeader = createOwnerEnvelopeHeader(passwordType, ownerEnvelopeSalt);
+      const fekAad = buildFEKEnvelopeAAD(candidateFileID, fekEnvelopeHeader);
       const encryptedFekResult = await encryptAESGCM({
         data: fek,
         key: fekEncryptionKey,
@@ -894,7 +887,7 @@ export async function uploadFiles(
   // Resolve the account key once for the entire batch. If this fails, the
   // batch cannot continue at all -- no file would have a way to encrypt its
   // metadata. Surface as a synchronous throw rather than per-file failures.
-  const accountKey = await resolveAccountKey(options);
+  const account = await resolveAccountKey(options);
 
   // Capture the per-file pieces explicitly to construct UploadOptions with
   // exactOptionalPropertyTypes-friendly typing (no `undefined` assigned to
@@ -927,7 +920,7 @@ export async function uploadFiles(
     const fileOptions: UploadOptions = {
       username: options.username,
       passwordType: options.passwordType,
-      accountKey,
+      accountKey: account.key,
     };
     if (options.customPassword !== undefined) {
       fileOptions.customPassword = options.customPassword;

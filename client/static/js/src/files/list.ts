@@ -23,6 +23,7 @@ import { authenticatedFetch, getUsernameFromToken, getCurrentUser, fetchAdminCon
 import { showError, showSuccess } from '../ui/messages';
 import { downloadFile } from './download';
 import { shareFile } from './share';
+import { debugLog } from '../utils/debug-log.js';
 import { exportBackup } from './export';
 import {
   getAccountKey,
@@ -246,7 +247,7 @@ export async function displayFiles(data: FilesResponse): Promise<void> {
     const downloadBtn = document.createElement('button');
     downloadBtn.textContent = 'Download';
     downloadBtn.addEventListener('click', () => {
-      console.log('[arkfile-download] Download button clicked');
+      debugLog('[arkfile-download] Download button clicked');
       downloadFile(file.file_id, file.password_hint, file.sha256sum, file.password_type);
     });
 

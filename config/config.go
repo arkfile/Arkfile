@@ -204,9 +204,9 @@ type PaymentsConfig struct {
 // payment code and Monero). These are display-only; the operator credits users
 // manually via arkfile-admin billing gift after verifying the chain payment.
 type OobPaymentsConfig struct {
-	PayNym              string `json:"paynym"`
-	PayNymPaymentCode   string `json:"paynym_payment_code"`
-	MoneroAddress       string `json:"monero_address"`
+	PayNym            string `json:"paynym"`
+	PayNymPaymentCode string `json:"paynym_payment_code"`
+	MoneroAddress     string `json:"monero_address"`
 }
 
 // Configured returns true when at least one OOB payment destination is set.
@@ -887,6 +887,11 @@ func validatePaymentOrigin(raw string, production, allowLoopbackHTTP bool) (*url
 // ValidateProductionConfig validates that the configuration is safe for production
 func ValidateProductionConfig() error {
 	if utils.IsProductionEnvironment() {
+		debugMode := strings.ToLower(strings.TrimSpace(os.Getenv("DEBUG_MODE")))
+		if debugMode == "true" || debugMode == "1" || debugMode == "yes" {
+			return fmt.Errorf("FATAL: DEBUG_MODE=%q is incompatible with production environment - deployment blocked", debugMode)
+		}
+
 		// ADMIN_DEV_TEST_API_ENABLED grants /api/admin/dev-test/**
 		// which exposes destructive endpoints (user-cleanup, TOTP
 		// decrypt-check, billing tick-now). The route group itself is

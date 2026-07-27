@@ -48,6 +48,8 @@ Arkfile uses the OPAQUE PAKE (Password-Authenticated Key Exchange) protocol for 
 | POST | `/api/opaque/register/response` | OPAQUE registration step 1 - server response | Public |
 | POST | `/api/opaque/register/finalize` | OPAQUE registration step 2 - finalize registration | Public |
 
+The finalize request also carries the client-generated `account_kdf_salt` as canonical base64 for exactly 32 bytes and `account_kdf_profile: 1`. These are public file-key derivation metadata, not OPAQUE inputs, and are stored atomically with the new account.
+
 #### User Login (Multi-Step OPAQUE)
 
 | Method | Path | Purpose | Auth |
@@ -58,7 +60,7 @@ Arkfile uses the OPAQUE PAKE (Password-Authenticated Key Exchange) protocol for 
 | POST | `/api/opaque/reregister/finalize` | OPAQUE re-registration ceremony step 2 (for flagged accounts) | Re-registration handoff token |
 | GET | `/api/opaque/health` | Health probe for OPAQUE service | Public |
 
-When an operator has flagged an account for OPAQUE credential rotation, `/api/opaque/login/response` returns HTTP `409` with stable error code `account_requires_reregistration`. The response `data` carries a short-lived `reregistration_token` (audience `arkfile-reregistration`), the authoritative `file_count`, and--when the user owns files--a single account-key-encrypted `verifier` sample (`file_id`, `owner_username`, `encrypted_filename`, `filename_nonce`). The client confirms the entered password by test-decrypting the verifier with the derived Account Key before completing the ceremony, then re-binds `opaque_user_data` via the `reregister` endpoints and continues into the normal MFA flow. Files, shares, MFA enrollment, and settings are preserved.
+When an operator has flagged an account for OPAQUE credential rotation, `/api/opaque/login/response` returns HTTP `409` with stable error code `account_requires_reregistration`. The response `data` carries a short-lived `reregistration_token` (audience `arkfile-reregistration`), the authoritative `file_count`, the preserved `account_kdf_salt` and `account_kdf_profile`, and, when the user owns files, a single Account-Key-encrypted `verifier` sample (`file_id`, `owner_username`, `encrypted_filename`, `filename_nonce`). The client confirms the entered password by test-decrypting the verifier with the derived Account Key before completing the ceremony, then re-binds `opaque_user_data` via the `reregister` endpoints and continues into the normal MFA flow. Files, shares, MFA enrollment, account KDF metadata, and settings are preserved.
 
 #### Admin Login (Multi-Step OPAQUE)
 
@@ -80,6 +82,7 @@ When an operator has flagged an account for OPAQUE credential rotation, `/api/op
 |--------|------|---------|------|
 | POST | `/api/refresh` | Exchange refresh token for new access token | Refresh Cookie |
 | POST | `/api/logout` | Invalidate session and revoke tokens | Access |
+| GET | `/api/auth/crypto-metadata` | Get username, public Account Key salt, and KDF profile | Access (approval not required) |
 
 #### Token Revocation (Require MFA)
 
@@ -203,11 +206,11 @@ All file downloads use the chunked download API. Files are stored and downloaded
 3. Decrypt each chunk using AES-GCM with the FEK
 4. Combine decrypted chunks into the final file
 
-Each chunk includes a 12-byte nonce prefix and 16-byte authentication tag (28 bytes overhead per chunk). The first chunk also includes a 2-byte envelope header.
+Every encrypted content chunk has the same layout: a 12-byte nonce prefix, ciphertext, and a 16-byte authentication tag. The owner FEK envelope is separate encrypted metadata and is not embedded in chunk zero.
 
 #### Backup Export
 
-Export files as self-contained `.arkbackup` bundles for offline decryption. The bundle begins with magic bytes ARKB and a version field, followed by length-prefixed JSON metadata and the encrypted ciphertext stream matching the stored object.
+Export files as self-contained `.arkbackup` version 2 bundles for offline decryption. The bundle begins with magic bytes ARKB and a version field, followed by length-prefixed JSON metadata and the encrypted ciphertext stream matching the stored object. Metadata includes `owner_username`, the public `account_kdf_salt` and `account_kdf_profile`, the owner FEK envelope, encrypted owner metadata, file identifiers, and chunk parameters.
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
@@ -218,7 +221,7 @@ Export files as self-contained `.arkbackup` bundles for offline decryption. The 
 
 **CLI export flow:** `arkfile-client export --file-id <uuid>` sends a standard `Authorization: Bearer` header to the GET endpoint.
 
-**Offline decryption:** `arkfile-client decrypt-blob --bundle <file>.arkbackup --username <user> --output <file>` decrypts a bundle locally with no server access required.
+**Offline decryption:** `arkfile-client decrypt-blob --bundle <file>.arkbackup --output <file>` decrypts a bundle locally with no server access required. `--username` is optional; when supplied, it must match the bundle's `owner_username`.
 
 ---
 

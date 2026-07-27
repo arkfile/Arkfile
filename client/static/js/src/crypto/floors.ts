@@ -18,6 +18,10 @@ export interface Argon2Params {
 export interface ChunkingConfig {
   plaintextChunkSizeBytes: number;
   envelope: {
+    version: number;
+    headerSizeBytes: number;
+    saltSizeBytes: number;
+    kdfProfile: number;
     keyTypes: {
       account: number;
       custom: number;
@@ -59,6 +63,10 @@ export const FLOOR_ARGON2: Argon2Params = {
 export const FLOOR_CHUNKING: ChunkingConfig = {
   plaintextChunkSizeBytes: 16777216,
   envelope: {
+    version: 2,
+    headerSizeBytes: 35,
+    saltSizeBytes: 32,
+    kdfProfile: 1,
     keyTypes: {
       account: 1,
       custom: 2,
@@ -109,9 +117,13 @@ export function resolveChunkingParams(server: Partial<ChunkingConfig> | null | u
   return {
     plaintextChunkSizeBytes: Math.max(server.plaintextChunkSizeBytes ?? 0, FLOOR_CHUNKING.plaintextChunkSizeBytes),
     envelope: {
+      version: FLOOR_CHUNKING.envelope.version,
+      headerSizeBytes: FLOOR_CHUNKING.envelope.headerSizeBytes,
+      saltSizeBytes: FLOOR_CHUNKING.envelope.saltSizeBytes,
+      kdfProfile: FLOOR_CHUNKING.envelope.kdfProfile,
       keyTypes: {
-        account: server.envelope?.keyTypes?.account ?? FLOOR_CHUNKING.envelope.keyTypes.account,
-        custom: server.envelope?.keyTypes?.custom ?? FLOOR_CHUNKING.envelope.keyTypes.custom,
+        account: FLOOR_CHUNKING.envelope.keyTypes.account,
+        custom: FLOOR_CHUNKING.envelope.keyTypes.custom,
       },
     },
     aesGcm: {

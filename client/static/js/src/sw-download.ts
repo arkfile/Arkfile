@@ -26,7 +26,7 @@
  *   - Stale streams are cleaned up after a 5 minute TTL.
  */
 
-export {};
+import { debugLog } from './utils/debug-log.js';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -146,7 +146,7 @@ self.addEventListener('fetch', (event: FetchEvent) => {
   if (!entry) {
     // No entry at all: either it never existed, was cancelled, or its
     // post-consumption grace window already elapsed. 404 is appropriate here.
-    console.log('[arkfile-sw] fetch: no entry for path; returning 404');
+    debugLog('[arkfile-sw] fetch: no entry for path; returning 404');
     event.respondWith(new Response('SW: stream not found or expired', {
       status: 404,
       headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' },
@@ -161,7 +161,7 @@ self.addEventListener('fetch', (event: FetchEvent) => {
     // a 404 here causes the DM to abort with "File wasn't available on
     // site." Returning an empty 200 keeps the DM happy; the actual data
     // is being delivered through the original fetch's streaming Response.
-    console.log('[arkfile-sw] fetch: subsequent match (already consumed); returning empty 200');
+    debugLog('[arkfile-sw] fetch: subsequent match (already consumed); returning empty 200');
     event.respondWith(new Response(new Uint8Array(0), {
       status: 200,
       headers: {
@@ -176,7 +176,7 @@ self.addEventListener('fetch', (event: FetchEvent) => {
   // schedule cleanup for after the post-consumed grace window.
   entry.consumed = true;
   entry.expiresAt = Date.now() + POST_CONSUMED_GRACE_MS;
-  console.log('[arkfile-sw] fetch: first match; delivering streaming Response');
+  debugLog('[arkfile-sw] fetch: first match; delivering streaming Response');
 
   const safeName = encodeFilenameForContentDisposition(entry.filename);
   const headers: Record<string, string> = {

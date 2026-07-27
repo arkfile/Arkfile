@@ -10,6 +10,9 @@ import { loadFiles } from '../files/list.js';
 import { handleMFASetupFlow } from './mfa-setup.js';
 import { validateAccountPassword } from '../crypto/password-validation.js';
 import { csrfHeader } from '../utils/auth.js';
+import { generatePasswordSalt } from '../crypto/file-encryption.js';
+import { toBase64 } from '../crypto/primitives.js';
+import { FLOOR_CHUNKING } from '../crypto/floors.js';
 
 export interface RegisterCredentials {
   username: string;
@@ -79,6 +82,7 @@ export class RegistrationManager {
 
     try {
       showProgressMessage('Creating account...');
+      const accountKDFSalt = generatePasswordSalt();
 
       // Get OPAQUE client instance
       const opaqueClient = await getOpaqueClient();
@@ -152,7 +156,9 @@ export class RegistrationManager {
         body: JSON.stringify({
           session_id: responseData.session_id,
           username: credentials.username,
-          registration_record: registrationFinalize.record
+          registration_record: registrationFinalize.record,
+          account_kdf_salt: toBase64(accountKDFSalt),
+          account_kdf_profile: FLOOR_CHUNKING.envelope.kdfProfile,
         })
       });
 

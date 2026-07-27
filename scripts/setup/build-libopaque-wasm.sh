@@ -40,6 +40,14 @@ LIBSODIUM_JS_VERSION="0.7.16"
 #   - Default: empty (production-safe, no cryptographic debug dumps in browser console)
 LIBOPRFHOME_PATH="../../liboprf/src"
 BUILD_DEFINES="${LIBOPAQUE_DEFINES:-}"
+if [[ "$BUILD_DEFINES" == *"-DNORANDOM"* ]]; then
+    echo "ERROR: Insecure -DNORANDOM build flag is forbidden" >&2
+    exit 1
+fi
+if [[ "$BUILD_DEFINES" == *"-DTRACE"* ]] && [ "${ARKFILE_ALLOW_WASM_TRACE:-false}" != "true" ]; then
+    echo "ERROR: OPAQUE trace logging requires the explicit development trace profile" >&2
+    exit 1
+fi
 
 # Function to print status messages
 print_status() {

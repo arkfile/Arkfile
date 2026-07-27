@@ -179,3 +179,22 @@ func TestVerifyShareTicket_RejectsMalformed(t *testing.T) {
 		}
 	}
 }
+
+func FuzzVerifyShareTicket(f *testing.F) {
+	key := shareTicketTestKey()
+	shareID := "abcdefghijklmnopqrstuvwxyz1234567890ABCDEFG"
+	entityID := strings.Repeat("a", 64)
+	valid, err := IssueShareTicket(key, shareID, entityID, time.Unix(1_700_000_000, 0))
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(valid)
+	f.Add("")
+	f.Add("not-base64")
+	f.Fuzz(func(t *testing.T, ticket string) {
+		if len(ticket) > 4096 {
+			t.Skip()
+		}
+		_, _ = VerifyShareTicket(key, ticket, shareID, entityID, time.Unix(1_700_000_000, 0))
+	})
+}

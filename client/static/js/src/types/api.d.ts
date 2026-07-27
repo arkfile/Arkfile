@@ -56,6 +56,8 @@ interface ReregistrationRequiredData {
   reregistration_token?: string;
   expires_at?: string;
   file_count?: number;
+  account_kdf_salt?: string;
+  account_kdf_profile?: number;
   verifier?: ReregistrationVerifier;
 }
 

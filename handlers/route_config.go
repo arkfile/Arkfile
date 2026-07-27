@@ -200,6 +200,7 @@ func RegisterRoutes() {
 	pendingAllowedGroup.GET("/api/user/contact-info", GetContactInfo)
 	pendingAllowedGroup.PUT("/api/user/contact-info", PutContactInfo)
 	pendingAllowedGroup.DELETE("/api/user/contact-info", DeleteContactInfo)
+	pendingAllowedGroup.GET("/api/auth/crypto-metadata", GetAccountCryptoMetadata)
 
 	// Current user identity - used by browser clients to get username/role
 	// since the full JWT is HttpOnly and not readable by JavaScript.

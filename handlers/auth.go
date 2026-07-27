@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/arkfile/Arkfile/auth"
 	"github.com/arkfile/Arkfile/config"
+	arkcrypto "github.com/arkfile/Arkfile/crypto"
 	"github.com/arkfile/Arkfile/database"
 	"github.com/arkfile/Arkfile/logging"
 	"github.com/arkfile/Arkfile/models"
@@ -236,6 +238,25 @@ type OpaqueRegisterResponseRequest struct {
 type OpaqueRegisterFinalizeRequest struct {
 	Username           string `json:"username"`
 	RegistrationRecord string `json:"registration_record"` // base64 encoded
+	AccountKDFSalt     string `json:"account_kdf_salt"`
+	AccountKDFProfile  int    `json:"account_kdf_profile"`
+}
+
+func validateAccountKDFMetadata(saltB64 string, profile int) error {
+	salt, err := base64.StdEncoding.DecodeString(saltB64)
+	if err != nil {
+		return err
+	}
+	if base64.StdEncoding.EncodeToString(salt) != saltB64 {
+		return fmt.Errorf("non-canonical base64 salt")
+	}
+	if err := arkcrypto.ValidatePasswordSalt(salt); err != nil {
+		return err
+	}
+	if profile != int(arkcrypto.OwnerEnvelopeKDFProfile()) {
+		return fmt.Errorf("unsupported Account Key KDF profile")
+	}
+	return nil
 }
 
 // OpaqueHealthCheckResponse represents the health status of OPAQUE system
@@ -259,7 +280,6 @@ func OpaqueRegisterResponse(c echo.Context) error {
 		logging.ErrorLogger.Printf("OPAQUE registration response bind error: %v", err)
 		return JSONError(c, http.StatusBadRequest, "Invalid request format")
 	}
-
 	// Validate username format (fail fast before creating OPAQUE session)
 	if request.Username == "" {
 		return JSONError(c, http.StatusBadRequest, "Username is required")
@@ -310,10 +330,15 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 		SessionID          string `json:"session_id"`
 		Username           string `json:"username"`
 		RegistrationRecord string `json:"registration_record"` // base64 encoded
+		AccountKDFSalt     string `json:"account_kdf_salt"`
+		AccountKDFProfile  int    `json:"account_kdf_profile"`
 	}
 	if err := c.Bind(&request); err != nil {
 		logging.ErrorLogger.Printf("OPAQUE registration finalize bind error: %v", err)
 		return JSONError(c, http.StatusBadRequest, "Invalid request format")
+	}
+	if err := validateAccountKDFMetadata(request.AccountKDFSalt, request.AccountKDFProfile); err != nil {
+		return JSONError(c, http.StatusBadRequest, "Invalid Account Key derivation metadata")
 	}
 
 	// Validate session and get registration secret
@@ -379,7 +404,13 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 	// can flip it at runtime via `arkfile-admin set-approval-policy` without a
 	// restart. require_approval=false => auto-approved with approved_by="system";
 	// true => created pending explicit admin approval.
-	_, err = models.CreateUser(tx, request.Username, !config.RequireApproval())
+	_, err = models.CreateUser(
+		tx,
+		request.Username,
+		request.AccountKDFSalt,
+		request.AccountKDFProfile,
+		!config.RequireApproval(),
+	)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create user %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "User creation failed")
@@ -1071,12 +1102,12 @@ func MFAReset(c echo.Context) error {
 
 // MFAStatusResponse represents MFA status for a user.
 type MFAStatusResponse struct {
-	Enabled       bool                          `json:"enabled"`
-	SetupRequired bool                          `json:"setup_required"`
-	MethodType    string                        `json:"method_type,omitempty"`
-	Credentials   []auth.MFACredentialSummary   `json:"credentials,omitempty"`
-	LastUsed      *time.Time                    `json:"last_used,omitempty"`
-	CreatedAt     *time.Time                    `json:"created_at,omitempty"`
+	Enabled       bool                        `json:"enabled"`
+	SetupRequired bool                        `json:"setup_required"`
+	MethodType    string                      `json:"method_type,omitempty"`
+	Credentials   []auth.MFACredentialSummary `json:"credentials,omitempty"`
+	LastUsed      *time.Time                  `json:"last_used,omitempty"`
+	CreatedAt     *time.Time                  `json:"created_at,omitempty"`
 }
 
 // MFAStatus returns MFA enrollment status for a user.
@@ -1138,5 +1169,20 @@ func GetCurrentUser(c echo.Context) error {
 		"total_storage":   user.TotalStorageBytes,
 		"storage_limit":   user.StorageLimitBytes,
 		"storage_used_pc": user.GetStorageUsagePercent(),
+	})
+}
+
+func GetAccountCryptoMetadata(c echo.Context) error {
+	username := auth.GetUsernameFromToken(c)
+	accountKDFSalt, accountKDFProfile, err := models.GetAccountCryptoMetadata(database.DB, username)
+	if err != nil {
+		logging.ErrorLogger.Printf("GetAccountCryptoMetadata: failed to load user %s: %v", username, err)
+		return JSONError(c, http.StatusInternalServerError, "Failed to get account cryptographic metadata")
+	}
+
+	return JSONResponse(c, http.StatusOK, "Account cryptographic metadata retrieved", map[string]interface{}{
+		"username":            username,
+		"account_kdf_salt":    accountKDFSalt,
+		"account_kdf_profile": accountKDFProfile,
 	})
 }

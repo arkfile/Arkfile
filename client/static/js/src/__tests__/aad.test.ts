@@ -19,6 +19,8 @@ import {
   buildMetadataFieldAAD,
 } from '../crypto/aad';
 import { fromHex, toHex } from '../crypto/primitives';
+import { createOwnerEnvelopeHeader } from '../crypto/owner-envelope';
+import fixture from '../../../../../crypto/testdata/crypto-conformance-v2.json';
 
 // ============================================================================
 // CROSS-LANGUAGE CONFORMANCE VECTOR
@@ -65,6 +67,28 @@ describe('buildChunkAAD -- cross-language conformance', () => {
     // Byte-for-byte equality, with a hex-encoded mismatch dump on failure
     // so a future drift is trivially diagnosable.
     expect(toHex(got)).toBe(toHex(want));
+  });
+});
+
+describe('shared crypto v2 AAD fixture', () => {
+  test('matches chunk and metadata field bytes', () => {
+    expect(toHex(buildChunkAAD(fixture.file_id, 0n, 3n)))
+      .toBe(fixture.aad.chunk_zero_of_three_hex);
+    expect(toHex(buildMetadataFieldAAD(
+      fixture.file_id,
+      AAD_FIELD_FILENAME,
+      fixture.owner_username,
+    ))).toBe(fixture.aad.encrypted_filename_hex);
+    expect(toHex(buildMetadataFieldAAD(
+      fixture.file_id,
+      AAD_FIELD_SHA256,
+      fixture.owner_username,
+    ))).toBe(fixture.aad.encrypted_sha256sum_hex);
+    expect(toHex(buildMetadataFieldAAD(
+      fixture.file_id,
+      AAD_FIELD_PASSWORD_HINT,
+      fixture.owner_username,
+    ))).toBe(fixture.aad.encrypted_password_hint_hex);
   });
 });
 
@@ -116,28 +140,32 @@ describe('buildChunkAAD -- determinism and uniqueness', () => {
 // ============================================================================
 
 describe('buildFEKEnvelopeAAD -- determinism and distinction', () => {
+  const salt = new Uint8Array(32);
+
   test('is deterministic for identical inputs', () => {
-    const a = buildFEKEnvelopeAAD('file-x', 0x01);
-    const b = buildFEKEnvelopeAAD('file-x', 0x01);
+    const header = createOwnerEnvelopeHeader('account', salt);
+    const a = buildFEKEnvelopeAAD('file-x', header);
+    const b = buildFEKEnvelopeAAD('file-x', header);
     expect(toHex(a)).toBe(toHex(b));
   });
 
   test('account (0x01) and custom (0x02) produce different AADs for same fileID', () => {
-    const account = buildFEKEnvelopeAAD('file-x', 0x01);
-    const custom = buildFEKEnvelopeAAD('file-x', 0x02);
+    const account = buildFEKEnvelopeAAD('file-x', createOwnerEnvelopeHeader('account', salt));
+    const custom = buildFEKEnvelopeAAD('file-x', createOwnerEnvelopeHeader('custom', salt));
     expect(toHex(account)).not.toBe(toHex(custom));
   });
 
   test('differs across fileID for the same keyType', () => {
-    const a = buildFEKEnvelopeAAD('file-a', 0x01);
-    const b = buildFEKEnvelopeAAD('file-b', 0x01);
+    const header = createOwnerEnvelopeHeader('account', salt);
+    const a = buildFEKEnvelopeAAD('file-a', header);
+    const b = buildFEKEnvelopeAAD('file-b', header);
     expect(toHex(a)).not.toBe(toHex(b));
   });
 
-  test('rejects keyTypeByte outside 0..255', () => {
-    expect(() => buildFEKEnvelopeAAD('file-x', -1)).toThrow();
-    expect(() => buildFEKEnvelopeAAD('file-x', 256)).toThrow();
-    expect(() => buildFEKEnvelopeAAD('file-x', 1.5)).toThrow();
+  test('matches the shared complete-header fixture', () => {
+    const header = fromHex(fixture.owner_headers.account_hex);
+    expect(toHex(buildFEKEnvelopeAAD(fixture.file_id, header)))
+      .toBe(fixture.aad.account_fek_envelope_hex);
   });
 });
 

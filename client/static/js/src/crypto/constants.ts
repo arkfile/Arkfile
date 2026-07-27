@@ -184,25 +184,7 @@ export async function getChunkingParams(): Promise<ChunkingConfig> {
 }
 
 
-// Salt Domain Prefixes
-
-/**
- * Domain separation prefixes for deterministic salt derivation
- * 
- * CRITICAL: These MUST match the Go implementation in crypto/key_derivation.go
- * Format: SHA-256("arkfile-{context}-key-salt:{username}") → first 32 bytes = salt
- * 
- * See: GenerateUserKeySalt() in crypto/key_derivation.go
- */
 export type PasswordContext = 'account' | 'custom';
-
-export const SALT_DOMAIN_PREFIXES: Record<PasswordContext, string> = {
-  /** Salt prefix for account password key derivation */
-  account: 'arkfile-account-key-salt:',
-  
-  /** Salt prefix for custom password key derivation */
-  custom: 'arkfile-custom-key-salt:',
-} as const;
 
 // Protocol Version
 
@@ -210,13 +192,13 @@ export const SALT_DOMAIN_PREFIXES: Record<PasswordContext, string> = {
  * Protocol version for encrypted file format
  * Increment this when making breaking changes to the encryption format
  */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /**
  * File encryption format version
  * This is embedded in encrypted file metadata
  */
-export const FILE_ENCRYPTION_VERSION = 1;
+export const FILE_ENCRYPTION_VERSION = 2;
 
 // Timeouts and Limits
 

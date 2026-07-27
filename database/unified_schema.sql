@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE NOT NULL,
     username_folded TEXT UNIQUE NOT NULL,
+    account_kdf_salt TEXT NOT NULL CHECK(length(account_kdf_salt) = 44),
+    account_kdf_profile INTEGER NOT NULL CHECK(account_kdf_profile = 1),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     total_storage_bytes BIGINT NOT NULL DEFAULT 0,
     storage_limit_bytes BIGINT NOT NULL DEFAULT 1073741824,

@@ -12,6 +12,7 @@ import { showFileSection, showAuthSection } from '../ui/sections';
 import { registerSwDownload } from '../files/sw-streaming-download';
 import { setupHomePageListeners } from './home-listeners';
 import type { AppShell } from './shell';
+import { debugLog } from '../utils/debug-log.js';
 
 async function checkServiceReady(): Promise<boolean> {
   try {
@@ -103,7 +104,7 @@ export async function bootstrapApplication(shell: AppShell): Promise<boolean> {
 
     registerSwDownload().then((ok) => {
       if (ok) {
-        console.log('[arkfile] SW streaming download ready');
+        debugLog('[arkfile] SW streaming download ready');
       } else {
         console.warn('[arkfile] SW streaming unavailable; large file downloads (>2 GB) may fail on Chromium');
       }
@@ -144,7 +145,7 @@ export async function bootstrapApplication(shell: AppShell): Promise<boolean> {
       await handleInitialAuth(shell);
     }
 
-    console.log('ArkFile TypeScript application initialized');
+    debugLog('ArkFile TypeScript application initialized');
     void initSitewideFooters();
     return true;
   } catch (error) {

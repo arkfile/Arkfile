@@ -490,8 +490,8 @@ func TestCopyObjectBetweenProviders_LargeObject_Multipart(t *testing.T) {
 
 	// Create content larger than CopyMultipartThreshold (5 MB).
 	// We use a real buffer here to exercise the multipart read path.
-	// 150 MB = 2 full 64MB parts + 1 partial 22MB part = 3 parts total.
-	objectSize := int64(150 * 1024 * 1024)
+	// 90 MiB exercises two multipart uploads while remaining below 100 MB.
+	objectSize := int64(90 * 1024 * 1024)
 	content := make([]byte, objectSize)
 	// Fill with a pattern so hashing is deterministic
 	for i := range content {
@@ -507,22 +507,16 @@ func TestCopyObjectBetweenProviders_LargeObject_Multipart(t *testing.T) {
 	uploadID := "test-upload-id-123"
 	dest.On("InitiateMultipartUpload", mock.Anything, "large-obj", mock.Anything).Return(uploadID, nil)
 
-	// Expect 3 UploadPart calls: part 1 (64MB), part 2 (64MB), part 3 (22MB)
-	part1Size := int64(CopyMultipartPartSize)       // 64 MB
-	part2Size := int64(CopyMultipartPartSize)       // 64 MB
-	part3Size := objectSize - part1Size - part2Size // 22 MB
+	part1Size := int64(CopyMultipartPartSize)
+	part2Size := objectSize - part1Size
 
 	dest.On("UploadPart", mock.Anything, "large-obj", uploadID, 1, mock.Anything, part1Size).
 		Return(CompletePart{PartNumber: 1, ETag: "etag-1"}, nil)
 	dest.On("UploadPart", mock.Anything, "large-obj", uploadID, 2, mock.Anything, part2Size).
 		Return(CompletePart{PartNumber: 2, ETag: "etag-2"}, nil)
-	dest.On("UploadPart", mock.Anything, "large-obj", uploadID, 3, mock.Anything, part3Size).
-		Return(CompletePart{PartNumber: 3, ETag: "etag-3"}, nil)
-
 	expectedParts := []CompletePart{
 		{PartNumber: 1, ETag: "etag-1"},
 		{PartNumber: 2, ETag: "etag-2"},
-		{PartNumber: 3, ETag: "etag-3"},
 	}
 	dest.On("CompleteMultipartUpload", mock.Anything, "large-obj", uploadID, expectedParts).Return(nil)
 
@@ -541,11 +535,9 @@ func TestCopyObjectBetweenProviders_LargeObject_Multipart(t *testing.T) {
 	assert.NotEmpty(t, hash)
 	assert.Len(t, hash, 64) // SHA-256 hex = 64 chars
 
-	// Progress should be called once per part (3 parts)
-	assert.Len(t, progressCalls, 3)
+	assert.Len(t, progressCalls, 2)
 	assert.Equal(t, part1Size, progressCalls[0])
-	assert.Equal(t, part1Size+part2Size, progressCalls[1])
-	assert.Equal(t, objectSize, progressCalls[2])
+	assert.Equal(t, objectSize, progressCalls[1])
 
 	source.AssertExpectations(t)
 	dest.AssertExpectations(t)
@@ -555,7 +547,7 @@ func TestCopyObjectBetweenProviders_LargeObject_PartUploadFails(t *testing.T) {
 	source := new(MockObjectStorageProvider)
 	dest := new(MockObjectStorageProvider)
 
-	objectSize := int64(150 * 1024 * 1024)
+	objectSize := int64(90 * 1024 * 1024)
 	content := make([]byte, objectSize)
 	for i := range content {
 		content[i] = byte(i % 251)
@@ -572,7 +564,7 @@ func TestCopyObjectBetweenProviders_LargeObject_PartUploadFails(t *testing.T) {
 	// First part succeeds, second part fails
 	dest.On("UploadPart", mock.Anything, "large-fail-obj", uploadID, 1, mock.Anything, int64(CopyMultipartPartSize)).
 		Return(CompletePart{PartNumber: 1, ETag: "etag-1"}, nil)
-	dest.On("UploadPart", mock.Anything, "large-fail-obj", uploadID, 2, mock.Anything, int64(CopyMultipartPartSize)).
+	dest.On("UploadPart", mock.Anything, "large-fail-obj", uploadID, 2, mock.Anything, objectSize-int64(CopyMultipartPartSize)).
 		Return(CompletePart{}, errors.New("upload part 2 failed"))
 	dest.On("AbortMultipartUpload", mock.Anything, "large-fail-obj", uploadID).Return(nil)
 
@@ -594,7 +586,7 @@ func TestCopyObjectBetweenProviders_LargeObject_Cancellation(t *testing.T) {
 	source := new(MockObjectStorageProvider)
 	dest := new(MockObjectStorageProvider)
 
-	objectSize := int64(200 * 1024 * 1024)
+	objectSize := int64(90 * 1024 * 1024)
 	content := make([]byte, objectSize)
 
 	obj := &MockStoredObject{}

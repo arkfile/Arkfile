@@ -22,8 +22,10 @@ const originalFetch = globalThis.fetch;
 const CHUNKING_CONFIG = {
   plaintextChunkSizeBytes: 16777216,
   envelope: {
-    version: 1,
-    headerSizeBytes: 2,
+    version: 2,
+    headerSizeBytes: 35,
+    saltSizeBytes: 32,
+    kdfProfile: 1,
     keyTypes: { account: 1, custom: 2 },
   },
   aesGcm: {

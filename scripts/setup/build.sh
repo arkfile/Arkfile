@@ -289,6 +289,10 @@ echo -e "${GREEN}Source directory: $(pwd)${NC}"
 echo -e "${YELLOW}Building libopaque WASM/JS library...${NC}"
 
 # Check if we should skip WASM library building (respects SKIP_C_LIBS flag)
+if [ "$PRODUCTION_BUILD" = "true" ] && [ "${SKIP_C_LIBS}" = "true" ]; then
+    echo -e "${RED}[X] Production builds cannot skip the trace-free WASM rebuild${NC}"
+    exit 1
+fi
 if [ "${SKIP_C_LIBS}" = "true" ]; then
     # Verify WASM files exist in client directory
     if [ -f "client/static/js/libopaque.js" ] && [ -f "client/static/js/libopaque.debug.js" ]; then
@@ -301,7 +305,7 @@ fi
 
 if [ "${SKIP_C_LIBS}" != "true" ]; then
     # Use the dedicated WASM build script (includes validation and proper error handling)
-    if ! ./scripts/setup/build-libopaque-wasm.sh; then
+    if ! ARKFILE_PRODUCTION_BUILD="$PRODUCTION_BUILD" ./scripts/setup/build-libopaque-wasm.sh; then
         echo -e "${RED}[X] Failed to build libopaque WASM library${NC}"
         exit 1
     fi

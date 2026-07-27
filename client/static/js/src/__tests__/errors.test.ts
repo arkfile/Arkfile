@@ -21,8 +21,6 @@ import {
   OpaqueAuthenticationError,
   InvalidOpaqueResponseError,
   InvalidOpaqueStateError,
-  SaltDerivationError,
-  InvalidUsernameError,
   InvalidKeyError,
   InvalidKeyLengthError,
   ExpiredKeyError,
@@ -123,13 +121,6 @@ describe('Error hierarchy', () => {
   test('OpaqueAuthenticationError extends OpaqueError', () => {
     const err = new OpaqueAuthenticationError('auth fail');
     expect(err instanceof OpaqueError).toBe(true);
-  });
-
-  test('InvalidUsernameError extends SaltDerivationError', () => {
-    const err = new InvalidUsernameError('too short');
-    expect(err instanceof SaltDerivationError).toBe(true);
-    expect(err instanceof CryptoError).toBe(true);
-    expect(err.name).toBe('InvalidUsernameError');
   });
 
   test('InvalidKeyLengthError extends InvalidKeyError', () => {

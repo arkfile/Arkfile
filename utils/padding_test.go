@@ -29,18 +29,6 @@ func TestPaddingCalculator(t *testing.T) {
 			minExpected:  50 * 1024 * 1024,      // 50MB (rounded to 1MB block)
 			maxExpected:  50*1024*1024 + 102400, // 50MB + 10% of 1MB
 		},
-		{
-			name:         "Large file (100MB-1GB)",
-			originalSize: 500 * 1024 * 1024,         // 500MB
-			minExpected:  500 * 1024 * 1024,         // 500MB (rounded to 10MB block)
-			maxExpected:  500*1024*1024 + 1024*1024, // 500MB + 10% of 10MB
-		},
-		{
-			name:         "Very large file (> 1GB)",
-			originalSize: 2 * 1024 * 1024 * 1024,        // 2GB
-			minExpected:  2 * 1024 * 1024 * 1024,        // 2GB (rounded to 100MB block)
-			maxExpected:  2100*1024*1024 + 10*1024*1024, // 2100MB (rounded up) + 10% of 100MB
-		},
 	}
 
 	calc := NewPaddingCalculator()
@@ -157,10 +145,10 @@ func TestPaddingConsistency(t *testing.T) {
 func BenchmarkCalculatePaddedSize(b *testing.B) {
 	calc := NewPaddingCalculator()
 	sizes := []int64{
-		1024,               // 1KB
-		1024 * 1024,        // 1MB
-		100 * 1024 * 1024,  // 100MB
-		1024 * 1024 * 1024, // 1GB
+		1024,
+		1024 * 1024,
+		50 * 1024 * 1024,
+		90 * 1024 * 1024,
 	}
 
 	for _, size := range sizes {

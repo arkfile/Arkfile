@@ -46,7 +46,7 @@ import {
 import { debugLog } from '../utils/debug-log.js';
 
 import { deriveFileEncryptionKey } from '../crypto/file-encryption';
-import { getAccountKey, decryptFEK } from '../crypto/metadata-helpers';
+import { getAccountKey, decryptFEK, parseEncryptedFEKHeader } from '../crypto/metadata-helpers';
 
 const LOG_PREFIX = '[arkfile-download]';
 const INTEGRITY_PANEL_ID = 'download-integrity-panel';
@@ -125,6 +125,10 @@ export async function downloadFile(
 
     let fek: Uint8Array;
     let metadataDecryptionKey: Uint8Array;
+    const envelopeHeader = parseEncryptedFEKHeader(meta.encrypted_fek);
+    if (envelopeHeader.keyType !== meta.password_type) {
+      throw new Error('Owner envelope key type does not match file metadata');
+    }
 
     if (passwordType === 'account' || meta.password_type === 'account') {
       // Account-encrypted: get Account Key, decrypt FEK
@@ -178,7 +182,7 @@ export async function downloadFile(
         });
 
         const tKdf = Date.now();
-        const customKey = await deriveFileEncryptionKey(password, username, 'custom');
+        const customKey = await deriveFileEncryptionKey(password, envelopeHeader.salt, 'custom');
         debugLog(`${LOG_PREFIX} Custom key derived (Argon2id) in ${Date.now() - tKdf}ms`);
         hideProgress();
 

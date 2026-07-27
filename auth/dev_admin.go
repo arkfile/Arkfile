@@ -82,21 +82,32 @@ func CreateDevAdminWithOPAQUE(db *sql.DB, username, password string) (*models.Us
 	}
 
 	log.Printf("OPAQUE registration completed for dev admin, export_key_length=%d", len(exportKey))
+	accountKDFSalt, err := crypto.GeneratePasswordSalt()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate Account Key salt: %w", err)
+	}
+	accountKDFSaltB64 := crypto.EncodeBase64(accountKDFSalt)
 
 	// Create user record in database
 	user := &models.User{
-		Username:   username,
-		IsApproved: true, // Auto-approve admin
-		IsAdmin:    true, // Set admin privileges
-		CreatedAt:  time.Now(),
+		Username:          username,
+		AccountKDFSalt:    accountKDFSaltB64,
+		AccountKDFProfile: int(crypto.OwnerEnvelopeKDFProfile()),
+		IsApproved:        true, // Auto-approve admin
+		IsAdmin:           true, // Set admin privileges
+		CreatedAt:         time.Now(),
 	}
 
 	// Insert user into database
 	folded := utils.FoldUsername(user.Username)
 	result, err := db.Exec(`
-		INSERT INTO users (username, username_folded, is_approved, is_admin, created_at)
-		VALUES (?, ?, ?, ?, ?)`,
-		user.Username, folded, user.IsApproved, user.IsAdmin, user.CreatedAt,
+		INSERT INTO users (
+			username, username_folded, account_kdf_salt, account_kdf_profile,
+			is_approved, is_admin, created_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		user.Username, folded, user.AccountKDFSalt, user.AccountKDFProfile,
+		user.IsApproved, user.IsAdmin, user.CreatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user record: %w", err)

@@ -24,6 +24,8 @@ import {
 } from './file-encryption.js';
 import { unlockAccountKey } from './account-key-cache.js';
 import { promptForAccountKeyPassword } from '../ui/password-modal.js';
+import { FLOOR_CHUNKING } from './floors.js';
+import { parseOwnerEnvelopeHeader, type OwnerEnvelopeHeader } from './owner-envelope.js';
 
 // Base64 Helpers
 
@@ -98,13 +100,9 @@ export async function getAccountKey(username: string): Promise<Uint8Array | null
  * Decrypt an encrypted FEK (File Encryption Key).
  *
  * Encrypted FEK wire format (matches Go crypto.EncryptFEK):
- *   [version (1 byte)][keyType (1 byte)][nonce (12)][ciphertext][tag (16)]
+ *   [version][keyType][KDF profile][salt][nonce][ciphertext][tag]
  *
- * The 2-byte envelope header is stripped before AES-GCM decryption.
- * AAD = BuildFEKEnvelopeAAD(fileID, keyTypeByte) binds the envelope to this
- * specific file_id and to the declared key type, so a server with DB-write
- * access cannot move FEK envelopes between files or flip the key-type
- * byte to mis-route the client.
+ * The complete fixed-width header is authenticated as AAD with the file ID.
  *
  * @param encrypted_fek_base64 - Base64-encoded encrypted FEK with envelope header
  * @param kek                  - The Key Encryption Key (account or custom derived, 32 bytes)
@@ -121,31 +119,27 @@ export async function decryptFEK(
   }
 
   const raw = base64ToBytes(encrypted_fek_base64);
-
-  // Minimum: 2 (envelope) + 12 (nonce) + 16 (tag) + 1 (min ciphertext) = 31
-  if (raw.length < 31) {
-    throw new Error(`Encrypted FEK too short: expected >= 31 bytes, got ${raw.length}`);
+  const header = parseOwnerEnvelopeHeader(raw);
+  const expectedLength = header.bytes.length +
+    FLOOR_CHUNKING.aesGcm.nonceSizeBytes +
+    FLOOR_CHUNKING.aesGcm.keySizeBytes +
+    FLOOR_CHUNKING.aesGcm.tagSizeBytes;
+  if (raw.length !== expectedLength) {
+    throw new Error(`Encrypted FEK must be ${expectedLength} bytes, got ${raw.length}`);
   }
 
-  const version = raw[0];
-  if (version !== 0x01) {
-    throw new Error(
-      `Unsupported envelope version: 0x${version.toString(16).padStart(2, '0')} (expected 0x01)`,
-    );
-  }
-
-  const keyTypeByte = raw[1];
-  const aad = buildFEKEnvelopeAAD(fileID, keyTypeByte);
-
-  // Strip 2-byte envelope header, then decrypt under the matching AAD.
-  // Remaining payload: [nonce (12)][ciphertext][tag (16)]
-  const fek = await decryptChunk(raw.slice(2), kek, aad);
+  const aad = buildFEKEnvelopeAAD(fileID, header.bytes);
+  const fek = await decryptChunk(raw.slice(header.bytes.length), kek, aad);
 
   if (fek.length !== 32) {
     throw new Error(`Invalid FEK length: expected 32 bytes, got ${fek.length}`);
   }
 
   return fek;
+}
+
+export function parseEncryptedFEKHeader(encryptedFEKBase64: string): OwnerEnvelopeHeader {
+  return parseOwnerEnvelopeHeader(base64ToBytes(encryptedFEKBase64));
 }
 
 // Metadata Field Decryption
@@ -158,7 +152,7 @@ export async function decryptFEK(
  *   [nonce (12 bytes)][ciphertext][tag (16 bytes)]
  *
  * Metadata is always encrypted with the Account Key (Argon2id derived from
- * account password + username), regardless of whether the file uses account
+ * account password + public Account Key salt), regardless of whether the file uses account
  * or custom password for FEK encryption. AAD =
  * BuildMetadataFieldAAD(fileID, fieldName, ownerUsername) binds each field
  * to (file, field-label, owner) so the server cannot move metadata between

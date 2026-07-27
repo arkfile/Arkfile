@@ -69,7 +69,7 @@ func TestBootstrapRegisterFinalize_RejectsForgedXFF(t *testing.T) {
 	e := echo.New()
 	e.IPExtractor = echo.ExtractIPDirect()
 
-	body := []byte(`{"bootstrap_token":"fake","session_id":"fake","username":"alice","registration_record":"AAAA"}`)
+	body := []byte(`{"bootstrap_token":"fake","session_id":"fake","username":"alice","registration_record":"AAAA","account_kdf_salt":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","account_kdf_profile":1}`)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/bootstrap/register/finalize", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")

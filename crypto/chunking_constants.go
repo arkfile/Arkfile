@@ -19,7 +19,11 @@ type ChunkingParams struct {
 
 // EnvelopeParams represents envelope header configuration
 type EnvelopeParams struct {
-	KeyTypes KeyTypeMapping `json:"keyTypes"`
+	Version         int            `json:"version"`
+	HeaderSizeBytes int            `json:"headerSizeBytes"`
+	SaltSizeBytes   int            `json:"saltSizeBytes"`
+	KDFProfile      int            `json:"kdfProfile"`
+	KeyTypes        KeyTypeMapping `json:"keyTypes"`
 }
 
 // KeyTypeMapping maps password context names to envelope key type bytes
@@ -101,4 +105,20 @@ func KeyTypeForContext(passwordType string) (byte, error) {
 	default:
 		return 0, fmt.Errorf("unknown password type: %s", passwordType)
 	}
+}
+
+func OwnerEnvelopeVersion() byte {
+	return byte(MustGetChunkingParams().Envelope.Version)
+}
+
+func OwnerEnvelopeHeaderSize() int {
+	return MustGetChunkingParams().Envelope.HeaderSizeBytes
+}
+
+func OwnerEnvelopeSaltSize() int {
+	return MustGetChunkingParams().Envelope.SaltSizeBytes
+}
+
+func OwnerEnvelopeKDFProfile() byte {
+	return byte(MustGetChunkingParams().Envelope.KDFProfile)
 }

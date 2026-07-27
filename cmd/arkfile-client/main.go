@@ -566,7 +566,7 @@ func requireSession(config *ClientConfig) (*AuthSession, error) {
 
 // requireAccountKey gets the account key from the agent with session binding validation.
 // Returns a clear error if agent is not running, key is not set, or session has expired/mismatched.
-func requireAccountKey(config *ClientConfig) ([]byte, error) {
+func requireAccountKey(client *HTTPClient, config *ClientConfig) ([]byte, error) {
 	session, err := requireSession(config)
 	if err != nil {
 		return nil, err
@@ -577,7 +577,15 @@ func requireAccountKey(config *ClientConfig) ([]byte, error) {
 		return nil, fmt.Errorf("failed to connect to agent: %w", err)
 	}
 
-	accountKey, err := agentClient.GetAccountKey(session.AccessToken)
+	metadata, err := fetchAccountKDFMetadata(client, session)
+	if err != nil {
+		return nil, err
+	}
+	accountKey, err := agentClient.GetAccountKey(
+		session.AccessToken,
+		metadata.SaltB64,
+		metadata.Profile,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("account key not available: %v\nPlease run: arkfile-client login --username <user>", err)
 	}
@@ -677,11 +685,17 @@ func handleRegisterCommand(client *HTTPClient, config *ClientConfig, args []stri
 	if err != nil {
 		return fmt.Errorf("failed to finalize registration: %w", err)
 	}
+	accountKDFSalt, err := crypto.GeneratePasswordSalt()
+	if err != nil {
+		return fmt.Errorf("failed to generate Account Key salt: %w", err)
+	}
 
-	regFinalizeResp, err := client.makeRequest("POST", "/api/opaque/register/finalize", map[string]string{
+	regFinalizeResp, err := client.makeRequest("POST", "/api/opaque/register/finalize", map[string]interface{}{
 		"session_id":          sessionID,
 		"username":            *usernameFlag,
 		"registration_record": encodeBase64(registrationRecord),
+		"account_kdf_salt":    encodeBase64(accountKDFSalt),
+		"account_kdf_profile": int(crypto.OwnerEnvelopeKDFProfile()),
 	}, "")
 	if err != nil {
 		return fmt.Errorf("OPAQUE registration finalization failed: %w", err)
@@ -977,12 +991,31 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 		loginResp.ExpiresAt = mfaResp.ExpiresAt
 	}
 
-	// Derive the account key for file encryption using Argon2id.
-	// This is completely separate from OPAQUE -- OPAQUE is only for authentication.
-	// The account key is derived from the user's password + username using the
-	// embedded Argon2id parameters, matching the TypeScript frontend exactly.
-	accountKey := crypto.DeriveAccountPasswordKey(password, *usernameFlag)
+	accountResp, err := client.makeRequest("GET", "/api/auth/crypto-metadata", nil, loginResp.Token)
+	if err != nil {
+		clearBytes(password)
+		return fmt.Errorf("failed to load Account Key metadata: %w", err)
+	}
+	accountKDFSaltB64, ok := accountResp.Data["account_kdf_salt"].(string)
+	if !ok {
+		clearBytes(password)
+		return fmt.Errorf("invalid account response: missing account_kdf_salt")
+	}
+	accountKDFProfile, ok := accountResp.Data["account_kdf_profile"].(float64)
+	if !ok || int(accountKDFProfile) != int(crypto.OwnerEnvelopeKDFProfile()) {
+		clearBytes(password)
+		return fmt.Errorf("invalid account response: unsupported account_kdf_profile")
+	}
+	accountKDFSalt, err := decodeBase64(accountKDFSaltB64)
+	if err != nil {
+		clearBytes(password)
+		return fmt.Errorf("invalid account KDF salt: %w", err)
+	}
+	accountKey, err := crypto.DeriveAccountPasswordKey(password, accountKDFSalt)
 	clearBytes(password)
+	if err != nil {
+		return fmt.Errorf("failed to derive Account Key: %w", err)
+	}
 	defer clearBytes(accountKey)
 
 	session := &AuthSession{
@@ -1037,7 +1070,14 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 		if err != nil {
 			logVerbose("Warning: Failed to create agent client: %v", err)
 		} else {
-			if err := agentClient.StoreAccountKey(accountKey, *usernameFlag, session.AccessToken, keyTTLHours); err != nil {
+			if err := agentClient.StoreAccountKey(
+				accountKey,
+				*usernameFlag,
+				accountKDFSaltB64,
+				int(accountKDFProfile),
+				session.AccessToken,
+				keyTTLHours,
+			); err != nil {
 				logVerbose("Warning: Failed to store account key in agent: %v", err)
 			} else {
 				fmt.Printf("Account key cached in agent (TTL: %d hours)\n", keyTTLHours)

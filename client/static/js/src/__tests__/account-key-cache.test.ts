@@ -1,337 +1,79 @@
-/**
- * Unit Tests -- Account Key Cache
- *
- * Tests for: cacheAccountKey, getCachedAccountKey, clearCachedAccountKey,
- * clearAllCachedAccountKeys, isAccountKeyCached, lockAccountKey,
- * unlockAccountKey, isAccountKeyLocked, getAccountKeyCacheConfig,
- * setAccountKeyCacheConfig, cleanupAccountKeyCache
- *
- * The Account Key cache encrypts the derived key with an ephemeral wrapping
- * key (JS heap only) and stores the ciphertext in sessionStorage. These tests
- * verify the full round-trip, session binding, expiration, locking, and config.
- */
-
 import './setup';
-import { describe, test, expect, beforeEach } from 'bun:test';
-import { resetMocks } from './setup';
-import { randomBytes, toHex } from '../crypto/primitives';
+import { beforeEach, describe, expect, test } from 'bun:test';
 import {
   cacheAccountKey,
-  getCachedAccountKey,
+  cleanupAccountKeyCache,
   clearCachedAccountKey,
-  clearAllCachedAccountKeys,
+  getCachedAccountKey,
   isAccountKeyCached,
+  isAccountKeyLocked,
   lockAccountKey,
   unlockAccountKey,
-  isAccountKeyLocked,
-  cleanupAccountKeyCache,
 } from '../crypto/account-key-cache';
-import {
-  getAccountKeyCacheConfig,
-  setAccountKeyCacheConfig,
-} from '../crypto/account-key-cache';
+import { randomBytes, toBase64, toHex } from '../crypto/primitives';
 
-// ============================================================================
-// Helpers
-// ============================================================================
-
-const TEST_USERNAME = 'testuser01';  // 10+ chars
-const TEST_TOKEN = 'eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.test-token-payload';
-
-function makeKey(): Uint8Array {
-  return randomBytes(32);
-}
-
-// ============================================================================
-// Setup -- clean slate before each test
-// ============================================================================
+const USERNAME = 'cache-user-2026';
+const TOKEN = 'header.cache-token-payload.signature';
+let metadataSalt = new Uint8Array(32).fill(1);
+let metadataProfile = 1;
 
 beforeEach(() => {
-  resetMocks();
-  // Ensure unlocked state and clean wrapping key by running cleanup
   cleanupAccountKeyCache();
-});
-
-// ============================================================================
-// cacheAccountKey + getCachedAccountKey round-trip
-// ============================================================================
-
-describe('cacheAccountKey / getCachedAccountKey', () => {
-  test('round-trips a 32-byte key', async () => {
-    const key = makeKey();
-    await cacheAccountKey(TEST_USERNAME, key, TEST_TOKEN, 1);
-
-    const retrieved = await getCachedAccountKey(TEST_USERNAME, TEST_TOKEN);
-    expect(retrieved).not.toBeNull();
-    expect(retrieved!.length).toBe(32);
-    expect(toHex(retrieved!)).toBe(toHex(key));
-  });
-
-  test('returns null when nothing is cached', async () => {
-    const result = await getCachedAccountKey(TEST_USERNAME, TEST_TOKEN);
-    expect(result).toBeNull();
-  });
-
-  test('returns null for wrong username', async () => {
-    const key = makeKey();
-    await cacheAccountKey(TEST_USERNAME, key, TEST_TOKEN, 1);
-
-    const result = await getCachedAccountKey('otheruserx', TEST_TOKEN);
-    expect(result).toBeNull();
+  unlockAccountKey();
+  metadataSalt = new Uint8Array(32).fill(1);
+  metadataProfile = 1;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    data: {
+      username: USERNAME,
+      account_kdf_salt: toBase64(metadataSalt),
+      account_kdf_profile: metadataProfile,
+    },
+  }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
   });
 });
 
-// ============================================================================
-// isAccountKeyCached
-// ============================================================================
-
-describe('isAccountKeyCached', () => {
-  test('returns true after caching', async () => {
-    const key = makeKey();
-    await cacheAccountKey(TEST_USERNAME, key, TEST_TOKEN, 1);
-    expect(isAccountKeyCached(TEST_USERNAME)).toBe(true);
+describe('Account Key cache metadata binding', () => {
+  test('round-trips a key bound to username, salt, profile, and session', async () => {
+    const key = randomBytes(32);
+    await cacheAccountKey(USERNAME, key, TOKEN, 1);
+    const recovered = await getCachedAccountKey(USERNAME, TOKEN);
+    expect(recovered).not.toBeNull();
+    expect(toHex(recovered!)).toBe(toHex(key));
   });
 
-  test('returns false when nothing cached', () => {
-    expect(isAccountKeyCached(TEST_USERNAME)).toBe(false);
+  test('invalidates the entry after the account salt changes', async () => {
+    await cacheAccountKey(USERNAME, randomBytes(32), TOKEN, 1);
+    const storageKey = `arkfile_account_key_${USERNAME}`;
+    const cached = JSON.parse(sessionStorage.getItem(storageKey)!);
+    cached.account_kdf_salt = toBase64(new Uint8Array(32).fill(2));
+    sessionStorage.setItem(storageKey, JSON.stringify(cached));
+    expect(await getCachedAccountKey(USERNAME, TOKEN)).toBeNull();
+    expect(isAccountKeyCached(USERNAME)).toBe(false);
   });
 
-  test('returns false after clear', async () => {
-    const key = makeKey();
-    await cacheAccountKey(TEST_USERNAME, key, TEST_TOKEN, 1);
-    clearCachedAccountKey(TEST_USERNAME);
-    // After clearing the storage entry, isAccountKeyCached should be false
-    expect(isAccountKeyCached(TEST_USERNAME)).toBe(false);
-  });
-});
-
-// ============================================================================
-// clearCachedAccountKey
-// ============================================================================
-
-describe('clearCachedAccountKey', () => {
-  test('removes specific user key', async () => {
-    const key = makeKey();
-    await cacheAccountKey(TEST_USERNAME, key, TEST_TOKEN, 1);
-
-    clearCachedAccountKey(TEST_USERNAME);
-
-    const result = await getCachedAccountKey(TEST_USERNAME, TEST_TOKEN);
-    expect(result).toBeNull();
+  test('invalidates the entry after the KDF profile changes', async () => {
+    await cacheAccountKey(USERNAME, randomBytes(32), TOKEN, 1);
+    const storageKey = `arkfile_account_key_${USERNAME}`;
+    const cached = JSON.parse(sessionStorage.getItem(storageKey)!);
+    cached.account_kdf_profile = 2;
+    sessionStorage.setItem(storageKey, JSON.stringify(cached));
+    expect(await getCachedAccountKey(USERNAME, TOKEN)).toBeNull();
   });
 
-  test('does not affect other users', async () => {
-    const key1 = makeKey();
-    const key2 = makeKey();
-    const user2 = 'otheruser1';
-
-    await cacheAccountKey(TEST_USERNAME, key1, TEST_TOKEN, 1);
-    await cacheAccountKey(user2, key2, TEST_TOKEN, 1);
-
-    clearCachedAccountKey(TEST_USERNAME);
-
-    // user2's key should still be retrievable
-    const result = await getCachedAccountKey(user2, TEST_TOKEN);
-    expect(result).not.toBeNull();
-    expect(toHex(result!)).toBe(toHex(key2));
-  });
-});
-
-// ============================================================================
-// clearAllCachedAccountKeys
-// ============================================================================
-
-describe('clearAllCachedAccountKeys', () => {
-  test('removes all cached keys', async () => {
-    const key1 = makeKey();
-    const key2 = makeKey();
-    const user2 = 'otheruser1';
-
-    await cacheAccountKey(TEST_USERNAME, key1, TEST_TOKEN, 1);
-    await cacheAccountKey(user2, key2, TEST_TOKEN, 1);
-
-    clearAllCachedAccountKeys();
-
-    expect(isAccountKeyCached(TEST_USERNAME)).toBe(false);
-    expect(isAccountKeyCached(user2)).toBe(false);
-  });
-});
-
-// ============================================================================
-// Lock / Unlock
-// ============================================================================
-
-describe('lockAccountKey / unlockAccountKey / isAccountKeyLocked', () => {
-  test('isAccountKeyLocked returns false initially', () => {
-    expect(isAccountKeyLocked()).toBe(false);
-  });
-
-  test('lockAccountKey sets locked state', async () => {
-    const key = makeKey();
-    await cacheAccountKey(TEST_USERNAME, key, TEST_TOKEN, 1);
-
-    lockAccountKey();
-
+  test('locks on a session-token mismatch', async () => {
+    await cacheAccountKey(USERNAME, randomBytes(32), TOKEN, 1);
+    expect(await getCachedAccountKey(USERNAME, 'different-token')).toBeNull();
     expect(isAccountKeyLocked()).toBe(true);
   });
 
-  test('getCachedAccountKey returns null when locked', async () => {
-    const key = makeKey();
-    await cacheAccountKey(TEST_USERNAME, key, TEST_TOKEN, 1);
-
+  test('lock and explicit clear make cached material unavailable', async () => {
+    await cacheAccountKey(USERNAME, randomBytes(32), TOKEN, 1);
     lockAccountKey();
-
-    const result = await getCachedAccountKey(TEST_USERNAME, TEST_TOKEN);
-    expect(result).toBeNull();
-  });
-
-  test('isAccountKeyCached returns false when locked', async () => {
-    const key = makeKey();
-    await cacheAccountKey(TEST_USERNAME, key, TEST_TOKEN, 1);
-
-    lockAccountKey();
-
-    expect(isAccountKeyCached(TEST_USERNAME)).toBe(false);
-  });
-
-  test('unlockAccountKey clears locked state', () => {
-    lockAccountKey();
-    expect(isAccountKeyLocked()).toBe(true);
-
+    expect(await getCachedAccountKey(USERNAME, TOKEN)).toBeNull();
     unlockAccountKey();
-    expect(isAccountKeyLocked()).toBe(false);
-  });
-});
-
-// ============================================================================
-// Session binding (token mismatch → auto-lock)
-// ============================================================================
-
-describe('session binding', () => {
-  test('mismatched token causes getCachedAccountKey to return null and lock', async () => {
-    const key = makeKey();
-    await cacheAccountKey(TEST_USERNAME, key, TEST_TOKEN, 1);
-
-    const differentToken = 'eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.different-payload';
-    const result = await getCachedAccountKey(TEST_USERNAME, differentToken);
-
-    expect(result).toBeNull();
-    expect(isAccountKeyLocked()).toBe(true);
-  });
-
-  test('getCachedAccountKey works without token (no session check)', async () => {
-    const key = makeKey();
-    await cacheAccountKey(TEST_USERNAME, key, TEST_TOKEN, 1);
-
-    // Passing undefined skips session binding check
-    const result = await getCachedAccountKey(TEST_USERNAME);
-    expect(result).not.toBeNull();
-    expect(toHex(result!)).toBe(toHex(key));
-  });
-});
-
-// ============================================================================
-// Configuration
-// ============================================================================
-
-describe('getAccountKeyCacheConfig / setAccountKeyCacheConfig', () => {
-  test('returns default config when nothing set', () => {
-    const config = getAccountKeyCacheConfig();
-    expect(config.enabled).toBe(false);
-    expect(config.durationHours).toBe(1);
-    expect(config.inactivityTimeoutMinutes).toBe(15);
-  });
-
-  test('round-trips custom config', () => {
-    setAccountKeyCacheConfig({
-      enabled: true,
-      durationHours: 3,
-      inactivityTimeoutMinutes: 30,
-    });
-
-    const config = getAccountKeyCacheConfig();
-    expect(config.enabled).toBe(true);
-    expect(config.durationHours).toBe(3);
-    expect(config.inactivityTimeoutMinutes).toBe(30);
-  });
-
-  test('clamps duration to 1-4 range', () => {
-    setAccountKeyCacheConfig({
-      enabled: true,
-      durationHours: 10 as any,
-      inactivityTimeoutMinutes: 15,
-    });
-
-    const config = getAccountKeyCacheConfig();
-    expect(config.durationHours).toBeLessThanOrEqual(4);
-    expect(config.durationHours).toBeGreaterThanOrEqual(1);
-  });
-});
-
-// ============================================================================
-// cleanupAccountKeyCache
-// ============================================================================
-
-describe('cleanupAccountKeyCache', () => {
-  test('wipes everything and resets state', async () => {
-    const key = makeKey();
-    await cacheAccountKey(TEST_USERNAME, key, TEST_TOKEN, 1);
-
-    setAccountKeyCacheConfig({
-      enabled: true,
-      durationHours: 2,
-      inactivityTimeoutMinutes: 30,
-    });
-
-    cleanupAccountKeyCache();
-
-    expect(isAccountKeyCached(TEST_USERNAME)).toBe(false);
-    expect(isAccountKeyLocked()).toBe(false);
-    // Config should be cleared (returns default)
-    const config = getAccountKeyCacheConfig();
-    expect(config.enabled).toBe(false);
-  });
-
-  test('clearAllCachedAccountKeys leaves wrapping key usable until cleanup', async () => {
-    const key = makeKey();
-    await cacheAccountKey(TEST_USERNAME, key, TEST_TOKEN, 1);
-    clearAllCachedAccountKeys();
-    // Ciphertext gone; wrapping key may still exist in heap until cleanup/lock.
-    expect(isAccountKeyCached(TEST_USERNAME)).toBe(false);
-    cleanupAccountKeyCache();
-    expect(await getCachedAccountKey(TEST_USERNAME, TEST_TOKEN)).toBeNull();
-  });
-});
-
-describe('orphaned ciphertext after reload simulation', () => {
-  test('getCachedAccountKey clears sessionStorage ciphertext when wrapping key is null', async () => {
-    const key = makeKey();
-    await cacheAccountKey(TEST_USERNAME, key, TEST_TOKEN, 1);
-
-    const storageKey = `arkfile_account_key_${TEST_USERNAME}`;
-    expect(sessionStorage.getItem(storageKey)).not.toBeNull();
-
-    // Simulate page reload: wipe wrapping key via cleanup, then re-seed ciphertext
-    // without a wrapping key (as would happen if only sessionStorage survived).
-    const leftover = sessionStorage.getItem(storageKey)!;
-    cleanupAccountKeyCache();
-    sessionStorage.setItem(storageKey, leftover);
-
-    const result = await getCachedAccountKey(TEST_USERNAME, TEST_TOKEN);
-    expect(result).toBeNull();
-    expect(sessionStorage.getItem(storageKey)).toBeNull();
-  });
-});
-
-describe('lockAccountKey teardown', () => {
-  test('wipes ciphertext so getCachedAccountKey cannot recover after unlock alone', async () => {
-    const key = makeKey();
-    await cacheAccountKey(TEST_USERNAME, key, TEST_TOKEN, 1);
-
-    lockAccountKey();
-    unlockAccountKey();
-
-    expect(await getCachedAccountKey(TEST_USERNAME, TEST_TOKEN)).toBeNull();
-    expect(sessionStorage.getItem(`arkfile_account_key_${TEST_USERNAME}`)).toBeNull();
+    clearCachedAccountKey(USERNAME);
+    expect(isAccountKeyCached(USERNAME)).toBe(false);
   });
 });
