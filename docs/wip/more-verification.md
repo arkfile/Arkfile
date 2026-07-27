@@ -23,7 +23,7 @@ The script must use the same CGO and vendored-library environment as the support
 
 ### Online orchestration: `scripts/testing/online-integrity-test.sh`
 
-**Status: implemented; live-sequence validation pending.** This script requires a live development deployment produced by `dev-reset.sh`, the post-E2E auto-approval policy, the authenticated admin and development cleanup APIs, and root inspection access. It does not invoke reset or E2E scripts itself. It creates a unique dedicated integrity user, isolated CLI/admin HOME, files, shares, canaries, and temporary state under `/tmp/arkfile-integrity-test-data`; it captures and rechecks the shared E2E user's approval, MFA-file digest, and auto-approval policy so it cannot silently break the following Playwright run. The initial CLI RSS ceiling is 262,144 KiB with permitted growth of 98,304 KiB across the configured payload sequence. These are conservative initial failure thresholds, not observed baselines, and must be reviewed after the first complete live run.
+**Status: implemented; live-sequence validation pending.** This script must be invoked as `sudo bash scripts/testing/online-integrity-test.sh` because it inspects root-protected deployment configuration, service logs, database snapshots, storage data, and Arkfile's private temporary directory. It requires a live development deployment produced by `dev-reset.sh`, the post-E2E auto-approval policy, and the authenticated admin and development cleanup APIs. It does not invoke reset or E2E scripts itself. It creates a unique dedicated integrity user, isolated CLI/admin HOME, files, shares, canaries, and temporary state under `/tmp/arkfile-integrity-test-data`; it captures and rechecks the shared E2E user's approval, MFA-file digest, and auto-approval policy so it cannot silently break the following Playwright run. The initial CLI RSS ceiling is 262,144 KiB with permitted growth of 98,304 KiB across the configured payload sequence. These are conservative initial failure thresholds, not observed baselines, and must be reviewed after the first complete live run.
 
 Initial default groups:
 
@@ -37,11 +37,11 @@ Canary checks must allow Arkfile's intentional operational metadata: ownership u
 
 Online integrity may run between shell E2E and Playwright only if it preserves `arkfile-dev-test-user`, its password and MFA state, `/tmp/arkfile-e2e-test-data/mfa-secret`, and auto-approval. The preferred full manual sequence is:
 
-1. `dev-reset.sh`
-2. `offline-integrity-test.sh`
-3. `e2e-test.sh`
-4. `online-integrity-test.sh`
-5. `e2e-playwright.sh`
+1. `sudo bash scripts/dev-reset.sh`
+2. `bash scripts/testing/offline-integrity-test.sh`
+3. `bash scripts/testing/e2e-test.sh`
+4. `sudo bash scripts/testing/online-integrity-test.sh`
+5. `sudo bash scripts/testing/e2e-playwright.sh`
 
 ### Top three approaches
 

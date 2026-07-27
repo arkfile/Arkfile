@@ -176,13 +176,13 @@ Document the two browser download paths without presenting the Blob fallback as 
 
 Review the remainder of `docs/security.md` for aspirational commands, metrics, log locations, automated responses, or security properties that are not implemented. Either verify them against the code and deployment scripts or clearly label them as operational recommendations rather than current Arkfile behavior.
 
-## Integrity scripts ready for implementation
+## Integrity scripts
 
-The cleanup checks, formats, fixtures, and E2E behavior are now stable enough to create the scripts. Their implementation is the next project and is specified in `docs/wip/more-verification.md`.
+The cleanup checks, formats, fixtures, and E2E behavior are orchestrated by the integrity scripts specified in `docs/wip/more-verification.md`.
 
-`scripts/testing/offline-integrity-test.sh` will orchestrate shared Go/TypeScript conformance vectors, malformed-input tests, short parser fuzzing, focused state/concurrency tests, custom Arkfile analyzers, and production build-profile checks. It must not require a running server, `dev-reset.sh`, or completed E2E state. Network-dependent dependency checks remain optional rather than part of its deterministic default groups.
+`scripts/testing/offline-integrity-test.sh` orchestrates shared Go/TypeScript conformance vectors, malformed-input tests, short parser fuzzing, focused state/concurrency tests, custom Arkfile analyzers, and production build-profile checks. It does not require a running server, `dev-reset.sh`, or completed E2E state. Network-dependent dependency checks remain optional rather than part of its deterministic default groups.
 
-`scripts/testing/online-integrity-test.sh` will require a live development deployment and use dedicated integrity users, files, and shares. It should create its own fixtures through the development approval API rather than mutate E2E or Playwright users. It will exercise privacy canaries, inspect post-test log/database/storage/temp-file deltas, measure CLI streaming memory across increasing file sizes no larger than 100 MB without explicit developer approval, verify CLI interruption cleanup, and execute selected live authorization and accounting races.
+`scripts/testing/online-integrity-test.sh` must run as `sudo bash scripts/testing/online-integrity-test.sh` after shell E2E against a live development deployment. It uses dedicated integrity users, files, and shares under the post-E2E auto-approval policy rather than mutating E2E or Playwright users. It exercises privacy canaries, inspects post-test log/database/storage/temp-file deltas, measures CLI streaming memory across increasing file sizes no larger than 100 MB without explicit developer approval, verifies CLI interruption cleanup, and executes selected live authorization and accounting races.
 
 The online script must treat Service Worker streaming and Blob fallback as different resource models. It may assert bounded memory for CLI and Service Worker paths, but it must not assert bounded memory for Blob assembly or universally claim that an operating-system download manager leaves no partial file after interruption.
 

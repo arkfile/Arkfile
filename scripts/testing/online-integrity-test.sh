@@ -1,4 +1,8 @@
 #!/bin/bash
+
+# Run after scripts/testing/e2e-test.sh:
+# sudo bash scripts/testing/online-integrity-test.sh
+
 set -uo pipefail
 
 SERVER_URL="${SERVER_URL:-https://localhost:8443}"
@@ -47,14 +51,6 @@ log_ok() {
 
 log_error() {
     printf '[X] %s\n' "$1" >&2
-}
-
-as_root() {
-    if [ "$(id -u)" -eq 0 ]; then
-        "$@"
-    else
-        sudo -n "$@"
-    fi
 }
 
 stop_agent() {
@@ -135,11 +131,12 @@ preflight() {
     require_file "$CLIENT" || return 1
     require_file "$ADMIN" || return 1
 
-    if [ "$(id -u)" -ne 0 ] && ! sudo -n true >/dev/null 2>&1; then
-        log_error "Online integrity requires root inspection access. Run with sudo or establish non-interactive sudo credentials."
+    if [ "$(id -u)" -ne 0 ]; then
+        log_error "Online integrity must run as root."
+        log_error "Run: sudo bash scripts/testing/online-integrity-test.sh"
         return 1
     fi
-    if ! as_root test -f "$SECRETS_FILE"; then
+    if ! test -f "$SECRETS_FILE"; then
         log_error "Required deployment configuration not found: $SECRETS_FILE"
         return 1
     fi
@@ -157,7 +154,7 @@ preflight() {
     fi
 
     local dev_api_enabled
-    dev_api_enabled="$(as_root awk -F= '$1 == "ADMIN_DEV_TEST_API_ENABLED" {print $2}' "$SECRETS_FILE" | tr -d '\r')"
+    dev_api_enabled="$(awk -F= '$1 == "ADMIN_DEV_TEST_API_ENABLED" {print $2}' "$SECRETS_FILE" | tr -d '\r')"
     if [ "$dev_api_enabled" != "true" ]; then
         log_error "ADMIN_DEV_TEST_API_ENABLED=true is required"
         return 1
@@ -279,11 +276,11 @@ verify_preserved_e2e_state() {
 snapshot_tree() {
     local root="$1"
     local output="$2"
-    if ! as_root test -d "$root"; then
+    if ! test -d "$root"; then
         : >"$output"
         return
     fi
-    as_root find "$root" -type f -printf '%p\t%s\t%T@\n' 2>/dev/null | sort >"$output"
+    find "$root" -type f -printf '%p\t%s\t%T@\n' 2>/dev/null | sort >"$output"
 }
 
 snapshot_arkfile_temp() {
@@ -291,8 +288,8 @@ snapshot_arkfile_temp() {
     local root
     {
         for root in /tmp/systemd-private-*-arkfile.service-*/tmp /var/tmp/systemd-private-*-arkfile.service-*/tmp; do
-            as_root test -d "$root" || continue
-            as_root find "$root" -type f -printf '%p\t%s\t%T@\n' 2>/dev/null
+            test -d "$root" || continue
+            find "$root" -type f -printf '%p\t%s\t%T@\n' 2>/dev/null
         done
     } | sort >"$output"
 }
@@ -300,9 +297,9 @@ snapshot_arkfile_temp() {
 capture_database() {
     local output="$1"
     local username password address
-    username="$(as_root awk -F= '$1 == "RQLITE_USERNAME" {print substr($0, index($0, "=") + 1)}' "$SECRETS_FILE")"
-    password="$(as_root awk -F= '$1 == "RQLITE_PASSWORD" {print substr($0, index($0, "=") + 1)}' "$SECRETS_FILE")"
-    address="$(as_root awk -F= '$1 == "RQLITE_ADDRESS" {print substr($0, index($0, "=") + 1)}' "$SECRETS_FILE")"
+    username="$(awk -F= '$1 == "RQLITE_USERNAME" {print substr($0, index($0, "=") + 1)}' "$SECRETS_FILE")"
+    password="$(awk -F= '$1 == "RQLITE_PASSWORD" {print substr($0, index($0, "=") + 1)}' "$SECRETS_FILE")"
+    address="$(awk -F= '$1 == "RQLITE_ADDRESS" {print substr($0, index($0, "=") + 1)}' "$SECRETS_FILE")"
     if [ -z "$username" ] || [ -z "$password" ] || [ -z "$address" ]; then
         log_error "Could not load rqlite inspection configuration"
         return 1
@@ -325,7 +322,7 @@ capture_database() {
 }
 
 capture_journal_cursor() {
-    as_root journalctl -u arkfile -n 1 --show-cursor --no-pager 2>/dev/null |
+    journalctl -u arkfile -n 1 --show-cursor --no-pager 2>/dev/null |
         awk '/^-- cursor: / {sub("^-- cursor: ", ""); print; exit}'
 }
 
@@ -728,7 +725,7 @@ capture_post_test_deltas() {
         --server-url "$SERVER_URL" \
         --tls-insecure \
         security-events --json --limit 500 >"$TEST_ROOT/delta/security-events.json" || return 1
-    as_root journalctl -u arkfile \
+    journalctl -u arkfile \
         --after-cursor "$(<"$TEST_ROOT/baseline/journal.cursor")" \
         --no-pager -o cat >"$TEST_ROOT/delta/journal.log" 2>/dev/null || return 1
 
@@ -771,10 +768,10 @@ scan_changed_files() {
         case "$path" in
             "$TEST_ROOT"/*|/tmp/arkfile-e2e-test-data/*) continue ;;
         esac
-        as_root test -f "$path" || continue
+        test -f "$path" || continue
         while IFS=$'\t' read -r class value; do
             [ -n "$value" ] || continue
-            as_root grep -aFq -- "$value" "$path" 2>/dev/null
+            grep -aFq -- "$value" "$path" 2>/dev/null
             local status=$?
             if [ "$status" -eq 0 ]; then
                 log_error "Privacy canary found on surface '$surface': class=$class file=$path"
