@@ -40,7 +40,8 @@ func printClientBillingUsage() {
 	fmt.Print(`Usage: arkfile-client billing SUBCOMMAND [FLAGS]
 
 SUBCOMMANDS:
-    show [--json]                         Balance, usage, billing_mode from /api/credits
+    show [--json]                         Balance, usage, billing_mode from /api/credits;
+                                          also prints optional PayNym/Monero OOB top-up info
     top-up --amount USD [--open-browser] [--wait]
     invoice status --id INV [--json]
 
@@ -64,10 +65,56 @@ func handleBillingShowCommand(client *HTTPClient, config *ClientConfig, args []s
 	if *jsonOut {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		return enc.Encode(resp.Data)
+		payload := map[string]interface{}{
+			"credits": resp.Data,
+		}
+		if oob := fetchOobPaymentsPublic(client); oob != nil {
+			payload["oob_payments"] = oob
+		}
+		return enc.Encode(payload)
 	}
 	printClientBillingShow(resp.Data)
+	printClientOobPayments(fetchOobPaymentsPublic(client))
 	return nil
+}
+
+func fetchOobPaymentsPublic(client *HTTPClient) map[string]interface{} {
+	resp, err := client.makeRequest("GET", "/api/oob-payments", nil, "")
+	if err != nil {
+		return nil
+	}
+	if resp.Data == nil {
+		return nil
+	}
+	configured, _ := resp.Data["configured"].(bool)
+	if !configured {
+		return nil
+	}
+	return resp.Data
+}
+
+func printClientOobPayments(data map[string]interface{}) {
+	if data == nil {
+		return
+	}
+	fmt.Printf("\nManual crypto top-up (out-of-band):\n")
+	fmt.Printf("  Credit is applied manually after you contact the admin with your username and txid.\n")
+	if paynym := stringField(data, "paynym"); paynym != "" {
+		fmt.Printf("  PayNym:        %s\n", paynym)
+	}
+	if code := stringField(data, "paynym_payment_code"); code != "" {
+		fmt.Printf("  Payment code:  %s\n", code)
+	}
+	if stringField(data, "paynym_payment_code") != "" || stringField(data, "paynym") != "" {
+		fmt.Printf("  PayNym steps:  open a BIP47 channel (Sparrow/Ashigaru/etc.), pay, then message the admin with username + payment txid.\n")
+	}
+	if xmr := stringField(data, "monero_address"); xmr != "" {
+		fmt.Printf("  Monero (XMR):  %s\n", xmr)
+		fmt.Printf("  XMR steps:     send XMR, wait for confirmations, message the admin with username + txid.\n")
+	}
+	if contact := stringField(data, "admin_contact"); contact != "" {
+		fmt.Printf("  Admin contact: %s\n", contact)
+	}
 }
 
 func printClientBillingShow(data map[string]interface{}) {

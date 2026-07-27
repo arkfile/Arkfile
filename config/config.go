@@ -119,6 +119,7 @@ type Config struct {
 	Billing       BillingConfig       `json:"billing"`
 	Payments      PaymentsConfig      `json:"payments"`
 	Subscriptions SubscriptionsConfig `json:"subscriptions"`
+	OobPayments   OobPaymentsConfig   `json:"oob_payments"`
 }
 
 // BillingConfig is the storage credits / usage metering configuration.
@@ -197,6 +198,22 @@ type PaymentsConfig struct {
 	BTCPayWebhookSecret string `json:"btcpay_webhook_secret"`
 	MinTopUpUSD         string `json:"min_top_up_usd"`
 	MaxTopUpUSD         string `json:"max_top_up_usd"`
+}
+
+// OobPaymentsConfig holds optional out-of-band payment addresses (PayNym / BIP47
+// payment code and Monero). These are display-only; the operator credits users
+// manually via arkfile-admin billing gift after verifying the chain payment.
+type OobPaymentsConfig struct {
+	PayNym              string `json:"paynym"`
+	PayNymPaymentCode   string `json:"paynym_payment_code"`
+	MoneroAddress       string `json:"monero_address"`
+}
+
+// Configured returns true when at least one OOB payment destination is set.
+func (o OobPaymentsConfig) Configured() bool {
+	return strings.TrimSpace(o.PayNym) != "" ||
+		strings.TrimSpace(o.PayNymPaymentCode) != "" ||
+		strings.TrimSpace(o.MoneroAddress) != ""
 }
 
 // LoadConfig loads the configuration from environment variables and optional JSON file
@@ -595,6 +612,17 @@ func loadEnvConfig(cfg *Config) error {
 		cfg.Payments.MaxTopUpUSD = v
 	}
 
+	// Out-of-band PayNym / Monero receive addresses (display-only; optional).
+	if v := os.Getenv("ADMIN_PAYNYM"); v != "" {
+		cfg.OobPayments.PayNym = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("ADMIN_PAYNYM_PAYMENT_CODE"); v != "" {
+		cfg.OobPayments.PayNymPaymentCode = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("ADMIN_MONERO_ADDRESS"); v != "" {
+		cfg.OobPayments.MoneroAddress = strings.TrimSpace(v)
+	}
+
 	return nil
 }
 
@@ -659,7 +687,29 @@ func validateConfig(cfg *Config) error {
 	if err := validateSubscriptionsConfig(cfg); err != nil {
 		return err
 	}
+	if err := validateOobPaymentsConfig(cfg); err != nil {
+		return err
+	}
 
+	return nil
+}
+
+func validateOobPaymentsConfig(cfg *Config) error {
+	code := strings.TrimSpace(cfg.OobPayments.PayNymPaymentCode)
+	if code != "" && !strings.HasPrefix(code, "PM8T") {
+		return fmt.Errorf("ADMIN_PAYNYM_PAYMENT_CODE must be a BIP47 payment code starting with PM8T")
+	}
+	if code != "" && (len(code) < 80 || len(code) > 120) {
+		return fmt.Errorf("ADMIN_PAYNYM_PAYMENT_CODE length looks invalid for a BIP47 payment code")
+	}
+	xmr := strings.TrimSpace(cfg.OobPayments.MoneroAddress)
+	if xmr != "" && (len(xmr) < 90 || len(xmr) > 110) {
+		return fmt.Errorf("ADMIN_MONERO_ADDRESS length looks invalid for a Monero address")
+	}
+	paynym := strings.TrimSpace(cfg.OobPayments.PayNym)
+	if paynym != "" && !strings.HasPrefix(paynym, "+") {
+		return fmt.Errorf("ADMIN_PAYNYM should be a PayNym identifier starting with + (e.g. +roundgrass881)")
+	}
 	return nil
 }
 

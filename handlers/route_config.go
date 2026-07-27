@@ -113,6 +113,7 @@ func RegisterRoutes() {
 
 	// Admin contacts (public - no auth required)
 	Echo.GET("/api/admin-contacts", AdminContactsHandler)
+	Echo.GET("/api/oob-payments", OobPaymentsHandler)
 
 	// Session management (OPAQUE sessions)
 	Echo.POST("/api/refresh", RefreshToken)

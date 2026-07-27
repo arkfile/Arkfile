@@ -437,6 +437,9 @@ These endpoints are only available when `ADMIN_DEV_TEST_API_ENABLED=true`:
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
 | GET | `/api/admin-contacts` | Returns maintainer contact JSON | Public |
+| GET | `/api/oob-payments` | Optional PayNym / BIP47 payment code and Monero address for manual top-ups | Public |
+
+`GET /api/oob-payments` returns `{ configured, paynym, paynym_payment_code, monero_address, admin_contact }`. When nothing is set, `configured` is false and the string fields are empty. Destinations are display-only; operators credit users with `arkfile-admin billing gift` after verifying an on-chain payment.
 
 ---
 

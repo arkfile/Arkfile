@@ -57,3 +57,7 @@ Each account can enroll one second factor at a time: either TOTP or a hardware s
 ## Do I need to enter a PIN on my security key every time I log in?
 
 That depends on your key and how it is configured. Arkfile requests user verification as discouraged for both enrollment and login, so a single touch on your YubiKey or Nitrokey is usually enough after you have entered your password, similar to Proton Mail or Bitwarden. Some keys or browsers may still prompt for a PIN in edge cases. Your PIN never leaves the device and is not sent to Arkfile or the server.
+
+## Can I top up my balance with a PayNym or Monero?
+
+Some Arkfile instances publish optional out-of-band payment destinations in the Billing panel and in arkfile-client billing show. If a PayNym or BIP47 payment code is listed, you can open a payment channel in a compatible wallet such as Sparrow or Ashigaru, send Bitcoin, wait for 2 confirmations, then contact the instance administrator with your Arkfile username and the payment transaction ID. If a Monero address is listed, send XMR to that address, wait for 2 confirmations, and likewise message the admin with your username and transaction ID. Credit is applied manually by the operator and is not instant. These options are a convenience alongside any automated top-up methods the instance may also offer.

@@ -129,7 +129,10 @@ export async function loadBilling(): Promise<void> {
     }
     const result = await response.json();
     const data = (result.data || result) as CreditsResponse;
-    renderBilling(content, data);
+    const { fetchOobPayments, renderOobPaymentsSection } = await import('./oob-payments.js');
+    const oob = await fetchOobPayments();
+    const oobSection = oob ? renderOobPaymentsSection(oob) : null;
+    renderBilling(content, data, oobSection);
   } catch (err) {
     console.error('Failed to load billing info:', err);
     content.innerHTML = `<p class="error">Failed to load billing info: ${escapeHtml(String(err))}</p>`;
@@ -137,7 +140,11 @@ export async function loadBilling(): Promise<void> {
 }
 
 /** Render the entire billing panel content from the API response. */
-function renderBilling(host: HTMLElement, d: CreditsResponse): void {
+function renderBilling(
+  host: HTMLElement,
+  d: CreditsResponse,
+  oobSection: HTMLElement | null,
+): void {
   host.innerHTML = '';
 
   if (d.subscription?.enabled) {
@@ -148,6 +155,9 @@ function renderBilling(host: HTMLElement, d: CreditsResponse): void {
   if (!isSubscribed) {
     host.appendChild(renderBalanceSection(d));
     host.appendChild(renderUsageSection(d));
+    if (oobSection) {
+      host.appendChild(oobSection);
+    }
     const txs = d.transactions || [];
     if (txs.length > 0) {
       host.appendChild(renderTransactionsSection(txs));

@@ -76,6 +76,7 @@ EXAMPLES:
     arkfile-admin billing show --user alice
     arkfile-admin billing set-price 19.99
     arkfile-admin billing gift --user alice --amount 5.00 --reason "beta tester"
+    arkfile-admin billing gift --user alice --amount 20.00 --reason "OOB crypto top-up txid=..."
     arkfile-admin billing list-overdrawn --json
     arkfile-admin billing tick-now --sweep
 `)
@@ -230,7 +231,9 @@ func handleBillingGiftCommand(client *HTTPClient, config *AdminConfig, args []st
 		fmt.Print(`Usage: arkfile-admin billing gift --user NAME --amount USD --reason "..." [--json]
 
 Add positive credit to a user's balance. Records the gift as a typed
-'gift' transaction in the audit log.
+'gift' transaction in the audit log. Use this for out-of-band PayNym or
+Monero top-ups after you verify the on-chain payment (include the txid
+in --reason and keep a local list of credited txids to avoid doubles).
 
 FLAGS:
     --user NAME      Target username (required).
@@ -238,6 +241,11 @@ FLAGS:
     --reason TEXT    Reason for the gift (required, recorded in audit log).
     --json           Emit machine-readable JSON.
     --help           Show this help message.
+
+EXAMPLES:
+    arkfile-admin billing gift --user alice --amount 5.00 --reason "beta tester"
+    arkfile-admin billing gift --user alice --amount 20.00 --reason "PayNym top-up txid=abc123..."
+    arkfile-admin billing gift --user alice --amount 15.00 --reason "XMR top-up txid=def456..."
 `)
 	}
 	if err := fs.Parse(args); err != nil {
