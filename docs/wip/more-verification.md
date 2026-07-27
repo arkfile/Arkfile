@@ -29,12 +29,13 @@ Suggested order: `dev-reset.sh` -> `e2e-test.sh` -> `integrity-test.sh` -> `e2e-
 
 #### 3. Custom `go/analysis` checkers for Arkfile architectural invariants
 
-**Status: in scope (default integrity groups; offline).** Encode project-specific rules that generic linters miss: no raw IP logging (EntityID only), no plaintext filename/digest/hint reaching persistence or logs, no mixing OPAQUE session material into file-crypto paths, parameterized SQL only, and similar "server must never learn X" constraints. Run via `go vet` / a small analyzer driver from an integrity group. Cheap and continuous. Does not prove crypto or concurrency correctness; see deferred formal work below.
+**Status: in scope (default integrity groups; offline).** Encode project-specific rules that generic linters miss: no raw IP logging (EntityID only), no plaintext filename/digest/hint reaching persistence or logs, no mixing OPAQUE session material into file-crypto paths, parameterized SQL only, and similar "server must never learn X" constraints. Package as a small module of one-purpose checkers behind a single `multichecker` driver that enables every analyzer by default (so a forgotten flag cannot silently skip a rule), following the same discipline as [SpiceDB's custom analyzers](https://github.com/authzed/spicedb/tree/main/tools/analyzers): domain invariants as analyzers, not a port of their concrete checks. Treat these as adversarial `go vet`-style architectural checks (anti-slop for Arkfile-specific forbidden patterns), not generic style lint. Invoke from an integrity group via that driver / `go vet`. Cheap and continuous. Does not prove crypto or concurrency correctness; see deferred formal work below.
 
 ### Explicitly deferred or rejected for the default path
 
 - **TLA+ / model checking of server state machines** -- deferred (high value later; not in default integrity groups until the top three exist).
 - **Tamarin / ProVerif protocol models** -- deferred (after conformance corpus and preferably after a TLA+ state model).
+- **Crypto hot-path benchmarks with baselines** -- deferred (brief; after the top three). Later optional integrity group: Go `Benchmark*` for chunk encrypt/decrypt, FEK wrap/unwrap, share-envelope seal/open, and related envelope work, with a baseline to catch large time/alloc regressions. Complements streaming memory canaries; not a substitute for them.
 - **Gobra / Dafny / shipping verified-generated Go** -- not feasible for near-term product confidence; overstated practicality; Dafny-to-Go shipping conflicts with Arkfile's one canonical implementation path.
 - **Differential testing against age, RFC 8188, or secretbox** -- not appropriate; Arkfile envelope and chunk formats are not implementations of those protocols.
 - **Folding integrity into `e2e-test.sh` or replacing Playwright** -- rejected; integrity sits beside them.
@@ -54,7 +55,7 @@ Given the security-critical nature of the codebase, layering techniques beyond e
 
 #### Static analysis and security scanning
 
-**Status: feasible; partially overlaps top approach 3.** Generic scanners complement custom `go/analysis` rules. Candidates for integrity groups or adjacent CI once the custom analyzers exist; not a substitute for Arkfile-specific invariants.
+**Status: feasible; partially overlaps top approach 3.** Generic scanners complement custom `go/analysis` rules. Prefer Arkfile-specific analyzers (approach 3) as the primary static integrity signal; treat the tools below as optional complements once those exist.
 
 - **`go vet` and `golangci-lint`** with a curated linter set (staticcheck, unused, ineffassign, copylocks, etc.).
 - **`gosec`** -- security-focused analyzer that flags crypto misuse, hardcoded credentials, weak randomness, insecure TLS, etc.
@@ -68,6 +69,10 @@ Given the security-critical nature of the codebase, layering techniques beyond e
 
 - Run tests with `-race` in CI; consider `-gcflags=all=-d=checkptr` for unsafe audits.
 - If you use cgo (e.g., for libopaque / related C bindings), run under **MSan/UBSan** via `go build -msan`/`-asan` where the toolchain and environment support it.
+
+#### Crypto microbenchmarks
+
+**Status: feasible; deferred (see locked plan).** Same brief scope as the deferred benchmarks bullet above; complements approach 2 memory bounds.
 
 #### Fuzzing
 
@@ -208,4 +213,4 @@ In parallel, build one cross-client cryptographic conformance corpus covering ch
 
 Finally, add explicit privacy and resource-invariant testing. Instrument test deployments with unique plaintext canaries and assert that passwords, filenames, plaintext digests, hints, and file fragments never appear in HTTP server observations, logs, database fields, temporary files, or stored objects. Separately, run large synthetic streams while measuring peak browser-worker and CLI memory, asserting memory remains bounded independently of file size and that interruption leaves no usable partial plaintext. A Tamarin or ProVerif model could later formalize Arkfile’s composition of OPAQUE sessions, key-context separation, FEK wrapping, share envelopes, tickets, replay, revocation, and compromise assumptions, but pursue that after the executable conformance corpus and TLA+ state model: those two additions offer strong guarantees without pretending to verify the entire language and compiler stack.
 
-**How this maps to the locked plan:** conformance corpus + short fuzz, privacy/resource canaries, and custom `go/analysis` are the default integrity-test scope. TLA+ and Tamarin/ProVerif remain deferred formal follow-ons. Gobra/Dafny shipping and foreign-protocol differential testing remain rejected for the reasons above.
+**How this maps to the locked plan:** conformance corpus + short fuzz, privacy/resource canaries, and custom `go/analysis` (domain invariants as analyzers) are the default integrity-test scope. Crypto hot-path benchmarks with baselines are a brief deferred follow-on. TLA+ and Tamarin/ProVerif remain deferred formal work. Gobra/Dafny shipping and foreign-protocol differential testing remain rejected for the reasons above.

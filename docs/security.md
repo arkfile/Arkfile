@@ -633,9 +633,6 @@ rqlite -H localhost:4001 \
 
 # Key backup verification
 ./scripts/maintenance/backup-keys.sh --verify
-
-# Performance security baseline
-./scripts/testing/performance-benchmark.sh
 ```
 
 ## Threat Detection
