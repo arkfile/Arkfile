@@ -8,13 +8,14 @@ The prerequisite security cleanup in `docs/wip/full-cleanup-2.md` is complete as
 
 ### Offline orchestration: `scripts/testing/offline-integrity-test.sh`
 
-**Status: ready for implementation; build this first.** This script runs without a server or deployment. It must not invoke `dev-reset.sh`, `e2e-test.sh`, `e2e-playwright.sh`, or `fdre2e.sh`. It should use the established test-script pattern: explicit preflight checks, ordered `run_*` groups, pass/fail accounting, cleanup, and a final report.
+**Status: implemented; deterministic groups pass as of July 27, 2026.** This script runs without a server or deployment. It does not invoke `dev-reset.sh`, `e2e-test.sh`, `e2e-playwright.sh`, or `fdre2e.sh`. It uses explicit preflight checks, ordered groups, pass/fail accounting, cleanup, group selection, and a final report.
 
 Initial default groups:
 
 - Shared Go and TypeScript cryptographic conformance fixtures, including explicit-salt KDF, AAD, owner-envelope, and AES-GCM vectors.
 - Deterministic malformed-input and parser regression tests for owner FEK envelopes, share envelopes, share tickets, and `.arkbackup` bundles.
 - Short, explicitly time-bounded native Go fuzz runs seeded by the committed fixtures. Longer fuzz campaigns remain optional and must not run by default.
+- Focused upload-completion, share-download-limit, payment-credit, and security-event state invariants that do not require a live server.
 - Arkfile-specific `go/analysis` checks after their focused analyzer tests pass.
 - Existing production build-profile checks that prove debug console logging, production source maps, unsafe WASM tracing, and `NORANDOM` builds are excluded.
 
@@ -22,7 +23,7 @@ The script must use the same CGO and vendored-library environment as the support
 
 ### Online orchestration: `scripts/testing/online-integrity-test.sh`
 
-**Status: ready for implementation after the offline script.** This script requires a live development deployment produced by `dev-reset.sh` and the development approval API. It must not invoke reset or E2E scripts itself. It creates dedicated integrity users, files, shares, canaries, and temporary state under `/tmp/arkfile-integrity-test-data`; it must not mutate the shared E2E or Playwright users or their MFA material.
+**Status: implemented; live-sequence validation pending.** This script requires a live development deployment produced by `dev-reset.sh`, the post-E2E auto-approval policy, the authenticated admin and development cleanup APIs, and root inspection access. It does not invoke reset or E2E scripts itself. It creates a unique dedicated integrity user, isolated CLI/admin HOME, files, shares, canaries, and temporary state under `/tmp/arkfile-integrity-test-data`; it captures and rechecks the shared E2E user's approval, MFA-file digest, and auto-approval policy so it cannot silently break the following Playwright run. The initial CLI RSS ceiling is 262,144 KiB with permitted growth of 98,304 KiB across the configured payload sequence. These are conservative initial failure thresholds, not observed baselines, and must be reviewed after the first complete live run.
 
 Initial default groups:
 
@@ -46,15 +47,15 @@ Online integrity may run between shell E2E and Playwright only if it preserves `
 
 #### 1. Cross-client cryptographic conformance and short fuzzing
 
-**Status: core fixtures and initial fuzz targets implemented; offline orchestration pending.** The shared corpus pins explicit-salt Account and Custom Key derivation, chunk and metadata AAD, owner FEK envelope headers and wrapping, and AES-GCM behavior for Go and TypeScript consumers. Keep expected outputs fixed during routine tests so one client is not silently used as the oracle for the other. Extend cross-client fixtures only where canonical serialization is defined. Share-envelope cross-client decrypt fixtures remain useful; server padding and `.arkbackup` remain Go-only unless a TypeScript implementation exists.
+**Status: implemented and orchestrated offline.** The shared corpus pins explicit-salt Account and Custom Key derivation, chunk and metadata AAD, owner FEK envelope headers and wrapping, and AES-GCM behavior for Go and TypeScript consumers. The offline script runs the paired fixture consumers, deterministic malformed-input regressions, and separately time-bounded seeded native fuzz targets. Keep expected outputs fixed during routine tests so one client is not silently used as the oracle for the other. Extend cross-client fixtures only where canonical serialization is defined. Share-envelope cross-client decrypt fixtures remain useful; server padding and `.arkbackup` remain Go-only unless a TypeScript implementation exists.
 
 #### 2. Privacy-canary and streaming resource invariants
 
-**Status: contracts and logging protections implemented; online orchestration pending.** Use dedicated integrity identities and unique plaintext markers. Compare post-test deltas against a baseline instead of scanning unrelated historical data. Begin with server logs, security events, database fields, temporary files, and stored objects, then add CLI memory and interruption checks. Service Worker resource measurements may follow after CLI measurements are stable. Blob fallback must remain tested as a full-plaintext assembly path and must never be subjected to a false bounded-memory assertion.
+**Status: online orchestration implemented; live validation pending.** The online script uses a unique dedicated identity and protected canary classes, captures pre-test database, journal, temporary-file, application-log, and storage baselines, and reports the exact changed surface and canary class on failure. It includes CLI upload/download RSS measurements at 1 MiB, 20 MiB, 50 MB, and 100 MB, CLI interruption cleanup, and a concurrent one-download share check. Service Worker resource measurements may follow after CLI measurements are stable. Blob fallback remains a full-plaintext assembly path and is not subjected to a bounded-memory assertion.
 
 #### 3. Custom `go/analysis` checkers for Arkfile architectural invariants
 
-**Status: planned; implement narrowly scoped analyzers before the offline script depends on them.** Encode only forbidden patterns that can be detected reliably, beginning with raw request IP values entering logs or persisted security details, direct security-event construction outside approved helpers, and explicit mixing of OPAQUE session outputs into file-key operations. Package one-purpose analyzers behind a single `multichecker` driver with all checks enabled by default. Each analyzer requires positive and negative fixture tests. Do not claim whole-program secret taint tracking, universal SQL-injection proof, or cryptographic correctness from syntax-level analysis.
+**Status: implemented and enabled in offline integrity.** Three one-purpose analyzers reject raw request IP sources entering persistent logging/audit sinks, security-event type construction or direct SQL persistence outside the logging package, and OPAQUE client session/export outputs entering Arkfile file-crypto calls. They are packaged behind the `cmd/arkfile-analyzers` multichecker driver and have positive and negative `analysistest` fixtures. They deliberately do not claim whole-program secret taint tracking, universal SQL-injection proof, or cryptographic correctness from syntax-level analysis.
 
 ### Explicitly deferred or rejected for the default path
 
@@ -68,13 +69,12 @@ Online integrity may run between shell E2E and Playwright only if it preserves `
 
 ### Implementation order
 
-1. Define the initial analyzer package layout, exact forbidden patterns, allowed exceptions, fixture tests, and driver command.
-2. Implement and validate the narrow custom analyzers.
-3. Implement `offline-integrity-test.sh` around existing deterministic conformance, parser, fuzz, analyzer, and production-build checks.
-4. Implement `online-integrity-test.sh` with dedicated identity creation, canary generation, baseline/delta capture, cleanup, and precise failure reporting.
-5. Add CLI memory measurements and interruption cleanup to the online script after the basic canary lifecycle is reliable.
-6. Add a small number of live race checks only when they prove an invariant not already owned by native tests.
-7. Run the full manual sequence and update this document with measured thresholds, observed runtime, and any checks deliberately kept optional.
+1. Completed: define and implement the narrow custom analyzers, allowed exceptions, fixtures, and multichecker driver.
+2. Completed: implement `offline-integrity-test.sh` around deterministic conformance, parser, fuzz, analyzer, and production-build checks.
+3. Completed: implement `online-integrity-test.sh` with dedicated identity creation, canary generation, baseline/delta capture, cleanup, and precise failure reporting.
+4. Completed in the initial script: add CLI memory measurements, interruption cleanup, and a one-download share race.
+5. Pending developer workflow: run the full manual sequence and replace the initial memory thresholds with evidence-backed values if necessary.
+6. Pending after CLI measurements stabilize: consider Service Worker resource measurements without changing Blob fallback's documented resource model.
 
 ---
 
