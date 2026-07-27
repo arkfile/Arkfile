@@ -28,9 +28,9 @@ Arkfile's security model uses client-side encryption to ensure that user data re
 
 This section summarizes what Arkfile guarantees to protect and what can be recovered by adversaries across different system compromise levels.
 
-#### Invariant Protection: What Arkfile Never Discloses
+#### Protected Data with a Trusted Client
 
-The following assets are bound by strict client-side cryptography. They are never transmitted or stored in a form that is readable to the server, and they cannot be recovered by any level of server-side compromise:
+The following assets are protected by client-side cryptography when the user runs an authentic Arkfile browser client or independently installed CLI. They are not transmitted to or stored by the server in plaintext. A passive server compromise or theft of stored server data does not by itself reveal them. A live attacker who controls the web origin can replace the browser client and capture passwords, keys, metadata, or file plaintext during future client operations; this active client-replacement threat is outside the protection provided by a web application served from the compromised origin.
 
 - **User Password**: Standard credentials never reach the server, protected by OPAQUE, a Password-Authenticated Key Exchange (PAKE) protocol that allows a client to prove password ownership and authenticate without transmitting the password itself.
 - **File Payloads**: Encrypted entirely client-side under a cryptographically random, per-file File Encryption Key (FEK) using AES-256-GCM.
@@ -62,10 +62,10 @@ For a non-empty file, the canonical chunk count is `ceil(size_bytes / (chunk_siz
 
 3. **Full Host and Root Compromise**
    - **What is compromised**: Attacker has live root access to the running machine. They can read variables in active memory, monitor server-side activity, observe user-secret material (such as TOTP keys and contact details), or actively attempt to inject malicious client code or manipulate future file encryption parameters.
-   - **What remains secure**: User passwords can never be retrieved because OPAQUE authenticates without password transmission. Already uploaded file payloads remain completely undecryptable because the decryption keys are generated and held exclusively in client-side process or browser memory (RAM) during cryptographic operations, and are never transmitted. Authenticator backup codes cannot be reversed in bulk or recovered in cleartext because they are processed as one-way Argon2id hashes; since each backup code is generated using high-entropy rejection sampling (~59.5 bits of entropy), they resist offline brute-force attacks even under host compromise.
-   - **Note on active attacks**: While a live root attacker can observe padded file sizes, upload timestamps, and active username handles, they cannot swap or substitute file segments without triggering an immediate authenticated-encryption verification failure on the client.
+   - **What remains secure without client replacement**: Previously uploaded file payloads and encrypted owner metadata remain unavailable from server-side data alone because their decryption keys are held only by clients. OPAQUE does not expose account passwords during an authentic login exchange. Authenticator backup codes cannot be reversed in bulk or recovered in cleartext because they are processed as one-way Argon2id hashes; since each backup code is generated using high-entropy rejection sampling (~59.5 bits of entropy), they resist offline brute-force attacks.
+   - **Active client-replacement limit**: A root attacker who changes the JavaScript or WASM served by the Arkfile origin can capture passwords, Account Keys, FEKs, metadata, and plaintext during subsequent browser operations. Such an attacker can also make the modified client accept attacker-chosen data. AES-GCM prevents an unmodified trusted client from accepting substituted encrypted chunks, but it cannot protect a client implementation controlled by the attacker. An independently installed and authenticated CLI has a separate software-distribution trust boundary.
 
-This separation ensures that compromise of one system does not affect the security of the other, providing defense in depth through independent cryptographic operations.
+Cryptographic domain separation prevents authentication outputs from serving as file-encryption keys and limits accidental cross-domain key reuse. It does not make a client immune to replacement or make every security domain unaffected by a full host compromise.
 
 ### Defense in Depth
 
@@ -111,8 +111,8 @@ The file encryption system uses secure key generation combined with AES-256-GCM 
 **Key Generation:**
 - Cryptographically secure random key generation for each file
 - Independent keys prevent cross-file compromise
-- No password-derived keys that require salt storage
-- Session-based key derivation from OPAQUE authentication
+- Per-file FEKs wrapped by an Account Key or Custom Key derived client-side with Argon2id
+- File-encryption key derivation is independent of OPAQUE authentication and session keys
 
 **AES-256-GCM Encryption:**
 - 256-bit Advanced Encryption Standard
@@ -139,13 +139,18 @@ The file encryption system uses secure key generation combined with AES-256-GCM 
 - Consistent encryption key per file across all chunks
 - Memory-efficient processing
 
+**Browser Download Paths:**
+- Service Worker streaming is the preferred path and delivers decrypted chunks to the browser download manager with bounded application memory.
+- A Blob fallback is retained for browsers and systems where Service Worker streaming is unavailable. It assembles the complete plaintext in browser-managed Blob storage before triggering the download and therefore uses resources proportional to file size.
+- Both paths authenticate each encrypted chunk. The Blob path also verifies the whole-file plaintext digest before triggering the download, blocks the trigger and revokes the Blob URL on mismatch, and warns users when a large fallback download may exceed browser memory or storage limits.
+
 ### Multi-Key Encryption and Secure Sharing
 
 **Multi-Key System:**
-- Single file encrypted with multiple independent passwords
-- File sharing without revealing primary password
-- Unique encryption keys per share link
-- Avoids file duplication through metadata management
+- Each file payload is encrypted once under a random per-file FEK
+- The owner FEK envelope is wrapped by either the Account Key or a Custom Key
+- Each share uses an independently password-derived Share Key to encrypt a share envelope containing the FEK
+- Sharing does not reveal the account or custom file password and does not duplicate the encrypted file payload
 
 **Sharing Mechanism:**
 - Independent passwords for each share
@@ -160,7 +165,7 @@ The file encryption system uses secure key generation combined with AES-256-GCM 
 Arkfile implements OPAQUE (Oblivious Pseudorandom Functions for Key Exchange), a Password-Authenticated Key Exchange (PAKE) protocol that provides superior security properties compared to traditional password authentication.
 
 **OPAQUE Benefits:**
-- Passwords never transmitted to server
+- Passwords are not included in authentic OPAQUE protocol messages
 - Mutual authentication between client and server
 - Resistance to offline dictionary attacks
 - Protection against server compromise scenarios
@@ -228,7 +233,7 @@ Arkfile enforces different password requirements based on the authentication con
 **Account and Custom Password Requirements:**
 - Minimum 15 characters with at least 2 of 4 character classes (uppercase, lowercase, number, special character)
 - Real-time validation provides immediate feedback during password creation
-- Uses OPAQUE protocol providing complete zero-knowledge authentication
+- Uses OPAQUE password-authenticated key exchange without placing the password in authentic protocol messages
 
 **Share Password Requirements:**
 - Minimum 20 characters with at least 2 of 4 character classes (uppercase, lowercase, number, special character)
@@ -236,17 +241,17 @@ Arkfile enforces different password requirements based on the authentication con
 - Limited attack surface affecting only shared files
 
 **Validation Approach:**
-The system uses a straightforward, deterministic check: passwords must meet the minimum length for their context and contain characters from at least 2 of the 4 character classes (uppercase letters, lowercase letters, numbers, special characters). This approach provides clear, predictable requirements that users can easily satisfy while still ensuring strong passwords through generous minimum lengths and the memory-hard Argon2id key derivation that makes brute-force attacks impractical.
+The system uses a straightforward, deterministic check: passwords must meet the minimum length for their context and contain characters from at least 2 of the 4 character classes (uppercase letters, lowercase letters, numbers, special characters). This provides clear, predictable requirements, while Argon2id raises the cost of each guess against file and share key envelopes. These controls do not guarantee that a user-selected password has high entropy or make offline guessing impossible.
 
 ### Password Contexts and Key Derivation
 
 Arkfile uses the same account password for two completely independent purposes: OPAQUE authentication and file encryption key derivation. These two uses are cryptographically separated and never interact.
 
-**Account Password for Authentication (OPAQUE).** The account password is used with the OPAQUE protocol to authenticate the user. OPAQUE performs a password-authenticated key exchange in which the client proves knowledge of the password without ever transmitting it. The server never learns the password at any point during registration or login. OPAQUE has its own internal key derivation and does not use Argon2id. The output of a successful OPAQUE authentication is a set of session keys used for JWT token issuance and session management.
+**Account Password for Authentication (OPAQUE).** The account password is used with the OPAQUE protocol to authenticate the user. OPAQUE performs a password-authenticated key exchange in which an authentic client proves knowledge of the password without transmitting it in the protocol messages. The server does not learn the password during an authentic registration or login exchange. A compromised web origin can replace the browser client and capture the password before the OPAQUE exchange begins. OPAQUE has its own internal key derivation and does not use Argon2id. The output of a successful OPAQUE authentication is a set of session keys used for JWT token issuance and session management.
 
-**Account Password for File Encryption (Argon2id -> Account Key).** The same account password is used separately, entirely on the client side, to derive an Account Key via Argon2id. This Account Key serves as a Key Encryption Key (KEK). For each file, a cryptographically random 256-bit File Encryption Key (FEK) is generated, and the FEK is wrapped (encrypted) by the KEK using AES-256-GCM. The file data itself is encrypted with the FEK. The salt for this derivation is deterministic, computed as `SHA-256("arkfile-account-key-salt:{username}")`. This is safe because the Argon2id-derived key only wraps the FEK -- the actual file encryption uses random FEKs with unique nonces, and the memory-hard properties of Argon2id protect the KEK even with a known salt.
+**Account Password for File Encryption (Argon2id -> Account Key).** The same account password is used separately, entirely on the client side, to derive an Account Key via Argon2id. This Account Key serves as a Key Encryption Key (KEK). For each file, a cryptographically random 256-bit File Encryption Key (FEK) is generated, and the FEK is wrapped (encrypted) by the KEK using AES-256-GCM. The file data itself is encrypted with the FEK. The salt for this derivation is deterministic, computed as `SHA-256("arkfile-account-key-salt:{username}")`. The salt is public and does not prevent offline password guesses against a captured authenticated FEK envelope; AES-GCM authentication lets an attacker recognize a successful guess. Security against such guessing depends on password strength and the per-guess cost imposed by Argon2id. The username-derived salt provides domain separation and differs across usernames, but it does not provide the precomputation resistance of a random per-account salt.
 
-**Custom Password for File Encryption (Argon2id -> Custom Key).** Users may optionally provide a custom password instead of using their account key to encrypt a file. This custom password goes through the same Argon2id derivation with a different deterministic salt (`SHA-256("arkfile-custom-key-salt:{username}")`), producing a Custom Key (KEK) that wraps the FEK. The encrypted envelope format distinguishes account-wrapped from custom-wrapped FEKs via a key type byte (0x01 for account, 0x02 for custom), so the client knows which password to request at decryption time.
+**Custom Password for File Encryption (Argon2id -> Custom Key).** Users may optionally provide a custom password instead of using their account key to encrypt a file. This custom password goes through the same Argon2id derivation with a different deterministic salt (`SHA-256("arkfile-custom-key-salt:{username}")`), producing a Custom Key (KEK) that wraps the FEK. The same offline-guessing limitation described for the Account Key applies to captured custom-wrapped FEK envelopes. The encrypted envelope format distinguishes account-wrapped from custom-wrapped FEKs via a key type byte (0x01 for account, 0x02 for custom), so the client knows which password to request at decryption time.
 
 **Share Password for Secure Sharing (Argon2id -> Share Key).** When a user creates a share link, a separate share password is required. Unlike account and custom passwords, share passwords use a random 32-byte salt (not deterministic). The share password is processed through Argon2id to derive a Share Key, which encrypts a Share Envelope containing the FEK, a download token, and file metadata (filename, size, SHA-256 hash). The encryption uses AES-GCM with Additional Authenticated Data (AAD = share_id + file_id) to cryptographically bind the envelope to a specific share. Recipients enter the share password, derive the same key, decrypt the envelope, extract the FEK, and decrypt the file. The share password is never sent to the server.
 
@@ -260,7 +265,7 @@ All password-based key derivation contexts (account key, custom key, and share k
 - **Parallelism:** 1 thread
 - **Output key length:** 32 bytes (256 bits)
 
-These parameters exceed the strongest OWASP-recommended configuration for Argon2id (m=47,104 KiB / 46 MiB, t=1, p=1) as of 2026 by using significantly more memory and more iterations. Parallelism is set to 1 because the client-side key derivation runs in a browser WebAssembly context, which is single-threaded. Setting parallelism higher than 1 would not actually parallelize the computation in a browser -- it would instead multiply the sequential work, increasing latency without improving security. With p=1 and t=4 at 128 MiB, the derivation is expected to take approximately 1–3 seconds in modern browsers, which is practical for interactive authentication while being extremely costly for attackers to brute-force.
+These parameters exceed the strongest OWASP-recommended configuration for Argon2id (m=47,104 KiB / 46 MiB, t=1, p=1) as of 2026 by using significantly more memory and more iterations. Parallelism is set to 1 because the client-side key derivation runs in a browser WebAssembly context, which is single-threaded. Setting parallelism higher than 1 would not actually parallelize the computation in a browser -- it would instead multiply the sequential work. With p=1 and t=4 at 128 MiB, derivation is intended to remain practical on supported clients while substantially raising the cost of offline guesses. Actual latency and attacker cost depend on hardware and implementation, so these parameters require measurement across representative constrained and desktop devices.
 
 ## Session Management
 
@@ -351,7 +356,7 @@ Root Security
 ```bash
 # Directory structure
 /opt/arkfile/etc/keys/
-├── opaque/               # OPAQUE server keys (never rotated)
+├── opaque/               # OPAQUE server keys (guided user re-registration rotation)
 ├── jwt/                  # JWT signing keys (rotatable)
 └── backup/               # Encrypted key backups
 ```
