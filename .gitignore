@@ -1,7 +1,7 @@
 # .gitignore 
 
 # Compiled binaries
-arkfile
+/arkfile
 arkfile-alpine
 /arkfile-client
 /arkfile-admin
