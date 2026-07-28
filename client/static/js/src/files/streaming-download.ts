@@ -47,7 +47,7 @@
 import { sha256 } from '@noble/hashes/sha2.js';
 import { AESGCMDecryptor } from '../crypto/aes-gcm';
 import { getChunkingParams, type ChunkingConfig } from '../crypto/constants';
-import { downloadChunkWithRetry, RetryConfig } from './retry-handler';
+import { downloadChunkWithRetry, withRetry, RetryConfig } from './retry-handler';
 import { showProgress, updateProgress, hideProgress } from '../ui/progress';
 import {
   isSwAvailable,
@@ -382,6 +382,7 @@ export class StreamingDownloadManager {
         (attempt, error, delay) => {
           debugLog(`${LOG_PREFIX_FILE} Chunk ${chunkIndex} retry ${attempt} after ${delay}ms: ${error.message}`);
         },
+        this.options.abortController?.signal,
       );
       const fetchMs = Date.now() - tFetch;
 
@@ -678,7 +679,8 @@ export class StreamingDownloadManager {
    * Fetch a single encrypted share chunk, transparently refreshing the
    * short-lived download ticket if the server returns 403 mid-download. The
    * retry helper does not retry 403 by design (it is not a transient error in
-   * general), so we intercept it here specifically for ticket expiry.
+   * general), so we intercept it here specifically for ticket expiry, then
+   * apply the shared transfer retry policy for network / 5xx / 429 failures.
    */
   private async fetchShareChunkWithTicketRefresh(
     shareId: string,
@@ -689,20 +691,43 @@ export class StreamingDownloadManager {
     const doFetch = async (): Promise<Response> => {
       const headers: Record<string, string> = {};
       await this.applyShareAuthHeader(headers);
-      return fetch(url, { headers });
+      const init: RequestInit = { headers };
+      const signal = this.options.abortController?.signal;
+      if (signal) {
+        init.signal = signal;
+      }
+      return fetch(url, init);
     };
 
-    let response = await doFetch();
-    if (response.status === 403 && this.options.shareTicket) {
-      debugLog(`${LOG_PREFIX_SHARE} Chunk ${chunkIndex} got 403; refreshing share ticket and retrying once.`);
-      await this.options.shareTicket.refresh();
-      response = await doFetch();
+    const result = await withRetry(
+      async () => {
+        let response = await doFetch();
+        if (response.status === 403 && this.options.shareTicket) {
+          debugLog(`${LOG_PREFIX_SHARE} Chunk ${chunkIndex} got 403; refreshing share ticket and retrying once.`);
+          await this.options.shareTicket.refresh();
+          response = await doFetch();
+        }
+        if (!response.ok) {
+          const error = new Error(
+            `HTTP ${response.status} ${response.statusText} fetching chunk ${chunkIndex + 1}/${totalChunks}`,
+          );
+          (error as Error & { status: number }).status = response.status;
+          throw error;
+        }
+        const arrayBuffer = await response.arrayBuffer();
+        return new Uint8Array(arrayBuffer);
+      },
+      this.options.retryConfig ?? {},
+      (attempt, error, delay) => {
+        debugLog(`${LOG_PREFIX_SHARE} Chunk ${chunkIndex} retry ${attempt} after ${delay}ms: ${error.message}`);
+      },
+      this.options.abortController?.signal,
+    );
+
+    if (!result.success || !result.data) {
+      throw result.error || new Error(`Share chunk ${chunkIndex + 1}/${totalChunks} failed after retries`);
     }
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} ${response.statusText} fetching chunk ${chunkIndex + 1}/${totalChunks}`);
-    }
-    const arrayBuffer = await response.arrayBuffer();
-    return new Uint8Array(arrayBuffer);
+    return result.data;
   }
 
   private calculateTotalEncryptedSize(metadata: ChunkedDownloadMetadata): number {

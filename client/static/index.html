@@ -333,12 +333,21 @@
             </div>
             
             <div class="upload-section">
-                <h2>Upload File</h2>
-                <label for="fileInput" class="file-input-label" id="fileInputLabel">
-                    Choose File(s)
-                    <span class="file-input-name" id="fileInputName"></span>
-                </label>
+                <h2>Upload Files</h2>
+                <div class="file-input-row">
+                    <label for="fileInput" class="file-input-label" id="fileInputLabel">
+                        Choose File(s)
+                        <span class="file-input-name" id="fileInputName"></span>
+                    </label>
+                    <label for="folderInput" class="file-input-label" id="folderInputLabel">
+                        Choose Folder
+                        <span class="file-input-name" id="folderInputName"></span>
+                    </label>
+                    <button type="button" id="clear-file-selection-btn" class="btn-secondary hidden">Clear selection</button>
+                </div>
                 <input type="file" id="fileInput" multiple>
+                <input type="file" id="folderInput" webkitdirectory multiple>
+                <div id="selectedFilesList" class="selected-files-list hidden" aria-live="polite"></div>
                 
                 <div class="password-options">
                     <h3>Encryption Password</h3>
@@ -350,7 +359,7 @@
                     
                     <div class="option">
                         <input type="radio" name="passwordType" id="useCustomPassword" value="custom">
-                        <label for="useCustomPassword">Use a custom password for this file</label>
+                        <label for="useCustomPassword" id="customPasswordLabel">Use a custom password for this file</label>
                     </div>
                 </div>
                 
@@ -370,7 +379,10 @@
                 </div>
                 
                 <input type="text" id="passwordHint" placeholder="Password Hint (optional)">
-                <button type="button" id="upload-file-btn">Upload</button>
+                <div class="upload-actions">
+                    <button type="button" id="upload-file-btn">Upload</button>
+                    <button type="button" id="cancel-upload-btn" class="btn-secondary hidden">Cancel Upload</button>
+                </div>
             </div>
 
             <div id="storageInfo" class="storage-info-section"></div>

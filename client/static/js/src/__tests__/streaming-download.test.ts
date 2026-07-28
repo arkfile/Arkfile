@@ -346,6 +346,53 @@ describe('StreamingDownloadManager - Blob fallback path (SW unavailable)', () =>
       expect(headers['X-Download-Token']).toBeUndefined();
     }
   });
+
+  test('share chunk 403 refreshes ticket then retries through 503 to success', async () => {
+    const fek = randomBytes(32);
+    const plaintext = new TextEncoder().encode('share retry path');
+    const FILE_ID = 'test-share-retry-file';
+    const encryptedChunk = await buildEncryptedChunk(plaintext, fek, FILE_ID, 0, 1);
+
+    let chunkGets = 0;
+    let ticketRefreshes = 0;
+    const ticket = {
+      get: async () => 'ticket-v1',
+      refresh: async () => {
+        ticketRefreshes++;
+        return 'ticket-v2';
+      },
+    };
+
+    setFetchMock(withChunkingConfig(async (url: string) => {
+      if (url.includes('/metadata')) {
+        return new Response(JSON.stringify(makeShareMeta(plaintext.length, 1, plaintext.length, FILE_ID)), { status: 200 });
+      }
+      if (url.includes('/chunks/0')) {
+        chunkGets++;
+        if (chunkGets === 1) {
+          return new Response('forbidden', { status: 403 });
+        }
+        if (chunkGets === 2) {
+          return new Response('unavailable', { status: 503 });
+        }
+        return new Response(encryptedChunk.buffer as ArrayBuffer, { status: 200 });
+      }
+      return new Response('not found', { status: 404 });
+    }));
+
+    const manager = new StreamingDownloadManager('', {
+      shareTicket: ticket,
+      showProgressUI: false,
+      retryConfig: { maxRetries: 3, initialDelayMs: 1, jitter: false },
+    });
+
+    const result = await manager.downloadSharedFile(FAKE_SHARE_ID, fek, { filename: 'retry.bin' });
+
+    expect(result.success).toBe(true);
+    expect(result.blobUrl).toBeDefined();
+    expect(chunkGets).toBe(3);
+    expect(ticketRefreshes).toBeGreaterThanOrEqual(1);
+  });
 });
 
 // ── Owner download path tests ───────────────────────────────────────────────

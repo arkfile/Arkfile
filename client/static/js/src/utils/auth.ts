@@ -65,6 +65,9 @@ export interface CurrentUserInfo {
  * Custom error for 503 Service Unavailable responses.
  */
 export class ServiceUnavailableError extends Error {
+  /** HTTP status so transfer retry helpers treat site-wide 503 as retryable. */
+  status = 503;
+
   constructor(message = 'Service is temporarily unavailable. Please try again in a moment.') {
     super(message);
     this.name = 'ServiceUnavailableError';

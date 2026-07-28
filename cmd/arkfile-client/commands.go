@@ -721,28 +721,63 @@ func uploadChunk(client *HTTPClient, session *AuthSession, uploadID string, chun
 	chunkHash := hex.EncodeToString(h[:])
 
 	url := fmt.Sprintf("%s/api/uploads/%s/chunks/%d", client.baseURL, uploadID, chunkIndex)
-	req, err := http.NewRequest("POST", url, bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("failed to create chunk request: %w", err)
+
+	doPost := func() error {
+		if err := ensureFreshSessionToken(client, session, jwtRefreshThreshold); err != nil {
+			return err
+		}
+		req, err := http.NewRequest("POST", url, bytes.NewReader(data))
+		if err != nil {
+			return fmt.Errorf("failed to create chunk request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+session.AccessToken)
+		req.Header.Set("Content-Type", "application/octet-stream")
+		req.Header.Set("X-Chunk-Hash", chunkHash)
+		req.ContentLength = int64(len(data))
+
+		resp, err := client.client.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode == http.StatusUnauthorized {
+			if refreshErr := ensureFreshSessionToken(client, session, 0); refreshErr != nil {
+				return errAuthExpired
+			}
+			req2, err2 := http.NewRequest("POST", url, bytes.NewReader(data))
+			if err2 != nil {
+				return fmt.Errorf("failed to create chunk request: %w", err2)
+			}
+			req2.Header.Set("Authorization", "Bearer "+session.AccessToken)
+			req2.Header.Set("Content-Type", "application/octet-stream")
+			req2.Header.Set("X-Chunk-Hash", chunkHash)
+			req2.ContentLength = int64(len(data))
+			resp2, err2 := client.client.Do(req2)
+			if err2 != nil {
+				return err2
+			}
+			defer resp2.Body.Close()
+			if resp2.StatusCode == http.StatusUnauthorized {
+				return errAuthExpired
+			}
+			if resp2.StatusCode != http.StatusOK && resp2.StatusCode != http.StatusCreated {
+				body, _ := io.ReadAll(resp2.Body)
+				return &httpStatusError{Status: resp2.StatusCode, Body: string(body)}
+			}
+			return nil
+		}
+
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+			body, _ := io.ReadAll(resp.Body)
+			return &httpStatusError{Status: resp.StatusCode, Body: string(body)}
+		}
+		return nil
 	}
 
-	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
-	req.Header.Set("Content-Type", "application/octet-stream")
-	req.Header.Set("X-Chunk-Hash", chunkHash)
-	req.ContentLength = int64(len(data))
-
-	resp, err := client.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("chunk upload request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("chunk upload returned HTTP %d: %s", resp.StatusCode, string(body))
-	}
-
-	return nil
+	return withTransferRetry(context.Background(), doPost, func(attempt int, err error, delay time.Duration) {
+		logVerbose("  Chunk %d upload retry %d after %s: %v", chunkIndex, attempt, delay, err)
+	})
 }
 
 // ============================================================
@@ -944,28 +979,59 @@ func doChunkedDownload(ctx context.Context, client *HTTPClient, session *AuthSes
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		// Download chunk
-		chunkURL := fmt.Sprintf("%s/api/files/%s/chunks/%d", client.baseURL, fileID, i)
-		chunkReq, err := http.NewRequestWithContext(ctx, "GET", chunkURL, nil)
-		if err != nil {
-			return fmt.Errorf("failed to create chunk request for chunk %d: %w", i, err)
-		}
-		chunkReq.Header.Set("Authorization", "Bearer "+session.AccessToken)
 
-		chunkResp, err := client.client.Do(chunkReq)
+		var encryptedChunk []byte
+		err := withTransferRetry(ctx, func() error {
+			if err := ensureFreshSessionToken(client, session, jwtRefreshThreshold); err != nil {
+				return err
+			}
+			chunkURL := fmt.Sprintf("%s/api/files/%s/chunks/%d", client.baseURL, fileID, i)
+			chunkReq, err := http.NewRequestWithContext(ctx, "GET", chunkURL, nil)
+			if err != nil {
+				return fmt.Errorf("failed to create chunk request for chunk %d: %w", i, err)
+			}
+			chunkReq.Header.Set("Authorization", "Bearer "+session.AccessToken)
+
+			chunkResp, err := client.client.Do(chunkReq)
+			if err != nil {
+				return err
+			}
+			defer chunkResp.Body.Close()
+
+			if chunkResp.StatusCode == http.StatusUnauthorized {
+				if refreshErr := ensureFreshSessionToken(client, session, 0); refreshErr != nil {
+					return errAuthExpired
+				}
+				chunkReq2, err2 := http.NewRequestWithContext(ctx, "GET", chunkURL, nil)
+				if err2 != nil {
+					return fmt.Errorf("failed to create chunk request for chunk %d: %w", i, err2)
+				}
+				chunkReq2.Header.Set("Authorization", "Bearer "+session.AccessToken)
+				chunkResp2, err2 := client.client.Do(chunkReq2)
+				if err2 != nil {
+					return err2
+				}
+				defer chunkResp2.Body.Close()
+				if chunkResp2.StatusCode == http.StatusUnauthorized {
+					return errAuthExpired
+				}
+				if chunkResp2.StatusCode != http.StatusOK {
+					return &httpStatusError{Status: chunkResp2.StatusCode, Body: fmt.Sprintf("chunk %d", i)}
+				}
+				encryptedChunk, err = io.ReadAll(chunkResp2.Body)
+				return err
+			}
+
+			if chunkResp.StatusCode != http.StatusOK {
+				return &httpStatusError{Status: chunkResp.StatusCode, Body: fmt.Sprintf("chunk %d", i)}
+			}
+			encryptedChunk, err = io.ReadAll(chunkResp.Body)
+			return err
+		}, func(attempt int, err error, delay time.Duration) {
+			logVerbose("  Chunk %d download retry %d after %s: %v", i, attempt, delay, err)
+		})
 		if err != nil {
 			return fmt.Errorf("failed to download chunk %d: %w", i, err)
-		}
-
-		if chunkResp.StatusCode != http.StatusOK {
-			chunkResp.Body.Close()
-			return fmt.Errorf("server returned HTTP %d for chunk %d", chunkResp.StatusCode, i)
-		}
-
-		encryptedChunk, err := io.ReadAll(chunkResp.Body)
-		chunkResp.Body.Close()
-		if err != nil {
-			return fmt.Errorf("failed to read chunk %d body: %w", i, err)
 		}
 
 		// Decrypt the chunk with AAD = (file_id, chunk_index, total_chunks).
@@ -1873,43 +1939,53 @@ func setShareAuthHeader(req *http.Request, h *shareTicketHolder) error {
 
 // fetchShareChunkWithTicketRefresh downloads one encrypted share chunk, sending
 // the short-lived X-Share-Ticket. On a 403 (ticket expired mid-download) it
-// forces a ticket refresh and retries the chunk once.
+// forces a ticket refresh and retries the chunk once, then applies the shared
+// transfer retry policy for network / 5xx / 429 failures.
 func fetchShareChunkWithTicketRefresh(client *HTTPClient, h *shareTicketHolder, shareID string, chunkIndex, chunkCount int64) ([]byte, error) {
 	chunkURL := fmt.Sprintf("%s/api/public/shares/%s/chunks/%d", client.baseURL, shareID, chunkIndex)
 
-	doFetch := func() (*http.Response, error) {
-		req, err := http.NewRequestWithContext(h.ctx, "GET", chunkURL, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create chunk request: %w", err)
+	var encChunk []byte
+	err := withTransferRetry(h.ctx, func() error {
+		doFetch := func() (*http.Response, error) {
+			req, err := http.NewRequestWithContext(h.ctx, "GET", chunkURL, nil)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create chunk request: %w", err)
+			}
+			if err := setShareAuthHeader(req, h); err != nil {
+				return nil, fmt.Errorf("failed to obtain share ticket: %w", err)
+			}
+			return client.client.Do(req)
 		}
-		if err := setShareAuthHeader(req, h); err != nil {
-			return nil, fmt.Errorf("failed to obtain share ticket: %w", err)
-		}
-		return client.client.Do(req)
-	}
 
-	resp, err := doFetch()
+		resp, err := doFetch()
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode == http.StatusForbidden {
+			resp.Body.Close()
+			if _, refreshErr := h.refresh(); refreshErr != nil {
+				return fmt.Errorf("chunk %d returned 403 and ticket refresh failed: %w", chunkIndex, refreshErr)
+			}
+			resp, err = doFetch()
+			if err != nil {
+				return err
+			}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return &httpStatusError{
+				Status: resp.StatusCode,
+				Body:   fmt.Sprintf("chunk %d/%d", chunkIndex+1, chunkCount),
+			}
+		}
+		var readErr error
+		encChunk, readErr = io.ReadAll(resp.Body)
+		return readErr
+	}, func(attempt int, err error, delay time.Duration) {
+		logVerbose("  Share chunk %d download retry %d after %s: %v", chunkIndex, attempt, delay, err)
+	})
 	if err != nil {
 		return nil, err
-	}
-	if resp.StatusCode == http.StatusForbidden {
-		resp.Body.Close()
-		if _, refreshErr := h.refresh(); refreshErr != nil {
-			return nil, fmt.Errorf("chunk %d returned 403 and ticket refresh failed: %w", chunkIndex, refreshErr)
-		}
-		resp, err = doFetch()
-		if err != nil {
-			return nil, err
-		}
-	}
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, fmt.Errorf("server returned HTTP %d for chunk %d/%d", resp.StatusCode, chunkIndex+1, chunkCount)
-	}
-	encChunk, readErr := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if readErr != nil {
-		return nil, fmt.Errorf("failed to read chunk %d: %w", chunkIndex, readErr)
 	}
 	return encChunk, nil
 }

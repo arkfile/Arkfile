@@ -70,6 +70,13 @@ describe('isRetryableError', () => {
     expect(isRetryableError(new Error('something broke'))).toBe(false);
   });
 
+  test('returns true for ServiceUnavailableError-shaped object with status 503', () => {
+    const err = new Error('Service is temporarily unavailable') as Error & { status: number; name: string };
+    err.name = 'ServiceUnavailableError';
+    err.status = 503;
+    expect(isRetryableError(err)).toBe(true);
+  });
+
   test('returns false for null', () => {
     expect(isRetryableError(null)).toBe(false);
   });
@@ -293,6 +300,39 @@ describe('withRetry', () => {
     expect(result.success).toBe(false);
     expect(callCount).toBe(1);
     expect(result.attempts).toBe(1);
+  });
+
+  test('aborts during backoff when AbortSignal fires', async () => {
+    const controller = new AbortController();
+    let callCount = 0;
+    const resultPromise = withRetry(
+      async () => {
+        callCount++;
+        throw new TypeError('Failed to fetch');
+      },
+      { maxRetries: 3, initialDelayMs: 5000, jitter: false },
+      () => {
+        controller.abort();
+      },
+      controller.signal,
+    );
+    const result = await resultPromise;
+    expect(result.success).toBe(false);
+    expect(result.error?.name).toBe('AbortError');
+    expect(callCount).toBe(1);
+  });
+
+  test('does not retry AbortError', async () => {
+    let callCount = 0;
+    const result = await withRetry(
+      async () => {
+        callCount++;
+        throw new DOMException('Aborted', 'AbortError');
+      },
+      { maxRetries: 3, initialDelayMs: 1 },
+    );
+    expect(result.success).toBe(false);
+    expect(callCount).toBe(1);
   });
 });
 

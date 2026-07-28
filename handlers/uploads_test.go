@@ -306,6 +306,10 @@ func TestUploadChunk_RejectsChunkHashMismatch(t *testing.T) {
 		WithArgs(sessionID).
 		WillReturnRows(rows)
 
+	mock.ExpectQuery(`SELECT chunk_hash, etag FROM upload_chunks WHERE session_id = \? AND chunk_number = \?`).
+		WithArgs(sessionID, 0).
+		WillReturnError(sql.ErrNoRows)
+
 	err := UploadChunk(c)
 	require.NoError(t, err, "handler should write the 400 response itself")
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
@@ -314,6 +318,93 @@ func TestUploadChunk_RejectsChunkHashMismatch(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	assert.False(t, resp.Success)
 	assert.Equal(t, "chunk_hash_mismatch", resp.Error)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUploadChunk_IdempotentSameHash verifies that re-POSTing a chunk that
+// already exists with the same X-Chunk-Hash returns HTTP 200 with the stored
+// etag and does not attempt a second storage upload (same-hash short-circuit).
+func TestUploadChunk_IdempotentSameHash(t *testing.T) {
+	username := "chunk-idempotent-user"
+	sessionID := "session-chunk-idempotent"
+	chunkBody := []byte("this-is-a-sixty-four-byte-or-so-encrypted-chunk-body-payload-data")
+	sameHash := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	storedETag := `"etag-already-stored"`
+
+	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/uploads/"+sessionID+"/chunks/0", bytes.NewReader(chunkBody))
+	c.SetParamNames("sessionId", "chunkNumber")
+	c.SetParamValues(sessionID, "0")
+	c.Request().Header.Set("X-Chunk-Hash", sameHash)
+
+	claims := &auth.Claims{Username: username}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	rows := sqlmock.NewRows([]string{
+		"owner_username", "file_id", "storage_id", "storage_upload_id", "status", "total_chunks", "total_size", "padded_size",
+	}).AddRow(
+		username, "file-id", "storage-id", "upload-id", "in_progress", 1, int64(len(chunkBody)), int64(len(chunkBody)),
+	)
+	mock.ExpectQuery(`SELECT owner_username, file_id, storage_id, storage_upload_id, status, total_chunks, total_size, padded_size FROM upload_sessions WHERE id = \?`).
+		WithArgs(sessionID).
+		WillReturnRows(rows)
+
+	mock.ExpectQuery(`SELECT chunk_hash, etag FROM upload_chunks WHERE session_id = \? AND chunk_number = \?`).
+		WithArgs(sessionID, 0).
+		WillReturnRows(sqlmock.NewRows([]string{"chunk_hash", "etag"}).AddRow(sameHash, storedETag))
+
+	err := UploadChunk(c)
+	require.NoError(t, err, "handler should write the 200 response itself")
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, float64(0), resp["chunk_number"])
+	assert.Equal(t, storedETag, resp["etag"])
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUploadChunk_ConflictDifferentHash verifies that re-POSTing a chunk
+// number with a different X-Chunk-Hash returns HTTP 409 chunk_hash_conflict.
+func TestUploadChunk_ConflictDifferentHash(t *testing.T) {
+	username := "chunk-conflict-user"
+	sessionID := "session-chunk-conflict"
+	chunkBody := []byte("this-is-a-sixty-four-byte-or-so-encrypted-chunk-body-payload-data")
+	newHash := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	storedHash := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/uploads/"+sessionID+"/chunks/0", bytes.NewReader(chunkBody))
+	c.SetParamNames("sessionId", "chunkNumber")
+	c.SetParamValues(sessionID, "0")
+	c.Request().Header.Set("X-Chunk-Hash", newHash)
+
+	claims := &auth.Claims{Username: username}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	rows := sqlmock.NewRows([]string{
+		"owner_username", "file_id", "storage_id", "storage_upload_id", "status", "total_chunks", "total_size", "padded_size",
+	}).AddRow(
+		username, "file-id", "storage-id", "upload-id", "in_progress", 1, int64(len(chunkBody)), int64(len(chunkBody)),
+	)
+	mock.ExpectQuery(`SELECT owner_username, file_id, storage_id, storage_upload_id, status, total_chunks, total_size, padded_size FROM upload_sessions WHERE id = \?`).
+		WithArgs(sessionID).
+		WillReturnRows(rows)
+
+	mock.ExpectQuery(`SELECT chunk_hash, etag FROM upload_chunks WHERE session_id = \? AND chunk_number = \?`).
+		WithArgs(sessionID, 0).
+		WillReturnRows(sqlmock.NewRows([]string{"chunk_hash", "etag"}).AddRow(storedHash, `"old-etag"`))
+
+	err := UploadChunk(c)
+	require.NoError(t, err, "handler should write the 409 response itself")
+	assert.Equal(t, http.StatusConflict, rec.Code)
+
+	var resp APIResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.False(t, resp.Success)
+	assert.Equal(t, "chunk_hash_conflict", resp.Error)
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }

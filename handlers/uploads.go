@@ -692,6 +692,33 @@ func UploadChunk(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid chunk hash format")
 	}
 
+	// Idempotent PUT: if this chunk number was already recorded for the
+	// session, treat a matching X-Chunk-Hash as success (client retry after
+	// a lost response). A different hash is a conflict and must not retry.
+	var existingHash, existingETag string
+	existingErr := database.DB.QueryRow(
+		"SELECT chunk_hash, etag FROM upload_chunks WHERE session_id = ? AND chunk_number = ?",
+		sessionID, chunkNumber,
+	).Scan(&existingHash, &existingETag)
+	if existingErr == nil {
+		_, _ = io.Copy(io.Discard, c.Request().Body)
+		if strings.EqualFold(existingHash, chunkHash) {
+			logging.InfoLogger.Printf("Chunk idempotent replay: %s chunk %d/%d",
+				sessionID, chunkNumber+1, totalChunks)
+			return c.JSON(http.StatusOK, map[string]interface{}{
+				"chunk_number": chunkNumber,
+				"etag":         existingETag,
+			})
+		}
+		return JSONErrorCode(c, http.StatusConflict, "chunk_hash_conflict",
+			"Chunk already uploaded with a different hash")
+	}
+	if existingErr != sql.ErrNoRows {
+		logging.ErrorLogger.Printf("Failed to look up existing chunk for session %s chunk %d: %v",
+			sessionID, chunkNumber, existingErr)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check existing chunk")
+	}
+
 	// Validate chunk size. every chunk is uniform
 	// [nonce (12)][ciphertext][tag (16)]; the FEK
 	// envelope's version/key-type bytes are not part of the chunk

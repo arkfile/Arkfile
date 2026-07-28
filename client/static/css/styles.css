@@ -230,6 +230,59 @@ input[type="file"] {
     margin-bottom: 1rem;
 }
 
+.file-input-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+}
+
+.file-input-row .file-input-label {
+    margin-bottom: 0;
+}
+
+.selected-files-list {
+    margin: 0 0 1rem 0;
+    padding: 0.75rem 1rem;
+    background-color: var(--depth-2);
+    border: 1px solid var(--depth-4);
+    border-radius: 6px;
+    max-height: 12rem;
+    overflow-y: auto;
+}
+
+.selected-files-list .selected-files-count {
+    margin: 0 0 0.5rem 0;
+    font-weight: 600;
+    color: var(--foam-2);
+}
+
+.selected-files-list ul {
+    margin: 0;
+    padding-left: 1.25rem;
+}
+
+.selected-files-list li {
+    color: var(--salt);
+    font-size: 0.9rem;
+}
+
+.selected-files-list .selected-files-more {
+    list-style: none;
+    margin-left: -1.25rem;
+    color: var(--foam-2);
+    font-style: italic;
+}
+
+.upload-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
+    margin-top: 0.75rem;
+}
+
 .file-input-label:hover {
     background-color: var(--depth-4);
     border-color: var(--current-2);

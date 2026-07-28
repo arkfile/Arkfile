@@ -363,14 +363,100 @@ describe('uploadFiles batch loop', () => {
       QuotaExceededError: QE,
       AccountDisabledError: AD,
       TooManyInProgressUploadsError: TM,
+      UploadAbortedError: UA,
     } = await import('../files/upload.js');
 
     expect(fatal(new AE())).toBe(true);
     expect(fatal(new QE())).toBe(true);
     expect(fatal(new AD())).toBe(true);
     expect(fatal(new TM())).toBe(true);
+    expect(fatal(new UA())).toBe(true);
     expect(fatal(new Error('generic'))).toBe(false);
     expect(fatal(null)).toBe(false);
     expect(fatal(undefined)).toBe(false);
+  });
+});
+
+describe('uploadFile chunk transfer retries', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    (globalThis as any).document = {
+      cookie: '__Host-arkfile-csrf=test-csrf-token',
+    };
+  });
+
+  test('retries chunk POST on 503 then succeeds', async () => {
+    const { uploadFile } = await import('../files/upload.js');
+
+    let chunkPosts = 0;
+    const routes: Record<string, FetchMockEntry> = {
+      chunking: { status: 200, body: CHUNK_PARAMS_RESPONSE },
+      'uploads/init': { status: 200, body: makeInitResponse('sess-retry', 'will-be-replaced') },
+      complete: { status: 200, body: makeCompleteResponse('will-be-replaced') },
+    };
+
+    (globalThis as any).fetch = async (url: string, opts?: RequestInit): Promise<Response> => {
+      const path = new URL(url, 'http://localhost').pathname;
+      if (path.includes('/api/auth/crypto-metadata')) {
+        return new Response(JSON.stringify({
+          data: {
+            username: 'testuser',
+            account_kdf_salt: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+            account_kdf_profile: 1,
+          },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (path.includes('/chunks/')) {
+        chunkPosts++;
+        if (chunkPosts < 3) {
+          return new Response('unavailable', { status: 503 });
+        }
+        return new Response('{"chunk_number":0}', {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      for (const [pattern, entry] of Object.entries(routes)) {
+        if (path.includes(pattern)) {
+          if (pattern === 'uploads/init' && entry.status === 200 && opts?.body) {
+            try {
+              const reqBody = typeof opts.body === 'string' ? JSON.parse(opts.body) : null;
+              if (reqBody && typeof reqBody.file_id === 'string') {
+                const parsed = JSON.parse(entry.body);
+                parsed.file_id = reqBody.file_id;
+                return new Response(JSON.stringify(parsed), {
+                  status: entry.status,
+                  headers: { 'Content-Type': 'application/json' },
+                });
+              }
+            } catch {
+              // fall through
+            }
+          }
+          if (pattern === 'complete' && entry.status === 200 && opts?.body === undefined) {
+            // complete has no body; echo a stable file id from init is not available here.
+            // uploadFile only needs complete to return a file_id matching session.
+          }
+          return new Response(entry.body, {
+            status: entry.status,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+      }
+      return new Response('{"success":false,"error":"not_found"}', {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+
+    const result = await uploadFile(mockFile('retry.txt', 'hello retry world'), {
+      username: 'testuser',
+      passwordType: 'account',
+      accountKey: new Uint8Array(32),
+      retryConfig: { maxRetries: 3, initialDelayMs: 1, jitter: false },
+    });
+
+    expect(result.fileId).toBeTruthy();
+    expect(chunkPosts).toBe(3);
   });
 });

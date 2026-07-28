@@ -190,7 +190,11 @@ All file operations require TOTP authentication unless otherwise noted.
 | POST | `/api/uploads/:sessionId/chunks/:chunkNumber` | Upload numbered chunk | MFA |
 | POST | `/api/uploads/:sessionId/complete` | Finish the upload and assemble the file | MFA |
 | GET | `/api/uploads/:sessionId/status` | Check upload progress | MFA |
-| DELETE | `/api/uploads/:fileId` | Cancel and discard the upload session | MFA |
+| DELETE | `/api/uploads/:sessionId` | Cancel and discard the upload session | MFA |
+
+Chunk PUT is idempotent for the same `(session, chunk_number, X-Chunk-Hash)`: a replay after a lost response returns HTTP 200 with the stored etag and does not re-append to the streaming hashes or re-upload to storage. A different hash for an already-recorded chunk number returns HTTP 409 with `chunk_hash_conflict`.
+
+Browser and CLI clients retry individual chunk uploads and downloads on transient failures (network errors, HTTP 408/429/5xx) with exponential backoff before aborting that file transfer.
 
 #### Chunked Downloads
 

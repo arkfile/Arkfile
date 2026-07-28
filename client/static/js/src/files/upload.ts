@@ -68,6 +68,12 @@ import {
   refreshToken as doRefreshToken,
 } from '../utils/auth.js';
 import { loadFiles } from './list.js';
+import { withRetry, type RetryConfig } from './retry-handler.js';
+import {
+  getPendingUploadFiles,
+  setActiveUploadAbortController,
+  clearUploadSelection,
+} from '../app/upload-listeners.js';
 
 // Types
 
@@ -86,6 +92,10 @@ export interface UploadOptions {
   passwordHint?: string;
   /** Progress callback */
   onProgress?: (progress: UploadProgress) => void;
+  /** Optional abort signal; cancels in-flight chunk retries and the upload session */
+  abortSignal?: AbortSignal;
+  /** Optional chunk-transfer retry config (defaults match retry-handler.ts) */
+  retryConfig?: Partial<RetryConfig>;
 }
 
 export interface UploadProgress {
@@ -101,6 +111,18 @@ export interface UploadProgress {
   bytesUploaded?: number;
   /** Total bytes to upload */
   totalBytes?: number;
+  /** Retry attempt number when a chunk transfer is being retried (1-based) */
+  retryAttempt?: number;
+  /** Max transfer retries configured for the current chunk */
+  retryMax?: number;
+}
+
+/** Thrown when the user (or UI) aborts an in-progress upload. */
+export class UploadAbortedError extends Error {
+  constructor(message = 'Upload cancelled') {
+    super(message);
+    this.name = 'UploadAbortedError';
+  }
 }
 
 export interface UploadResult {
@@ -222,6 +244,7 @@ export function isFatalUploadError(err: unknown): boolean {
   if (err instanceof QuotaExceededError) return true;
   if (err instanceof AccountDisabledError) return true;
   if (err instanceof TooManyInProgressUploadsError) return true;
+  if (err instanceof UploadAbortedError) return true;
   return false;
 }
 
@@ -311,10 +334,24 @@ async function apiRequest<T>(
       }
     }
 
-    throw new Error(`API error (${response.status}): ${errorMessage}`);
+    const err = new Error(`API error (${response.status}): ${errorMessage}`) as Error & { status: number };
+    err.status = response.status;
+    throw err;
   }
 
   return response.json();
+}
+
+/**
+ * Best-effort cancel of an in-progress upload session. Errors are swallowed
+ * so callers can still surface the original failure/abort reason.
+ */
+async function cancelUploadSession(sessionId: string): Promise<void> {
+  try {
+    await authenticatedFetch(`/api/uploads/${sessionId}`, { method: 'DELETE' });
+  } catch (err) {
+    debugLog(`[upload] Failed to cancel session ${sessionId}: ${err}`);
+  }
 }
 
 /**
@@ -455,7 +492,7 @@ export async function uploadFile(
   file: File,
   options: UploadOptions
 ): Promise<UploadResult> {
-  const { username, passwordType, customPassword, passwordHint, onProgress } = options;
+  const { username, passwordType, customPassword, passwordHint, onProgress, abortSignal, retryConfig } = options;
 
   // Validate inputs
   if (!file) {
@@ -480,6 +517,14 @@ export async function uploadFile(
     }
   };
 
+  const throwIfAborted = () => {
+    if (abortSignal?.aborted) {
+      throw new UploadAbortedError();
+    }
+  };
+
+  let session: UploadSession | undefined;
+
   try {
     const uploadStart = performance.now();
     const logTiming = (step: string, startTime: number) => {
@@ -487,6 +532,7 @@ export async function uploadFile(
       const total = ((performance.now() - uploadStart) / 1000).toFixed(2);
       debugLog(`[upload] ${step} (${elapsed}s, total: ${total}s)`);
     };
+    throwIfAborted();
 
     // Privacy-safe filename for logging: first char + extension only
     const safeFileName = (name: string): string => {
@@ -584,7 +630,6 @@ export async function uploadFile(
     stepStart = performance.now();
     debugLog('[upload] Step 7: Initializing upload session...');
 
-    let session: UploadSession | undefined;
     let chosenFileID = '';
     let attempt = 0;
     // eslint-disable-next-line no-constant-condition
@@ -683,6 +728,7 @@ export async function uploadFile(
     let bytesUploaded = 0;
 
     for (let i = 0; i < totalChunks; i++) {
+      throwIfAborted();
       const chunkStart = performance.now();
       const start = i * CHUNK_SIZE;
       const end = Math.min(start + CHUNK_SIZE, file.size);
@@ -721,21 +767,48 @@ export async function uploadFile(
       const chunkHash = toHex(hash256(chunkToUpload));
       const hashTime = ((performance.now() - subStart) / 1000).toFixed(2);
 
-      // Upload chunk as raw binary with hash header
+      // Upload chunk as raw binary with hash header. Encrypt once; retry the
+      // same ciphertext buffer on transient transfer failures.
       const uploadBuffer = chunkToUpload.buffer.slice(
         chunkToUpload.byteOffset,
         chunkToUpload.byteOffset + chunkToUpload.byteLength
       ) as ArrayBuffer;
 
       subStart = performance.now();
-      await apiRequest(`/api/uploads/${session.session_id}/chunks/${i}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/octet-stream',
-          'X-Chunk-Hash': chunkHash,
+      const uploadResult = await withRetry(
+        async () => {
+          throwIfAborted();
+          return apiRequest(`/api/uploads/${session!.session_id}/chunks/${i}`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/octet-stream',
+              'X-Chunk-Hash': chunkHash,
+            },
+            body: new Blob([uploadBuffer]),
+          });
         },
-        body: new Blob([uploadBuffer]),
-      });
+        retryConfig ?? {},
+        (attemptNum, error, delayMs) => {
+          debugLog(`[upload] Chunk ${i + 1}/${totalChunks} retry ${attemptNum} after ${delayMs}ms: ${error.message}`);
+          reportProgress({
+            phase: 'uploading',
+            percent: 20 + Math.floor(i / totalChunks * 75),
+            currentChunk: i + 1,
+            totalChunks,
+            bytesUploaded,
+            totalBytes: totalEncryptedSize,
+            retryAttempt: attemptNum,
+            retryMax: (retryConfig?.maxRetries ?? 3),
+          });
+        },
+        abortSignal,
+      );
+      if (!uploadResult.success) {
+        if (uploadResult.error?.name === 'AbortError' || abortSignal?.aborted) {
+          throw new UploadAbortedError();
+        }
+        throw uploadResult.error || new Error(`Chunk ${i + 1} upload failed after retries`);
+      }
       const uploadTime = ((performance.now() - subStart) / 1000).toFixed(2);
 
       // plaintext, encryptedChunk, chunkToUpload all go out of scope here
@@ -801,6 +874,16 @@ export async function uploadFile(
       },
     };
   } catch (error) {
+    if (session) {
+      await cancelUploadSession(session.session_id);
+      session = undefined;
+    }
+    if (error instanceof UploadAbortedError) {
+      throw error;
+    }
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new UploadAbortedError();
+    }
     // Preserve typed errors so the batch loop can classify them correctly.
     // Wrapping in new Error() would erase the AuthExpiredError /
     // TooManyInProgressUploadsError / etc. discriminator.
@@ -928,6 +1011,12 @@ export async function uploadFiles(
     if (options.passwordHint !== undefined) {
       fileOptions.passwordHint = options.passwordHint;
     }
+    if (options.abortSignal !== undefined) {
+      fileOptions.abortSignal = options.abortSignal;
+    }
+    if (options.retryConfig !== undefined) {
+      fileOptions.retryConfig = options.retryConfig;
+    }
     if (batchOnProgress) {
       fileOptions.onProgress = (progress) => {
         batchOnProgress({
@@ -991,16 +1080,18 @@ export async function uploadFiles(
  *   the access token is within 5 minutes of expiry.
  */
 export async function handleFileUpload(): Promise<void> {
-  // Get file input -- HTML uses id="fileInput"
+  // Prefer the queued selection from upload-listeners (file or folder pick).
+  // Fall back to #fileInput for callers that set the input directly in tests.
+  let filesToUpload = getPendingUploadFiles();
   const fileInput = document.getElementById('fileInput') as HTMLInputElement | null;
-  if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+  if (filesToUpload.length === 0 && fileInput?.files && fileInput.files.length > 0) {
+    filesToUpload = Array.from(fileInput.files);
+  }
+  if (filesToUpload.length === 0) {
     showError('Please select one or more files to upload');
     return;
   }
 
-  // Snapshot the FileList into a stable array. The DOM FileList can change
-  // out from under us if the user picks new files mid-batch.
-  const filesToUpload: File[] = Array.from(fileInput.files);
   const fileCount = filesToUpload.length;
 
   // Get username from cache; if missing (e.g. page reload), fetch from server.
@@ -1025,11 +1116,15 @@ export async function handleFileUpload(): Promise<void> {
   // Upload button -- HTML uses id="upload-file-btn"
   const uploadButton = document.getElementById('upload-file-btn') as HTMLButtonElement | null;
 
+  const abortController = new AbortController();
+  setActiveUploadAbortController(abortController);
+
   // Build batch options. Optional fields are added conditionally to play
   // well with exactOptionalPropertyTypes.
   const batchOptions: BatchUploadOptions = {
     username,
     passwordType,
+    abortSignal: abortController.signal,
   };
   if (passwordHint) {
     batchOptions.passwordHint = passwordHint;
@@ -1052,6 +1147,7 @@ export async function handleFileUpload(): Promise<void> {
       const result = await promptForAccountKeyPassword();
       if (!result) {
         // User cancelled
+        setActiveUploadAbortController(null);
         return;
       }
       accountPassword = result.password;
@@ -1083,6 +1179,7 @@ export async function handleFileUpload(): Promise<void> {
     const customPassword = customPasswordInput?.value || '';
     if (!customPassword) {
       showError('Please enter your custom password for file encryption');
+      setActiveUploadAbortController(null);
       return;
     }
     batchOptions.customPassword = customPassword;
@@ -1123,6 +1220,9 @@ export async function handleFileUpload(): Promise<void> {
     if (progress.currentChunk && progress.totalChunks) {
       message += ` (chunk ${progress.currentChunk}/${progress.totalChunks})`;
     }
+    if (progress.retryAttempt && progress.retryMax) {
+      message += ` -- retry ${progress.retryAttempt}/${progress.retryMax}`;
+    }
     updateProgress({
       title: batchTitle,
       message,
@@ -1136,9 +1236,9 @@ export async function handleFileUpload(): Promise<void> {
 
     hideProgress();
 
-    // Build a clear summary message. Single-file batches keep the simple
-    // "File uploaded successfully" message that today's UX expects.
-    if (fileCount === 1) {
+    if (abortController.signal.aborted || batchResult.fatal?.reason.toLowerCase().includes('cancelled')) {
+      showWarning('Upload cancelled.');
+    } else if (fileCount === 1) {
       if (batchResult.succeeded.length === 1) {
         showSuccess(`File uploaded successfully! File ID: ${batchResult.succeeded[0].fileId}`);
       } else if (batchResult.failed.length === 1) {
@@ -1172,7 +1272,9 @@ export async function handleFileUpload(): Promise<void> {
         // Use a short human-readable reason instead of the raw server error message
         const reason = batchResult.fatal.reason.toLowerCase();
         let shortReason: string;
-        if (reason.includes('storage') || reason.includes('quota') || reason.includes('limit')) {
+        if (reason.includes('cancelled') || reason.includes('canceled')) {
+          shortReason = 'Cancelled';
+        } else if (reason.includes('storage') || reason.includes('quota') || reason.includes('limit')) {
           shortReason = 'Storage full';
         } else if (reason.includes('session') || reason.includes('expired') || reason.includes('auth')) {
           shortReason = 'Session expired';
@@ -1199,11 +1301,7 @@ export async function handleFileUpload(): Promise<void> {
     }
 
     // Clear the form regardless of outcome (matches single-file behavior).
-    if (fileInput) fileInput.value = '';
-    const fileInputLabel = document.getElementById('fileInputLabel');
-    const fileInputName = document.getElementById('fileInputName');
-    if (fileInputLabel) fileInputLabel.classList.remove('has-file');
-    if (fileInputName) fileInputName.textContent = '';
+    clearUploadSelection();
     const customPasswordInput = document.getElementById('filePassword') as HTMLInputElement | null;
     if (customPasswordInput) customPasswordInput.value = '';
     if (hintInput) hintInput.value = '';
@@ -1215,11 +1313,17 @@ export async function handleFileUpload(): Promise<void> {
   } catch (error) {
     // Errors that escape uploadFiles() (e.g. failed initial account-key
     // resolution) are shown directly. Per-file errors are summarized above.
-    const message = error instanceof Error ? error.message : 'Upload failed';
-    updateProgress({ error: message });
-    setTimeout(() => hideProgress(), 3000);
-    showError(message);
+    if (abortController.signal.aborted || error instanceof UploadAbortedError) {
+      hideProgress();
+      showWarning('Upload cancelled.');
+    } else {
+      const message = error instanceof Error ? error.message : 'Upload failed';
+      updateProgress({ error: message });
+      setTimeout(() => hideProgress(), 3000);
+      showError(message);
+    }
   } finally {
+    setActiveUploadAbortController(null);
     if (uploadButton) {
       uploadButton.disabled = false;
     }
