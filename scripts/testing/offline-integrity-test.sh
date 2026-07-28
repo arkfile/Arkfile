@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 TEST_ROOT=""
 FUZZ_TIME="${ARKFILE_INTEGRITY_FUZZ_TIME:-2s}"
+FUZZ_COMMAND_TIMEOUT="${ARKFILE_INTEGRITY_FUZZ_COMMAND_TIMEOUT:-90s}"
 SELECTED_GROUP="${1:-all}"
 TESTS_RUN=0
 TESTS_PASSED=0
@@ -32,7 +33,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 usage() {
-    printf 'Usage: %s [all|conformance|parsers|fuzz|state|analyzers|production]\n' "$0"
+    printf 'Usage: %s [all|conformance|parsers|fuzz|state|race|analyzers|production]\n' "$0"
 }
 
 require_command() {
@@ -53,7 +54,7 @@ preflight() {
     cd "$PROJECT_ROOT" || return 1
 
     case "$SELECTED_GROUP" in
-        all|conformance|parsers|fuzz|state|analyzers|production) ;;
+        all|conformance|parsers|fuzz|state|race|analyzers|production) ;;
         help|-h|--help)
             usage
             exit 0
@@ -120,7 +121,7 @@ run_group() {
 }
 
 run_conformance() {
-    go test ./crypto -run '^(TestBuildChunkAAD_CrossLanguageVector|TestAADSharedFixture|TestPasswordKDFConformance|TestAESGCMSharedFixture|TestOwnerEnvelopeSharedFixtureDecrypt|TestArgon2ConformanceFixture)$' -count=1 || return 1
+    go test ./crypto -run '^(TestBuildChunkAAD_CrossLanguageVector|TestAADSharedFixture|TestPasswordKDFConformance|TestAESGCMSharedFixture|TestOwnerEnvelopeSharedFixtureDecrypt|TestShareEnvelopeSharedFixture(Decrypt|RejectsTampering)|TestArgon2ConformanceFixture)$' -count=1 || return 1
     (
         cd client/static/js || exit 1
         bun test \
@@ -130,7 +131,8 @@ run_conformance() {
             src/__tests__/aes-gcm.test.ts \
             src/__tests__/file-encryption.test.ts \
             src/__tests__/metadata-helpers.test.ts \
-            src/__tests__/owner-envelope.test.ts
+            src/__tests__/owner-envelope.test.ts \
+            src/__tests__/share-envelope-conformance.test.ts
     )
 }
 
@@ -145,10 +147,10 @@ run_parser_regressions() {
 }
 
 run_short_fuzzing() {
-    timeout 30s go test ./crypto -run '^$' -fuzz '^FuzzParseFEKEnvelopeHeader$' -fuzztime="$FUZZ_TIME" || return 1
-    timeout 30s go test ./crypto -run '^$' -fuzz '^FuzzParseShareEnvelope$' -fuzztime="$FUZZ_TIME" || return 1
-    timeout 30s go test ./crypto -run '^$' -fuzz '^FuzzVerifyShareTicket$' -fuzztime="$FUZZ_TIME" || return 1
-    timeout 30s go test ./cmd/arkfile-client -run '^$' -fuzz '^FuzzParseBundle$' -fuzztime="$FUZZ_TIME"
+    timeout "$FUZZ_COMMAND_TIMEOUT" go test ./crypto -run '^$' -fuzz '^FuzzParseFEKEnvelopeHeader$' -fuzztime="$FUZZ_TIME" || return 1
+    timeout "$FUZZ_COMMAND_TIMEOUT" go test ./crypto -run '^$' -fuzz '^FuzzParseShareEnvelope$' -fuzztime="$FUZZ_TIME" || return 1
+    timeout "$FUZZ_COMMAND_TIMEOUT" go test ./crypto -run '^$' -fuzz '^FuzzVerifyShareTicket$' -fuzztime="$FUZZ_TIME" || return 1
+    timeout "$FUZZ_COMMAND_TIMEOUT" go test ./cmd/arkfile-client -run '^$' -fuzz '^FuzzParseBundle$' -fuzztime="$FUZZ_TIME"
 }
 
 run_state_invariants() {
@@ -156,6 +158,12 @@ run_state_invariants() {
         -run '^(TestClaimUploadCompletionIsSingleWinner|TestReleaseUploadCompletionClaimOnlyReopensCompletingState|TestDownloadShareChunk_AtomicDoubleSpendBlocked|TestDownloadShareChunk_AtomicConditionalFailure|TestBTCPayWebhookHandler_ConcurrentDeliveryCreditsOnce)$' \
         -count=1 || return 1
     go test ./logging -run '^TestSecurityEventSensitiveDataExclusion$' -count=1
+}
+
+run_race_invariants() {
+    go test -race ./handlers ./billing \
+        -run '^(TestClaimUploadCompletionIsSingleWinner|TestReleaseUploadCompletionClaimOnlyReopensCompletingState|TestDownloadShareChunk_AtomicDoubleSpendBlocked|TestDownloadShareChunk_AtomicConditionalFailure|TestBTCPayWebhookHandler_ConcurrentDeliveryCreditsOnce|TestProcessSubscriptionBridgeCallback_ConcurrentIdempotency)$' \
+        -count=1
 }
 
 run_analyzers() {
@@ -212,6 +220,7 @@ main() {
     run_group parsers run_parser_regressions
     run_group fuzz run_short_fuzzing
     run_group state run_state_invariants
+    run_group race run_race_invariants
     run_group analyzers run_analyzers
     run_group production run_production_profiles
 

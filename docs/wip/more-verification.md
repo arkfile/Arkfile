@@ -4,18 +4,19 @@
 
 Supplement unit tests, `e2e-test.sh`, and `e2e-playwright.sh` with checks that turn Arkfile's privacy and crypto claims into regressions developers can fail on. Whole-program formal verification across Go, TypeScript, Web Crypto, CGO/libopaque, and browsers is not presently realistic. Focus on security-critical boundaries.
 
-The prerequisite security cleanup in `docs/wip/full-cleanup-2.md` is complete as of July 27, 2026. Go and TypeScript native suites, `dev-reset.sh`, `e2e-test.sh`, and `e2e-playwright.sh` pass. Shared cryptographic fixtures, initial parser fuzz targets, random public Account and Custom Key salts, owner FEK envelope version 2, `.arkbackup` version 2, logging allowlists, and production build-profile checks are stable. Integrity-script implementation may now begin.
+The prerequisite security cleanup in `docs/wip/full-cleanup-2.md` is complete as of July 27, 2026. Go and TypeScript native suites, `dev-reset.sh`, `e2e-test.sh`, and `e2e-playwright.sh` pass. Shared cryptographic fixtures, initial parser fuzz targets, random public Account and Custom Key salts, owner FEK envelope version 2, `.arkbackup` version 2, logging allowlists, and production build-profile checks are stable. Offline and online integrity orchestration are implemented and their full intended sequence was validated on July 28, 2026.
 
 ### Offline orchestration: `scripts/testing/offline-integrity-test.sh`
 
-**Status: implemented; deterministic groups pass as of July 27, 2026.** This script runs without a server or deployment. It does not invoke `dev-reset.sh`, `e2e-test.sh`, `e2e-playwright.sh`, or `fdre2e.sh`. It uses explicit preflight checks, ordered groups, pass/fail accounting, cleanup, group selection, and a final report.
+**Status: implemented; default groups pass as of July 28, 2026.** This script runs without a server or deployment. It does not invoke `dev-reset.sh`, `e2e-test.sh`, `e2e-playwright.sh`, or `fdre2e.sh`. It uses explicit preflight checks, ordered groups, pass/fail accounting, cleanup, group selection, and a final report. Go and fuzz workers are capped at half of online CPUs with a minimum of one.
 
 Initial default groups:
 
-- Shared Go and TypeScript cryptographic conformance fixtures, including explicit-salt KDF, AAD, owner-envelope, and AES-GCM vectors.
+- Shared Go and TypeScript cryptographic conformance fixtures, including explicit-salt KDF, AAD, owner-envelope, share-envelope decrypt, and AES-GCM vectors. The pinned share fixture also rejects wrong share/file binding, ciphertext corruption, and authenticated sub-floor KDF parameters.
 - Deterministic malformed-input and parser regression tests for owner FEK envelopes, share envelopes, share tickets, and `.arkbackup` bundles.
 - Short, explicitly time-bounded native Go fuzz runs seeded by the committed fixtures. Longer fuzz campaigns remain optional and must not run by default.
 - Focused upload-completion, share-download-limit, payment-credit, and security-event state invariants that do not require a live server.
+- Focused race-detector runs for upload completion, share download limits, concurrent payment delivery, and subscription callback idempotency. These run by default because they exercise the security-sensitive concurrency invariants directly.
 - Arkfile-specific `go/analysis` checks after their focused analyzer tests pass.
 - Existing production build-profile checks that prove debug console logging, production source maps, unsafe WASM tracing, and `NORANDOM` builds are excluded.
 
@@ -23,7 +24,9 @@ The script must use the same CGO and vendored-library environment as the support
 
 ### Online orchestration: `scripts/testing/online-integrity-test.sh`
 
-**Status: implemented; live-sequence validation pending.** This script must be invoked as `sudo bash scripts/testing/online-integrity-test.sh` because it inspects root-protected deployment configuration, service logs, database snapshots, storage data, and Arkfile's private temporary directory. It requires a live development deployment produced by `dev-reset.sh`, the post-E2E auto-approval policy, and the authenticated admin and development cleanup APIs. It does not invoke reset or E2E scripts itself. It creates a unique dedicated integrity user, isolated CLI/admin HOME, files, shares, canaries, and temporary state under `/tmp/arkfile-integrity-test-data`; it captures and rechecks the shared E2E user's approval, MFA-file digest, and auto-approval policy so it cannot silently break the following Playwright run. The initial CLI RSS ceiling is 262,144 KiB with permitted growth of 98,304 KiB across the configured payload sequence. These are conservative initial failure thresholds, not observed baselines, and must be reviewed after the first complete live run.
+**Status: implemented; full live sequence passed July 28, 2026.** This script must be invoked as `sudo bash scripts/testing/online-integrity-test.sh` because it inspects root-protected deployment configuration, service logs, database snapshots, storage data, and Arkfile's private temporary directory. It requires a live development deployment produced by `dev-reset.sh`, the post-E2E auto-approval policy, and the authenticated admin and development cleanup APIs. It does not invoke reset or E2E scripts itself. It creates a unique dedicated integrity user, isolated CLI/admin HOME, files, shares, canaries, and temporary state under `/tmp/arkfile-integrity-test-data`; it captures and rechecks the shared E2E user's approval, MFA-file digest, and auto-approval policy so it cannot silently break the following Playwright run. All six online groups passed, and the following Playwright run passed all 18 tests.
+
+The CLI RSS regression ceiling remains 262,144 KiB with permitted growth of 98,304 KiB across 1 MiB, 20 MiB, 50 MB, and 100 MB upload/download operations. A five-run local baseline collected by `scripts/testing/cli-rss-baseline.sh` observed 25,568 KiB minimum RSS, 104,232 KiB maximum RSS, and 77,692 KiB maximum growth; individual run growth ranged from 61,920 to 77,692 KiB. These results support the current regression bounds for this machine and tested payload range. They do not prove bounded memory for the representative 6 GB file on a 3 GB device, and the thresholds remain intentionally conservative.
 
 Initial default groups:
 
@@ -47,21 +50,21 @@ Online integrity may run between shell E2E and Playwright only if it preserves `
 
 #### 1. Cross-client cryptographic conformance and short fuzzing
 
-**Status: implemented and orchestrated offline.** The shared corpus pins explicit-salt Account and Custom Key derivation, chunk and metadata AAD, owner FEK envelope headers and wrapping, and AES-GCM behavior for Go and TypeScript consumers. The offline script runs the paired fixture consumers, deterministic malformed-input regressions, and separately time-bounded seeded native fuzz targets. Keep expected outputs fixed during routine tests so one client is not silently used as the oracle for the other. Extend cross-client fixtures only where canonical serialization is defined. Share-envelope cross-client decrypt fixtures remain useful; server padding and `.arkbackup` remain Go-only unless a TypeScript implementation exists.
+**Status: implemented and orchestrated offline.** The shared corpus pins explicit-salt Account, Custom, and Share Key derivation, chunk and metadata AAD, owner FEK envelope headers and wrapping, share-envelope decryption and field recovery, and AES-GCM behavior for Go and TypeScript consumers. The offline script runs the paired fixture consumers, deterministic malformed-input regressions, and separately time-bounded seeded native fuzz targets. Keep expected outputs fixed during routine tests so one client is not silently used as the oracle for the other. Extend cross-client fixtures only where canonical serialization is defined. Server padding and `.arkbackup` remain Go-only unless a TypeScript implementation exists.
 
 #### 2. Privacy-canary and streaming resource invariants
 
-**Status: online orchestration implemented; live validation pending.** The online script uses a unique dedicated identity and protected canary classes, captures pre-test database, journal, temporary-file, application-log, and storage baselines, and reports the exact changed surface and canary class on failure. It includes CLI upload/download RSS measurements at 1 MiB, 20 MiB, 50 MB, and 100 MB, CLI interruption cleanup, and a concurrent one-download share check. Service Worker resource measurements may follow after CLI measurements are stable. Blob fallback remains a full-plaintext assembly path and is not subjected to a bounded-memory assertion.
+**Status: online orchestration and live validation complete.** The online script uses a unique dedicated identity and protected canary classes, captures pre-test database, journal, temporary-file, application-log, and storage baselines, and reports the exact changed surface and canary class on failure. It includes CLI upload/download RSS measurements at 1 MiB, 20 MiB, 50 MB, and 100 MB, CLI interruption cleanup, and a concurrent one-download share check. The full online run and subsequent Playwright preservation check passed on July 28, 2026. Service Worker resource measurements may follow after CLI measurements are stable. Blob fallback remains a full-plaintext assembly path and is not subjected to a bounded-memory assertion.
 
 #### 3. Custom `go/analysis` checkers for Arkfile architectural invariants
 
 **Status: implemented and enabled in offline integrity.** Three one-purpose analyzers reject raw request IP sources entering persistent logging/audit sinks, security-event type construction or direct SQL persistence outside the logging package, and OPAQUE client session/export outputs entering Arkfile file-crypto calls. They are packaged behind the `cmd/arkfile-analyzers` multichecker driver and have positive and negative `analysistest` fixtures. They deliberately do not claim whole-program secret taint tracking, universal SQL-injection proof, or cryptographic correctness from syntax-level analysis.
 
-### Explicitly deferred or rejected for the default path
+### Follow-on and deferred decisions
 
 - **TLA+ / model checking of server state machines** -- deferred (high value later; not in default integrity groups until the top three exist).
 - **Tamarin / ProVerif protocol models** -- deferred (after conformance corpus and preferably after a TLA+ state model).
-- **Crypto hot-path benchmarks with baselines** -- deferred (brief; after the top three). Later optional integrity group: Go `Benchmark*` for chunk encrypt/decrypt, FEK wrap/unwrap, share-envelope seal/open, and related envelope work, with a baseline to catch large time/alloc regressions. Complements streaming memory canaries; not a substitute for them.
+- **Crypto hot-path benchmarks with baselines** -- package-native Go benchmarks now cover 16 MiB chunk encrypt/decrypt, FEK wrap/unwrap, Share Key derivation, and share-envelope create/parse/seal/open with allocation reporting. Initial benchmark capture and any evidence-backed regression thresholds remain pending. Benchmarks complement streaming memory canaries; they are not a substitute for them and are not part of the default integrity pass/fail path.
 - **Gobra / Dafny / shipping verified-generated Go** -- not feasible for near-term product confidence; overstated practicality; Dafny-to-Go shipping conflicts with Arkfile's one canonical implementation path.
 - **Differential testing against age, RFC 8188, or secretbox** -- not appropriate; Arkfile envelope and chunk formats are not implementations of those protocols.
 - **Folding integrity into `e2e-test.sh` or replacing Playwright** -- rejected; integrity sits beside them.
@@ -73,7 +76,7 @@ Online integrity may run between shell E2E and Playwright only if it preserves `
 2. Completed: implement `offline-integrity-test.sh` around deterministic conformance, parser, fuzz, analyzer, and production-build checks.
 3. Completed: implement `online-integrity-test.sh` with dedicated identity creation, canary generation, baseline/delta capture, cleanup, and precise failure reporting.
 4. Completed in the initial script: add CLI memory measurements, interruption cleanup, and a one-download share race.
-5. Pending developer workflow: run the full manual sequence and replace the initial memory thresholds with evidence-backed values if necessary.
+5. Completed initial developer workflow: the full manual sequence passed, including all six online groups and the following 18-test Playwright run. Five repeated online measurements established the local CLI RSS baseline documented above; conservative thresholds were retained.
 6. Pending after CLI measurements stabilize: consider Service Worker resource measurements without changing Blob fallback's documented resource model.
 
 ---
@@ -100,14 +103,14 @@ Given the security-critical nature of the codebase, layering techniques beyond e
 
 #### Race detection and memory sanitizer
 
-**Status: feasible; deferred relative to the top three.** Valuable for CGO (libopaque) and concurrent handlers. Candidates for a later integrity group or CI job (`go test -race`, `-msan`/`-asan` where workable), not required for the first offline integrity cut.
+**Status: focused race coverage implemented by default; sanitizers remain deferred.** The offline integrity suite runs security-sensitive upload-completion, share-limit, payment-delivery, and subscription-idempotency tests under `go test -race`. MSan/ASan remain optional future work where the CGO toolchain supports them.
 
 - Run tests with `-race` in CI; consider `-gcflags=all=-d=checkptr` for unsafe audits.
 - If you use cgo (e.g., for libopaque / related C bindings), run under **MSan/UBSan** via `go build -msan`/`-asan` where the toolchain and environment support it.
 
 #### Crypto microbenchmarks
 
-**Status: feasible; deferred (see locked plan).** Same brief scope as the deferred benchmarks bullet above; complements approach 2 memory bounds.
+**Status: benchmark functions implemented; baseline capture pending.** Package-native Go benchmarks report time and allocations for the crypto hot paths listed in the locked plan and remain outside default pass/fail integrity until stable measurements justify thresholds.
 
 #### Fuzzing
 
