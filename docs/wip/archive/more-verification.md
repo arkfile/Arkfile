@@ -4,7 +4,7 @@
 
 Supplement unit tests, `e2e-test.sh`, and `e2e-playwright.sh` with checks that turn Arkfile's privacy and crypto claims into regressions developers can fail on. Whole-program formal verification across Go, TypeScript, Web Crypto, CGO/libopaque, and browsers is not presently realistic. Focus on security-critical boundaries.
 
-The prerequisite security cleanup in `docs/wip/full-cleanup-2.md` is complete as of July 27, 2026. Go and TypeScript native suites, `dev-reset.sh`, `e2e-test.sh`, and `e2e-playwright.sh` pass. Shared cryptographic fixtures, initial parser fuzz targets, random public Account and Custom Key salts, owner FEK envelope version 2, `.arkbackup` version 2, logging allowlists, and production build-profile checks are stable. Offline and online integrity orchestration are implemented and their full intended sequence was validated on July 28, 2026.
+The prerequisite security cleanup in `docs/wip/full-cleanup-2.md` is complete as of July 27, 2026. Go and TypeScript native suites, `dev-reset.sh`, `e2e-test.sh`, and `e2e-playwright.sh` pass. Shared cryptographic fixtures, initial parser fuzz targets, random public Account and Custom Key salts, owner FEK envelope version 2, `.arkbackup` version 2, logging allowlists, and production build-profile checks are stable. Offline and online integrity orchestration are implemented, and the complete human testing protocol in `docs/testing.md` passed on July 28, 2026.
 
 ### Offline orchestration: `scripts/testing/offline-integrity-test.sh`
 
@@ -38,7 +38,7 @@ Initial default groups:
 
 Canary checks must allow Arkfile's intentional operational metadata: ownership username, pre-padding encrypted size, padded size, chunk count, plaintext chunk size, encrypted-stream and stored-object digests, routing type, public Account Key salt and KDF profile, and owner-envelope version, key type, KDF profile, and public salt. Public cryptographic metadata is not a privacy-canary failure. Passwords, plaintext file contents, plaintext filenames, plaintext content digests, plaintext password hints, FEKs, KEKs, and OPAQUE outputs remain prohibited.
 
-Online integrity may run between shell E2E and Playwright only if it preserves `arkfile-dev-test-user`, its password and MFA state, `/tmp/arkfile-e2e-test-data/mfa-secret`, and auto-approval. The preferred full manual sequence is:
+Online integrity may run between shell E2E and Playwright only if it preserves `arkfile-dev-test-user`, its password and MFA state, `/tmp/arkfile-e2e-test-data/mfa-secret`, and auto-approval. `docs/testing.md` is the canonical comprehensive human testing protocol. Its deployment-dependent sequence is:
 
 1. `sudo bash scripts/dev-reset.sh`
 2. `bash scripts/testing/offline-integrity-test.sh`
@@ -64,7 +64,7 @@ Online integrity may run between shell E2E and Playwright only if it preserves `
 
 - **TLA+ / model checking of server state machines** -- deferred (high value later; not in default integrity groups until the top three exist).
 - **Tamarin / ProVerif protocol models** -- deferred (after conformance corpus and preferably after a TLA+ state model).
-- **Crypto hot-path benchmarks with baselines** -- package-native Go benchmarks now cover 16 MiB chunk encrypt/decrypt, FEK wrap/unwrap, Share Key derivation, and share-envelope create/parse/seal/open with allocation reporting. Initial benchmark capture and any evidence-backed regression thresholds remain pending. Benchmarks complement streaming memory canaries; they are not a substitute for them and are not part of the default integrity pass/fail path.
+- **Crypto hot-path benchmarks with baselines** -- package-native Go benchmarks cover 16 MiB chunk encrypt/decrypt, FEK wrap/unwrap, Share Key derivation, and share-envelope create/parse/seal/open with allocation reporting. The initial three-run baseline was captured on an Intel Core i7-10700 with `GOMAXPROCS=8`: chunk encrypt/decrypt medians were approximately 6.69/6.32 ms with 4/3 allocations; FEK wrap/unwrap approximately 165/164 ms with 39/38 allocations; Share Key derivation approximately 165 ms with 33 allocations; share-envelope create/parse approximately 1.29/4.89 microseconds; and share-envelope seal/open approximately 1.30/0.76 microseconds. Timing remains informational rather than a pass/fail gate. Benchmarks complement streaming memory canaries; they are not a substitute for them and are not part of default integrity.
 - **Gobra / Dafny / shipping verified-generated Go** -- not feasible for near-term product confidence; overstated practicality; Dafny-to-Go shipping conflicts with Arkfile's one canonical implementation path.
 - **Differential testing against age, RFC 8188, or secretbox** -- not appropriate; Arkfile envelope and chunk formats are not implementations of those protocols.
 - **Folding integrity into `e2e-test.sh` or replacing Playwright** -- rejected; integrity sits beside them.
@@ -77,7 +77,8 @@ Online integrity may run between shell E2E and Playwright only if it preserves `
 3. Completed: implement `online-integrity-test.sh` with dedicated identity creation, canary generation, baseline/delta capture, cleanup, and precise failure reporting.
 4. Completed in the initial script: add CLI memory measurements, interruption cleanup, and a one-download share race.
 5. Completed initial developer workflow: the full manual sequence passed, including all six online groups and the following 18-test Playwright run. Five repeated online measurements established the local CLI RSS baseline documented above; conservative thresholds were retained.
-6. Pending after CLI measurements stabilize: consider Service Worker resource measurements without changing Blob fallback's documented resource model.
+6. Completed initial crypto benchmark capture with three stable runs under the half-core policy; allocation counts were stable and timing remains informational.
+7. Pending after CLI measurements stabilize: consider Service Worker resource measurements without changing Blob fallback's documented resource model.
 
 ---
 
@@ -110,7 +111,7 @@ Given the security-critical nature of the codebase, layering techniques beyond e
 
 #### Crypto microbenchmarks
 
-**Status: benchmark functions implemented; baseline capture pending.** Package-native Go benchmarks report time and allocations for the crypto hot paths listed in the locked plan and remain outside default pass/fail integrity until stable measurements justify thresholds.
+**Status: benchmark functions and initial baseline implemented.** Package-native Go benchmarks report time and allocations for the crypto hot paths listed in the locked plan. Three stable runs were captured under `GOMAXPROCS=8`; timing and allocation results are documented in the locked plan above. They remain outside default pass/fail integrity until repeated results justify durable thresholds.
 
 #### Fuzzing
 
