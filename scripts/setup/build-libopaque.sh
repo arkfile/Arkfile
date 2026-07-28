@@ -22,6 +22,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=build-config.sh
 source "$SCRIPT_DIR/build-config.sh"
 
+# Half of online CPUs (minimum 1); override with JOBS=N if needed.
+JOBS="${JOBS:-$(get_parallel_jobs)}"
+
 echo "Arkfile Static Library Build System (vendored libsodium)"
 
 # =============================================================================
@@ -175,8 +178,8 @@ build_libsodium_vendored() {
             --without-pthreads \
             >/dev/null
 
-        echo "[INFO] Compiling libsodium..."
-        $MAKE_CMD -j"$(nproc 2>/dev/null || echo 2)" >/dev/null
+        echo "[INFO] Compiling libsodium (jobs=$JOBS)..."
+        $MAKE_CMD -j"$JOBS" >/dev/null
     )
 
     if [ ! -f "$LIBSODIUM_STATIC_ARCHIVE" ]; then
@@ -304,6 +307,7 @@ main() {
         exit 1
     fi
     echo "[INFO] Using make command: $MAKE_CMD"
+    echo "[INFO] Parallel jobs: $JOBS"
 
     # Build vendored libsodium first; libopaque / liboprf depend on it.
     build_libsodium_vendored

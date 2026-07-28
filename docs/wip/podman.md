@@ -54,7 +54,7 @@ WORKDIR /build
 RUN git clone --depth 1 --branch stable https://github.com/jedisct1/libsodium.git && \
     cd libsodium && ./autogen.sh && \
     ./configure --disable-shared --enable-static --prefix=/usr/local && \
-    make -j$(nproc) && make install
+    n=$(nproc); j=$((n/2)); [ "$j" -ge 1 ] || j=1; make -j"$j" && make install
 
 # Copy and build liboprf + libopaque (static)
 COPY vendor/stef/liboprf /build/liboprf

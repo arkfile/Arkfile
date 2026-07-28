@@ -93,8 +93,12 @@ preflight() {
     CGO_CFLAGS="$(cli_fido_cgo_cflags)"
     CGO_LDFLAGS="$(cli_fido_cgo_ldflags "$PROJECT_ROOT")"
 
+    # Cap Go/fuzz workers at half of online CPUs (minimum 1).
+    export GOMAXPROCS
+    GOMAXPROCS="$(get_parallel_jobs)"
+
     TEST_ROOT="$(mktemp -d /tmp/arkfile-offline-integrity.XXXXXX)" || return 1
-    log_ok "Offline integrity preflight passed"
+    log_ok "Offline integrity preflight passed (GOMAXPROCS=$GOMAXPROCS)"
 }
 
 run_group() {
