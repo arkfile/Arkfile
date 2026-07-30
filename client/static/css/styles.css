@@ -396,6 +396,18 @@ button:not(.password-toggle-btn):hover, .btn-primary:hover, .hero-btn:hover, .sh
     display: none;
 }
 
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
 .error-message {
     position: fixed;
     top: 20px;
@@ -1349,6 +1361,13 @@ button:not(.password-toggle-btn):hover, .btn-primary:hover, .hero-btn:hover, .sh
     align-items: center;
     justify-content: center;
     z-index: 1000;
+}
+
+/* .modal sets display:flex after .hidden; without this, class="modal hidden"
+   stays visible and intercepts clicks (breaks Playwright and real UI). */
+.modal.hidden {
+    display: none;
+    pointer-events: none;
 }
 
 .modal-content {

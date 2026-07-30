@@ -412,27 +412,6 @@
                 <div id="filesList"></div>
             </div>
 
-            <div id="editTagsModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="editTagsModalTitle">
-                <div class="modal-content edit-tags-modal-content">
-                    <h3 id="editTagsModalTitle">Edit tags</h3>
-                    <p id="editTagsFilename" class="edit-tags-filename"></p>
-                    <div id="editTagsChips" class="edit-tags-chips"></div>
-                    <div class="edit-tags-add-row">
-                        <input type="text" id="editTagsAddInput" placeholder="Add tag" autocomplete="off">
-                        <button type="button" id="editTagsAddBtn">Add</button>
-                    </div>
-                    <div class="edit-tags-replace-row">
-                        <input type="text" id="editTagsReplaceFrom" placeholder="Replace tag" autocomplete="off">
-                        <input type="text" id="editTagsReplaceTo" placeholder="with" autocomplete="off">
-                        <button type="button" id="editTagsReplaceBtn">Replace</button>
-                    </div>
-                    <p id="editTagsStatus" class="edit-tags-status" aria-live="polite"></p>
-                    <div class="edit-tags-actions">
-                        <button type="button" id="editTagsCloseBtn" class="btn-secondary">Close</button>
-                    </div>
-                </div>
-            </div>
-
             <!-- Share List Section -->
             <div class="share-list-section">
                 <div class="share-list-header">
@@ -444,6 +423,31 @@
                         <p>No shares found</p>
                         <p class="hint">Create a share to get started</p>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Overlay dialogs live at app-container root so ancestor .hidden/.overflow cannot trap them. -->
+        <div id="editTagsModal" class="modal hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="editTagsModalTitle" inert>
+            <div class="modal-content edit-tags-modal-content" role="document">
+                <h3 id="editTagsModalTitle">Edit tags</h3>
+                <p id="editTagsFilename" class="edit-tags-filename"></p>
+                <div id="editTagsChips" class="edit-tags-chips"></div>
+                <div class="edit-tags-add-row">
+                    <label for="editTagsAddInput" class="sr-only">Add tag</label>
+                    <input type="text" id="editTagsAddInput" placeholder="Add tag" autocomplete="off">
+                    <button type="button" id="editTagsAddBtn">Add</button>
+                </div>
+                <div class="edit-tags-replace-row">
+                    <label for="editTagsReplaceFrom" class="sr-only">Replace tag</label>
+                    <input type="text" id="editTagsReplaceFrom" placeholder="Replace tag" autocomplete="off">
+                    <label for="editTagsReplaceTo" class="sr-only">with</label>
+                    <input type="text" id="editTagsReplaceTo" placeholder="with" autocomplete="off">
+                    <button type="button" id="editTagsReplaceBtn">Replace</button>
+                </div>
+                <p id="editTagsStatus" class="edit-tags-status" aria-live="polite"></p>
+                <div class="edit-tags-actions">
+                    <button type="button" id="editTagsCloseBtn" class="btn-secondary" aria-label="Close edit tags dialog">Close</button>
                 </div>
             </div>
         </div>

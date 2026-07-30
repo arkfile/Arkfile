@@ -196,6 +196,36 @@ async function applyMutation(
 
 let activeTarget: TagMutationTarget | null = null;
 let onUpdated: ((updated: TagMutationTarget) => void) | null = null;
+let previouslyFocused: HTMLElement | null = null;
+let editTagsModalWired = false;
+
+function getEditTagsModal(): HTMLElement | null {
+  return document.getElementById('editTagsModal');
+}
+
+function setModalOpenState(modal: HTMLElement, open: boolean): void {
+  modal.classList.toggle('hidden', !open);
+  modal.setAttribute('aria-hidden', open ? 'false' : 'true');
+  if (open) {
+    modal.removeAttribute('inert');
+  } else {
+    modal.setAttribute('inert', '');
+  }
+}
+
+function closeEditTagsModal(): void {
+  const modal = getEditTagsModal();
+  if (modal) {
+    setModalOpenState(modal, false);
+  }
+  activeTarget = null;
+  onUpdated = null;
+  const restore = previouslyFocused;
+  previouslyFocused = null;
+  if (restore && typeof restore.focus === 'function') {
+    restore.focus();
+  }
+}
 
 function renderEditChips(tags: string[]): void {
   const chips = document.getElementById('editTagsChips');
@@ -245,23 +275,50 @@ export function openEditTagsModal(
 ): void {
   activeTarget = { ...target, tags: target.tags.slice() };
   onUpdated = onChange;
-  const modal = document.getElementById('editTagsModal');
+  const modal = getEditTagsModal();
   const filenameEl = document.getElementById('editTagsFilename');
   const status = document.getElementById('editTagsStatus');
   if (filenameEl) filenameEl.textContent = target.filename;
   if (status) status.textContent = '';
   renderEditChips(activeTarget.tags);
-  modal?.classList.remove('hidden');
+  previouslyFocused = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null;
+  if (modal) {
+    setModalOpenState(modal, true);
+  }
+  const addInput = document.getElementById('editTagsAddInput') as HTMLInputElement | null;
+  addInput?.focus();
 }
 
 export function wireEditTagsModal(): void {
-  const closeBtn = document.getElementById('editTagsCloseBtn');
-  const modal = document.getElementById('editTagsModal');
-  closeBtn?.addEventListener('click', () => {
-    modal?.classList.add('hidden');
-    activeTarget = null;
-    onUpdated = null;
+  if (editTagsModalWired) return;
+  editTagsModalWired = true;
+
+  const modal = getEditTagsModal();
+  if (modal) {
+    // Ensure closed state matches markup even if CSS/JS load order differs.
+    setModalOpenState(modal, false);
+  }
+
+  document.getElementById('editTagsCloseBtn')?.addEventListener('click', () => {
+    closeEditTagsModal();
   });
+
+  modal?.addEventListener('click', (ev) => {
+    if (ev.target === modal) {
+      closeEditTagsModal();
+    }
+  });
+
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Escape') return;
+    const openModal = getEditTagsModal();
+    if (!openModal || openModal.classList.contains('hidden')) return;
+    ev.preventDefault();
+    closeEditTagsModal();
+  });
+
   document.getElementById('editTagsAddBtn')?.addEventListener('click', () => {
     const input = document.getElementById('editTagsAddInput') as HTMLInputElement | null;
     const value = input?.value.trim() || '';
@@ -270,6 +327,12 @@ export function wireEditTagsModal(): void {
       if (input) input.value = '';
     });
   });
+  document.getElementById('editTagsAddInput')?.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter') return;
+    ev.preventDefault();
+    document.getElementById('editTagsAddBtn')?.click();
+  });
+
   document.getElementById('editTagsReplaceBtn')?.addEventListener('click', () => {
     const from = document.getElementById('editTagsReplaceFrom') as HTMLInputElement | null;
     const to = document.getElementById('editTagsReplaceTo') as HTMLInputElement | null;

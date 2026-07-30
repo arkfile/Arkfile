@@ -688,8 +688,10 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await expect(sharedPage.locator('#tagFilterClearBtn')).toBeHidden({ timeout: 10_000 });
 
     logStep('file-tags', 'Opening Edit tags modal...');
+    // Closed modal must not intercept clicks (CSS .modal.hidden must win over .modal display:flex).
+    await expect(sharedPage.locator('#editTagsModal')).toBeHidden();
     await clickFileAction(sharedPage, tagsFileName, 'Edit tags');
-    await expect(sharedPage.locator('#editTagsModal')).not.toHaveClass(/hidden/);
+    await expect(sharedPage.locator('#editTagsModal')).toBeVisible();
     await expect(sharedPage.locator('#editTagsModal')).toContainText('Edit tags');
     await expect(sharedPage.locator('#editTagsModal')).not.toContainText(/clear all/i);
     await expect(sharedPage.locator('#editTagsAddInput')).toBeVisible();
@@ -714,7 +716,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await expect(sharedPage.locator('#editTagsChips')).not.toContainText('PC-1', { timeout: 30_000 });
 
     await sharedPage.click('#editTagsCloseBtn');
-    await expect(sharedPage.locator('#editTagsModal')).toHaveClass(/hidden/);
+    await expect(sharedPage.locator('#editTagsModal')).toBeHidden();
 
     const updatedItem = findFileItem(sharedPage, tagsFileName);
     await expect(updatedItem.locator('.tag-chip', { hasText: 'folder-B' })).toBeVisible();
