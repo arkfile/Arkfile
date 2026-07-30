@@ -90,6 +90,7 @@ func TestAADSharedFixture(t *testing.T) {
 			Filename     string `json:"encrypted_filename_hex"`
 			SHA256       string `json:"encrypted_sha256sum_hex"`
 			PasswordHint string `json:"encrypted_password_hint_hex"`
+			Tags         string `json:"encrypted_tags_hex"`
 		} `json:"aad"`
 	}
 	if err := json.Unmarshal(raw, &fixture); err != nil {
@@ -105,6 +106,7 @@ func TestAADSharedFixture(t *testing.T) {
 		"filename":      {BuildMetadataFieldAAD(fixture.FileID, AADFieldFilename, fixture.OwnerUsername), fixture.AAD.Filename},
 		"sha256":        {BuildMetadataFieldAAD(fixture.FileID, AADFieldSha256, fixture.OwnerUsername), fixture.AAD.SHA256},
 		"password_hint": {BuildMetadataFieldAAD(fixture.FileID, AADFieldPasswordHint, fixture.OwnerUsername), fixture.AAD.PasswordHint},
+		"tags":          {BuildMetadataFieldAAD(fixture.FileID, AADFieldTags, fixture.OwnerUsername), fixture.AAD.Tags},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -238,6 +240,10 @@ func TestAADFieldLabels_AreCanonicalStrings(t *testing.T) {
 	if AADFieldPasswordHint != "encrypted_password_hint" {
 		t.Errorf("AADFieldPasswordHint drifted: got %q, expected exactly %q",
 			AADFieldPasswordHint, "encrypted_password_hint")
+	}
+	if AADFieldTags != "encrypted_tags" {
+		t.Errorf("AADFieldTags drifted: got %q, expected exactly %q",
+			AADFieldTags, "encrypted_tags")
 	}
 }
 

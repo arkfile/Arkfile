@@ -146,6 +146,7 @@ export function setupUploadListeners(): void {
         setLabelState('fileInputLabel', 'fileInputName', '', false);
       }
       renderSelectedFilesList(files);
+      updateUploadTagsBatchNote(files.length);
     });
   }
 
@@ -166,6 +167,35 @@ export function setupUploadListeners(): void {
         setLabelState('folderInputLabel', 'folderInputName', '', false);
       }
       renderSelectedFilesList(files);
+      updateUploadTagsBatchNote(files.length);
     });
+  }
+
+  void refreshUploadTagsConfigStatus();
+}
+
+function updateUploadTagsBatchNote(count: number): void {
+  const note = document.getElementById('uploadTagsBatchNote');
+  if (!note) return;
+  if (count > 1) {
+    note.textContent = `Apply these tags to all ${count} files`;
+    note.classList.remove('hidden');
+  } else {
+    note.textContent = '';
+    note.classList.add('hidden');
+  }
+}
+
+async function refreshUploadTagsConfigStatus(): Promise<void> {
+  const status = document.getElementById('uploadTagsStatus');
+  const input = document.getElementById('uploadTagsInput') as HTMLInputElement | null;
+  try {
+    const { loadFileTagsParams } = await import('../crypto/file-tags');
+    await loadFileTagsParams();
+    if (input) input.disabled = false;
+    if (status) status.textContent = '';
+  } catch {
+    if (input) input.disabled = true;
+    if (status) status.textContent = 'Tags unavailable (config not loaded). Untagged uploads still work.';
   }
 }

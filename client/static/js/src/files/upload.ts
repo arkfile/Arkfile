@@ -39,7 +39,13 @@ import {
   AAD_FIELD_FILENAME,
   AAD_FIELD_SHA256,
   AAD_FIELD_PASSWORD_HINT,
+  AAD_FIELD_TAGS,
 } from '../crypto/aad.js';
+import {
+  loadFileTagsParams,
+  parseAndCanonicalizeTags,
+  serializeTags,
+} from '../crypto/file-tags.js';
 import { debugLog } from '../utils/debug-log.js';
 import {
   deriveFileEncryptionKey,
@@ -88,8 +94,10 @@ export interface UploadOptions {
   passwordType: PasswordContext;
   /** Custom password -- required when passwordType === 'custom' (derives custom KEK) */
   customPassword?: string;
-  /** Optional hint for custom passwords (stored unencrypted) */
+  /** Optional hint for custom passwords (encrypted under Account Key) */
   passwordHint?: string;
+  /** Optional canonical comma-separated tags plaintext (encrypted under Account Key) */
+  tagsPlaintext?: string;
   /** Progress callback */
   onProgress?: (progress: UploadProgress) => void;
   /** Optional abort signal; cancels in-flight chunk retries and the upload session */
@@ -492,7 +500,7 @@ export async function uploadFile(
   file: File,
   options: UploadOptions
 ): Promise<UploadResult> {
-  const { username, passwordType, customPassword, passwordHint, onProgress, abortSignal, retryConfig } = options;
+  const { username, passwordType, customPassword, passwordHint, tagsPlaintext, onProgress, abortSignal, retryConfig } = options;
 
   // Validate inputs
   if (!file) {
@@ -657,6 +665,13 @@ export async function uploadFile(
         );
       }
 
+      let encryptedTags: { encrypted: string; nonce: string } | null = null;
+      if (tagsPlaintext) {
+        encryptedTags = await encryptMetadata(
+          tagsPlaintext, accountKey, candidateFileID, AAD_FIELD_TAGS, username,
+        );
+      }
+
       // Encrypt FEK with the appropriate KEK + FEK-envelope AAD.
       // Wire layout: [version][keyType][KDF profile][salt][nonce][ciphertext][tag]
       // (matches crypto.EncryptFEK() in Go).
@@ -689,6 +704,10 @@ export async function uploadFile(
         if (encryptedHint) {
           initBody.encrypted_password_hint = encryptedHint.encrypted;
           initBody.password_hint_nonce = encryptedHint.nonce;
+        }
+        if (encryptedTags) {
+          initBody.encrypted_tags = encryptedTags.encrypted;
+          initBody.tags_nonce = encryptedTags.nonce;
         }
         session = await apiRequest<UploadSession>('/api/uploads/init', {
           method: 'POST',
@@ -1011,6 +1030,9 @@ export async function uploadFiles(
     if (options.passwordHint !== undefined) {
       fileOptions.passwordHint = options.passwordHint;
     }
+    if (options.tagsPlaintext !== undefined) {
+      fileOptions.tagsPlaintext = options.tagsPlaintext;
+    }
     if (options.abortSignal !== undefined) {
       fileOptions.abortSignal = options.abortSignal;
     }
@@ -1113,6 +1135,19 @@ export async function handleFileUpload(): Promise<void> {
   const hintInput = document.getElementById('passwordHint') as HTMLInputElement | null;
   const passwordHint = hintInput?.value || '';
 
+  const tagsInput = document.getElementById('uploadTagsInput') as HTMLInputElement | null;
+  const tagsRaw = tagsInput?.value || '';
+  let tagsPlaintext = '';
+  if (tagsRaw.trim()) {
+    try {
+      const params = await loadFileTagsParams();
+      tagsPlaintext = serializeTags(parseAndCanonicalizeTags(tagsRaw, params));
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Invalid tags or tags config unavailable');
+      return;
+    }
+  }
+
   // Upload button -- HTML uses id="upload-file-btn"
   const uploadButton = document.getElementById('upload-file-btn') as HTMLButtonElement | null;
 
@@ -1128,6 +1163,9 @@ export async function handleFileUpload(): Promise<void> {
   };
   if (passwordHint) {
     batchOptions.passwordHint = passwordHint;
+  }
+  if (tagsPlaintext) {
+    batchOptions.tagsPlaintext = tagsPlaintext;
   }
 
   // Resolve account key / password once for the whole batch.

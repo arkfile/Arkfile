@@ -1,4 +1,4 @@
-// commands.go - Upload, download, list-files, share, and generate-test-file commands.
+// commands.go - Upload, download, list-files, tags, share, and generate-test-file commands.
 // Uses streaming per-chunk AES-GCM encryption via crypto_utils.go helpers.
 
 package main
@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -233,14 +234,15 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 	recursive := fs.Bool("recursive", false, "When used with --dir, recurse into subdirectories")
 	passwordType := fs.String("password-type", "account", "Password type: account or custom")
 	hint := fs.String("hint", "", "Password hint (for custom password) -- one hint applies to every file in the batch")
+	tagsFlag := fs.String("tags", "", "Comma-separated owner tags applied to every file in the batch (e.g. tag-1,Food,activity)")
 	force := fs.Bool("force", false, "Force upload even if a file is a duplicate")
 	passwordStdin := fs.Bool("password-stdin", false, "Read custom password from stdin")
 
 	fs.Usage = func() {
-		fmt.Printf("Usage: arkfile-client upload [--file FILE]... [PATHS...] [--dir DIR [--recursive]] [--password-type account|custom] [--hint HINT] [--force] [--password-stdin]\n\n" +
+		fmt.Printf("Usage: arkfile-client upload [--file FILE]... [PATHS...] [--dir DIR [--recursive]] [--password-type account|custom] [--hint HINT] [--tags TAGS] [--force] [--password-stdin]\n\n" +
 			"Encrypt and upload one or more files sequentially using streaming per-chunk AES-GCM.\n" +
 			"Multiple files may be supplied via repeated --file flags, positional path arguments, and/or a --dir.\n" +
-			"One password (and one hint) applies to every file in the batch.\n" +
+			"One password, one hint, and one --tags list apply to every file in the batch.\n" +
 			"Files are uploaded one at a time. Per-file failures are logged and skipped; fatal\n" +
 			"conditions (auth expired, quota exceeded, account disabled, server's per-user upload\n" +
 			"session cap reached) abort the batch and the remaining files are reported as skipped.\n" +
@@ -251,6 +253,15 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 		return err
 	}
 	defer withPasswordStdin(*passwordStdin)()
+
+	tagsPlaintext := ""
+	if strings.TrimSpace(*tagsFlag) != "" {
+		canonical, cerr := crypto.ParseAndCanonicalizeTags(*tagsFlag)
+		if cerr != nil {
+			return fmt.Errorf("invalid --tags: %w", cerr)
+		}
+		tagsPlaintext = crypto.SerializeTags(canonical)
+	}
 
 	files, err := collectUploadInputs([]string(fileFlags), fs.Args(), *dir, *recursive)
 	if err != nil {
@@ -343,7 +354,7 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 
 		fileID, err := uploadOneFile(
 			client, session, accountKey, accountKDFSalt, customPassword,
-			finalPasswordType, *hint, path, *force,
+			finalPasswordType, *hint, tagsPlaintext, path, *force,
 		)
 		if err == nil {
 			succeeded++
@@ -401,7 +412,7 @@ func uploadOneFile(
 	client *HTTPClient,
 	session *AuthSession,
 	accountKey, accountKDFSalt, customPassword []byte,
-	finalPasswordType, hint, filePath string,
+	finalPasswordType, hint, tagsPlaintext, filePath string,
 	force bool,
 ) (string, error) {
 	if err := isSeekableFile(filePath); err != nil {
@@ -510,6 +521,12 @@ func uploadOneFile(
 			return "", fmt.Errorf("failed to encrypt password hint: %w", herr)
 		}
 
+		encTagsB64, tagsNonceB64, terr := encryptTags(tagsPlaintext, accountKey, fileID, ownerUsername)
+		if terr != nil {
+			clearBytes(fek)
+			return "", fmt.Errorf("failed to encrypt tags: %w", terr)
+		}
+
 		returnedFileID, derr := doChunkedUpload(client, session, &ChunkedUploadParams{
 			FilePath:             filePath,
 			FileID:               fileID,
@@ -524,6 +541,8 @@ func uploadOneFile(
 			PasswordType:         finalPasswordType,
 			EncPasswordHintB64:   encHintB64,
 			PasswordHintNonceB64: hintNonceB64,
+			EncTagsB64:           encTagsB64,
+			TagsNonceB64:         tagsNonceB64,
 			FileSizeBytes:        fileSizeBytes,
 			TotalEncSize:         totalEncSize,
 			ChunkCount:           chunkCount,
@@ -591,6 +610,8 @@ type ChunkedUploadParams struct {
 	PasswordType         string
 	EncPasswordHintB64   string // empty = omit from init payload
 	PasswordHintNonceB64 string // empty = omit from init payload
+	EncTagsB64           string // empty = omit from init payload
+	TagsNonceB64         string // empty = omit from init payload
 	FileSizeBytes        int64
 	TotalEncSize         int64
 	ChunkCount           int64
@@ -622,6 +643,11 @@ func doChunkedUpload(client *HTTPClient, session *AuthSession, params *ChunkedUp
 	if params.EncPasswordHintB64 != "" && params.PasswordHintNonceB64 != "" {
 		initPayload["encrypted_password_hint"] = params.EncPasswordHintB64
 		initPayload["password_hint_nonce"] = params.PasswordHintNonceB64
+	}
+	// Empty tags: omit both fields (do not send empty strings at upload init).
+	if params.EncTagsB64 != "" && params.TagsNonceB64 != "" {
+		initPayload["encrypted_tags"] = params.EncTagsB64
+		initPayload["tags_nonce"] = params.TagsNonceB64
 	}
 
 	initResp, err := client.makeRequestWithSession("POST", "/api/uploads/init", initPayload, session)
@@ -1062,11 +1088,28 @@ func handleListFilesCommand(client *HTTPClient, config *ClientConfig, args []str
 	fs := flag.NewFlagSet("list-files", flag.ExitOnError)
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
 	rawOutput := fs.Bool("raw", false, "Output raw server response (no decryption)")
+	tagsFilter := fs.String("tags", "", "Client-side AND filter by comma-separated tags after decrypt")
 	limit := fs.Int("limit", 100, "Maximum number of files to list")
 	offset := fs.Int("offset", 0, "Offset for pagination")
 
+	fs.Usage = func() {
+		fmt.Printf("Usage: arkfile-client list-files [--json|--raw] [--tags TAGS] [--limit N] [--offset N]\n\n" +
+			"List owner files. With --tags, filter client-side after decrypt (AND match).\n" +
+			"--json emits decrypted tags as a string array ([] when untagged, null when unavailable).\n" +
+			"--raw prints the opaque server response without inventing plaintext tags.\n")
+	}
+
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	var filterTags []string
+	if strings.TrimSpace(*tagsFilter) != "" {
+		parsed, perr := crypto.ParseFilterTags(*tagsFilter)
+		if perr != nil {
+			return fmt.Errorf("invalid --tags filter: %w", perr)
+		}
+		filterTags = parsed
 	}
 
 	session, err := requireSession(config)
@@ -1093,7 +1136,7 @@ func handleListFilesCommand(client *HTTPClient, config *ClientConfig, args []str
 	}
 
 	if *rawOutput {
-		// Just dump the raw response
+		// Just dump the raw response (opaque fields only; no plaintext tags).
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return fmt.Errorf("failed to read response: %w", err)
@@ -1107,45 +1150,112 @@ func handleListFilesCommand(client *HTTPClient, config *ClientConfig, args []str
 		return fmt.Errorf("failed to decode file list: %w", err)
 	}
 
-	if *jsonOutput {
-		// Decrypt filenames and output as JSON
-		type DecryptedFile struct {
-			FileID       string `json:"file_id"`
-			Filename     string `json:"filename"`
-			SizeBytes    int64  `json:"size_bytes"`
-			SizeReadable string `json:"size_readable"`
-			UploadDate   string `json:"upload_date"`
-			PasswordType string `json:"password_type"`
-			ChunkCount   int64  `json:"chunk_count"`
+	accountKey := getOptionalAccountKey(client, session)
+
+	type listedFile struct {
+		FileID        string
+		Filename      string
+		SizeBytes     int64
+		SizeReadable  string
+		UploadDate    string
+		PasswordType  string
+		ChunkCount    int64
+		Tags          []string
+		TagsAvailable bool
+	}
+
+	listed := make([]listedFile, 0, len(fileList.Files))
+	for _, f := range fileList.Files {
+		lf := listedFile{
+			FileID:        f.FileID,
+			Filename:      "[encrypted]",
+			SizeBytes:     f.SizeBytes,
+			SizeReadable:  f.SizeReadable,
+			UploadDate:    f.UploadDate,
+			PasswordType:  f.PasswordType,
+			ChunkCount:    f.ChunkCount,
+			Tags:          []string{},
+			TagsAvailable: true,
+		}
+		owner := f.OwnerUsername
+		if owner == "" {
+			owner = session.Username
+		}
+		if accountKey != nil && f.EncryptedFilename != "" && f.FilenameNonce != "" {
+			if name, derr := decryptMetadataField(
+				f.EncryptedFilename, f.FilenameNonce, accountKey,
+				f.FileID, crypto.AADFieldFilename, owner,
+			); derr == nil {
+				lf.Filename = name
+			}
 		}
 
-		accountKey := getOptionalAccountKey(client, session)
+		hasTagCipher := f.EncryptedTags != "" && f.TagsNonce != ""
+		if !hasTagCipher {
+			lf.Tags = []string{}
+			lf.TagsAvailable = true
+		} else if accountKey == nil {
+			lf.Tags = nil
+			lf.TagsAvailable = false
+		} else if plaintext, derr := decryptMetadataField(
+			f.EncryptedTags, f.TagsNonce, accountKey,
+			f.FileID, crypto.AADFieldTags, owner,
+		); derr != nil {
+			lf.Tags = nil
+			lf.TagsAvailable = false
+		} else if plaintext == "" {
+			lf.Tags = []string{}
+			lf.TagsAvailable = true
+		} else {
+			lf.Tags = strings.Split(plaintext, ",")
+			lf.TagsAvailable = true
+		}
 
-		decryptedFiles := make([]DecryptedFile, 0, len(fileList.Files))
-		for _, f := range fileList.Files {
+		listed = append(listed, lf)
+	}
+
+	visible := listed
+	if len(filterTags) > 0 {
+		filtered := make([]listedFile, 0, len(listed))
+		skippedUndecryptable := 0
+		for _, lf := range listed {
+			if !lf.TagsAvailable {
+				skippedUndecryptable++
+				continue
+			}
+			if crypto.FileHasAllTags(lf.Tags, filterTags) {
+				filtered = append(filtered, lf)
+			}
+		}
+		visible = filtered
+		if skippedUndecryptable > 0 {
+			fmt.Fprintf(os.Stderr, "[!] Warning: %d file(s) could not be evaluated for the current tag filter\n", skippedUndecryptable)
+		}
+	}
+
+	if *jsonOutput {
+		type DecryptedFile struct {
+			FileID       string   `json:"file_id"`
+			Filename     string   `json:"filename"`
+			SizeBytes    int64    `json:"size_bytes"`
+			SizeReadable string   `json:"size_readable"`
+			UploadDate   string   `json:"upload_date"`
+			PasswordType string   `json:"password_type"`
+			ChunkCount   int64    `json:"chunk_count"`
+			Tags         []string `json:"tags"`
+		}
+
+		decryptedFiles := make([]DecryptedFile, 0, len(visible))
+		for _, lf := range visible {
 			df := DecryptedFile{
-				FileID:       f.FileID,
-				SizeBytes:    f.SizeBytes,
-				SizeReadable: f.SizeReadable,
-				UploadDate:   f.UploadDate,
-				PasswordType: f.PasswordType,
-				ChunkCount:   f.ChunkCount,
-			}
-			owner := f.OwnerUsername
-			if owner == "" {
-				owner = session.Username
-			}
-			if accountKey != nil && f.EncryptedFilename != "" && f.FilenameNonce != "" {
-				if name, err := decryptMetadataField(
-					f.EncryptedFilename, f.FilenameNonce, accountKey,
-					f.FileID, crypto.AADFieldFilename, owner,
-				); err == nil {
-					df.Filename = name
-				} else {
-					df.Filename = "[encrypted]"
-				}
-			} else {
-				df.Filename = "[encrypted]"
+				FileID:       lf.FileID,
+				Filename:     lf.Filename,
+				SizeBytes:    lf.SizeBytes,
+				SizeReadable: lf.SizeReadable,
+				UploadDate:   lf.UploadDate,
+				PasswordType: lf.PasswordType,
+				ChunkCount:   lf.ChunkCount,
+				Tags:         lf.Tags, // nil -> null; empty slice -> []
 			}
 			decryptedFiles = append(decryptedFiles, df)
 		}
@@ -1156,46 +1266,353 @@ func handleListFilesCommand(client *HTTPClient, config *ClientConfig, args []str
 	}
 
 	// Human-readable table output
-	if len(fileList.Files) == 0 {
-		fmt.Println("No files found.")
+	if len(visible) == 0 {
+		if len(filterTags) > 0 {
+			fmt.Println("No files matched the tag filter.")
+		} else {
+			fmt.Println("No files found.")
+		}
 		return nil
 	}
 
-	accountKey := getOptionalAccountKey(client, session)
-
 	sep := strings.Repeat("-", 80)
-	for i, f := range fileList.Files {
-		filename := "[encrypted]"
-		owner := f.OwnerUsername
-		if owner == "" {
-			owner = session.Username
-		}
-		if accountKey != nil && f.EncryptedFilename != "" && f.FilenameNonce != "" {
-			if name, err := decryptMetadataField(
-				f.EncryptedFilename, f.FilenameNonce, accountKey,
-				f.FileID, crypto.AADFieldFilename, owner,
-			); err == nil {
-				filename = name
-			}
-		}
-
-		size := f.SizeReadable
+	for i, lf := range visible {
+		size := lf.SizeReadable
 		if size == "" {
-			size = formatFileSize(f.SizeBytes)
+			size = formatFileSize(lf.SizeBytes)
 		}
 
 		fmt.Println(sep)
-		fmt.Printf("File %d of %d\n", i+1, len(fileList.Files))
-		fmt.Printf("  File ID:   %s\n", f.FileID)
-		fmt.Printf("  Filename:  %s\n", filename)
+		fmt.Printf("File %d of %d\n", i+1, len(visible))
+		fmt.Printf("  File ID:   %s\n", lf.FileID)
+		fmt.Printf("  Filename:  %s\n", lf.Filename)
 		fmt.Printf("  Size:      %s\n", size)
-		fmt.Printf("  Uploaded:  %s\n", f.UploadDate)
-		fmt.Printf("  Type:      %s\n", f.PasswordType)
+		fmt.Printf("  Uploaded:  %s\n", lf.UploadDate)
+		fmt.Printf("  Type:      %s\n", lf.PasswordType)
+		if !lf.TagsAvailable {
+			fmt.Printf("  Tags:      [unavailable]\n")
+		} else if len(lf.Tags) == 0 {
+			fmt.Printf("  Tags:      (none)\n")
+		} else {
+			fmt.Printf("  Tags:      %s\n", strings.Join(lf.Tags, ", "))
+		}
 	}
 
-	fmt.Printf("\nTotal: %d files\n", len(fileList.Files))
+	if len(filterTags) > 0 {
+		fmt.Printf("\nShowing: %d of %d files\n", len(visible), len(listed))
+	} else {
+		fmt.Printf("\nTotal: %d files\n", len(visible))
+	}
 
 	return nil
+}
+
+// ============================================================
+// TAGS COMMANDS (post-upload single-tag mutation)
+// ============================================================
+
+func handleTagsCommand(client *HTTPClient, config *ClientConfig, args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("subcommand required: add, remove, replace")
+	}
+
+	subcommand := args[0]
+	subArgs := args[1:]
+
+	switch subcommand {
+	case "add":
+		return handleTagsAdd(client, config, subArgs)
+	case "remove":
+		return handleTagsRemove(client, config, subArgs)
+	case "replace":
+		return handleTagsReplace(client, config, subArgs)
+	default:
+		return fmt.Errorf("unknown tags subcommand: %s (use add, remove, or replace)", subcommand)
+	}
+}
+
+func handleTagsAdd(client *HTTPClient, config *ClientConfig, args []string) error {
+	fs := flag.NewFlagSet("tags add", flag.ExitOnError)
+	fileID := fs.String("file-id", "", "File ID to update")
+	fs.Usage = func() {
+		fmt.Printf("Usage: arkfile-client tags add --file-id FILE_ID TAG\n\n" +
+			"Add one owner tag to a file (encrypted under the Account Key).\n")
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *fileID == "" {
+		return fmt.Errorf("--file-id is required")
+	}
+	pos := fs.Args()
+	if len(pos) != 1 {
+		return fmt.Errorf("exactly one TAG argument is required")
+	}
+	return mutateFileTags(client, config, *fileID, "add", strings.TrimSpace(pos[0]), "")
+}
+
+func handleTagsRemove(client *HTTPClient, config *ClientConfig, args []string) error {
+	fs := flag.NewFlagSet("tags remove", flag.ExitOnError)
+	fileID := fs.String("file-id", "", "File ID to update")
+	fs.Usage = func() {
+		fmt.Printf("Usage: arkfile-client tags remove --file-id FILE_ID TAG\n\n" +
+			"Remove one owner tag from a file (case-insensitive match).\n")
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *fileID == "" {
+		return fmt.Errorf("--file-id is required")
+	}
+	pos := fs.Args()
+	if len(pos) != 1 {
+		return fmt.Errorf("exactly one TAG argument is required")
+	}
+	return mutateFileTags(client, config, *fileID, "remove", strings.TrimSpace(pos[0]), "")
+}
+
+func handleTagsReplace(client *HTTPClient, config *ClientConfig, args []string) error {
+	fs := flag.NewFlagSet("tags replace", flag.ExitOnError)
+	fileID := fs.String("file-id", "", "File ID to update")
+	fs.Usage = func() {
+		fmt.Printf("Usage: arkfile-client tags replace --file-id FILE_ID OLD_TAG NEW_TAG\n\n" +
+			"Replace one owner tag in place (casing-only replacement is allowed).\n")
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *fileID == "" {
+		return fmt.Errorf("--file-id is required")
+	}
+	pos := fs.Args()
+	if len(pos) != 2 {
+		return fmt.Errorf("exactly two arguments are required: OLD_TAG NEW_TAG")
+	}
+	return mutateFileTags(client, config, *fileID, "replace", strings.TrimSpace(pos[0]), strings.TrimSpace(pos[1]))
+}
+
+type fileTagsState struct {
+	FileID        string
+	OwnerUsername string
+	Tags          []string
+	TagsAvailable bool
+	TagsRevision  int64
+}
+
+func fetchFileTagsState(client *HTTPClient, session *AuthSession, accountKey []byte, fileID string) (*fileTagsState, error) {
+	req, err := http.NewRequest("GET", client.baseURL+"/api/files/"+fileID+"/meta", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create metadata request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
+
+	resp, err := client.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch file metadata: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to fetch file metadata: HTTP %d", resp.StatusCode)
+	}
+
+	var meta ServerFileInfo
+	if err := decodeJSONResponse(resp, &meta); err != nil {
+		return nil, fmt.Errorf("failed to decode file metadata: %w", err)
+	}
+
+	owner := meta.OwnerUsername
+	if owner == "" {
+		owner = session.Username
+	}
+	state := &fileTagsState{
+		FileID:        fileID,
+		OwnerUsername: owner,
+		Tags:          []string{},
+		TagsAvailable: true,
+		TagsRevision:  meta.TagsRevision,
+	}
+	if meta.EncryptedTags == "" || meta.TagsNonce == "" {
+		return state, nil
+	}
+	plaintext, derr := decryptMetadataField(
+		meta.EncryptedTags, meta.TagsNonce, accountKey,
+		fileID, crypto.AADFieldTags, owner,
+	)
+	if derr != nil {
+		state.Tags = nil
+		state.TagsAvailable = false
+		return state, nil
+	}
+	if plaintext != "" {
+		state.Tags = strings.Split(plaintext, ",")
+	}
+	return state, nil
+}
+
+func putFileTags(client *HTTPClient, session *AuthSession, fileID, encTags, tagsNonce string, expectedRevision int64) (int64, error) {
+	payload := map[string]interface{}{
+		"encrypted_tags":    encTags,
+		"tags_nonce":        tagsNonce,
+		"expected_revision": expectedRevision,
+	}
+	resp, err := client.makeRequestWithSession("PUT", "/api/files/"+fileID+"/tags", payload, session)
+	if err != nil {
+		if resp != nil && (resp.Error == "tags_revision_conflict" ||
+			strings.Contains(err.Error(), "tags_revision_conflict")) {
+			return 0, errTagsRevisionConflict
+		}
+		return 0, err
+	}
+	rev := int64(0)
+	if resp.Data != nil {
+		switch v := resp.Data["tags_revision"].(type) {
+		case float64:
+			rev = int64(v)
+		case json.Number:
+			n, _ := v.Int64()
+			rev = n
+		case int64:
+			rev = v
+		case int:
+			rev = int64(v)
+		}
+	}
+	return rev, nil
+}
+
+var errTagsRevisionConflict = fmt.Errorf("tags_revision_conflict")
+
+func mutateFileTags(client *HTTPClient, config *ClientConfig, fileID, kind, tagA, tagB string) error {
+	session, err := requireSession(config)
+	if err != nil {
+		return err
+	}
+	accountKey, err := requireAccountKey(client, config)
+	if err != nil {
+		return err
+	}
+	defer clearBytes(accountKey)
+
+	params := crypto.GetFileTagsParams()
+	if kind == "add" || kind == "remove" {
+		if err := crypto.ValidateTagSyntax(tagA, params.MaxTagLength); err != nil {
+			return fmt.Errorf("invalid tag: %w", err)
+		}
+	}
+	if kind == "replace" {
+		if err := crypto.ValidateTagSyntax(tagA, params.MaxTagLength); err != nil {
+			return fmt.Errorf("invalid OLD_TAG: %w", err)
+		}
+		if err := crypto.ValidateTagSyntax(tagB, params.MaxTagLength); err != nil {
+			return fmt.Errorf("invalid NEW_TAG: %w", err)
+		}
+	}
+
+	state, err := fetchFileTagsState(client, session, accountKey, fileID)
+	if err != nil {
+		return err
+	}
+	if !state.TagsAvailable {
+		return fmt.Errorf("could not decrypt current tags")
+	}
+
+	updated, err := applyTagMutation(client, session, accountKey, state, kind, tagA, tagB, true)
+	if err != nil {
+		return err
+	}
+
+	switch kind {
+	case "add":
+		fmt.Printf("Tag added. Tags: %s (revision %d)\n", formatTagsDisplay(updated.Tags), updated.TagsRevision)
+	case "remove":
+		fmt.Printf("Tag removed. Tags: %s (revision %d)\n", formatTagsDisplay(updated.Tags), updated.TagsRevision)
+	case "replace":
+		fmt.Printf("Tag replaced. Tags: %s (revision %d)\n", formatTagsDisplay(updated.Tags), updated.TagsRevision)
+	}
+	return nil
+}
+
+func formatTagsDisplay(tags []string) string {
+	if len(tags) == 0 {
+		return "(none)"
+	}
+	return strings.Join(tags, ", ")
+}
+
+func applyTagMutation(
+	client *HTTPClient,
+	session *AuthSession,
+	accountKey []byte,
+	state *fileTagsState,
+	kind, tagA, tagB string,
+	allowRetry bool,
+) (*fileTagsState, error) {
+	working := *state
+	working.Tags = append([]string(nil), state.Tags...)
+
+	var nextTags []string
+	var merr error
+	switch kind {
+	case "add":
+		if crypto.TagPresent(working.Tags, tagA) {
+			return &working, nil
+		}
+		nextTags, merr = crypto.AddTag(working.Tags, tagA)
+	case "remove":
+		if !crypto.TagPresent(working.Tags, tagA) {
+			return &working, nil
+		}
+		nextTags = crypto.RemoveTag(working.Tags, tagA)
+	case "replace":
+		nextTags, merr = crypto.ReplaceTag(working.Tags, tagA, tagB)
+	default:
+		return nil, fmt.Errorf("unknown tag mutation: %s", kind)
+	}
+	if merr != nil {
+		return nil, merr
+	}
+
+	encTags, tagsNonce, err := encryptTags(crypto.SerializeTags(nextTags), accountKey, working.FileID, working.OwnerUsername)
+	if err != nil {
+		return nil, err
+	}
+	// Final tag removal: PUT both fields as empty strings.
+	if len(nextTags) == 0 {
+		encTags = ""
+		tagsNonce = ""
+	}
+
+	newRev, err := putFileTags(client, session, working.FileID, encTags, tagsNonce, working.TagsRevision)
+	if err == nil {
+		working.Tags = nextTags
+		working.TagsRevision = newRev
+		working.TagsAvailable = true
+		return &working, nil
+	}
+	if !errors.Is(err, errTagsRevisionConflict) || !allowRetry {
+		if errors.Is(err, errTagsRevisionConflict) {
+			return nil, fmt.Errorf("tags revision conflict; reload and retry")
+		}
+		return nil, err
+	}
+
+	refreshed, rerr := fetchFileTagsState(client, session, accountKey, working.FileID)
+	if rerr != nil {
+		return nil, fmt.Errorf("tags changed and could not be reloaded: %w", rerr)
+	}
+	if !refreshed.TagsAvailable {
+		return nil, fmt.Errorf("tags changed and could not be reloaded")
+	}
+	if kind == "add" && crypto.TagPresent(refreshed.Tags, tagA) {
+		return refreshed, nil
+	}
+	if kind == "remove" && !crypto.TagPresent(refreshed.Tags, tagA) {
+		return refreshed, nil
+	}
+	if kind == "replace" && !crypto.TagPresent(refreshed.Tags, tagA) {
+		return nil, fmt.Errorf("tags changed; the original tag is no longer present")
+	}
+	return applyTagMutation(client, session, accountKey, refreshed, kind, tagA, tagB, false)
 }
 
 // ============================================================

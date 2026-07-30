@@ -50,6 +50,7 @@ COMMANDS:
     upload            Encrypt and upload a file (streaming, per-chunk AES-GCM)
     download          Download and decrypt a file (streaming, per-chunk AES-GCM)
     list-files        List files with auto-decrypted filenames
+    tags              Add, remove, or replace one owner file tag
     delete-file       Permanently delete a file from the server
     share             Manage file shares (create, list, revoke, download)
     revoke-all        Revoke all sessions and refresh tokens
@@ -78,10 +79,15 @@ EXAMPLES:
     arkfile-client upload --file document.pdf --username alice12345
     arkfile-client upload --file document.pdf --username alice12345 --password-type custom
     arkfile-client upload --file document.pdf --username alice12345 --force
+    arkfile-client upload --file document.pdf --tags 'tag-1,Food,activity'
     arkfile-client download --file-id abc123 --output document.pdf --username alice12345
     arkfile-client list-files
     arkfile-client list-files --json
+    arkfile-client list-files --tags 'Food,FUN'
     arkfile-client list-files --raw
+    arkfile-client tags add --file-id abc123 Food
+    arkfile-client tags remove --file-id abc123 Food
+    arkfile-client tags replace --file-id abc123 Food FOOD
     arkfile-client share create --file-id abc123
     arkfile-client share list
     arkfile-client share download --share-id xyz --output file.pdf
@@ -141,16 +147,19 @@ type Response struct {
 // ServerFileInfo represents file metadata from server response.
 //
 // OwnerUsername is required to reconstruct the metadata AAD when
-// decrypting `encrypted_filename`, `encrypted_sha256sum`, and
-// `encrypted_password_hint`. For owner-only endpoints it equals the
-// authenticated user, but the server is the authority on this
-// value so it is taken from the response.
+// decrypting `encrypted_filename`, `encrypted_sha256sum`,
+// `encrypted_password_hint`, and `encrypted_tags`. For owner-only
+// endpoints it equals the authenticated user, but the server is the
+// authority on this value so it is taken from the response.
 type ServerFileInfo struct {
 	FileID                string `json:"file_id"`
 	StorageID             string `json:"storage_id"`
 	OwnerUsername         string `json:"owner_username"`
 	EncryptedPasswordHint string `json:"encrypted_password_hint,omitempty"`
 	PasswordHintNonce     string `json:"password_hint_nonce,omitempty"`
+	EncryptedTags         string `json:"encrypted_tags,omitempty"`
+	TagsNonce             string `json:"tags_nonce,omitempty"`
+	TagsRevision          int64  `json:"tags_revision"`
 	PasswordType          string `json:"password_type"`
 	FilenameNonce         string `json:"filename_nonce"`
 	EncryptedFilename     string `json:"encrypted_filename"`
@@ -278,6 +287,11 @@ func main() {
 	case "list-files":
 		if err := handleListFilesCommand(client, config, args); err != nil {
 			logError("List files failed: %v", err)
+			os.Exit(1)
+		}
+	case "tags":
+		if err := handleTagsCommand(client, config, args); err != nil {
+			logError("Tags command failed: %v", err)
 			os.Exit(1)
 		}
 	case "delete-file":

@@ -504,6 +504,26 @@ func runSchemaMigrations() {
 			description: "Rename credit_transactions.balance_after_usd_cents to balance_after_usd_microcents",
 			sql:         "ALTER TABLE credit_transactions RENAME COLUMN balance_after_usd_cents TO balance_after_usd_microcents",
 		},
+		{
+			description: "Add encrypted_tags to file_metadata",
+			sql:         "ALTER TABLE file_metadata ADD COLUMN encrypted_tags TEXT",
+		},
+		{
+			description: "Add tags_nonce to file_metadata",
+			sql:         "ALTER TABLE file_metadata ADD COLUMN tags_nonce TEXT",
+		},
+		{
+			description: "Add tags_revision to file_metadata",
+			sql:         "ALTER TABLE file_metadata ADD COLUMN tags_revision INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			description: "Add encrypted_tags to upload_sessions",
+			sql:         "ALTER TABLE upload_sessions ADD COLUMN encrypted_tags TEXT",
+		},
+		{
+			description: "Add tags_nonce to upload_sessions",
+			sql:         "ALTER TABLE upload_sessions ADD COLUMN tags_nonce TEXT",
+		},
 	}
 
 	for _, m := range migrations {

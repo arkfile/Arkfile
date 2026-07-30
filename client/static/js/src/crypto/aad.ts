@@ -49,6 +49,7 @@
 export const AAD_FIELD_FILENAME = 'encrypted_filename';
 export const AAD_FIELD_SHA256 = 'encrypted_sha256sum';
 export const AAD_FIELD_PASSWORD_HINT = 'encrypted_password_hint';
+export const AAD_FIELD_TAGS = 'encrypted_tags';
 
 // uint64 wire-format upper bound (2^64 - 1). bigint values outside [0, MAX_U64]
 // are rejected before encoding, since the wire format is a fixed 8-byte BE uint.

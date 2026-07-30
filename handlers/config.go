@@ -42,6 +42,13 @@ func GetChunkingConfig(c echo.Context) error {
 	return c.JSONBlob(http.StatusOK, data)
 }
 
+// GetFileTagsConfig returns owner file-tag limits from embedded data.
+// This ensures TypeScript and Go use the same per-file, per-tag, and filter limits.
+func GetFileTagsConfig(c echo.Context) error {
+	data := crypto.GetEmbeddedFileTagsParamsJSON()
+	return c.JSONBlob(http.StatusOK, data)
+}
+
 // GetVersion returns the current Arkfile application version
 func GetVersion(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{

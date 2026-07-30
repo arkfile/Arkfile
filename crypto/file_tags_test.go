@@ -1,0 +1,101 @@
+package crypto
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+func TestFileTagsParamsEmbedded(t *testing.T) {
+	params, err := LoadFileTagsParams()
+	if err != nil {
+		t.Fatalf("LoadFileTagsParams: %v", err)
+	}
+	if params.MaxTagsPerFile != 5 || params.MaxTagLength != 32 || params.MaxTagsPerFilterQuery != 10 {
+		t.Fatalf("unexpected defaults: %+v", params)
+	}
+	var raw map[string]int
+	if err := json.Unmarshal(GetEmbeddedFileTagsParamsJSON(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw["maxTagsPerFile"] != 5 {
+		t.Fatalf("embedded JSON drift: %v", raw)
+	}
+}
+
+func TestParseAndCanonicalizeTags(t *testing.T) {
+	tags, err := ParseAndCanonicalizeTags(" Food ,activity,FUN,food ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(tags, ",") != "Food,activity,FUN" {
+		t.Fatalf("got %q", strings.Join(tags, ","))
+	}
+}
+
+func TestValidateTagSyntax(t *testing.T) {
+	params := GetFileTagsParams()
+	valid := []string{"ab-cd", "PC-1", "topicC", "A"}
+	for _, tag := range valid {
+		if err := ValidateTagSyntax(tag, params.MaxTagLength); err != nil {
+			t.Fatalf("%q should be valid: %v", tag, err)
+		}
+	}
+	invalid := []string{"-abcd-", "ab--cd", "---", "ab cd", "", "a_b", strings.Repeat("a", 33)}
+	for _, tag := range invalid {
+		if err := ValidateTagSyntax(tag, params.MaxTagLength); err == nil {
+			t.Fatalf("%q should be invalid", tag)
+		}
+	}
+}
+
+func TestAddRemoveReplaceTag(t *testing.T) {
+	tags := []string{"Food", "activity"}
+	out, err := AddTag(tags, "FUN")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(out, ",") != "Food,activity,FUN" {
+		t.Fatalf("add: %q", strings.Join(out, ","))
+	}
+	out = RemoveTag(out, "activity")
+	if strings.Join(out, ",") != "Food,FUN" {
+		t.Fatalf("remove: %q", strings.Join(out, ","))
+	}
+	out, err = ReplaceTag(out, "Food", "FOOD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(out, ",") != "FOOD,FUN" {
+		t.Fatalf("casing replace: %q", strings.Join(out, ","))
+	}
+	if _, err := ReplaceTag(out, "FOOD", "FUN"); err == nil {
+		t.Fatal("expected collision")
+	}
+}
+
+func TestParseFilterTagsAndMatch(t *testing.T) {
+	query, err := ParseFilterTags("Food, food,FUN")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(query) != 2 {
+		t.Fatalf("expected collapsed query, got %v", query)
+	}
+	if !FileHasAllTags([]string{"Food", "activity", "FUN"}, query) {
+		t.Fatal("expected AND match")
+	}
+	if FileHasAllTags([]string{"Food"}, query) {
+		t.Fatal("expected AND miss")
+	}
+}
+
+func TestParseFilterTagsLimit(t *testing.T) {
+	parts := make([]string, 11)
+	for i := range parts {
+		parts[i] = string(rune('a' + i))
+	}
+	if _, err := ParseFilterTags(strings.Join(parts, ",")); err == nil {
+		t.Fatal("expected filter max error")
+	}
+}

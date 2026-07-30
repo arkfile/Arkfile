@@ -42,6 +42,10 @@ Yes. Tor Browser is a supported browser for Arkfile. TOTP-based two-factor authe
 
 The web app runs in your browser and handles encryption, upload, download, and account management through the Arkfile website. The arkfile-client tool is a command-line program for the same operations: encrypting and uploading files, downloading and decrypting files, and logging into your account. Both use the same OPAQUE authentication and the same two-factor requirements. Both support TOTP and hardware security keys (e.g. YubiKey or Nitrokey), signing in once with a backup code, and re-enrolling a new second factor with a backup code. The browser uses WebAuthn for hardware keys; arkfile-client uses a direct USB connection. Choose whichever client fits your workflow; the security model is the same.
 
+## What are file tags?
+
+File tags are optional labels you attach to your own files so you can organize and filter them after upload, for example to remember which computer or topic a file came from. Tags are encrypted on your device with your Account Key before they reach the server, so the server stores only opaque ciphertext and cannot read the tag text. Anonymous share recipients never see your tags; shares do not carry them. Limits such as how many tags a file may have and how long each tag may be are defined by the instance and applied by both the web app and arkfile-client. Filtering by tags happens on your device after your file list is unlocked, not as a server-side search. When you export an owner backup as an .arkbackup file, encrypted tags travel with that bundle so offline decrypt can show them again.
+
 ## How do I contact the administrator?
 
 The administrator contact details for your Arkfile instance are shown on the site. Look for Contact Admin in the footer on the homepage or when you are logged in. The exact address or channel depends on how your instance operator configured the deployment. If your account is awaiting approval, admin contact information is also shown on the pending-approval screen.

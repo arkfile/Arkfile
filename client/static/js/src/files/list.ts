@@ -29,8 +29,17 @@ import {
   getAccountKey,
   decryptMetadataField,
 } from '../crypto/metadata-helpers';
-import { AAD_FIELD_FILENAME, AAD_FIELD_SHA256, AAD_FIELD_PASSWORD_HINT } from '../crypto/aad';
+import { AAD_FIELD_FILENAME, AAD_FIELD_SHA256, AAD_FIELD_PASSWORD_HINT, AAD_FIELD_TAGS } from '../crypto/aad';
 import { getCachedAccountKey } from '../crypto/file-encryption';
+import {
+  buildTagVocabulary,
+  fileHasAllTags,
+  getCachedFileTagsParams,
+  loadFileTagsParams,
+  suggestTags,
+  type FileTagsParams,
+} from '../crypto/file-tags';
+import { openEditTagsModal, wireEditTagsModal, type TagMutationTarget } from './tags';
 
 // Types (match server response, snake_case)
 
@@ -43,6 +52,9 @@ export interface ServerFileEntry {
   password_type: 'account' | 'custom';
   encrypted_password_hint?: string;
   password_hint_nonce?: string;
+  encrypted_tags?: string;
+  tags_nonce?: string;
+  tags_revision?: number;
   encrypted_filename: string;
   filename_nonce: string;
   encrypted_sha256sum: string;
@@ -66,15 +78,24 @@ export interface FilesResponse {
 /** A file entry after client-side metadata decryption */
 interface DecryptedFileEntry {
   file_id: string;
+  owner_username: string;
   password_type: 'account' | 'custom';
   /** Plaintext custom-password hint after Account Key decrypt (empty if none). */
   password_hint: string;
   filename: string;        // decrypted or "[Encrypted]"
   sha256sum: string;       // decrypted hex or ""
+  tags: string[];
+  tags_available: boolean;
+  tags_revision: number;
   size_readable: string;
   upload_date: string;
   metadata_decrypted: boolean;
 }
+
+let decryptedListCache: DecryptedFileEntry[] = [];
+let activeFilterTags: string[] = [];
+let tagFilterParams: FileTagsParams | null = null;
+let tagFilterWired = false;
 
 // File Loading
 
@@ -150,10 +171,14 @@ export async function displayFiles(data: FilesResponse): Promise<void> {
   for (const file of data.files) {
     const entry: DecryptedFileEntry = {
       file_id: file.file_id,
+      owner_username: file.owner_username,
       password_type: file.password_type,
       password_hint: '',
       filename: '[Encrypted]',
       sha256sum: '',
+      tags: [],
+      tags_available: !(file.encrypted_tags && file.tags_nonce),
+      tags_revision: file.tags_revision ?? 0,
       size_readable: file.size_readable,
       upload_date: file.upload_date,
       metadata_decrypted: false,
@@ -201,13 +226,65 @@ export async function displayFiles(data: FilesResponse): Promise<void> {
           console.warn(`Failed to decrypt password hint for ${file.file_id}:`, err);
         }
       }
+
+      if (file.encrypted_tags && file.tags_nonce) {
+        try {
+          const plaintext = await decryptMetadataField(
+            file.encrypted_tags,
+            file.tags_nonce,
+            accountKey,
+            file.file_id,
+            AAD_FIELD_TAGS,
+            file.owner_username,
+          );
+          entry.tags = plaintext ? plaintext.split(',') : [];
+          entry.tags_available = true;
+        } catch (err) {
+          console.warn(`Failed to decrypt tags for ${file.file_id}:`, err);
+          entry.tags_available = false;
+        }
+      } else {
+        entry.tags_available = true;
+      }
     }
 
     decryptedFiles.push(entry);
   }
 
-  // Render the file list
-  for (const file of decryptedFiles) {
+  decryptedListCache = decryptedFiles;
+  await ensureTagFilterReady(!!accountKey);
+  renderFilteredFileList();
+
+  // Update storage info
+  updateStorageInfo(data.storage);
+}
+
+function renderFilteredFileList(): void {
+  const filesList = document.getElementById('filesList');
+  if (!filesList) return;
+
+  // Keep decrypt banner if present as first child with that class
+  const banner = filesList.querySelector('.decrypt-banner');
+  filesList.innerHTML = '';
+  if (banner) {
+    filesList.appendChild(banner);
+  }
+
+  let undecryptableSkipped = 0;
+  const visible = decryptedListCache.filter((file) => {
+    if (activeFilterTags.length === 0) {
+      return true;
+    }
+    if (!file.tags_available) {
+      undecryptableSkipped += 1;
+      return false;
+    }
+    return fileHasAllTags(file.tags, activeFilterTags);
+  });
+
+  updateTagFilterChrome(undecryptableSkipped, visible.length, decryptedListCache.length);
+
+  for (const file of visible) {
     const fileElement = document.createElement('div');
     fileElement.className = 'file-item';
 
@@ -232,6 +309,22 @@ export async function displayFiles(data: FilesResponse): Promise<void> {
     typeEl.textContent = file.password_type === 'account' ? 'Account Password' : 'Custom Password';
 
     fileInfo.appendChild(nameEl);
+    if (file.tags_available && file.tags.length > 0) {
+      const tagsRow = document.createElement('div');
+      tagsRow.className = 'file-tags';
+      for (const tag of file.tags) {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'tag-chip';
+        chip.textContent = tag;
+        chip.title = `Filter by ${tag}`;
+        chip.addEventListener('click', () => {
+          addFilterTag(tag);
+        });
+        tagsRow.appendChild(chip);
+      }
+      fileInfo.appendChild(tagsRow);
+    }
     fileInfo.appendChild(sizeEl);
     fileInfo.appendChild(dateEl);
     fileInfo.appendChild(typeEl);
@@ -277,6 +370,27 @@ export async function displayFiles(data: FilesResponse): Promise<void> {
         showMetadataModal(file);
       });
       fileActions.appendChild(metaBtn);
+
+      const editTagsBtn = document.createElement('button');
+      editTagsBtn.textContent = 'Edit tags';
+      editTagsBtn.title = 'Add, remove, or replace tags for this file';
+      editTagsBtn.addEventListener('click', () => {
+        const target: TagMutationTarget = {
+          file_id: file.file_id,
+          owner_username: file.owner_username,
+          filename: file.filename,
+          tags: file.tags.slice(),
+          tags_available: file.tags_available,
+          tags_revision: file.tags_revision,
+        };
+        openEditTagsModal(target, (updated) => {
+          file.tags = updated.tags;
+          file.tags_revision = updated.tags_revision;
+          file.tags_available = updated.tags_available;
+          renderFilteredFileList();
+        });
+      });
+      fileActions.appendChild(editTagsBtn);
     }
 
     // Delete button
@@ -296,9 +410,140 @@ export async function displayFiles(data: FilesResponse): Promise<void> {
     fileElement.appendChild(fileActions);
     filesList.appendChild(fileElement);
   }
+}
 
-  // Update storage info
-  updateStorageInfo(data.storage);
+async function ensureTagFilterReady(metadataUnlocked: boolean): Promise<void> {
+  wireTagFilterOnce();
+  const input = document.getElementById('tagFilterInput') as HTMLInputElement | null;
+  const status = document.getElementById('tagFilterStatus');
+  if (!metadataUnlocked) {
+    if (input) input.disabled = true;
+    if (status) status.textContent = 'Unlock file metadata to filter by tags';
+    return;
+  }
+  try {
+    tagFilterParams = getCachedFileTagsParams() || await loadFileTagsParams();
+    if (input) input.disabled = false;
+    if (status) status.textContent = '';
+  } catch {
+    tagFilterParams = null;
+    if (input) input.disabled = true;
+    if (status) status.textContent = 'Tag filtering unavailable (config not loaded)';
+  }
+}
+
+function wireTagFilterOnce(): void {
+  if (tagFilterWired) return;
+  tagFilterWired = true;
+  wireEditTagsModal();
+
+  const input = document.getElementById('tagFilterInput') as HTMLInputElement | null;
+  const suggestions = document.getElementById('tagFilterSuggestions');
+  const clearBtn = document.getElementById('tagFilterClearBtn');
+
+  input?.addEventListener('input', () => {
+    refreshTagSuggestions();
+  });
+  input?.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      const value = input.value.trim();
+      if (value) {
+        addFilterTag(value);
+        input.value = '';
+        refreshTagSuggestions();
+      }
+    }
+  });
+  clearBtn?.addEventListener('click', () => {
+    activeFilterTags = [];
+    renderFilteredFileList();
+  });
+  document.addEventListener('click', (ev) => {
+    if (!suggestions) return;
+    const target = ev.target as Node;
+    if (input && (input === target || input.contains(target))) return;
+    if (suggestions.contains(target)) return;
+    suggestions.classList.add('hidden');
+    input?.setAttribute('aria-expanded', 'false');
+  });
+}
+
+function refreshTagSuggestions(): void {
+  const input = document.getElementById('tagFilterInput') as HTMLInputElement | null;
+  const suggestions = document.getElementById('tagFilterSuggestions');
+  if (!input || !suggestions || !tagFilterParams) return;
+  const vocab = buildTagVocabulary(decryptedListCache.map((f) => (f.tags_available ? f.tags : null)));
+  const items = suggestTags(vocab, input.value, activeFilterTags);
+  suggestions.innerHTML = '';
+  if (items.length === 0) {
+    suggestions.classList.add('hidden');
+    input.setAttribute('aria-expanded', 'false');
+    return;
+  }
+  for (const item of items) {
+    const li = document.createElement('li');
+    li.setAttribute('role', 'option');
+    li.textContent = item;
+    li.addEventListener('click', () => {
+      addFilterTag(item);
+      input.value = '';
+      suggestions.classList.add('hidden');
+      input.setAttribute('aria-expanded', 'false');
+    });
+    suggestions.appendChild(li);
+  }
+  suggestions.classList.remove('hidden');
+  input.setAttribute('aria-expanded', 'true');
+}
+
+function addFilterTag(tag: string): void {
+  if (!tagFilterParams) return;
+  const key = tag.toLowerCase();
+  if (activeFilterTags.some((t) => t.toLowerCase() === key)) {
+    renderFilteredFileList();
+    return;
+  }
+  if (activeFilterTags.length >= tagFilterParams.maxTagsPerFilterQuery) {
+    showError(`At most ${tagFilterParams.maxTagsPerFilterQuery} filter tags`);
+    return;
+  }
+  activeFilterTags.push(tag);
+  renderFilteredFileList();
+}
+
+function updateTagFilterChrome(undecryptableSkipped: number, visible: number, total: number): void {
+  const chips = document.getElementById('tagFilterChips');
+  const count = document.getElementById('tagFilterCount');
+  const clearBtn = document.getElementById('tagFilterClearBtn');
+  const status = document.getElementById('tagFilterStatus');
+  if (chips) {
+    chips.innerHTML = '';
+    for (const tag of activeFilterTags) {
+      const chip = document.createElement('span');
+      chip.className = 'tag-chip';
+      chip.textContent = tag;
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'tag-chip-remove';
+      removeBtn.textContent = 'x';
+      removeBtn.addEventListener('click', () => {
+        activeFilterTags = activeFilterTags.filter((t) => t.toLowerCase() !== tag.toLowerCase());
+        renderFilteredFileList();
+      });
+      chip.appendChild(removeBtn);
+      chips.appendChild(chip);
+    }
+  }
+  if (count) {
+    count.textContent = activeFilterTags.length > 0 ? `${visible} of ${total} files` : '';
+  }
+  clearBtn?.classList.toggle('hidden', activeFilterTags.length === 0);
+  if (status && tagFilterParams) {
+    status.textContent = undecryptableSkipped > 0
+      ? `${undecryptableSkipped} file(s) could not be evaluated for the current tag filter`
+      : '';
+  }
 }
 
 // Storage Info

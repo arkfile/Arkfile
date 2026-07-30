@@ -68,6 +68,7 @@ func RegisterRoutes() {
 	Echo.GET("/api/config/argon2", GetArgon2Config)
 	Echo.GET("/api/config/password-requirements", GetPasswordRequirements)
 	Echo.GET("/api/config/chunking", GetChunkingConfig)
+	Echo.GET("/api/config/file-tags", GetFileTagsConfig)
 	// OPAQUE server identity (idS); browser + CLI fetch this so all OPAQUE
 	// participants bind the same server identity into the protocol transcript.
 	Echo.GET("/api/config/opaque", GetOpaqueConfig)
@@ -147,6 +148,7 @@ func RegisterRoutes() {
 	mfaProtectedGroup.GET("/api/files/metadata", ListRecentFileMetadata)
 	mfaProtectedGroup.POST("/api/files/metadata/batch", GetFileMetadataBatch)
 	mfaProtectedGroup.GET("/api/files/:fileId/meta", GetFileMeta)
+	mfaProtectedGroup.PUT("/api/files/:fileId/tags", UpdateFileTags)
 	mfaProtectedGroup.DELETE("/api/files/:fileId", DeleteFile)
 
 	// Chunked downloads - require MFA

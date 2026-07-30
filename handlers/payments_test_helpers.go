@@ -106,6 +106,8 @@ func setupPaymentsSQLiteDB(t *testing.T) *sql.DB {
 			total_chunks INTEGER NOT NULL,
 			encrypted_password_hint TEXT,
 			password_hint_nonce TEXT,
+			encrypted_tags TEXT,
+			tags_nonce TEXT,
 			password_type TEXT NOT NULL,
 			storage_upload_id TEXT,
 			storage_id VARCHAR(36),

@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS file_metadata (
     owner_username TEXT NOT NULL,
     encrypted_password_hint TEXT,               -- base64-encoded AES-GCM encrypted custom-password hint (Account Key + AAD)
     password_hint_nonce TEXT,                   -- base64-encoded 12-byte nonce for password-hint encryption
+    encrypted_tags TEXT,                        -- base64-encoded AES-GCM encrypted owner tags (Account Key + AAD)
+    tags_nonce TEXT,                            -- base64-encoded 12-byte nonce for tags encryption
+    tags_revision INTEGER NOT NULL DEFAULT 0,   -- optimistic concurrency for post-upload tag updates
     password_type TEXT NOT NULL DEFAULT 'custom',
     filename_nonce TEXT NOT NULL,               -- base64-encoded 12-byte nonce for filename encryption
     encrypted_filename TEXT NOT NULL,           -- base64-encoded AES-GCM encrypted filename
@@ -238,6 +241,8 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
     total_chunks INTEGER NOT NULL,
     encrypted_password_hint TEXT,
     password_hint_nonce TEXT,
+    encrypted_tags TEXT,
+    tags_nonce TEXT,
     password_type TEXT NOT NULL,
     storage_upload_id TEXT,
     storage_id VARCHAR(36),

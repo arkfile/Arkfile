@@ -1,0 +1,5 @@
+{
+  "maxTagsPerFile": 5,
+  "maxTagLength": 32,
+  "maxTagsPerFilterQuery": 10
+}

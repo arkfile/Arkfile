@@ -379,6 +379,12 @@
                 </div>
                 
                 <input type="text" id="passwordHint" placeholder="Password Hint (optional)">
+                <div class="upload-tags-row">
+                    <label for="uploadTagsInput">Tags (optional)</label>
+                    <input type="text" id="uploadTagsInput" placeholder="e.g. PC-1,folder-A,topic-C" autocomplete="off">
+                    <p id="uploadTagsBatchNote" class="upload-tags-batch-note hidden" aria-live="polite"></p>
+                    <p id="uploadTagsStatus" class="upload-tags-status" aria-live="polite"></p>
+                </div>
                 <div class="upload-actions">
                     <button type="button" id="upload-file-btn">Upload</button>
                     <button type="button" id="cancel-upload-btn" class="btn-secondary hidden">Cancel Upload</button>
@@ -389,7 +395,42 @@
 
             <div class="files-list">
                 <h2>Your Files</h2>
+                <div id="tagFilterBar" class="tag-filter-bar" aria-label="Filter by tags">
+                    <div class="tag-filter-label">Filter by tags</div>
+                    <div class="tag-filter-controls">
+                        <span class="tag-filter-match-all">Match all</span>
+                        <div id="tagFilterChips" class="tag-filter-chips"></div>
+                        <div class="tag-filter-combobox">
+                            <input type="text" id="tagFilterInput" placeholder="Type a tag to filter" autocomplete="off" disabled aria-autocomplete="list" aria-controls="tagFilterSuggestions" aria-expanded="false">
+                            <ul id="tagFilterSuggestions" class="tag-filter-suggestions hidden" role="listbox"></ul>
+                        </div>
+                        <span id="tagFilterCount" class="tag-filter-count"></span>
+                        <button type="button" id="tagFilterClearBtn" class="btn-secondary tag-filter-clear hidden">Show all files</button>
+                    </div>
+                    <p id="tagFilterStatus" class="tag-filter-status">Unlock file metadata to filter by tags</p>
+                </div>
                 <div id="filesList"></div>
+            </div>
+
+            <div id="editTagsModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="editTagsModalTitle">
+                <div class="modal-content edit-tags-modal-content">
+                    <h3 id="editTagsModalTitle">Edit tags</h3>
+                    <p id="editTagsFilename" class="edit-tags-filename"></p>
+                    <div id="editTagsChips" class="edit-tags-chips"></div>
+                    <div class="edit-tags-add-row">
+                        <input type="text" id="editTagsAddInput" placeholder="Add tag" autocomplete="off">
+                        <button type="button" id="editTagsAddBtn">Add</button>
+                    </div>
+                    <div class="edit-tags-replace-row">
+                        <input type="text" id="editTagsReplaceFrom" placeholder="Replace tag" autocomplete="off">
+                        <input type="text" id="editTagsReplaceTo" placeholder="with" autocomplete="off">
+                        <button type="button" id="editTagsReplaceBtn">Replace</button>
+                    </div>
+                    <p id="editTagsStatus" class="edit-tags-status" aria-live="polite"></p>
+                    <div class="edit-tags-actions">
+                        <button type="button" id="editTagsCloseBtn" class="btn-secondary">Close</button>
+                    </div>
+                </div>
             </div>
 
             <!-- Share List Section -->

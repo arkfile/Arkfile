@@ -1302,6 +1302,148 @@ run_files_standard() {
         record_test "File listing verification" "FAIL"
     fi
 
+    scenario "Owner file tags upload / add / filter / replace / remove"
+    if [ -n "$UPLOADED_FILE_ID" ]; then
+        local tagged_upload_file="$TEST_DATA_DIR/tags_upload_seed.bin"
+        local tagged_gen_out tagged_gen_code
+        safe_exec tagged_gen_out tagged_gen_code \
+            $CLIENT generate-test-file \
+            --filename "$tagged_upload_file" \
+            --size 4096 \
+            --pattern random
+        local tagged_up_out tagged_up_code
+        safe_exec tagged_up_out tagged_up_code \
+            $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+            upload --file "$tagged_upload_file" --password-type account \
+            --tags 'upload-A,upload-B'
+        local TAGGED_UPLOAD_FILE_ID=""
+        if [ $tagged_up_code -eq 0 ]; then
+            TAGGED_UPLOAD_FILE_ID=$(echo "$tagged_up_out" | grep '^\[OK\]' | grep -o 'file_id=[^ )]*' | cut -d= -f2)
+        fi
+        if [ -n "$TAGGED_UPLOAD_FILE_ID" ]; then
+            record_test "upload --tags" "PASS"
+        else
+            error "upload --tags failed:"; echo "$tagged_up_out"
+            record_test "upload --tags" "FAIL"
+        fi
+        local tagged_filter_out tagged_filter_code
+        safe_exec tagged_filter_out tagged_filter_code \
+            $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+            list-files --tags 'upload-A,upload-B' --json
+        if [ $tagged_filter_code -eq 0 ] && [ -n "$TAGGED_UPLOAD_FILE_ID" ] \
+            && echo "$tagged_filter_out" | jq -e --arg id "$TAGGED_UPLOAD_FILE_ID" \
+            'map(select(.file_id == $id)) | length == 1 and .[0].tags == ["upload-A","upload-B"]' >/dev/null 2>&1; then
+            record_test "upload --tags list filter" "PASS"
+        else
+            error "upload --tags list filter failed:"; echo "$tagged_filter_out"
+            record_test "upload --tags list filter" "FAIL"
+        fi
+
+        local tags_add_out tags_add_code
+        safe_exec tags_add_out tags_add_code \
+            $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+            tags add --file-id "$UPLOADED_FILE_ID" 'PC-1'
+        if [ $tags_add_code -eq 0 ]; then
+            record_test "tags add" "PASS"
+        else
+            error "tags add failed:"; echo "$tags_add_out"
+            record_test "tags add" "FAIL"
+        fi
+
+        safe_exec tags_add_out tags_add_code \
+            $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+            tags add --file-id "$UPLOADED_FILE_ID" 'folder-A'
+        local tags_list_out tags_list_code
+        safe_exec tags_list_out tags_list_code \
+            $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+            list-files --tags 'PC-1,folder-A' --json
+        if [ $tags_list_code -eq 0 ] && echo "$tags_list_out" | jq -e --arg id "$UPLOADED_FILE_ID" \
+            'map(select(.file_id == $id)) | length == 1 and .[0].tags == ["PC-1","folder-A"]' >/dev/null 2>&1; then
+            record_test "list-files --tags filter and JSON tags array" "PASS"
+        else
+            error "list-files --tags/json failed:"; echo "$tags_list_out"
+            record_test "list-files --tags filter and JSON tags array" "FAIL"
+        fi
+
+        local tags_raw_out tags_raw_code
+        safe_exec tags_raw_out tags_raw_code \
+            $CLIENT --server-url "$SERVER_URL" --tls-insecure list-files --raw
+        if [ $tags_raw_code -eq 0 ] \
+            && echo "$tags_raw_out" | jq -e --arg id "$UPLOADED_FILE_ID" '.files[] | select(.file_id == $id) | (.encrypted_tags | type == "string" and length > 0) and (.tags_nonce | type == "string" and length > 0)' >/dev/null 2>&1 \
+            && ! echo "$tags_raw_out" | jq -e '.files[] | select(has("tags"))' >/dev/null 2>&1 \
+            && ! echo "$tags_raw_out" | grep -Fq 'PC-1'; then
+            record_test "Raw list API tags privacy" "PASS"
+        else
+            error "Raw list exposed plaintext tags or missing opaque tag fields"
+            record_test "Raw list API tags privacy" "FAIL"
+        fi
+
+        local tags_repl_out tags_repl_code
+        safe_exec tags_repl_out tags_repl_code \
+            $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+            tags replace --file-id "$UPLOADED_FILE_ID" 'folder-A' 'folder-B'
+        if [ $tags_repl_code -eq 0 ]; then
+            record_test "tags replace" "PASS"
+        else
+            error "tags replace failed:"; echo "$tags_repl_out"
+            record_test "tags replace" "FAIL"
+        fi
+
+        # Stale revision: PUT with expected_revision 0 must return tags_revision_conflict
+        # once tags_revision has advanced past 0 (add/replace above).
+        local tags_tok
+        tags_tok=$(jq -r '.access_token // empty' "$HOME/.arkfile-session.json" 2>/dev/null)
+        local conflict_http
+        conflict_http=$(curl -sk -o /tmp/arkfile-tags-conflict.json -w '%{http_code}' \
+            -X PUT "$SERVER_URL/api/files/$UPLOADED_FILE_ID/tags" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $tags_tok" \
+            -d '{"encrypted_tags":"","tags_nonce":"","expected_revision":0}' || true)
+        if [ "$conflict_http" = "409" ] && jq -e '.error == "tags_revision_conflict"' /tmp/arkfile-tags-conflict.json >/dev/null 2>&1; then
+            record_test "tags_revision_conflict HTTP probe" "PASS"
+        else
+            error "Expected 409 tags_revision_conflict, got HTTP $conflict_http"
+            cat /tmp/arkfile-tags-conflict.json 2>/dev/null || true
+            record_test "tags_revision_conflict HTTP probe" "FAIL"
+        fi
+
+        local tags_rm_out tags_rm_code
+        safe_exec tags_rm_out tags_rm_code \
+            $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+            tags remove --file-id "$UPLOADED_FILE_ID" 'PC-1'
+        safe_exec tags_rm_out tags_rm_code \
+            $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+            tags remove --file-id "$UPLOADED_FILE_ID" 'folder-B'
+        if [ $tags_rm_code -eq 0 ]; then
+            record_test "tags remove (including final tag)" "PASS"
+        else
+            error "tags remove failed:"; echo "$tags_rm_out"
+            record_test "tags remove (including final tag)" "FAIL"
+        fi
+
+        # Leave one encrypted tag for later export / decrypt-blob Tags line check.
+        safe_exec tags_add_out tags_add_code \
+            $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+            tags add --file-id "$UPLOADED_FILE_ID" 'backup-restore'
+        if [ $tags_add_code -eq 0 ]; then
+            record_test "tags add for export restore" "PASS"
+        else
+            error "tags add for export restore failed:"; echo "$tags_add_out"
+            record_test "tags add for export restore" "FAIL"
+        fi
+        rm -f "$tagged_upload_file"
+    else
+        record_test "upload --tags" "FAIL"
+        record_test "upload --tags list filter" "FAIL"
+        record_test "tags add" "FAIL"
+        record_test "list-files --tags filter and JSON tags array" "FAIL"
+        record_test "Raw list API tags privacy" "FAIL"
+        record_test "tags replace" "FAIL"
+        record_test "tags_revision_conflict HTTP probe" "FAIL"
+        record_test "tags remove (including final tag)" "FAIL"
+        record_test "tags add for export restore" "FAIL"
+    fi
+
     scenario "Agent digest privacy and session enforcement"
     local agent_default_out agent_default_code
     safe_exec agent_default_out agent_default_code "$CLIENT" agent status
@@ -1438,6 +1580,12 @@ run_files_standard() {
     else
         error "Offline decrypt failed:"; echo "$decrypt_result"
         record_test "Offline decrypt (.arkbackup)" "FAIL"
+    fi
+    if [ $decrypt_exit_code -eq 0 ] && echo "$decrypt_result" | grep -Fq 'Tags: backup-restore'; then
+        record_test "Offline decrypt Tags line" "PASS"
+    else
+        error "Offline decrypt missing Tags: backup-restore line:"; echo "$decrypt_result"
+        record_test "Offline decrypt Tags line" "FAIL"
     fi
     assert_sha256_matches "$decrypt_output" "$UPLOADED_FILE_SHA256" "Offline decrypt SHA-256 integrity"
 
@@ -1762,6 +1910,19 @@ run_shares() {
     else
         error "Share A creation failed:"; echo "$create_a_output"
         record_test "Share A creation (no limits)" "FAIL"
+    fi
+    # Owner tags must never appear on the public share envelope path.
+    if [ -n "$SHARE_A_ID" ]; then
+        local share_env_body
+        share_env_body=$(curl -sk "${SERVER_URL}/api/public/shares/${SHARE_A_ID}/envelope" 2>/dev/null || true)
+        if echo "$share_env_body" | grep -Eiq 'encrypted_tags|tags_nonce|tags_revision|backup-restore|PC-1|folder-B|upload-A'; then
+            error "Public share envelope leaked tag fields or plaintext tags"
+            record_test "Share envelope tags privacy" "FAIL"
+        else
+            record_test "Share envelope tags privacy" "PASS"
+        fi
+    else
+        record_test "Share envelope tags privacy" "FAIL"
     fi
     scenario "Create share with max_accesses=2"
 

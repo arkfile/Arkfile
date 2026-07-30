@@ -37,6 +37,8 @@ type bundleMeta struct {
 	FilenameNonce      string `json:"filename_nonce"`
 	EncryptedSHA256Sum string `json:"encrypted_sha256sum"`
 	SHA256SumNonce     string `json:"sha256sum_nonce"`
+	EncryptedTags      string `json:"encrypted_tags,omitempty"`
+	TagsNonce          string `json:"tags_nonce,omitempty"`
 	ChunkSizeBytes     int64  `json:"chunk_size_bytes"`
 	ChunkCount         int64  `json:"chunk_count"`
 	EnvelopeVersion    int    `json:"envelope_version"`
@@ -167,6 +169,23 @@ func handleDecryptBlobCommand(args []string) error {
 		}
 	}
 
+	// Decrypt owner tags when present (Account Key; warn and continue on failure).
+	tagsLine := ""
+	if meta.EncryptedTags != "" && meta.TagsNonce != "" {
+		if tagsPlaintext, decErr := decryptMetadataField(
+			meta.EncryptedTags, meta.TagsNonce, accountKey,
+			meta.FileID, crypto.AADFieldTags, meta.OwnerUsername,
+		); decErr == nil {
+			if tagsPlaintext == "" {
+				tagsLine = "(none)"
+			} else {
+				tagsLine = strings.ReplaceAll(tagsPlaintext, ",", ", ")
+			}
+		} else {
+			fmt.Printf("[!] WARNING: Could not decrypt tags: %v\n", decErr)
+		}
+	}
+
 	var actualSHA256 string
 	verificationStatus := "[!] (no SHA-256 metadata available)"
 	if err := writeAtomicOutput(*outputPath, func(outFile *os.File) error {
@@ -204,6 +223,9 @@ func handleDecryptBlobCommand(args []string) error {
 	}
 
 	fmt.Printf("Decrypted: %s\n", filename)
+	if tagsLine != "" {
+		fmt.Printf("Tags: %s\n", tagsLine)
+	}
 	fmt.Printf("SHA-256: %s\n", actualSHA256)
 	fmt.Printf("Verified: %s\n", verificationStatus)
 

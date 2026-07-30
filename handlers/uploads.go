@@ -108,6 +108,8 @@ func CreateUploadSession(c echo.Context) error {
 		ChunkSize             int    `json:"chunk_size"`
 		EncryptedPasswordHint string `json:"encrypted_password_hint"`
 		PasswordHintNonce     string `json:"password_hint_nonce"`
+		EncryptedTags         string `json:"encrypted_tags"`
+		TagsNonce             string `json:"tags_nonce"`
 		PasswordType          string `json:"password_type"`
 	}
 
@@ -164,6 +166,10 @@ func CreateUploadSession(c echo.Context) error {
 	if request.PasswordType != "custom" && (hasHintCipher || hasHintNonce) {
 		return JSONErrorCode(c, http.StatusBadRequest, "invalid_password_hint",
 			"password hint fields are only valid for custom password files")
+	}
+
+	if err := validateOpaqueTagsPair(request.EncryptedTags, request.TagsNonce, false); err != nil {
+		return JSONErrorCode(c, http.StatusBadRequest, "invalid_tags", err.Error())
 	}
 
 	// Check user's storage limit and approval status
@@ -358,8 +364,8 @@ func CreateUploadSession(c echo.Context) error {
 	// pre-check above and this INSERT, surface the same stable
 	// file_id_conflict code so the client can retry uniformly.
 	_, err = tx.Exec(
-		"INSERT INTO upload_sessions (id, file_id, encrypted_filename, filename_nonce, encrypted_sha256sum, sha256sum_nonce, encrypted_fek, owner_username, total_size, chunk_size, total_chunks, encrypted_password_hint, password_hint_nonce, password_type, storage_id, padded_size, status, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		sessionID, fileID, encryptedFilename, filenameNonce, encryptedSha256sum, sha256sumNonce, encryptedFek, username, request.TotalSize, request.ChunkSize, totalChunks, request.EncryptedPasswordHint, request.PasswordHintNonce, request.PasswordType, storageID, paddedSize, "in_progress", time.Now().Add(24*time.Hour),
+		"INSERT INTO upload_sessions (id, file_id, encrypted_filename, filename_nonce, encrypted_sha256sum, sha256sum_nonce, encrypted_fek, owner_username, total_size, chunk_size, total_chunks, encrypted_password_hint, password_hint_nonce, encrypted_tags, tags_nonce, password_type, storage_id, padded_size, status, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		sessionID, fileID, encryptedFilename, filenameNonce, encryptedSha256sum, sha256sumNonce, encryptedFek, username, request.TotalSize, request.ChunkSize, totalChunks, request.EncryptedPasswordHint, request.PasswordHintNonce, request.EncryptedTags, request.TagsNonce, request.PasswordType, storageID, paddedSize, "in_progress", time.Now().Add(24*time.Hour),
 	)
 	if err != nil {
 		if isUniqueConstraintFileID(err) {
@@ -894,15 +900,19 @@ func CompleteUpload(c echo.Context) error {
 	var sha256sumNonceBytes []byte
 	var encryptedFekBytes []byte
 
+	var encTags sql.NullString
+	var tagsNonce sql.NullString
 	err := database.DB.QueryRow(
 		`SELECT owner_username, file_id, storage_id, storage_upload_id, status, total_chunks,
-                total_size, chunk_size, padded_size, encrypted_password_hint, password_hint_nonce, password_type, encrypted_filename, filename_nonce,
+                total_size, chunk_size, padded_size, encrypted_password_hint, password_hint_nonce,
+                encrypted_tags, tags_nonce, password_type, encrypted_filename, filename_nonce,
                 encrypted_sha256sum, sha256sum_nonce, encrypted_fek
          FROM upload_sessions WHERE id = ?`,
 		sessionID,
 	).Scan(
 		&ownerUsername, &fileID, &storageID, &storageUploadID, &status, &totalChunks,
-		&totalSizeRaw, &chunkSizeRaw, &paddedSizeRaw, &encPasswordHint, &passwordHintNonce, &passwordType,
+		&totalSizeRaw, &chunkSizeRaw, &paddedSizeRaw, &encPasswordHint, &passwordHintNonce,
+		&encTags, &tagsNonce, &passwordType,
 		&encryptedFilenameBytes, &filenameNonceBytes, &encryptedSha256sumBytes, &sha256sumNonceBytes, &encryptedFekBytes,
 	)
 
@@ -1117,9 +1127,9 @@ func CompleteUpload(c echo.Context) error {
 	// encrypted_stream_sha256sum = hash of encrypted data only (pre-padding).
 	// stored_blob_sha256sum = hash of all bytes stored in S3 (encrypted data + padding).
 	_, err = tx.Exec(`
-		INSERT INTO file_metadata (file_id, storage_id, owner_username, encrypted_password_hint, password_hint_nonce, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, encrypted_stream_sha256sum, stored_blob_sha256sum, encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		fileID.String, storageID.String, username, encPasswordHint.String, passwordHintNonce.String, passwordType.String, filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, serverCalculatedHash, storedBlobHash, encryptedFek, declaredSize, paddedSize, chunkCount, chunkSizeBytes,
+		INSERT INTO file_metadata (file_id, storage_id, owner_username, encrypted_password_hint, password_hint_nonce, encrypted_tags, tags_nonce, tags_revision, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, encrypted_stream_sha256sum, stored_blob_sha256sum, encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		fileID.String, storageID.String, username, encPasswordHint.String, passwordHintNonce.String, encTags.String, tagsNonce.String, passwordType.String, filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, serverCalculatedHash, storedBlobHash, encryptedFek, declaredSize, paddedSize, chunkCount, chunkSizeBytes,
 	)
 	if err != nil {
 		if isUniqueConstraintFileID(err) {

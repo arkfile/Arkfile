@@ -33,6 +33,7 @@ The tables below list every current HTTP endpoint exposed by Arkfile v1.
 | GET | `/api/config/argon2` | Get Argon2 parameters for client-side crypto | Public |
 | GET | `/api/config/password-requirements` | Get password validation requirements | Public |
 | GET | `/api/config/chunking` | Get chunking parameters for uploads/downloads | Public |
+| GET | `/api/config/file-tags` | Get owner file-tag limits (`maxTagsPerFile`, `maxTagLength`, `maxTagsPerFilterQuery`) | Public |
 | GET | `/api/version` | Get application version | Public |
 
 ---
@@ -176,11 +177,14 @@ All file operations require TOTP authentication unless otherwise noted.
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| GET | `/api/files` | List files owned by the user | MFA |
-| GET | `/api/files/metadata` | List recent file metadata | MFA |
-| POST | `/api/files/metadata/batch` | Get metadata for multiple files | MFA |
-| GET | `/api/files/:fileId/meta` | Get metadata for a single file | MFA |
+| GET | `/api/files` | List files owned by the user (includes opaque `encrypted_tags` / `tags_nonce` / `tags_revision` when present) | MFA |
+| GET | `/api/files/metadata` | List recent file metadata (lightweight; no tags) | MFA |
+| POST | `/api/files/metadata/batch` | Get metadata for multiple files (lightweight; no tags) | MFA |
+| GET | `/api/files/:fileId/meta` | Get metadata for a single file (includes tags fields and `tags_revision`) | MFA |
+| PUT | `/api/files/:fileId/tags` | Replace opaque owner tags under optimistic concurrency | MFA |
 | DELETE | `/api/files/:fileId` | Delete a file | MFA |
+
+Owner file tags are optional client-encrypted organization metadata. `POST /api/uploads/init` accepts optional opaque `encrypted_tags` and `tags_nonce` (both present or both omitted). When non-empty, `encrypted_tags` must be at most 1024 base64 characters and `tags_nonce` must decode to exactly 12 bytes; violations return `invalid_tags`. `PUT /api/files/:fileId/tags` requires `expected_revision` plus both tag fields. A non-empty list sends ciphertext and nonce; removing the final tag sends both fields as empty strings. On success the server increments `tags_revision` and returns the new revision. A stale `expected_revision` returns HTTP 409 with code `tags_revision_conflict` and no refreshed metadata. Official clients mutate one tag at a time; the server cannot inspect plaintext lists. Lightweight metadata endpoints do not include tags. Filtering is client-side after decrypt.
 
 #### Chunked Uploads
 

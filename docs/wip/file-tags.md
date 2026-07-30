@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft planning document with design decisions locked. No implementation code has been written yet. This captures the agreed tag model, privacy boundaries, client-side filter approach, and the files and tests expected to change when the feature is built. Intended first delivery includes server, TypeScript frontend, CLI, docs, unit tests, and e2e/Playwright script updates in one pass; unit tests run only after code changes are in place, then the developer runs `dev-reset` and e2e as needed.
+Implementation complete pending developer `dev-reset` + e2e/Playwright validation. Design decisions remain locked. Server, TypeScript frontend, CLI, docs, unit tests, and e2e/Playwright script updates are in place; run Go and TypeScript unit tests locally, then `dev-reset.sh` before `e2e-test.sh` / `e2e-playwright.sh`.
 
 ## Overview
 

@@ -41,6 +41,9 @@ type File struct {
 	OwnerUsername            string         `json:"owner_username"`
 	EncryptedPasswordHint    string         `json:"encrypted_password_hint,omitempty"`
 	PasswordHintNonce        string         `json:"password_hint_nonce,omitempty"`
+	EncryptedTags            string         `json:"encrypted_tags,omitempty"`
+	TagsNonce                string         `json:"tags_nonce,omitempty"`
+	TagsRevision             int64          `json:"tags_revision"`
 	PasswordType             string         `json:"password_type"`
 	FilenameNonce            string         // Now stored as base64 strings directly
 	EncryptedFilename        string         // Now stored as base64 strings directly
@@ -107,8 +110,10 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 	var chunkSizeBytes interface{} // Use interface{} to handle both int64 and float64
 	var uploadDateStr string       // Scan as string first to handle RQLite timestamp format
 
+	var tagsRevision interface{}
 	err := db.QueryRow(`
-		SELECT id, file_id, storage_id, owner_username, COALESCE(encrypted_password_hint, ''), COALESCE(password_hint_nonce, ''), password_type,
+		SELECT id, file_id, storage_id, owner_username, COALESCE(encrypted_password_hint, ''), COALESCE(password_hint_nonce, ''),
+			   COALESCE(encrypted_tags, ''), COALESCE(tags_nonce, ''), COALESCE(tags_revision, 0), password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum,
 			   COALESCE(encrypted_stream_sha256sum, ''), encrypted_fek, size_bytes, padded_size,
 			   chunk_count, chunk_size_bytes, upload_date
@@ -116,7 +121,8 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 		fileID,
 	).Scan(
 		&file.ID, &file.FileID, &file.StorageID, &file.OwnerUsername,
-		&file.EncryptedPasswordHint, &file.PasswordHintNonce, &file.PasswordType,
+		&file.EncryptedPasswordHint, &file.PasswordHintNonce,
+		&file.EncryptedTags, &file.TagsNonce, &tagsRevision, &file.PasswordType,
 		&file.FilenameNonce, &file.EncryptedFilename,
 		&file.Sha256sumNonce, &file.EncryptedSha256sum,
 		&encryptedStreamSha256sum, &file.EncryptedFEK,
@@ -130,6 +136,8 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	file.TagsRevision = coerceInt64(tagsRevision, 0)
 
 	// Convert sizeBytes from interface{} to int64, handling both int64 and float64
 	switch v := sizeBytes.(type) {
@@ -217,8 +225,10 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 	var chunkSizeBytes interface{} // Use interface{} to handle both int64 and float64
 	var uploadDateStr string       // Scan as string first to handle RQLite timestamp format
 
+	var tagsRevision interface{}
 	err := db.QueryRow(`
-		SELECT id, file_id, storage_id, owner_username, COALESCE(encrypted_password_hint, ''), COALESCE(password_hint_nonce, ''), password_type,
+		SELECT id, file_id, storage_id, owner_username, COALESCE(encrypted_password_hint, ''), COALESCE(password_hint_nonce, ''),
+			   COALESCE(encrypted_tags, ''), COALESCE(tags_nonce, ''), COALESCE(tags_revision, 0), password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum,
 			   COALESCE(encrypted_stream_sha256sum, ''), encrypted_fek, size_bytes, padded_size,
 			   chunk_count, chunk_size_bytes, upload_date
@@ -226,7 +236,8 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 		storageID,
 	).Scan(
 		&file.ID, &file.FileID, &file.StorageID, &file.OwnerUsername,
-		&file.EncryptedPasswordHint, &file.PasswordHintNonce, &file.PasswordType,
+		&file.EncryptedPasswordHint, &file.PasswordHintNonce,
+		&file.EncryptedTags, &file.TagsNonce, &tagsRevision, &file.PasswordType,
 		&file.FilenameNonce, &file.EncryptedFilename,
 		&file.Sha256sumNonce, &file.EncryptedSha256sum,
 		&encryptedStreamSha256sum, &file.EncryptedFEK,
@@ -240,6 +251,8 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	file.TagsRevision = coerceInt64(tagsRevision, 0)
 
 	// Convert sizeBytes from interface{} to int64, handling both int64 and float64
 	switch v := sizeBytes.(type) {
@@ -324,7 +337,8 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 	}
 
 	query := `
-		SELECT id, file_id, storage_id, owner_username, COALESCE(encrypted_password_hint, ''), COALESCE(password_hint_nonce, ''), password_type,
+		SELECT id, file_id, storage_id, owner_username, COALESCE(encrypted_password_hint, ''), COALESCE(password_hint_nonce, ''),
+			   COALESCE(encrypted_tags, ''), COALESCE(tags_nonce, ''), COALESCE(tags_revision, 0), password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, 
 			   COALESCE(encrypted_stream_sha256sum, ''), encrypted_fek, size_bytes, padded_size,
 			   chunk_count, chunk_size_bytes, upload_date 
@@ -345,10 +359,12 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 		var chunkCount interface{}
 		var chunkSizeBytes interface{}
 		var uploadDateStr string
+		var tagsRevision interface{}
 
 		err := rows.Scan(
 			&file.ID, &file.FileID, &file.StorageID, &file.OwnerUsername,
-			&file.EncryptedPasswordHint, &file.PasswordHintNonce, &file.PasswordType,
+			&file.EncryptedPasswordHint, &file.PasswordHintNonce,
+			&file.EncryptedTags, &file.TagsNonce, &tagsRevision, &file.PasswordType,
 			&file.FilenameNonce, &file.EncryptedFilename,
 			&file.Sha256sumNonce, &file.EncryptedSha256sum,
 			&encryptedStreamSha256sum, &file.EncryptedFEK,
@@ -358,6 +374,7 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan row for user '%s': %w", ownerUsername, err)
 		}
+		file.TagsRevision = coerceInt64(tagsRevision, 0)
 
 		// Convert sizeBytes from interface{} to int64
 		switch v := sizeBytes.(type) {
@@ -588,6 +605,9 @@ type FileMetadataForClient struct {
 	OwnerUsername         string    `json:"owner_username"`
 	EncryptedPasswordHint string    `json:"encrypted_password_hint,omitempty"`
 	PasswordHintNonce     string    `json:"password_hint_nonce,omitempty"`
+	EncryptedTags         string    `json:"encrypted_tags,omitempty"`
+	TagsNonce             string    `json:"tags_nonce,omitempty"`
+	TagsRevision          int64     `json:"tags_revision"`
 	PasswordType          string    `json:"password_type"`
 	FilenameNonce         string    `json:"filename_nonce"`
 	EncryptedFilename     string    `json:"encrypted_filename"`
@@ -608,6 +628,9 @@ func (f *File) ToClientMetadata() *FileMetadataForClient {
 		OwnerUsername:         f.OwnerUsername,
 		EncryptedPasswordHint: f.EncryptedPasswordHint,
 		PasswordHintNonce:     f.PasswordHintNonce,
+		EncryptedTags:         f.EncryptedTags,
+		TagsNonce:             f.TagsNonce,
+		TagsRevision:          f.TagsRevision,
 		PasswordType:          f.PasswordType,
 		FilenameNonce:         f.FilenameNonce,
 		EncryptedFilename:     f.EncryptedFilename,
@@ -616,5 +639,50 @@ func (f *File) ToClientMetadata() *FileMetadataForClient {
 		EncryptedFEK:          f.EncryptedFEK,
 		SizeBytes:             f.SizeBytes,
 		UploadDate:            f.UploadDate,
+	}
+}
+
+// UpdateFileTagsConditionally replaces opaque tags when expectedRevision matches.
+// On success it returns the new revision. ErrTagsRevisionConflict means a stale
+// expected revision; the ciphertext was not changed.
+func UpdateFileTagsConditionally(db *sql.DB, fileID, ownerUsername, encryptedTags, tagsNonce string, expectedRevision int64) (int64, error) {
+	if db == nil {
+		return 0, errors.New("database connection is nil")
+	}
+	newRevision := expectedRevision + 1
+	result, err := db.Exec(`
+		UPDATE file_metadata
+		SET encrypted_tags = ?, tags_nonce = ?, tags_revision = ?
+		WHERE file_id = ? AND owner_username = ? AND tags_revision = ?`,
+		encryptedTags, tagsNonce, newRevision, fileID, ownerUsername, expectedRevision,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to update tags: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to read tags update result: %w", err)
+	}
+	if affected == 0 {
+		return 0, ErrTagsRevisionConflict
+	}
+	return newRevision, nil
+}
+
+// ErrTagsRevisionConflict indicates an optimistic-concurrency miss on tags update.
+var ErrTagsRevisionConflict = errors.New("tags revision conflict")
+
+func coerceInt64(v interface{}, fallback int64) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case float64:
+		return int64(n)
+	case int:
+		return int64(n)
+	case nil:
+		return fallback
+	default:
+		return fallback
 	}
 }

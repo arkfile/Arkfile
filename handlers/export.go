@@ -59,6 +59,8 @@ type bundleMetadata struct {
 	FilenameNonce      string `json:"filename_nonce"`
 	EncryptedSHA256Sum string `json:"encrypted_sha256sum"`
 	SHA256SumNonce     string `json:"sha256sum_nonce"`
+	EncryptedTags      string `json:"encrypted_tags,omitempty"`
+	TagsNonce          string `json:"tags_nonce,omitempty"`
 	ChunkSizeBytes     int64  `json:"chunk_size_bytes"`
 	ChunkCount         int64  `json:"chunk_count"`
 	EnvelopeVersion    int    `json:"envelope_version"`
@@ -350,7 +352,7 @@ func buildBundleMetadata(file *models.File, accountKDFSalt string, accountKDFPro
 
 	envelopeVersion := int(crypto.OwnerEnvelopeVersion())
 
-	return &bundleMetadata{
+	meta := &bundleMetadata{
 		Version:            2,
 		FileID:             file.FileID,
 		OwnerUsername:      file.OwnerUsername,
@@ -369,4 +371,9 @@ func buildBundleMetadata(file *models.File, accountKDFSalt string, accountKDFPro
 		EnvelopeVersion:    envelopeVersion,
 		CreatedAt:          file.UploadDate.UTC().Format(time.RFC3339),
 	}
+	if file.EncryptedTags != "" && file.TagsNonce != "" {
+		meta.EncryptedTags = file.EncryptedTags
+		meta.TagsNonce = file.TagsNonce
+	}
+	return meta
 }

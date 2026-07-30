@@ -636,8 +636,92 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     expect(responseStr).not.toContain(CUSTOM_FILE_SHA256);
     expect(responseStr).toContain('encrypted_filename');
     expect(responseStr).toContain('encrypted_sha256sum');
+    expect(responseStr).not.toMatch(/"tags"\s*:/);
+    expect(responseStr).not.toContain('PC-1');
+    expect(responseStr).not.toContain('folder-A');
 
-    console.log('[OK] Raw API does not expose plaintext filenames or hashes');
+    console.log('[OK] Raw API does not expose plaintext filenames, hashes, or tags');
+  });
+
+  // --------------------------------------------------------------------------
+  // Owner file tags (upload chips, filter, Edit tags modal)
+  // --------------------------------------------------------------------------
+  test('Owner file tags UI (upload, chips, filter, edit modal)', async () => {
+    const tagsFileName = 'pw_tags_test.bin';
+    const tagsFilePath = join(PLAYWRIGHT_TEMP_DIR, tagsFileName);
+
+    logStep('file-tags', `Generating ${tagsFileName}...`);
+    execSync(`${CLIENT_BIN} generate-test-file --filename "${tagsFilePath}" --size 2048 --pattern random`, {
+      timeout: 10_000,
+    });
+
+    logStep('file-tags', 'Uploading with tags PC-1,folder-A...');
+    await sharedPage.setInputFiles('#fileInput', tagsFilePath);
+    await expect(sharedPage.locator('#useAccountPassword')).toBeChecked();
+    await sharedPage.fill('#uploadTagsInput', 'PC-1, folder-A');
+    await sharedPage.click('#upload-file-btn');
+    await sharedPage.waitForFunction(
+      () => document.body.innerText.toLowerCase().includes('uploaded successfully'),
+      { timeout: 180_000 },
+    );
+    await sharedPage.waitForTimeout(2000);
+
+    let appeared = await fileExistsInList(sharedPage, tagsFileName);
+    if (!appeared) {
+      await sharedPage.reload({ waitUntil: 'networkidle' });
+      await sharedPage.waitForSelector('#file-section', { state: 'visible', timeout: 30_000 });
+      await sharedPage.waitForTimeout(2000);
+    }
+    await expect(findFileItem(sharedPage, tagsFileName)).toBeVisible({ timeout: 60_000 });
+
+    const fileItem = findFileItem(sharedPage, tagsFileName);
+    await expect(fileItem.locator('.tag-chip', { hasText: 'PC-1' })).toBeVisible({ timeout: 30_000 });
+    await expect(fileItem.locator('.tag-chip', { hasText: 'folder-A' })).toBeVisible();
+
+    logStep('file-tags', 'Filtering by tag chip PC-1...');
+    await fileItem.locator('.tag-chip', { hasText: 'PC-1' }).click();
+    await expect(sharedPage.locator('#tagFilterChips .tag-chip', { hasText: 'PC-1' })).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(findFileItem(sharedPage, tagsFileName)).toBeVisible();
+    await sharedPage.click('#tagFilterClearBtn');
+    await expect(sharedPage.locator('#tagFilterClearBtn')).toBeHidden({ timeout: 10_000 });
+
+    logStep('file-tags', 'Opening Edit tags modal...');
+    await clickFileAction(sharedPage, tagsFileName, 'Edit tags');
+    await expect(sharedPage.locator('#editTagsModal')).not.toHaveClass(/hidden/);
+    await expect(sharedPage.locator('#editTagsModal')).toContainText('Edit tags');
+    await expect(sharedPage.locator('#editTagsModal')).not.toContainText(/clear all/i);
+    await expect(sharedPage.locator('#editTagsAddInput')).toBeVisible();
+    await expect(sharedPage.locator('#editTagsReplaceFrom')).toBeVisible();
+
+    await sharedPage.fill('#editTagsAddInput', 'topic-C');
+    await sharedPage.click('#editTagsAddBtn');
+    await expect(sharedPage.locator('#editTagsChips .tag-chip', { hasText: 'topic-C' })).toBeVisible({
+      timeout: 30_000,
+    });
+
+    await sharedPage.fill('#editTagsReplaceFrom', 'folder-A');
+    await sharedPage.fill('#editTagsReplaceTo', 'folder-B');
+    await sharedPage.click('#editTagsReplaceBtn');
+    await expect(sharedPage.locator('#editTagsChips .tag-chip', { hasText: 'folder-B' })).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(sharedPage.locator('#editTagsChips')).not.toContainText('folder-A');
+
+    await sharedPage.locator('#editTagsChips .tag-chip', { hasText: 'PC-1' })
+      .locator('.tag-chip-remove').click();
+    await expect(sharedPage.locator('#editTagsChips')).not.toContainText('PC-1', { timeout: 30_000 });
+
+    await sharedPage.click('#editTagsCloseBtn');
+    await expect(sharedPage.locator('#editTagsModal')).toHaveClass(/hidden/);
+
+    const updatedItem = findFileItem(sharedPage, tagsFileName);
+    await expect(updatedItem.locator('.tag-chip', { hasText: 'folder-B' })).toBeVisible();
+    await expect(updatedItem.locator('.tag-chip', { hasText: 'topic-C' })).toBeVisible();
+    await expect(updatedItem.locator('.tag-chip', { hasText: 'PC-1' })).toHaveCount(0);
+
+    console.log('[OK] Owner file tags UI verified');
   });
 
   // --------------------------------------------------------------------------
@@ -763,6 +847,14 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     logStep('anonymous-share', 'Submitting share password...');
     await page.click('#shareAccessForm button[type="submit"]');
     await page.waitForSelector('#fileDetails', { state: 'visible', timeout: 120_000 });
+
+    // Shared recipient UI must not expose owner tags controls or chip chrome.
+    await expect(page.locator('#tagFilterBar')).toHaveCount(0);
+    await expect(page.locator('#editTagsModal')).toHaveCount(0);
+    await expect(page.locator('#uploadTagsInput')).toHaveCount(0);
+    await expect(page.getByText('Edit tags')).toHaveCount(0);
+    await expect(page.getByText('Filter by tags')).toHaveCount(0);
+    await expect(page.locator('.tag-chip')).toHaveCount(0);
 
     const filenameText = await page.locator('#fileNameDisplay').innerText();
     expect(filenameText).toBeTruthy();

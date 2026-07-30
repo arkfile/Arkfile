@@ -119,6 +119,11 @@ func GetFileMeta(c echo.Context) error {
 		resp["encrypted_password_hint"] = file.EncryptedPasswordHint
 		resp["password_hint_nonce"] = file.PasswordHintNonce
 	}
+	resp["tags_revision"] = file.TagsRevision
+	if file.EncryptedTags != "" && file.TagsNonce != "" {
+		resp["encrypted_tags"] = file.EncryptedTags
+		resp["tags_nonce"] = file.TagsNonce
+	}
 	return c.JSON(http.StatusOK, resp)
 }
 

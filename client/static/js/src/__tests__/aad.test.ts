@@ -14,6 +14,7 @@ import {
   AAD_FIELD_FILENAME,
   AAD_FIELD_SHA256,
   AAD_FIELD_PASSWORD_HINT,
+  AAD_FIELD_TAGS,
   buildChunkAAD,
   buildFEKEnvelopeAAD,
   buildMetadataFieldAAD,
@@ -89,6 +90,11 @@ describe('shared crypto v2 AAD fixture', () => {
       AAD_FIELD_PASSWORD_HINT,
       fixture.owner_username,
     ))).toBe(fixture.aad.encrypted_password_hint_hex);
+    expect(toHex(buildMetadataFieldAAD(
+      fixture.file_id,
+      AAD_FIELD_TAGS,
+      fixture.owner_username,
+    ))).toBe(fixture.aad.encrypted_tags_hex);
   });
 });
 
@@ -226,5 +232,9 @@ describe('AAD field-label constants', () => {
 
   test('AAD_FIELD_PASSWORD_HINT is the exact canonical string', () => {
     expect(AAD_FIELD_PASSWORD_HINT).toBe('encrypted_password_hint');
+  });
+
+  test('AAD_FIELD_TAGS is the exact canonical string', () => {
+    expect(AAD_FIELD_TAGS).toBe('encrypted_tags');
   });
 });
