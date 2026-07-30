@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft planning document with design decisions locked. No implementation code has been written yet. This captures the agreed tag model, privacy boundaries, client-side filter approach, and the files and tests expected to change when the feature is built.
+Draft planning document with design decisions locked. No implementation code has been written yet. This captures the agreed tag model, privacy boundaries, client-side filter approach, and the files and tests expected to change when the feature is built. Intended first delivery includes server, TypeScript frontend, CLI, docs, unit tests, and e2e/Playwright script updates in one pass; unit tests run only after code changes are in place, then the developer runs `dev-reset` and e2e as needed.
 
 ## Overview
 
@@ -31,6 +31,7 @@ Post-upload editing requires a new authenticated owner metadata update path, bec
 | Multi-tag filter | AND (file must contain every queried tag); OR deferred |
 | Duplicate filter terms | Collapse query tags case-insensitively before applying the configured query-tag limit |
 | Filter UI | A `Filter by tags` chip combobox below `Your Files`, with removable selected chips, `Match all`, result count, and `Show all files`; do not label exact tag filtering as generic search |
+| Edit tags UI | Each decrypted file row exposes an `Edit tags` button/link that opens a modal for add / remove / replace on that one file; file-row chips remain for display and filter-click only |
 | Autocomplete | Derive a case-insensitive vocabulary only from the decrypted in-memory file list; show prefix matches first, then usage frequency and display spelling; never send queries or vocabulary to the server or persist them in browser storage |
 | Colors | Not in ciphertext; fixed UI accents only |
 | Search location | Client-side only after decrypt; no blind indexes |
@@ -38,6 +39,7 @@ Post-upload editing requires a new authenticated owner metadata update path, bec
 | Encryption | Account Key, AES-256-GCM, AAD label `encrypted_tags` bound to `(file_id, field_label, owner_username)` |
 | Compartmentalization | Tags always under Account Key (same as filename/hint), including for custom-password files; not isolated by custom file password |
 | Empty / absent tags | Omit both fields at upload when no tags are supplied; after removing the final tag, send both `encrypted_tags` and `tags_nonce` as empty strings with `expected_revision` |
+| Opaque blob size caps | When non-empty, `encrypted_tags` base64 string length is at most 1024 characters; `tags_nonce` must be valid standard base64 of exactly 12 bytes (16 base64 characters). Reject oversized or malformed pairs with a stable `invalid_tags` error. Empty-string pair on PUT remains allowed for final tag removal. |
 | Post-upload edit model | One file at a time; add, remove, or replace one tag per user action; replace is a first-class UI action and CLI command; no clear-all / delete-all-tags |
 | Server enforcement boundary | Official clients enforce one-tag-at-a-time mutation and no clear-all control; the privacy-preserving server cannot inspect or compare plaintext lists, so it validates only ownership, field pairing, encoded size, and revision |
 | Upload-time tags | A single upload may assign several initial tags through the canonical comma-separated input; the one-tag-at-a-time restriction applies to post-upload mutation |
@@ -103,7 +105,7 @@ Prefer a small dedicated module on each side (for example `crypto/file_tags.go` 
 - Ensure `GET /api/files` list responses include the opaque tag fields and `tags_revision` (required for list chips, client-side filter, and conditional updates).
 - Keep tags and `tags_revision` out of the lightweight `/api/files/metadata` and `/api/files/metadata/batch` shapes. Those endpoints remain filename-focused for share-list and other lightweight workflows.
 - Update test schema helpers that recreate `file_metadata` / `upload_sessions` (for example `handlers/payments_test_helpers.go` and any sqlmock column lists).
-- Cap opaque ciphertext and nonce string lengths on upload init and the tags PUT (reject absurd sizes even though contents stay opaque).
+- On upload init and the tags PUT, when tag fields are non-empty: require `encrypted_tags` base64 length `<= 1024`, and require `tags_nonce` to decode as exactly 12 bytes. Reject half-present, oversized, or malformed pairs with `invalid_tags`. Empty-string pair on PUT clears stored tags after final one-by-one removal.
 
 ### 5. Upload init and completion
 
@@ -145,7 +147,7 @@ There is no owner metadata mutation API today. Add an authenticated MFA-protecte
 - Autocomplete must support keyboard navigation and accessible combobox/listbox semantics. On narrow/mobile displays, the filter control, selected chips, and file-row tags wrap without horizontal scrolling.
 - Keep the autocomplete vocabulary and typed query only in memory, update it after tag mutations, and never send it to the server, store it in `localStorage` or other persistent browser storage, or include it in logs.
 - Until the Account Key and tag metadata are decrypted, disable the filter and autocomplete with text such as `Unlock file metadata to filter by tags`. Config-load failure follows the separately locked graceful-degradation rule.
-- File detail / actions: add, remove, or replace one tag on the selected file; decrypt current tags, mutate one, re-encrypt, PUT with the revision that was read. Replace is a first-class single action, not a remove followed by an add. No "clear all tags" button. No multi-select batch retag in v1.
+- File detail / actions: each decrypted file row has an `Edit tags` button/link that opens a modal for that file. The modal supports add, remove, or replace one tag; decrypt current tags, mutate one, re-encrypt, PUT with the revision that was read. Replace is a first-class single action, not a remove followed by an add. No "clear all tags" button. No multi-select batch retag in v1.
 - Ensure share and anonymous recipient pages never show or request tags.
 
 ### 9. Go CLI UX
@@ -184,12 +186,12 @@ There is no owner metadata mutation API today. Add an authenticated MFA-protecte
 - Config endpoint / JSON load tests for `file-tags-params.json`.
 - Browser tests prove config failure disables tag controls and tag-bearing uploads without blocking unrelated file operations, and prove there is no hardcoded fallback limit.
 - AAD constant and fixture updates for `encrypted_tags`.
-- Handler tests: init accepts/rejects half-present pairs; final-tag removal accepts an explicit empty-string pair; update ownership and opaque replace; successful update increments revision; stale revision returns `409 Conflict` with code `tags_revision_conflict`, no refreshed metadata, and no ciphertext change; reject absurd ciphertext sizes; full list/meta include opaque fields and revision; lightweight recent/batch endpoints omit tags; share paths unchanged.
+- Handler tests: init accepts/rejects half-present pairs; final-tag removal accepts an explicit empty-string pair; update ownership and opaque replace; successful update increments revision; stale revision returns `409 Conflict` with code `tags_revision_conflict`, no refreshed metadata, and no ciphertext change; reject `encrypted_tags` longer than 1024 base64 characters and non-12-byte nonces with `invalid_tags`; full list/meta include opaque fields and revision; lightweight recent/batch endpoints omit tags; share paths unchanged.
 - Client tests: one automatic add/remove retry after a revision conflict; refreshed add-present/remove-absent are successful no-ops without a PUT; replace retry only while its original tag still exists; report a second conflict; initial upload accepts several valid tags; surrounding comma whitespace is trimmed while internal whitespace is rejected; reject leading, trailing, and consecutive dashes; duplicate filter terms collapse before limit enforcement; undecryptable tags remain visible without a filter but are excluded with a warning while filtering; `list-files --json` distinguishes tag arrays, `[]`, and `null`; batch upload clearly applies the same tags to every selected file.
 - Frontend filter/autocomplete tests: vocabulary comes only from decrypted entries and remains in memory; prefix ordering, frequency ordering, case-fold deduplication, selected-tag omission, suggestion limit, chip click, AND filtering, result count, `Show all files`, locked/config-failure disabled state, keyboard operation, and no network request during query/autocomplete.
 - Model/sqlmock column list updates wherever `encrypted_password_hint` appears today.
 - E2E (`e2e-test.sh`): upload with tags, list filter, add/remove/replace one tag, stale revision rejection, raw API privacy, share create/download proves tags absent from recipient path, export + `decrypt-blob` prints restored tags.
-- Playwright: upload with tags, chips visible after decrypt, filter narrows list, add/remove/replace one tag in UI, confirm shared-file UI has no tags and no clear-all control.
+- Playwright: upload with tags, chips visible after decrypt, filter narrows list, `Edit tags` modal add/remove/replace, confirm shared-file UI has no tags and no clear-all control.
 
 ## Out of Scope for v1
 
@@ -242,9 +244,9 @@ Paths are the primary touch list; some test helpers and sqlmock strings will exp
 - `client/static/js/src/files/streaming-download.ts` -- types only if meta includes new fields; do not require tags for download
 - `client/static/js/src/app/upload-listeners.ts` -- wire tags input if present in UI
 - `client/static/js/src/types/api.d.ts` -- API types for tags fields / update body / config
-- New small UI module as needed (for example `files/tags.ts`) for single-tag add/remove/replace on one file
+- New small UI module as needed (for example `files/tags.ts`) for the `Edit tags` modal and single-tag add/remove/replace on one file
 - New small filter/autocomplete module as needed (for example `files/tag-filter.ts`) operating only on decrypted in-memory entries
-- `client/static/index.html` -- tags input, filter control, chip markup hooks
+- `client/static/index.html` -- tags input, filter control, Edit-tags modal hooks, chip markup hooks
 - `client/static/css/styles.css` -- fixed-accent tag chip / filter styles
 - `client/static/js/src/__tests__/upload-batch.test.ts` -- tags on init payload when provided
 - Additional frontend unit tests for list filter and single-tag mutation if not covered solely by `file-tags.test.ts`
@@ -266,7 +268,7 @@ Paths are the primary touch list; some test helpers and sqlmock strings will exp
 ### E2E and Playwright
 
 - `scripts/testing/e2e-test.sh` -- upload with tags; list filter; add/remove/replace one tag; stale revision rejection; `--raw` privacy (opaque fields only); share path proves no tag leakage; export + `decrypt-blob` shows tags
-- `scripts/testing/e2e-playwright.ts` -- UI chips, filter, single-tag add/remove/replace; shared page has no tags; no clear-all control
+- `scripts/testing/e2e-playwright.ts` -- UI chips, filter, Edit-tags modal add/remove/replace; shared page has no tags; no clear-all control
 - `scripts/testing/online-integrity-test.sh` / offline integrity scripts only if they assert full metadata field sets or AAD fixture lists
 - Deploy/copy paths that install `crypto/*.json` must include `file-tags-params.json`
 
