@@ -2638,12 +2638,12 @@ run_admin_operations() {
     fi
 
     # Verify storage stats reflect uploaded files
-# files: test_file.bin (8.2) + custom (9.2) + extra A/B/C (8.13-8.15)
-    # (delete_test.bin from 8.11 was already deleted)
-    if echo "$system_status_output" | grep -q "Total Files: 5"; then
+    # files: test_file.bin + tags_upload_seed + custom + extra A/B/C
+    # (delete_test.bin was already deleted)
+    if echo "$system_status_output" | grep -q "Total Files: 6"; then
         record_test "Admin system-status file count" "PASS"
     else
-        error "Storage stats: expected Total Files: 5"
+        error "Storage stats: expected Total Files: 6"
         record_test "Admin system-status file count" "FAIL"
     fi
 
@@ -3148,7 +3148,7 @@ run_storage_replication() {
 
 # Requires ARKFILE_BILLING_ENABLED=true, ARKFILE_BILLING_TICK_INTERVAL=1m,
 # and ARKFILE_FREE_STORAGE_BYTES=10485760 (10 MiB) -- all set by dev-reset.sh.
-# The test user has ~5 uploaded files from earlier groups, well above the
+# The test user has ~6 uploaded files from earlier groups, well above the
 # MiB baseline, so a tick produces a non-zero accumulator immediately.
 run_billing() {
     group "Billing"
