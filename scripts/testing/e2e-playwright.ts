@@ -546,6 +546,12 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     const customFileItem = findFileItem(sharedPage, CUSTOM_FILE_NAME);
     await expect(customFileItem.locator('.encryption-type')).toContainText('Custom Password');
 
+    // Shared page keeps radio state across serial tests. Reset to account mode so later
+    // uploads (tags, etc.) do not inherit custom selection or a leftover #filePassword.
+    await sharedPage.click('#useAccountPassword');
+    await expect(sharedPage.locator('#useAccountPassword')).toBeChecked();
+    await expect(sharedPage.locator('#customPasswordSection')).toBeHidden();
+
     console.log('[OK] Custom-password file uploaded successfully');
   });
 
@@ -657,6 +663,8 @@ test.describe.serial('Arkfile Playwright E2E', () => {
 
     logStep('file-tags', 'Uploading with tags PC-1,folder-A...');
     await sharedPage.setInputFiles('#fileInput', tagsFilePath);
+    // Explicitly select account mode (do not rely on HTML default attribute after prior custom uploads).
+    await sharedPage.click('#useAccountPassword');
     await expect(sharedPage.locator('#useAccountPassword')).toBeChecked();
     await sharedPage.fill('#uploadTagsInput', 'PC-1, folder-A');
     await sharedPage.click('#upload-file-btn');
