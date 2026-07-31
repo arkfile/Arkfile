@@ -44,7 +44,7 @@ The web app runs in your browser and handles encryption, upload, download, and a
 
 ## What are file tags?
 
-File tags are optional labels you attach to your own files so you can organize and filter them after upload, for example to remember which computer or topic a file came from. Tags are encrypted on your device with your Account Key before they reach the server, so the server stores only opaque ciphertext and cannot read the tag text. Anonymous share recipients never see your tags; shares do not carry them. Limits such as how many tags a file may have and how long each tag may be are defined by the instance and applied by both the web app and arkfile-client. Filtering by tags happens on your device after your file list is unlocked, not as a server-side search. When you export an owner backup as an .arkbackup file, encrypted tags travel with that bundle so offline decrypt can show them again.
+File tags are optional labels you attach to your own files so you can organize and filter them after upload, for example to remember which computer or topic a file came from. Tags are encrypted on your device with your Account Key before they reach the server, so the server stores only opaque ciphertext and cannot read the tag text. Anonymous share recipients never see your tags; shares do not carry them. Files may have 5 tags each, of up to 32 characters each, assigned to them. Filtering by tags happens on your device after your file list is unlocked, not as a server-side search. When you export an owner backup as an .arkbackup file, encrypted tags travel with that bundle so offline decrypt can show them again.
 
 ## How do I contact the administrator?
 
