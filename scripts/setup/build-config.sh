@@ -12,6 +12,15 @@
 export BUILD_ROOT="${ARKFILE_BUILD_DIR:-/var/tmp/arkfile-build}"
 
 # =============================================================================
+# CADDY / DNS-01 (deSEC) BUILD PINS (VPS deploy via xcaddy)
+# =============================================================================
+# github.com/caddy-dns/desec tags start at v1.0.0 (v0.2.x is libdns/desec, not this module).
+# desec v1.1.0 is published against caddy/v2 v2.10.2 -- keep those aligned.
+export XCADDY_VERSION="${XCADDY_VERSION:-v0.4.6}"
+export CADDY_VERSION="${CADDY_VERSION:-v2.10.2}"
+export CADDY_DESEC_MODULE="${CADDY_DESEC_MODULE:-github.com/caddy-dns/desec@v1.1.0}"
+
+# =============================================================================
 # BUILD SUBDIRECTORIES
 # =============================================================================
 export BUILD_BIN="$BUILD_ROOT/bin"                    # Go binaries

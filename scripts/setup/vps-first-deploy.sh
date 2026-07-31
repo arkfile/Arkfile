@@ -427,8 +427,9 @@ GLOBALEOF
 }
 
 build_and_install_caddy() {
-    print_status "INFO" "Installing xcaddy build tool (pinned to v0.4.4)..."
-    if ! run_as_user "$GO_BINARY" install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.4; then
+    # Pins: XCADDY_VERSION, CADDY_VERSION, CADDY_DESEC_MODULE from build-config.sh
+    print_status "INFO" "Installing xcaddy build tool (pinned to ${XCADDY_VERSION})..."
+    if ! run_as_user "$GO_BINARY" install "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"; then
         print_status "ERROR" "Failed to install xcaddy"
         exit 1
     fi
@@ -445,9 +446,9 @@ build_and_install_caddy() {
         exit 1
     fi
 
-    print_status "INFO" "Building Caddy (pinned to v2.9.1) with deSEC module (pinned to v0.2.2)..."
+    print_status "INFO" "Building Caddy (pinned to ${CADDY_VERSION}) with deSEC module (pinned to ${CADDY_DESEC_MODULE})..."
     rm -f caddy 2>/dev/null || true
-    if ! run_as_user env PATH="$PATH" "$xcaddy_bin" build v2.9.1 --with github.com/caddy-dns/desec@v0.2.2; then
+    if ! run_as_user env PATH="$PATH" "$xcaddy_bin" build "${CADDY_VERSION}" --with "${CADDY_DESEC_MODULE}"; then
         print_status "ERROR" "Failed to build Caddy"
         exit 1
     fi
