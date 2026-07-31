@@ -372,7 +372,7 @@ function renderFilteredFileList(): void {
       fileActions.appendChild(metaBtn);
 
       const editTagsBtn = document.createElement('button');
-      editTagsBtn.textContent = 'Edit tags';
+      editTagsBtn.textContent = 'Edit Tags';
       editTagsBtn.title = 'Add, remove, or replace tags for this file';
       editTagsBtn.addEventListener('click', () => {
         const target: TagMutationTarget = {

@@ -72,6 +72,7 @@ export function parseTagList(input: string): string[] {
   return out;
 }
 
+/** Failures name the specific rule that was violated. */
 export function validateTagSyntax(tag: string, maxLen: number): void {
   if (!tag) {
     throw new Error('tag is empty');
@@ -82,8 +83,22 @@ export function validateTagSyntax(tag: string, maxLen: number): void {
   if (/\s/.test(tag)) {
     throw new Error('tag contains whitespace');
   }
+  if (tag.startsWith('-')) {
+    throw new Error('tag cannot start with a dash');
+  }
+  if (tag.endsWith('-')) {
+    throw new Error('tag cannot end with a dash');
+  }
+  if (tag.includes('--')) {
+    throw new Error('tag cannot contain consecutive dashes');
+  }
+  if (!/^[A-Za-z0-9-]+$/.test(tag)) {
+    throw new Error(
+      'tag contains invalid characters (use A-Z, a-z, 0-9, and single dashes between segments)',
+    );
+  }
   if (!TAG_SYNTAX.test(tag)) {
-    throw new Error('tag has invalid syntax');
+    throw new Error('tag has invalid syntax (use alphanumeric segments separated by single dashes)');
   }
 }
 

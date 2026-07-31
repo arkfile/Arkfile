@@ -58,12 +58,18 @@ describe('file-tags helpers', () => {
       .toBe('apple,banana,cherry,DOG,123');
   });
 
-  test('rejects invalid syntax', () => {
-    expect(() => validateTagSyntax('-abcd-', 32)).toThrow();
-    expect(() => validateTagSyntax('ab--cd', 32)).toThrow();
-    expect(() => validateTagSyntax('ab cd', 32)).toThrow('tag contains whitespace');
-    expect(() => validateTagSyntax('a_b', 32)).toThrow();
+  test('rejects invalid syntax with named rules', () => {
     expect(() => validateTagSyntax('ok-tag', 32)).not.toThrow();
+    expect(() => validateTagSyntax('a-b-c-d', 32)).not.toThrow();
+    expect(() => validateTagSyntax('ab cd', 32)).toThrow('tag contains whitespace');
+    expect(() => validateTagSyntax('-abc', 32)).toThrow('tag cannot start with a dash');
+    expect(() => validateTagSyntax('a-b-c-d-', 32)).toThrow('tag cannot end with a dash');
+    expect(() => validateTagSyntax('-abcd-', 32)).toThrow('tag cannot start with a dash');
+    expect(() => validateTagSyntax('ab--cd', 32)).toThrow('tag cannot contain consecutive dashes');
+    expect(() => validateTagSyntax('a_b', 32)).toThrow(
+      'tag contains invalid characters (use A-Z, a-z, 0-9, and single dashes between segments)',
+    );
+    expect(() => validateTagSyntax('a'.repeat(33), 32)).toThrow('tag exceeds max length 32');
   });
 
   test('add/remove/replace preserve order and position', () => {

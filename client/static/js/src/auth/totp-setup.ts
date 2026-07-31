@@ -6,7 +6,7 @@
 import { showError, showSuccess } from '../ui/messages.js';
 import { showProgressMessage, hideProgress } from '../ui/progress.js';
 import { showModal } from '../ui/modals.js';
-import { clearAllSessionData, csrfHeader } from '../utils/auth.js';
+import { clearAllSessionData, csrfHeader, mfaHandoffHeaders } from '../utils/auth.js';
 import { showFileSection, showPendingApprovalSection, showAuthSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
 
@@ -123,7 +123,9 @@ async function initiateTOTPSetupForRegistration(flowData: TOTPSetupFlowData): Pr
     const response = await fetch(setupPath, {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
+      headers: flowData.addSecondFactor
+        ? { 'Content-Type': 'application/json', ...csrfHeader() }
+        : mfaHandoffHeaders(flowData.tempToken),
       body: JSON.stringify({}),
     });
     
@@ -331,11 +333,12 @@ async function completeTOTPSetupForRegistration(code: string, flowData: TOTPSetu
   try {
     showProgressMessage('Completing registration...');
     
-    // Temp token is in __Host-arkfile-temp cookie; credentials:'include' sends it automatically.
     const response = await fetch('/api/mfa/verify', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
+      headers: flowData.addSecondFactor
+        ? { 'Content-Type': 'application/json', ...csrfHeader() }
+        : mfaHandoffHeaders(flowData.tempToken),
       body: JSON.stringify({ code }),
     });
     

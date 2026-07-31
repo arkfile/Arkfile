@@ -5,7 +5,7 @@
 import { showError, showSuccess } from '../ui/messages';
 import { showProgressMessage, hideProgress } from '../ui/progress';
 import { showModal, showTOTPAppsModal } from '../ui/modals';
-import { clearAllSessionData, AuthManager, csrfHeader } from '../utils/auth';
+import { clearAllSessionData, AuthManager, csrfHeader, mfaHandoffHeaders } from '../utils/auth';
 import { getAdminContactForDisplay } from '../ui/footer';
 import { showFileSection, showAuthSection, showTOTPSetupSection } from '../ui/sections';
 import { loadFiles } from '../files/list';
@@ -310,10 +310,7 @@ async function submitMFAAuth(code: string, isBackup: boolean): Promise<void> {
     const response = await fetch('/api/mfa/auth', {
       method: 'POST',
       credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-        ...csrfHeader(),
-      },
+      headers: mfaHandoffHeaders(pendingData.tempToken),
       body: JSON.stringify({
         code: code,
         is_backup: isBackup

@@ -347,7 +347,7 @@ input[type="checkbox"] {
     cursor: pointer;
 }
 
-.btn, button:not(.password-toggle-btn), .hero-btn, .share-action-btn, .share-list-refresh, .secondary-button, .danger-button, .btn-primary, .btn-secondary, .logout-btn, .nav-link, .remove-contact-btn, .cancel-button, .progress-modal .cancel-button {
+.btn, button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove), .hero-btn, .share-action-btn, .share-list-refresh, .secondary-button, .danger-button, .btn-primary, .btn-secondary, .logout-btn, .nav-link, .remove-contact-btn, .cancel-button, .progress-modal .cancel-button {
     padding: 0.75rem 1.5rem;
     border-radius: 6px;
     cursor: pointer;
@@ -359,7 +359,7 @@ input[type="checkbox"] {
     color: var(--foam-1);
 }
 
-button:not(.password-toggle-btn):hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .share-list-refresh:hover, .secondary-button:hover, .nav-link:hover {
+button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .share-list-refresh:hover, .secondary-button:hover, .nav-link:hover {
     background-color: color-mix(in srgb, var(--current-1) 70%, var(--depth-1));
     transform: translateY(-1px);
     box-shadow: 0 4px 12px color-mix(in srgb, var(--current-1) 30%, transparent);
@@ -521,20 +521,33 @@ button:not(.password-toggle-btn):hover, .btn-primary:hover, .hero-btn:hover, .sh
     align-items: center;
 }
 
+/* Option A: biolum outline chips -- smaller labels, not action buttons */
 .tag-chip {
     display: inline-flex;
     align-items: center;
-    gap: 0.25rem;
-    padding: 0.15rem 0.5rem;
-    border-radius: 10px;
-    font-size: 0.8rem;
+    gap: 0.2rem;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    font-size: 0.7rem;
     font-weight: 500;
-    background-color: color-mix(in srgb, var(--biolum) 18%, var(--depth-3));
+    line-height: 1.3;
+    background-color: transparent;
     color: var(--biolum);
     border: 1px solid var(--biolum);
     cursor: pointer;
     width: auto;
     margin: 0;
+    box-shadow: none;
+    transform: none;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.tag-chip:hover {
+    background-color: color-mix(in srgb, var(--biolum) 14%, transparent);
+    border-color: var(--biolum);
+    color: var(--biolum);
+    box-shadow: none;
+    transform: none;
 }
 
 .tag-chip-remove {
@@ -542,11 +555,20 @@ button:not(.password-toggle-btn):hover, .btn-primary:hover, .hero-btn:hover, .sh
     background: transparent;
     color: inherit;
     cursor: pointer;
-    padding: 0 0.15rem;
+    padding: 0 0.1rem;
     margin: 0;
     width: auto;
-    font-size: 0.85rem;
+    font-size: 0.7rem;
+    font-weight: 500;
     line-height: 1;
+    box-shadow: none;
+    transform: none;
+}
+
+.tag-chip-remove:hover {
+    background: transparent;
+    box-shadow: none;
+    transform: none;
 }
 
 .tag-filter-bar {

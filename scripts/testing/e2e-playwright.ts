@@ -695,12 +695,12 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await sharedPage.click('#tagFilterClearBtn');
     await expect(sharedPage.locator('#tagFilterClearBtn')).toBeHidden({ timeout: 10_000 });
 
-    logStep('file-tags', 'Opening Edit tags modal...');
+    logStep('file-tags', 'Opening Edit Tags modal...');
     // Closed modal must not intercept clicks (CSS .modal.hidden must win over .modal display:flex).
     await expect(sharedPage.locator('#editTagsModal')).toBeHidden();
-    await clickFileAction(sharedPage, tagsFileName, 'Edit tags');
+    await clickFileAction(sharedPage, tagsFileName, 'Edit Tags');
     await expect(sharedPage.locator('#editTagsModal')).toBeVisible();
-    await expect(sharedPage.locator('#editTagsModal')).toContainText('Edit tags');
+    await expect(sharedPage.locator('#editTagsModal')).toContainText('Edit Tags');
     await expect(sharedPage.locator('#editTagsModal')).not.toContainText(/clear all/i);
     await expect(sharedPage.locator('#editTagsAddInput')).toBeVisible();
     await expect(sharedPage.locator('#editTagsReplaceFrom')).toBeVisible();
@@ -862,7 +862,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await expect(page.locator('#tagFilterBar')).toHaveCount(0);
     await expect(page.locator('#editTagsModal')).toHaveCount(0);
     await expect(page.locator('#uploadTagsInput')).toHaveCount(0);
-    await expect(page.getByText('Edit tags')).toHaveCount(0);
+    await expect(page.getByText('Edit Tags')).toHaveCount(0);
     await expect(page.getByText('Filter by tags')).toHaveCount(0);
     await expect(page.locator('.tag-chip')).toHaveCount(0);
 

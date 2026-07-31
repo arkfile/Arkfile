@@ -13,7 +13,7 @@ import type {
 import { showError, showSuccess } from '../ui/messages.js';
 import { showProgressMessage, hideProgress } from '../ui/progress.js';
 import { showModal } from '../ui/modals.js';
-import { clearAllSessionData, csrfHeader } from '../utils/auth.js';
+import { clearAllSessionData, csrfHeader, mfaHandoffHeaders } from '../utils/auth.js';
 import { getAdminContactForDisplay } from '../ui/footer.js';
 import { showFileSection, showPendingApprovalSection, showAuthSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
@@ -127,7 +127,9 @@ async function beginWebAuthnEnrollment(
       : '/api/mfa/webauthn/register/begin', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
+      headers: flowData.addSecondFactor
+        ? { 'Content-Type': 'application/json', ...csrfHeader() }
+        : mfaHandoffHeaders(flowData.tempToken),
       body: JSON.stringify({}),
     });
 
@@ -254,7 +256,9 @@ async function finishWebAuthnEnrollment(
       : '/api/mfa/webauthn/register/finish', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
+      headers: flowData.addSecondFactor
+        ? { 'Content-Type': 'application/json', ...csrfHeader() }
+        : mfaHandoffHeaders(flowData.tempToken),
       body: JSON.stringify({ credential, label }),
     });
 
@@ -470,7 +474,7 @@ async function runBackupSignIn(modal: Element): Promise<void> {
     const response = await fetch('/api/mfa/auth', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
+      headers: mfaHandoffHeaders(flowData.tempToken),
       body: JSON.stringify({ code, is_backup: true }),
     });
     hideProgress();
@@ -513,7 +517,7 @@ async function runWebAuthnLogin(modal: Element): Promise<void> {
     const beginResp = await fetch('/api/mfa/webauthn/auth/begin', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
+      headers: mfaHandoffHeaders(flowData.tempToken),
       body: JSON.stringify({ credential_id: flowData.credentialId || '' }),
     });
 
@@ -532,7 +536,7 @@ async function runWebAuthnLogin(modal: Element): Promise<void> {
     const finishResp = await fetch('/api/mfa/webauthn/auth/finish', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
+      headers: mfaHandoffHeaders(flowData.tempToken),
       body: JSON.stringify({
         credential,
         credential_id: flowData.credentialId || '',

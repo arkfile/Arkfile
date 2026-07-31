@@ -84,6 +84,7 @@ func ParseTagList(input string) ([]string, error) {
 }
 
 // ValidateTagSyntax checks a single tag against the locked character rules and length.
+// Failures name the specific rule that was violated.
 func ValidateTagSyntax(tag string, maxLen int) error {
 	if tag == "" {
 		return fmt.Errorf("tag is empty")
@@ -97,8 +98,23 @@ func ValidateTagSyntax(tag string, maxLen int) error {
 	if strings.ContainsAny(tag, " \t\n\r") {
 		return fmt.Errorf("tag contains whitespace")
 	}
+	if strings.HasPrefix(tag, "-") {
+		return fmt.Errorf("tag cannot start with a dash")
+	}
+	if strings.HasSuffix(tag, "-") {
+		return fmt.Errorf("tag cannot end with a dash")
+	}
+	if strings.Contains(tag, "--") {
+		return fmt.Errorf("tag cannot contain consecutive dashes")
+	}
+	for _, r := range tag {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			continue
+		}
+		return fmt.Errorf("tag contains invalid characters (use A-Z, a-z, 0-9, and single dashes between segments)")
+	}
 	if !tagSyntaxRE.MatchString(tag) {
-		return fmt.Errorf("tag has invalid syntax")
+		return fmt.Errorf("tag has invalid syntax (use alphanumeric segments separated by single dashes)")
 	}
 	return nil
 }

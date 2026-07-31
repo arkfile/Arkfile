@@ -992,7 +992,9 @@ func RecoverWithBackupCode(c echo.Context) error {
 		return JSONError(c, http.StatusInternalServerError, "Failed to create reset session")
 	}
 
-	// Browser client support: Write temporary cookie.
+	// Browser client support: write temp cookie and drop any full-tier session
+	// that would shadow it in CookieTokenMiddleware.
+	expireFullSessionCookies(c)
 	c.SetCookie(&http.Cookie{
 		Name:     CookieTempToken,
 		Value:    resetToken,

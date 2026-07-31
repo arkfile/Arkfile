@@ -343,6 +343,24 @@ export function csrfHeader(): Record<string, string> {
   return token ? { 'X-CSRF-Token': token } : {};
 }
 
+/**
+ * Headers for MFA handoff requests (setup / verify / auth / webauthn).
+ * Sends CSRF when present, and Authorization Bearer when a temp token is in
+ * memory so enrollment can proceed even if the temp cookie was not stored.
+ * Server-side issueTempCookie also clears stale full-tier cookies so
+ * CookieTokenMiddleware does not shadow the temp session.
+ */
+export function mfaHandoffHeaders(tempToken?: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...csrfHeader(),
+  };
+  if (tempToken) {
+    headers['Authorization'] = `Bearer ${tempToken}`;
+  }
+  return headers;
+}
+
 // Utility function exports
 export const isAuthenticated = AuthManager.isAuthenticated.bind(AuthManager);
 export const getUsernameFromToken = AuthManager.getUsernameFromToken.bind(AuthManager);

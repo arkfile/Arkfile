@@ -74,16 +74,33 @@ func TestParseAndAddTags_MultiWithSpaces(t *testing.T) {
 
 func TestValidateTagSyntax(t *testing.T) {
 	params := GetFileTagsParams()
-	valid := []string{"ab-cd", "PC-1", "topicC", "A"}
+	valid := []string{"ab-cd", "PC-1", "topicC", "A", "a-b-c-d"}
 	for _, tag := range valid {
 		if err := ValidateTagSyntax(tag, params.MaxTagLength); err != nil {
 			t.Fatalf("%q should be valid: %v", tag, err)
 		}
 	}
-	invalid := []string{"-abcd-", "ab--cd", "---", "ab cd", "", "a_b", strings.Repeat("a", 33)}
-	for _, tag := range invalid {
-		if err := ValidateTagSyntax(tag, params.MaxTagLength); err == nil {
-			t.Fatalf("%q should be invalid", tag)
+	cases := []struct {
+		tag string
+		msg string
+	}{
+		{"", "tag is empty"},
+		{"ab cd", "tag contains whitespace"},
+		{"-abc", "tag cannot start with a dash"},
+		{"a-b-c-d-", "tag cannot end with a dash"},
+		{"-abcd-", "tag cannot start with a dash"},
+		{"ab--cd", "tag cannot contain consecutive dashes"},
+		{"---", "tag cannot start with a dash"},
+		{"a_b", "tag contains invalid characters (use A-Z, a-z, 0-9, and single dashes between segments)"},
+		{strings.Repeat("a", 33), "tag exceeds max length 32"},
+	}
+	for _, tc := range cases {
+		err := ValidateTagSyntax(tc.tag, params.MaxTagLength)
+		if err == nil {
+			t.Fatalf("%q should be invalid", tc.tag)
+		}
+		if err.Error() != tc.msg {
+			t.Fatalf("%q: got %q, want %q", tc.tag, err.Error(), tc.msg)
 		}
 	}
 }
