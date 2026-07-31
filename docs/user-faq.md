@@ -56,7 +56,7 @@ An administrator can clear your enrolled second factor and backup codes using th
 
 ## Can I have both TOTP and a hardware security key?
 
-Each account can enroll one second factor at a time: either TOTP or a hardware security key, not both. A future release plans to allow up to three second-factor credentials per account, such as one TOTP app plus two labeled security keys. Backup codes remain recommended regardless of which method you use.
+Yes. Each account may enroll up to two second-factor methods: one authenticator app (TOTP) and one hardware security key. At sign-in you complete one enrolled method; if both are enrolled, you choose which to use. You cannot enroll two TOTP apps or two security keys on the same account today. Backup codes remain recommended regardless of which methods you use.
 
 ## Do I need to enter a PIN on my security key every time I log in?
 

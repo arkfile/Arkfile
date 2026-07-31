@@ -296,11 +296,15 @@ echo ""
 echo -e "${BLUE}Setting File Permissions${NC}"
 
 sudo chown -R ${USER}:${GROUP} "${TLS_DIR}"
+# Directory modes: ca/ and parent tls/ traversable for Caddy; service dirs locked
+sudo chmod 755 "${TLS_DIR}"
+sudo chmod 755 "${TLS_DIR}/ca"
 sudo chmod 600 "${TLS_DIR}/ca/ca.key"
 sudo chmod 644 "${TLS_DIR}/ca/ca.crt"
 
 for entry in "${SERVICES[@]}"; do
     IFS='|' read -r name _ _ <<< "$entry"
+    sudo chmod 700 "${TLS_DIR}/${name}"
     sudo chmod 600 "${TLS_DIR}/${name}/server.key"
     sudo chmod 644 "${TLS_DIR}/${name}/server.crt"
     sudo chmod 644 "${TLS_DIR}/${name}/server-bundle.crt"

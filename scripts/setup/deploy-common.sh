@@ -303,3 +303,46 @@ sync_database_schema_from_build() {
         chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/database"
     fi
 }
+
+# Apply key-directory permissions so the caddy user can read the public
+# internal CA certificate while private keys stay locked to arkfile.
+#
+# Caddy (User=caddy) needs world-execute on the path to
+# /opt/arkfile/etc/keys/tls/ca/ca.crt and world-read on ca.crt itself.
+# Private material (*.key, opaque/, backups/, totp/, per-service TLS dirs)
+# remains mode 700/600 owned by arkfile.
+apply_arkfile_key_permissions() {
+    local root="${1:-$ARKFILE_DIR}"
+    local keys_dir="$root/etc/keys"
+    local tls_dir="$keys_dir/tls"
+
+    # Path traversal for caddy -> public CA cert
+    chmod 755 "$root"
+    [ -d "$root/etc" ] && chmod 755 "$root/etc"
+    [ -d "$keys_dir" ] && chmod 755 "$keys_dir"
+    [ -d "$tls_dir" ] && chmod 755 "$tls_dir"
+    [ -d "$tls_dir/ca" ] && chmod 755 "$tls_dir/ca"
+
+    # Private key directories: arkfile only
+    [ -d "$keys_dir/opaque" ] && chmod 700 "$keys_dir/opaque"
+    [ -d "$keys_dir/backups" ] && chmod 700 "$keys_dir/backups"
+    [ -d "$keys_dir/totp" ] && chmod 700 "$keys_dir/totp"
+    [ -d "$tls_dir/arkfile" ] && chmod 700 "$tls_dir/arkfile"
+    [ -d "$tls_dir/rqlite" ] && chmod 700 "$tls_dir/rqlite"
+    [ -d "$tls_dir/seaweedfs" ] && chmod 700 "$tls_dir/seaweedfs"
+
+    # Public CA cert readable; private keys locked
+    if [ -f "$tls_dir/ca/ca.crt" ]; then
+        chmod 644 "$tls_dir/ca/ca.crt"
+    fi
+    if [ -f "$tls_dir/ca/ca.key" ]; then
+        chmod 600 "$tls_dir/ca/ca.key"
+    fi
+    if [ -d "$tls_dir" ]; then
+        find "$tls_dir" -type f -name '*.key' -exec chmod 600 {} +
+        find "$tls_dir" -type f \( -name '*.crt' -o -name '*.pem' \) -exec chmod 644 {} +
+    fi
+    if [ -f "$keys_dir/user-secret-master.bin" ]; then
+        chmod 400 "$keys_dir/user-secret-master.bin"
+    fi
+}

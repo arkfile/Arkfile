@@ -535,16 +535,7 @@ echo -e "${CYAN}Step 4: Ensuring correct ownership${NC}"
 echo "===================================="
 
 chown -R arkfile:arkfile "$ARKFILE_DIR"
-
-chmod 700 "$ARKFILE_DIR/etc/keys"
-[ -d "$ARKFILE_DIR/etc/keys/opaque" ] && chmod 700 "$ARKFILE_DIR/etc/keys/opaque"
-[ -d "$ARKFILE_DIR/etc/keys/tls" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls"
-[ -d "$ARKFILE_DIR/etc/keys/tls/ca" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/ca"
-[ -d "$ARKFILE_DIR/etc/keys/tls/arkfile" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/arkfile"
-[ -d "$ARKFILE_DIR/etc/keys/tls/rqlite" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/rqlite"
-[ -d "$ARKFILE_DIR/etc/keys/tls/seaweedfs" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/seaweedfs"
-[ -d "$ARKFILE_DIR/etc/keys/backups" ] && chmod 700 "$ARKFILE_DIR/etc/keys/backups"
-[ -d "$ARKFILE_DIR/etc/keys/totp" ] && chmod 700 "$ARKFILE_DIR/etc/keys/totp"
+apply_arkfile_key_permissions "$ARKFILE_DIR"
 
 # Create and permission log directory
 mkdir -p "$ARKFILE_DIR/var/log"
@@ -782,14 +773,12 @@ print_status "SUCCESS" "TLS certificates generated"
 
 # Fix ownership after key generation
 chown -R arkfile:arkfile "$ARKFILE_DIR"
-chmod 700 "$ARKFILE_DIR/etc/keys"
-[ -d "$ARKFILE_DIR/etc/keys/tls" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls"
-[ -d "$ARKFILE_DIR/etc/keys/tls/ca" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/ca"
-[ -d "$ARKFILE_DIR/etc/keys/tls/arkfile" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/arkfile"
+apply_arkfile_key_permissions "$ARKFILE_DIR"
 
 if ! verify_ownership "$ARKFILE_DIR"; then
     print_status "WARNING" "Fixing ownership after key generation..."
     chown -R arkfile:arkfile "$ARKFILE_DIR"
+    apply_arkfile_key_permissions "$ARKFILE_DIR"
     if ! verify_ownership "$ARKFILE_DIR"; then
         print_status "ERROR" "Failed to fix ownership"
         exit 1

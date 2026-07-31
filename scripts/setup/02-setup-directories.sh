@@ -18,8 +18,9 @@ echo -e "${GREEN}Setting up Arkfile directory structure...${NC}"
 echo "Creating main directories..."
 sudo install -d -m 755 -o ${USER} -g ${GROUP} ${BASE_DIR}
 sudo install -d -m 755 -o ${USER} -g ${GROUP} "${BASE_DIR}/bin"
-sudo install -d -m 750 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc"
-sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys"
+# etc/ and etc/keys/ are 755 so the caddy user can traverse to the public CA cert
+sudo install -d -m 755 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc"
+sudo install -d -m 755 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys"
 
 # Generate user-secret-master.bin if missing
 MASTER_KEY_FILE="${BASE_DIR}/etc/keys/user-secret-master.bin"
@@ -36,11 +37,13 @@ sudo install -d -m 750 -o ${USER} -g ${GROUP} "${BASE_DIR}/var/log"
 sudo install -d -m 755 -o ${USER} -g ${GROUP} "${BASE_DIR}/var/run"
 sudo install -d -m 755 -o ${USER} -g ${GROUP} "${BASE_DIR}/webroot"
 
-# Create key management subdirectories
+# Create key management subdirectories.
+# tls/ and tls/ca/ are traversable (755) for Caddy's tls_trusted_ca_certs path;
+# per-service TLS dirs and opaque/backups stay 700.
 echo "Creating key management directories..."
 sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/opaque"
-sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/tls"
-sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/tls/ca"
+sudo install -d -m 755 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/tls"
+sudo install -d -m 755 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/tls/ca"
 sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/tls/arkfile"
 sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/tls/rqlite"
 sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/tls/seaweedfs"

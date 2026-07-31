@@ -373,17 +373,7 @@ echo "===================================="
 
 print_status "INFO" "Ensuring correct ownership of all directories..."
 chown -R arkfile:arkfile "$ARKFILE_DIR"
-
-# Preserve specific permissions for sensitive directories (only if they exist)
-chmod 700 "$ARKFILE_DIR/etc/keys"
-[ -d "$ARKFILE_DIR/etc/keys/opaque" ] && chmod 700 "$ARKFILE_DIR/etc/keys/opaque"
-[ -d "$ARKFILE_DIR/etc/keys/tls" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls"
-[ -d "$ARKFILE_DIR/etc/keys/tls/ca" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/ca"
-[ -d "$ARKFILE_DIR/etc/keys/tls/arkfile" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/arkfile"
-[ -d "$ARKFILE_DIR/etc/keys/tls/rqlite" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/rqlite"
-[ -d "$ARKFILE_DIR/etc/keys/tls/seaweedfs" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/seaweedfs"
-[ -d "$ARKFILE_DIR/etc/keys/backups" ] && chmod 700 "$ARKFILE_DIR/etc/keys/backups"
-[ -d "$ARKFILE_DIR/etc/keys/totp" ] && chmod 700 "$ARKFILE_DIR/etc/keys/totp"
+apply_arkfile_key_permissions "$ARKFILE_DIR"
 
 print_status "SUCCESS" "Directory ownership verified"
 
@@ -574,12 +564,16 @@ if ! ./scripts/setup/04-setup-tls-certs.sh; then
 fi
 print_status "SUCCESS" "TLS certificates generated"
 
+chown -R arkfile:arkfile "$ARKFILE_DIR"
+apply_arkfile_key_permissions "$ARKFILE_DIR"
+
 # Verify ownership after key generation
 if ! verify_ownership "$ARKFILE_DIR"; then
     print_status "ERROR" "Ownership verification failed after key generation"
     print_status "INFO" "Attempting to fix ownership..."
     chown -R arkfile:arkfile "$ARKFILE_DIR"
-    
+    apply_arkfile_key_permissions "$ARKFILE_DIR"
+
     if ! verify_ownership "$ARKFILE_DIR"; then
         print_status "ERROR" "Failed to fix ownership issues"
         exit 1
