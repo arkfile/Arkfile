@@ -2,6 +2,8 @@
 
 ## Human Testing Protocol
 
+### Test Scripts
+
 Run from the repository root and stop immediately if any step fails.
 
 1. **All Go unit tests** (no sudo):
@@ -63,3 +65,34 @@ sudo bash scripts/testing/online-integrity-test.sh
 ```bash
 sudo bash scripts/testing/e2e-playwright.sh
 ```
+
+### Manual Testing
+
+Web App Browser TypeScript Frontend
+
+1. Registration: OPAQUE and MFA (TOTP and/or HW Security Key)
+2. Login with MFA
+3. Upload file with Account password
+4. Upload file with Custom password
+5. List files
+6. Tag files
+7. Download Account-password-encrypted file, confirm sha256sum matches
+7. Download Custom-password-encrypted file, confirm sha256sum matches
+8. Share a file, download it from a separate private browser session
+9. Revoke the share, and attempt to download it again
+10. Export an .arkbackup of a file, use arkfile-client to decrypt locally, check tags
+11. Attempt to upload and download a 2GB+ file on Brave (blob download, fallback method) 
+
+Command-Line arkfile-client Go Utility
+
+1. Registration: OPAQUE and MFA (TOTP and/or HW Security Key)
+2. Login with MFA
+3. Upload file with Account password
+4. Upload file with Custom password
+5. List files
+6. Tag files
+7. Download Account-password-encrypted file, confirm sha256sum matches
+7. Download Custom-password-encrypted file, confirm sha256sum matches
+8. Share a file, download it from a separate private browser session
+9. Revoke the share, and attempt to download it again
+10. Export an .arkbackup of a file, use arkfile-client to decrypt locally, check tags
