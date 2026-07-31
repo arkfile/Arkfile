@@ -103,12 +103,17 @@ func ValidateTagSyntax(tag string, maxLen int) error {
 	return nil
 }
 
+// ErrMaxTagsPerFile returns the canonical user-facing limit error.
+func ErrMaxTagsPerFile(max int) error {
+	return fmt.Errorf("%d tags maximum", max)
+}
+
 // CanonicalizeTags validates, deduplicates case-insensitively (first-seen casing),
 // enforces max tags per file, and returns the canonical ordered list.
 func CanonicalizeTags(tags []string) ([]string, error) {
 	params := GetFileTagsParams()
 	if len(tags) > params.MaxTagsPerFile {
-		return nil, fmt.Errorf("too many tags: max %d", params.MaxTagsPerFile)
+		return nil, ErrMaxTagsPerFile(params.MaxTagsPerFile)
 	}
 	seen := make(map[string]struct{}, len(tags))
 	out := make([]string, 0, len(tags))
@@ -124,7 +129,7 @@ func CanonicalizeTags(tags []string) ([]string, error) {
 		out = append(out, tag)
 	}
 	if len(out) > params.MaxTagsPerFile {
-		return nil, fmt.Errorf("too many tags: max %d", params.MaxTagsPerFile)
+		return nil, ErrMaxTagsPerFile(params.MaxTagsPerFile)
 	}
 	return out, nil
 }
@@ -190,23 +195,50 @@ func FileHasAllTags(fileTags, queryTags []string) bool {
 
 // AddTag appends tag if not already present (case-insensitive). Preserves order.
 func AddTag(tags []string, tag string) ([]string, error) {
+	return AddTags(tags, []string{tag})
+}
+
+// AddTags appends each tag in toAdd if not already present (case-insensitive).
+// Preserves existing order and appends new tags in toAdd order. Whitespace inside
+// a tag remains invalid; callers should ParseTagList first so spaces around commas
+// are trimmed. Returns ErrMaxTagsPerFile if the resulting list would exceed the limit.
+func AddTags(tags []string, toAdd []string) ([]string, error) {
 	params := GetFileTagsParams()
-	if err := ValidateTagSyntax(tag, params.MaxTagLength); err != nil {
+	out := append([]string(nil), tags...)
+	for _, tag := range toAdd {
+		if err := ValidateTagSyntax(tag, params.MaxTagLength); err != nil {
+			return nil, err
+		}
+		key := strings.ToLower(tag)
+		present := false
+		for _, t := range out {
+			if strings.ToLower(t) == key {
+				present = true
+				break
+			}
+		}
+		if present {
+			continue
+		}
+		if len(out) >= params.MaxTagsPerFile {
+			return nil, ErrMaxTagsPerFile(params.MaxTagsPerFile)
+		}
+		out = append(out, tag)
+	}
+	return out, nil
+}
+
+// ParseAndAddTags parses a comma-separated input (trimming spaces around commas)
+// and merges the tags into existing via AddTags.
+func ParseAndAddTags(existing []string, input string) ([]string, error) {
+	parsed, err := ParseTagList(input)
+	if err != nil {
 		return nil, err
 	}
-	key := strings.ToLower(tag)
-	for _, t := range tags {
-		if strings.ToLower(t) == key {
-			return tags, nil
-		}
+	if len(parsed) == 0 {
+		return nil, fmt.Errorf("tag is empty")
 	}
-	if len(tags) >= params.MaxTagsPerFile {
-		return nil, fmt.Errorf("too many tags: max %d", params.MaxTagsPerFile)
-	}
-	out := make([]string, len(tags)+1)
-	copy(out, tags)
-	out[len(tags)] = tag
-	return out, nil
+	return AddTags(existing, parsed)
 }
 
 // RemoveTag removes the first case-insensitive match. Missing tag is a no-op.

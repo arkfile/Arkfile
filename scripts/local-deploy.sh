@@ -87,7 +87,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --add-ip <ip>                 Additional IP for TLS cert SANs (repeatable, e.g. VPS public IP, LAN IP)"
             echo "  --storage-backend <type>      Storage backend (default: local-seaweedfs)"
             echo "                                Options: local-seaweedfs, wasabi, backblaze, vultr, hetzner,"
-            echo "                                         cloudflare-r2, aws-s3, generic-s3"
+            echo "                                         ionos, cloudflare-r2, aws-s3, generic-s3"
             echo "  -h, --help                    Show this help message"
             exit 0
             ;;
@@ -258,6 +258,18 @@ prompt_storage_backend_config() {
             S3_SECRET_KEY=$(prompt_secret_nonempty "Hetzner secret key: ")
             S3_BUCKET=$(prompt_nonempty "Hetzner bucket name: ")
             ;;
+        ionos)
+            echo ""
+            echo -e "${BLUE}IONOS Cloud Object Storage Configuration${NC}"
+            echo "  (Endpoint will be constructed as: https://s3.<region>.ionoscloud.com)"
+            echo "  Prefer contract-owned regions: us-central-1 (Lenexa), eu-central-3 (Berlin), eu-central-4 (Frankfurt)"
+            echo "  User-owned: eu-central-2 (Berlin), eu-south-2 (Logrono), de (Frankfurt; maps to host eu-central-1)"
+            echo "  Use path-style addressing. Good cheap secondary when reads are rare (2 TB/mo egress free)."
+            S3_REGION=$(prompt_nonempty "IONOS endpoint region code: ")
+            S3_ACCESS_KEY=$(prompt_nonempty "IONOS access key: ")
+            S3_SECRET_KEY=$(prompt_secret_nonempty "IONOS secret key: ")
+            S3_BUCKET=$(prompt_nonempty "IONOS bucket name: ")
+            ;;
         cloudflare-r2)
             echo ""
             echo -e "${BLUE}Cloudflare R2 Storage Configuration${NC}"
@@ -298,7 +310,7 @@ prompt_storage_backend_config() {
 # Validate storage backend
 if ! validate_storage_backend "$STORAGE_BACKEND"; then
     print_status "ERROR" "Unsupported storage backend: $STORAGE_BACKEND"
-    echo "Supported backends: local-seaweedfs, wasabi, backblaze, vultr, hetzner, cloudflare-r2, aws-s3, generic-s3"
+    echo "Supported backends: local-seaweedfs, wasabi, backblaze, vultr, hetzner, ionos, cloudflare-r2, aws-s3, generic-s3"
     exit 1
 fi
 
@@ -621,7 +633,7 @@ EOF
         chmod 640 "$ARKFILE_DIR/etc/seaweedfs-s3.json"
         print_status "SUCCESS" "SeaweedFS S3 auth configuration created"
         ;;
-    wasabi|vultr|hetzner|aws-s3)
+    wasabi|vultr|hetzner|ionos|aws-s3)
         cat >> "$ARKFILE_DIR/etc/secrets.env" << EOF
 # Storage Configuration - ${STORAGE_BACKEND}
 STORAGE_PROVIDER_1=${STORAGE_BACKEND}

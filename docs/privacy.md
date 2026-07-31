@@ -80,7 +80,7 @@ A single user file exists in three distinct forms throughout the Arkfile system.
 
 ## 10. Storage Backends
 
-Arkfile supports multiple storage backends including Amazon S3, SeaweedFS, Backblaze B2, Wasabi, Vultr Object Storage, and Hetzner Object Storage.
+Arkfile supports multiple storage backends including Amazon S3, SeaweedFS, Backblaze B2, Wasabi, Vultr Object Storage, Hetzner Object Storage, IONOS Cloud Object Storage, and Cloudflare R2.
 
 Encrypted file data is opaque to the storage provider; none of them receive decryption keys.
 

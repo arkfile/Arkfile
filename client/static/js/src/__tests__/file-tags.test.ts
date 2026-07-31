@@ -2,11 +2,13 @@ import './setup';
 import { describe, test, expect, beforeEach } from 'bun:test';
 import {
   addTag,
+  addTags,
   buildTagVocabulary,
   canonicalizeTags,
   clearFileTagsParamsCacheForTests,
   fileHasAllTags,
   loadFileTagsParams,
+  parseAndAddTags,
   parseAndCanonicalizeTags,
   parseFilterTags,
   removeTag,
@@ -49,10 +51,17 @@ describe('file-tags helpers', () => {
       .toBe('Food,activity,FUN');
   });
 
+  test('trims spaces around commas and reports 5 tags maximum', () => {
+    expect(() => parseAndCanonicalizeTags('apple, banana, cherry, DOG, 123, noun', params))
+      .toThrow('5 tags maximum');
+    expect(serializeTags(parseAndCanonicalizeTags('apple, banana, cherry, DOG, 123', params)))
+      .toBe('apple,banana,cherry,DOG,123');
+  });
+
   test('rejects invalid syntax', () => {
     expect(() => validateTagSyntax('-abcd-', 32)).toThrow();
     expect(() => validateTagSyntax('ab--cd', 32)).toThrow();
-    expect(() => validateTagSyntax('ab cd', 32)).toThrow();
+    expect(() => validateTagSyntax('ab cd', 32)).toThrow('tag contains whitespace');
     expect(() => validateTagSyntax('a_b', 32)).toThrow();
     expect(() => validateTagSyntax('ok-tag', 32)).not.toThrow();
   });
@@ -66,6 +75,15 @@ describe('file-tags helpers', () => {
     tags = replaceTag(tags, 'Food', 'FOOD', params);
     expect(serializeTags(tags)).toBe('FOOD,FUN');
     expect(() => replaceTag(tags, 'FOOD', 'FUN', params)).toThrow();
+  });
+
+  test('parseAndAddTags accepts one or many comma-separated tags', () => {
+    expect(serializeTags(parseAndAddTags(['Food'], ' activity , FUN ,food ', params)))
+      .toBe('Food,activity,FUN');
+    expect(serializeTags(addTags(['a'], ['b', 'c'], params))).toBe('a,b,c');
+    expect(() => parseAndAddTags(['a', 'b', 'c', 'd', 'e'], 'f, g', params))
+      .toThrow('5 tags maximum');
+    expect(() => parseAndAddTags([], 'apple banana', params)).toThrow();
   });
 
   test('filter collapses duplicates and ANDs', () => {

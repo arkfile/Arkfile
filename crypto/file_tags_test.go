@@ -33,6 +33,45 @@ func TestParseAndCanonicalizeTags(t *testing.T) {
 	}
 }
 
+func TestParseAndCanonicalizeTags_TrimsSpacesRejectsMax(t *testing.T) {
+	// Spaces around commas must not produce "tag contains whitespace".
+	_, err := ParseAndCanonicalizeTags("apple, banana, cherry, DOG, 123, noun")
+	if err == nil {
+		t.Fatal("expected max-tags error for six tags")
+	}
+	if err.Error() != "5 tags maximum" {
+		t.Fatalf("got %q, want %q", err.Error(), "5 tags maximum")
+	}
+
+	tags, err := ParseAndCanonicalizeTags("apple, banana, cherry, DOG, 123")
+	if err != nil {
+		t.Fatalf("five spaced tags should succeed: %v", err)
+	}
+	if strings.Join(tags, ",") != "apple,banana,cherry,DOG,123" {
+		t.Fatalf("got %q", strings.Join(tags, ","))
+	}
+}
+
+func TestParseAndAddTags_MultiWithSpaces(t *testing.T) {
+	out, err := ParseAndAddTags([]string{"Food"}, " activity , FUN ,food ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(out, ",") != "Food,activity,FUN" {
+		t.Fatalf("got %q", strings.Join(out, ","))
+	}
+
+	_, err = ParseAndAddTags([]string{"a", "b", "c", "d", "e"}, "f, g")
+	if err == nil || err.Error() != "5 tags maximum" {
+		t.Fatalf("expected 5 tags maximum, got %v", err)
+	}
+
+	// In-tag space still invalid after trim of comma segments.
+	if _, err := ParseAndAddTags(nil, "apple banana"); err == nil {
+		t.Fatal("expected whitespace/syntax error for in-tag space")
+	}
+}
+
 func TestValidateTagSyntax(t *testing.T) {
 	params := GetFileTagsParams()
 	valid := []string{"ab-cd", "PC-1", "topicC", "A"}

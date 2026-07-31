@@ -162,7 +162,7 @@ For systems that handle sensitive or long-lived data, combining both layers -- t
 
 ## Popular Object Storage Providers
 
-The following providers offer S3-compatible APIs suitable for use as multi-backend storage targets. All prices are approximate, based on publicly listed rates as of May 2026, and may vary by region or contract terms.
+The following providers offer S3-compatible APIs suitable for use as multi-backend storage targets. All prices are approximate, based on publicly listed rates as of July 2026, and may vary by region or contract terms.
 
 ### Providers with Free Egress
 
@@ -171,33 +171,36 @@ These three providers offer S3-compatible APIs with effectively zero egress char
 | Provider | Storage (per TB/mo) | Egress | Notes |
 |---|---|---|---|
 | Backblaze B2 | $6.95 | $0 (up to 3x stored volume) | 17+3 RS erasure coding; most established budget option |
-| Wasabi | $6.99 | $0 (up to 1x stored volume) | 90-day minimum retention; minimum 1 TB billing |
+| Wasabi | $7.99 | $0 (up to 1x stored volume; fair-use) | 90-day minimum retention; minimum 1 TB billing |
 | Cloudflare R2 | $15.00 | $0 (unlimited, unconditional) | No egress caps or ratio limits; data distributed globally |
 
 **Backblaze B2**: Free egress as long as monthly downloads do not exceed three times the average stored data volume. Beyond that threshold, excess egress is $0.01/GB.
 
-**Wasabi**: Free egress as long as monthly downloads do not exceed the active storage volume (1:1 ratio). Wasabi enforces a 90-day minimum retention policy -- deleting data before 90 days still incurs 90 days of storage charges. Minimum billing is 1 TB regardless of actual usage.
+**Wasabi**: Pay as You Go is $7.99/TB/mo across North America, EMEA, and APAC (effective 2026-07-01). Free egress is a fair-use policy: monthly downloads should not exceed active storage volume (1:1). Regular overuse is not billed as overage; Wasabi may limit or suspend the account instead. Wasabi enforces a 90-day minimum retention policy -- deleting data before 90 days still incurs storage charges for the remaining days. Minimum billing is 1 TB regardless of actual usage.
 
-**Cloudflare R2**: The only provider with truly unconditional free egress -- no ratio limits, no caps. Higher storage cost than Backblaze or Wasabi, but eliminates all egress cost uncertainty. Operations are charged separately (Class A: $4.50/million, Class B: $0.36/million).
+**Cloudflare R2**: The only provider with truly unconditional free egress -- no ratio limits, no caps. Standard storage is $0.015/GB-month (~$15/TB). Higher storage cost than Backblaze or Wasabi, but eliminates all egress cost uncertainty. Operations are charged separately (Class A: $4.50/million, Class B: $0.36/million). Infrequent Access is $0.01/GB-month with retrieval fees and a 30-day minimum duration.
 
 ### Other S3-Compatible Providers
 
-These providers charge for egress but offer competitive storage pricing or other advantages. Listed in ascending order by storage cost per TB.
+These providers charge for egress but offer competitive storage pricing or other advantages. Listed in ascending order by storage cost per TB for the hot/standard tier shown.
 
 | Provider | Storage (per TB/mo) | Egress (per TB) | Notes |
 |---|---|---|---|
-| Hetzner Object Storage | ~$6.49 (EUR) | ~$1.00/TB (EUR) | EU-only (NBG1, FSN1, HEL1); 1 TB egress included in base |
-| Vultr Object Storage | $18.00 | $10.00 (1 TB included per block) | Sold in 1 TB blocks; 5 GB object size cap |
-| DigitalOcean Spaces | $20.00 (additional) | $10.00 (1 TiB included in base) | Base plan $5/mo for 250 GiB; 5 GB object size cap |
-| Google Cloud Storage | $20.00 | $85-120 (tiered) | S3 interop via XML API; complex tiered egress pricing |
+| IONOS Cloud Object Storage | ~$4.99 | First 2 TB/mo free, then ~$37/TB (tiered) | Strong cheap secondary when reads are rare; API ops free; US/EU regions |
+| Hetzner Object Storage | €6.49 base | €1.00/TB after included | EU-only (NBG1, FSN1, HEL1); base includes 1 TB storage + 1 TB egress |
+| Vultr Object Storage (Standard) | $18.00 | $10.00 (1 TB included per block) | Sold in 1 TB blocks; also Archival tier at $6/TB |
+| DigitalOcean Spaces | $20.00 (additional) | $10.00 (1 TiB included in base) | Base plan $5/mo for 250 GiB + 1 TiB transfer |
+| Google Cloud Storage | $20.00 | $85-120 (tiered) | S3 interop via XML API; Premium vs Standard Tier egress |
 | AWS S3 Standard | $23.00 | $90.00 (first 10 TB) | Reference S3 implementation; most extensive feature set |
 
-**Vultr**: Pricing is structured as $18/block for the first 1 TB, including 1 TB of egress. Additional storage is $20/TB after that. Excess egress is $0.01/GB. The 5 GB maximum object size is a constraint for applications handling very large files.
+**IONOS Cloud Object Storage**: Storage at $0.00487/GB/30 days (~$4.99/TB/mo, binary TB). PUT/GET/LIST/DELETE are free. Account-wide public egress includes 2 TB/month free, then $0.036/GB for the next 8 TB, with further tier reductions at higher volumes. Ingress is free. This pricing favors a secondary/replica role: steady storage cost stays low while failover downloads are uncommon. A large restore that exceeds the free egress allowance becomes relatively expensive, so IONOS is a poor fit as a busy primary. S3-compatible endpoints use the form `https://s3.<region>.ionoscloud.com` with path-style addressing. Prefer contract-owned regions for new deployments (`us-central-1` Lenexa, `eu-central-3` Berlin, `eu-central-4` Frankfurt). Prices from the IONOS Inc. list (US/Canada); EU contracts use the EUR price list.
 
-**Hetzner**: EU-only provider with three datacenter locations in Germany and Finland. Base plan of EUR 6.49/month includes 1 TB storage and 1 TB outgoing traffic. Additional storage is EUR 8.70/TB. S3-compatible API, GDPR-compliant.
+**Hetzner**: EU-only provider with three datacenter locations in Germany and Finland (NBG1, FSN1, HEL1). Base plan of EUR 6.49/month includes 1 TB storage and 1 TB outgoing traffic. Additional storage is about EUR 8.70/TB/month; excess egress is EUR 1.00/TB. Ingress, internal eu-central traffic, and S3 API calls are free. S3-compatible API, GDPR-compliant.
 
-**DigitalOcean Spaces**: Base plan of $5/month includes 250 GiB storage and 1 TiB outbound transfer. Additional storage is $0.02/GiB (~$20/TB). Additional transfer is $0.01/GiB (~$10/TB). The 5 GB object size limit applies.
+**Vultr**: Standard Object Storage is $18/month for the first 1 TB block, including 1 TB of egress. Additional Standard storage is $18/TB; excess egress is $0.01/GB (~$10/TB). Vultr also offers an Archival tier at $6/TB/month (same included-bandwidth pattern). Single PUT is typically limited to 5 GB; larger objects use multipart upload (not a hard total object-size cap).
 
-**Google Cloud Storage**: Offers an XML API interoperability mode that allows use of standard S3 client libraries. Storage at $0.02/GiB for Standard class in US regions. Egress pricing is complex: Premium Tier charges $0.12/GB for the first 1 TB, dropping to $0.11/GB for 1-10 TB. Standard Tier is cheaper ($0.085/GB) but provides lower network quality of service. Not natively S3 -- the interop mode covers basic operations but may not support all S3 features.
+**DigitalOcean Spaces**: Base plan of $5/month includes 250 GiB storage and 1 TiB outbound transfer. Additional storage is $0.02/GiB (~$20/TB). Additional transfer is $0.01/GiB (~$10/TB). Spaces Cold Storage is $0.007/GiB/month with retrieval fees and a 30-day minimum retention. Single-request uploads are commonly limited around 5 GB; larger objects use multipart upload.
 
-**AWS S3**: The original and reference implementation of the S3 API. All other "S3-compatible" providers are emulating this API. Storage at $0.023/GB for Standard tier (first 50 TB). Egress at $0.09/GB for the first 10 TB/month ($90/TB), with 100 GB/month free. The most feature-complete option but also among the most expensive for both storage and egress.
+**Google Cloud Storage**: Offers an XML API interoperability mode that allows use of standard S3 client libraries. Storage at $0.02/GiB (~$20/TB) for Standard class in US single-region locations such as us-central1. Egress pricing is complex: Premium Tier is about $0.12/GB for the first 1 TB (~$120/TB), then $0.11/GB for 1-10 TB; Standard Tier is cheaper (~$0.085/GB, ~$85/TB) but provides lower network quality of service. Not natively S3 -- the interop mode covers basic operations but may not support all S3 features.
+
+**AWS S3**: The original and reference implementation of the S3 API. All other "S3-compatible" providers are emulating this API. Storage at $0.023/GB (~$23/TB) for Standard tier (first 50 TB, us-east-1). Egress at $0.09/GB for the first 10 TB/month ($90/TB), with 100 GB/month free across the account. The most feature-complete option but also among the most expensive for both storage and egress.

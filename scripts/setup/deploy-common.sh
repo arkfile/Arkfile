@@ -115,7 +115,7 @@ validate_username() {
 
 validate_storage_backend() {
     case "$1" in
-        local-seaweedfs|wasabi|backblaze|vultr|hetzner|cloudflare-r2|aws-s3|generic-s3)
+        local-seaweedfs|wasabi|backblaze|vultr|hetzner|ionos|cloudflare-r2|aws-s3|generic-s3)
             return 0
             ;;
         *)

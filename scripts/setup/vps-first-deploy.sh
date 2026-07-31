@@ -254,7 +254,7 @@ EOF2
             chown "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/etc/seaweedfs-s3.json"
             chmod 640 "$ARKFILE_DIR/etc/seaweedfs-s3.json"
             ;;
-        wasabi|vultr|hetzner|aws-s3)
+        wasabi|vultr|hetzner|ionos|aws-s3)
             cat >> "$ARKFILE_DIR/etc/secrets.env" <<EOF2
 # Storage Configuration
 STORAGE_PROVIDER_1=${STORAGE_BACKEND}
@@ -690,6 +690,16 @@ prompt_storage_backend_config() {
             S3_SECRET_KEY=$(prompt_secret_nonempty "Hetzner secret key: ")
             S3_BUCKET=$(prompt_nonempty "Hetzner bucket name: ")
             ;;
+        ionos)
+            echo "  (Endpoint will be constructed as: https://s3.<region>.ionoscloud.com)"
+            echo "  Prefer contract-owned regions: us-central-1 (Lenexa), eu-central-3 (Berlin), eu-central-4 (Frankfurt)"
+            echo "  User-owned: eu-central-2 (Berlin), eu-south-2 (Logrono), de (Frankfurt; maps to host eu-central-1)"
+            echo "  Use path-style addressing. Good cheap secondary when reads are rare (2 TB/mo egress free)."
+            S3_REGION=$(prompt_nonempty "IONOS endpoint region code: ")
+            S3_ACCESS_KEY=$(prompt_nonempty "IONOS access key: ")
+            S3_SECRET_KEY=$(prompt_secret_nonempty "IONOS secret key: ")
+            S3_BUCKET=$(prompt_nonempty "IONOS bucket name: ")
+            ;;
         cloudflare-r2)
             CLOUDFLARE_ENDPOINT=$(prompt_nonempty "Cloudflare R2 endpoint: ")
             CLOUDFLARE_ACCESS_KEY_ID=$(prompt_nonempty "Cloudflare R2 access key ID: ")
@@ -801,7 +811,7 @@ fi
 
 if ! validate_storage_backend "$STORAGE_BACKEND"; then
     print_status "ERROR" "Unsupported storage backend: $STORAGE_BACKEND"
-    echo "Supported backends: local-seaweedfs, wasabi, backblaze, vultr, hetzner, cloudflare-r2, aws-s3, generic-s3"
+    echo "Supported backends: local-seaweedfs, wasabi, backblaze, vultr, hetzner, ionos, cloudflare-r2, aws-s3, generic-s3"
     exit 1
 fi
 

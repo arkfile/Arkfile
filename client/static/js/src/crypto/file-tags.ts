@@ -87,9 +87,14 @@ export function validateTagSyntax(tag: string, maxLen: number): void {
   }
 }
 
+/** Canonical user-facing limit error for per-file tag count. */
+export function maxTagsPerFileError(max: number): Error {
+  return new Error(`${max} tags maximum`);
+}
+
 export function canonicalizeTags(tags: string[], params: FileTagsParams): string[] {
   if (tags.length > params.maxTagsPerFile) {
-    throw new Error(`too many tags: max ${params.maxTagsPerFile}`);
+    throw maxTagsPerFileError(params.maxTagsPerFile);
   }
   const seen = new Set<string>();
   const out: string[] = [];
@@ -103,7 +108,7 @@ export function canonicalizeTags(tags: string[], params: FileTagsParams): string
     out.push(tag);
   }
   if (out.length > params.maxTagsPerFile) {
-    throw new Error(`too many tags: max ${params.maxTagsPerFile}`);
+    throw maxTagsPerFileError(params.maxTagsPerFile);
   }
   return out;
 }
@@ -149,14 +154,36 @@ export function tagPresent(tags: string[], tag: string): boolean {
 }
 
 export function addTag(tags: string[], tag: string, params: FileTagsParams): string[] {
-  validateTagSyntax(tag, params.maxTagLength);
-  if (tagPresent(tags, tag)) {
-    return tags.slice();
+  return addTags(tags, [tag], params);
+}
+
+/**
+ * Append each tag in toAdd if not already present (case-insensitive).
+ * Preserves existing order; appends new tags in toAdd order.
+ * Callers should parseTagList first so spaces around commas are trimmed.
+ */
+export function addTags(tags: string[], toAdd: string[], params: FileTagsParams): string[] {
+  const out = tags.slice();
+  for (const tag of toAdd) {
+    validateTagSyntax(tag, params.maxTagLength);
+    if (tagPresent(out, tag)) {
+      continue;
+    }
+    if (out.length >= params.maxTagsPerFile) {
+      throw maxTagsPerFileError(params.maxTagsPerFile);
+    }
+    out.push(tag);
   }
-  if (tags.length >= params.maxTagsPerFile) {
-    throw new Error(`too many tags: max ${params.maxTagsPerFile}`);
+  return out;
+}
+
+/** Parse comma-separated input (trim around commas) and merge into existing tags. */
+export function parseAndAddTags(existing: string[], input: string, params: FileTagsParams): string[] {
+  const parsed = parseTagList(input);
+  if (parsed.length === 0) {
+    throw new Error('tag is empty');
   }
-  return [...tags, tag];
+  return addTags(existing, parsed, params);
 }
 
 export function removeTag(tags: string[], tag: string): string[] {

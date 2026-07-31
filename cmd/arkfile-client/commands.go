@@ -1335,8 +1335,9 @@ func handleTagsAdd(client *HTTPClient, config *ClientConfig, args []string) erro
 	fs := flag.NewFlagSet("tags add", flag.ExitOnError)
 	fileID := fs.String("file-id", "", "File ID to update")
 	fs.Usage = func() {
-		fmt.Printf("Usage: arkfile-client tags add --file-id FILE_ID TAG\n\n" +
-			"Add one owner tag to a file (encrypted under the Account Key).\n")
+		fmt.Printf("Usage: arkfile-client tags add --file-id FILE_ID TAGS\n\n" +
+			"Add one owner tag or a comma-separated list (spaces around commas are trimmed).\n" +
+			"Tags are encrypted under the Account Key. Example: 'Food, activity, FUN'\n")
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -1346,7 +1347,7 @@ func handleTagsAdd(client *HTTPClient, config *ClientConfig, args []string) erro
 	}
 	pos := fs.Args()
 	if len(pos) != 1 {
-		return fmt.Errorf("exactly one TAG argument is required")
+		return fmt.Errorf("exactly one TAGS argument is required (one tag or comma-separated list)")
 	}
 	return mutateFileTags(client, config, *fileID, "add", strings.TrimSpace(pos[0]), "")
 }
@@ -1523,7 +1524,7 @@ func mutateFileTags(client *HTTPClient, config *ClientConfig, fileID, kind, tagA
 
 	switch kind {
 	case "add":
-		fmt.Printf("Tag added. Tags: %s (revision %d)\n", formatTagsDisplay(updated.Tags), updated.TagsRevision)
+		fmt.Printf("Tags updated. Tags: %s (revision %d)\n", formatTagsDisplay(updated.Tags), updated.TagsRevision)
 	case "remove":
 		fmt.Printf("Tag removed. Tags: %s (revision %d)\n", formatTagsDisplay(updated.Tags), updated.TagsRevision)
 	case "replace":
@@ -1554,10 +1555,11 @@ func applyTagMutation(
 	var merr error
 	switch kind {
 	case "add":
-		if crypto.TagPresent(working.Tags, tagA) {
+		// tagA may be one tag or a comma-separated list (spaces around commas trimmed).
+		nextTags, merr = crypto.ParseAndAddTags(working.Tags, tagA)
+		if merr == nil && crypto.SerializeTags(nextTags) == crypto.SerializeTags(working.Tags) {
 			return &working, nil
 		}
-		nextTags, merr = crypto.AddTag(working.Tags, tagA)
 	case "remove":
 		if !crypto.TagPresent(working.Tags, tagA) {
 			return &working, nil
@@ -1603,8 +1605,20 @@ func applyTagMutation(
 	if !refreshed.TagsAvailable {
 		return nil, fmt.Errorf("tags changed and could not be reloaded")
 	}
-	if kind == "add" && crypto.TagPresent(refreshed.Tags, tagA) {
-		return refreshed, nil
+	if kind == "add" {
+		wanted, perr := crypto.ParseTagList(tagA)
+		if perr == nil && len(wanted) > 0 {
+			allPresent := true
+			for _, t := range wanted {
+				if !crypto.TagPresent(refreshed.Tags, t) {
+					allPresent = false
+					break
+				}
+			}
+			if allPresent {
+				return refreshed, nil
+			}
+		}
 	}
 	if kind == "remove" && !crypto.TagPresent(refreshed.Tags, tagA) {
 		return refreshed, nil

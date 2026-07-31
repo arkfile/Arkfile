@@ -306,6 +306,16 @@ func loadPrimaryStorageConfig(cfg *Config) {
 		}
 		cfg.Storage.ForcePathStyle = true
 		cfg.Storage.UseSSL = true
+	case "ionos":
+		if cfg.Storage.Endpoint == "" {
+			endpointRegion := cfg.Storage.Region
+			if endpointRegion == "de" {
+				endpointRegion = "eu-central-1"
+			}
+			cfg.Storage.Endpoint = fmt.Sprintf("https://s3.%s.ionoscloud.com", endpointRegion)
+		}
+		cfg.Storage.ForcePathStyle = true
+		cfg.Storage.UseSSL = true
 	case "backblaze", "cloudflare-r2", "aws-s3":
 		cfg.Storage.UseSSL = true
 	}
@@ -667,7 +677,7 @@ func validateConfig(cfg *Config) error {
 			cfg.Storage.SecretAccessKey == "" || cfg.Storage.BucketName == "" {
 			return fmt.Errorf("cloudflare-r2 storage requires STORAGE_1_ENDPOINT, STORAGE_1_ACCESS_KEY, STORAGE_1_SECRET_KEY, and STORAGE_1_BUCKET")
 		}
-	case "wasabi", "vultr", "hetzner":
+	case "wasabi", "vultr", "hetzner", "ionos":
 		if cfg.Storage.AccessKeyID == "" || cfg.Storage.SecretAccessKey == "" ||
 			cfg.Storage.BucketName == "" || cfg.Storage.Region == "" {
 			return fmt.Errorf("%s storage requires STORAGE_1_ACCESS_KEY, STORAGE_1_SECRET_KEY, STORAGE_1_BUCKET, and STORAGE_1_REGION", cfg.Storage.Provider)

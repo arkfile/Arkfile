@@ -9,8 +9,9 @@ import { decryptMetadataField } from '../crypto/metadata-helpers';
 import { AAD_FIELD_TAGS, buildMetadataFieldAAD } from '../crypto/aad';
 import { encryptAESGCM, toBase64, concatBytes } from '../crypto/primitives';
 import {
-  addTag,
   loadFileTagsParams,
+  parseAndAddTags,
+  parseTagList,
   removeTag,
   replaceTag,
   serializeTags,
@@ -139,10 +140,11 @@ async function applyMutation(
 
   let nextTags: string[];
   if (kind === 'add') {
-    if (tagPresent(working.tags, tagA)) {
+    // tagA may be one tag or a comma-separated list (spaces around commas trimmed).
+    nextTags = parseAndAddTags(working.tags, tagA, params);
+    if (serializeTags(nextTags) === serializeTags(working.tags)) {
       return working;
     }
-    nextTags = addTag(working.tags, tagA, params);
   } else if (kind === 'remove') {
     if (!tagPresent(working.tags, tagA)) {
       return working;
@@ -175,8 +177,11 @@ async function applyMutation(
     if (!refreshed.tags_available) {
       throw new Error('Tags changed and could not be reloaded');
     }
-    if (kind === 'add' && tagPresent(refreshed.tags, tagA)) {
-      return { ...working, tags: refreshed.tags, tags_revision: refreshed.tags_revision, tags_available: true };
+    if (kind === 'add') {
+      const wanted = parseTagList(tagA);
+      if (wanted.length > 0 && wanted.every((t) => tagPresent(refreshed.tags, t))) {
+        return { ...working, tags: refreshed.tags, tags_revision: refreshed.tags_revision, tags_available: true };
+      }
     }
     if (kind === 'remove' && !tagPresent(refreshed.tags, tagA)) {
       return { ...working, tags: refreshed.tags, tags_revision: refreshed.tags_revision, tags_available: true };
@@ -261,7 +266,7 @@ async function runModalMutation(kind: MutationKind, tagA: string, tagB: string):
     renderEditChips(updated.tags);
     if (status) status.textContent = '';
     onUpdated?.(updated);
-    showSuccess(kind === 'remove' ? 'Tag removed' : kind === 'replace' ? 'Tag replaced' : 'Tag added');
+    showSuccess(kind === 'remove' ? 'Tag removed' : kind === 'replace' ? 'Tag replaced' : 'Tags updated');
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Tag update failed';
     if (status) status.textContent = message;

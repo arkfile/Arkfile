@@ -86,6 +86,14 @@ func defaultEndpointAndPathStyle(provider StorageProvider, region string) (strin
 		return fmt.Sprintf("https://%s.vultrobjects.com", region), false
 	case ProviderHetzner:
 		return fmt.Sprintf("https://%s.your-objectstorage.com", region), true
+	case ProviderIONOS:
+		// REGION must be the endpoint region code (e.g. us-central-1, eu-central-3).
+		// Legacy user-owned Frankfurt uses region name "de" but host eu-central-1.
+		endpointRegion := region
+		if region == "de" {
+			endpointRegion = "eu-central-1"
+		}
+		return fmt.Sprintf("https://s3.%s.ionoscloud.com", endpointRegion), true
 	case ProviderBackblaze:
 		return fmt.Sprintf("https://s3.%s.backblazeb2.com", region), false
 	case ProviderGenericS3:

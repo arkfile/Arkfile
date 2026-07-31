@@ -86,6 +86,7 @@ EXAMPLES:
     arkfile-client list-files --tags 'Food,FUN'
     arkfile-client list-files --raw
     arkfile-client tags add --file-id abc123 Food
+    arkfile-client tags add --file-id abc123 'Food, activity, FUN'
     arkfile-client tags remove --file-id abc123 Food
     arkfile-client tags replace --file-id abc123 Food FOOD
     arkfile-client share create --file-id abc123

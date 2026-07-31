@@ -166,7 +166,7 @@ The setup scripts are numbered to show their logical dependency order:
 - Writes production configuration (rqlite, SeaweedFS/external S3, secrets.env)
 - Builds Caddy from source with deSEC DNS-01 module
 - Starts and health-checks all services (SeaweedFS, rqlite, Arkfile, Caddy)
-- Supports storage backends: local-seaweedfs, wasabi, backblaze, vultr, hetzner, cloudflare-r2, aws-s3, generic-s3
+- Supports storage backends: local-seaweedfs, wasabi, backblaze, vultr, hetzner, ionos, cloudflare-r2, aws-s3, generic-s3
 - Detects existing deployments and offers REINSTALL option
 
 #### `prod-update.sh`
