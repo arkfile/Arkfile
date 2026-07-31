@@ -509,6 +509,65 @@ build_go_binaries_static
 # Verify binary linking policy
 verify_built_binaries
 
+# govulncheck OSV IDs that must not fail the production gate.
+# GO-2026-5932: golang.org/x/crypto/openpgp is deprecated with Fixed-in: N/A.
+# Arkfile links x/crypto for argon2/hkdf/acme only; openpgp is not imported or
+# present in vendor/, and fresh binaries contain no openpgp strings. Binary-mode
+# govulncheck still flags the module. Revisit if Arkfile ever uses OpenPGP.
+GOVULNCHECK_WHITELIST_IDS="GO-2026-5932"
+
+# Return 0 if $1 is in GOVULNCHECK_WHITELIST_IDS (space-separated).
+govulncheck_id_is_whitelisted() {
+    local id="$1"
+    local w
+    for w in $GOVULNCHECK_WHITELIST_IDS; do
+        if [ "$w" = "$id" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Run govulncheck -mode=binary. Args: $1=govulncheck binary, $2=path to scan.
+# Print full text report. Exit 0 if clean or only whitelisted OSV IDs remain;
+# exit 1 if any non-whitelisted finding exists.
+run_govulncheck_binary_with_whitelist() {
+    local gvbin="$1"
+    local binary="$2"
+    local report ids id blocking=0 whitelisted=0
+
+    report="$(GOTOOLCHAIN="${GOTOOLCHAIN:-local}" "$gvbin" -mode=binary "$binary" 2>&1)" || true
+    printf '%s\n' "$report"
+
+    ids="$(printf '%s\n' "$report" | grep -oE 'GO-[0-9]+-[0-9]+' | sort -u || true)"
+    if [ -z "$ids" ]; then
+        if printf '%s\n' "$report" | grep -qiE 'Your code is affected by [1-9]|Vulnerability #'; then
+            echo -e "${RED}[X] govulncheck reported findings but no OSV IDs could be parsed${NC}" >&2
+            return 1
+        fi
+        return 0
+    fi
+
+    while IFS= read -r id; do
+        [ -n "$id" ] || continue
+        if govulncheck_id_is_whitelisted "$id"; then
+            echo -e "${YELLOW}[!] govulncheck whitelist: ignoring ${id} for $(basename "$binary")${NC}"
+            whitelisted=$((whitelisted + 1))
+        else
+            echo -e "${RED}[X] govulncheck finding (not whitelisted): ${id}${NC}" >&2
+            blocking=$((blocking + 1))
+        fi
+    done <<< "$ids"
+
+    if [ "$blocking" -gt 0 ]; then
+        return 1
+    fi
+    if [ "$whitelisted" -gt 0 ]; then
+        echo -e "${GREEN}[OK] govulncheck: only whitelisted findings for $(basename "$binary")${NC}"
+    fi
+    return 0
+}
+
 # Run Go vulnerability check and generate SBOM
 run_security_audits_and_sbom() {
     echo -e "${YELLOW}Running security audits and generating SBOM...${NC}"
@@ -536,13 +595,14 @@ run_security_audits_and_sbom() {
     else
         local govulncheck_failed=false
         local binary
+        echo -e "${BLUE}govulncheck whitelist: ${GOVULNCHECK_WHITELIST_IDS}${NC}"
         for binary in "${BUILD_DIR}/${APP_NAME}" "${BUILD_DIR}/arkfile-client" "${BUILD_DIR}/arkfile-admin"; do
             if [ ! -x "$binary" ]; then
                 echo -e "${YELLOW}[WARNING] Skipping govulncheck; binary not found: $binary${NC}"
                 continue
             fi
             echo "Running govulncheck ($govulncheck_bin) on $(basename "$binary")..."
-            if ! GOTOOLCHAIN="${GOTOOLCHAIN:-local}" "$govulncheck_bin" -mode=binary "$binary"; then
+            if ! run_govulncheck_binary_with_whitelist "$govulncheck_bin" "$binary"; then
                 govulncheck_failed=true
             fi
         done
