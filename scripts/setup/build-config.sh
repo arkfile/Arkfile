@@ -433,35 +433,155 @@ Cflags: -I\${includedir}
 EOF
 }
 
+# emsdk (libopaque WASM) requires Python 3.10+. Alma/RHEL 9 ship python3 as 3.9.
+EMSDK_MIN_PYTHON_MAJOR=3
+EMSDK_MIN_PYTHON_MINOR=10
+
+# Return 0 if $1 is an executable Python >= EMSDK_MIN_PYTHON_*.
+python_meets_emsdk_min() {
+    local py="$1"
+    local ver major minor
+
+    [ -n "$py" ] || return 1
+    if [ ! -x "$py" ] && ! command -v "$py" >/dev/null 2>&1; then
+        return 1
+    fi
+
+    ver=$("$py" -c 'import sys; print("%d %d" % (sys.version_info[0], sys.version_info[1]))' 2>/dev/null) || return 1
+    # shellcheck disable=SC2086
+    set -- $ver
+    major="${1:-}"
+    minor="${2:-}"
+    [ -n "$major" ] && [ -n "$minor" ] || return 1
+
+    if [ "$major" -gt "$EMSDK_MIN_PYTHON_MAJOR" ]; then
+        return 0
+    fi
+    if [ "$major" -eq "$EMSDK_MIN_PYTHON_MAJOR" ] && [ "$minor" -ge "$EMSDK_MIN_PYTHON_MINOR" ]; then
+        return 0
+    fi
+    return 1
+}
+
+# Print absolute path of a Python suitable for emsdk, or return 1.
+# Honors EMSDK_PYTHON when already set and valid; otherwise prefers
+# python3.13 .. python3.10, then python3 if new enough.
+find_emsdk_python() {
+    local candidate path
+
+    if [ -n "${EMSDK_PYTHON:-}" ]; then
+        if [ -x "$EMSDK_PYTHON" ] && python_meets_emsdk_min "$EMSDK_PYTHON"; then
+            echo "$EMSDK_PYTHON"
+            return 0
+        fi
+        if path="$(command -v "$EMSDK_PYTHON" 2>/dev/null)" && python_meets_emsdk_min "$path"; then
+            echo "$path"
+            return 0
+        fi
+    fi
+
+    for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
+        if path="$(command -v "$candidate" 2>/dev/null)" && python_meets_emsdk_min "$path"; then
+            echo "$path"
+            return 0
+        fi
+    done
+
+    for candidate in \
+        /usr/bin/python3.13 \
+        /usr/bin/python3.12 \
+        /usr/bin/python3.11 \
+        /usr/bin/python3.10 \
+        /usr/local/bin/python3.13 \
+        /usr/local/bin/python3.12 \
+        /usr/local/bin/python3.11 \
+        /usr/local/bin/python3.10
+    do
+        if [ -x "$candidate" ] && python_meets_emsdk_min "$candidate"; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# Export EMSDK_PYTHON to a suitable interpreter. Return 1 if none found.
+ensure_emsdk_python() {
+    local py
+
+    if ! py="$(find_emsdk_python)"; then
+        return 1
+    fi
+    export EMSDK_PYTHON="$py"
+    return 0
+}
+
+# Package name / install token for MISSING_DEPS and hints.
+emsdk_python_package_name() {
+    case "$(detect_package_os_family)" in
+        debian) echo "python3" ;;
+        rhel)   echo "python3.11" ;;
+        alpine) echo "python3" ;;
+        arch)   echo "python" ;;
+        *)      echo "python3.11" ;;
+    esac
+}
+
+print_emsdk_python_install_hint() {
+    echo "    Python ${EMSDK_MIN_PYTHON_MAJOR}.${EMSDK_MIN_PYTHON_MINOR}+ is required for emsdk (libopaque WASM)."
+    case "$(detect_package_os_family)" in
+        debian)
+            echo "      Debian/Ubuntu: apt install -y python3  # 3.10+ on Debian 12 / Ubuntu 22.04+"
+            ;;
+        rhel)
+            echo "      RHEL/Alma/Rocky 9: dnf install -y python3.11  # system python3 is 3.9 and will not work"
+            echo "      Fedora:            dnf install -y python3"
+            ;;
+        alpine)
+            echo "      Alpine: apk add --no-cache python3"
+            ;;
+        arch)
+            echo "      Arch: pacman -S --needed python"
+            ;;
+        *)
+            echo "      Install a Python ${EMSDK_MIN_PYTHON_MAJOR}.${EMSDK_MIN_PYTHON_MINOR}+ interpreter (e.g. python3.11)"
+            ;;
+    esac
+}
+
 print_native_build_deps_hint() {
     echo "    FIDO/CLI build host packages (vendored libfido2 stack):"
-    echo "      Debian/Ubuntu: apt install -y build-essential cmake pkg-config perl git libudev-dev"
-    echo "      Alpine:        apk add --no-cache build-base cmake pkgconf-dev perl git linux-headers eudev-dev"
-    echo "      RHEL/Alma/Rocky/Fedora: dnf install -y gcc gcc-c++ make cmake pkgconf perl git systemd-devel"
-    echo "      Arch:          pacman -S --needed base-devel cmake pkgconf perl git systemd"
-    echo "      FreeBSD:       pkg install cmake gmake perl5 git pkgconf"
-    echo "      OpenBSD:       pkg_add cmake gmake perl git"
+    echo "      Debian/Ubuntu: apt install -y build-essential cmake pkg-config perl git libudev-dev python3"
+    echo "      Alpine:        apk add --no-cache build-base cmake pkgconf-dev perl git linux-headers eudev-dev python3"
+    echo "      RHEL/Alma/Rocky/Fedora: dnf install -y gcc gcc-c++ make cmake pkgconf perl git systemd-devel python3.11"
+    echo "      Arch:          pacman -S --needed base-devel cmake pkgconf perl git systemd python"
+    echo "      FreeBSD:       pkg install cmake gmake perl5 git pkgconf python3"
+    echo "      OpenBSD:       pkg_add cmake gmake perl git python3"
     echo "    Linux CLI runtime (USB security keys): libudev/eudev userland (usually already installed)."
+    print_emsdk_python_install_hint
 }
 
 print_native_build_package_install_hint() {
     case "$(detect_package_os_family)" in
         debian)
-            echo "  Install with: sudo apt install -y build-essential cmake pkg-config perl git libudev-dev"
+            echo "  Install with: sudo apt install -y build-essential cmake pkg-config perl git libudev-dev python3"
             ;;
         rhel)
-            echo "  Install with: sudo dnf install -y gcc gcc-c++ make cmake pkgconf perl git systemd-devel"
+            echo "  Install with: sudo dnf install -y gcc gcc-c++ make cmake pkgconf perl git systemd-devel python3.11"
             ;;
         alpine)
-            echo "  Install with: sudo apk add --no-cache build-base cmake pkgconf-dev perl git linux-headers eudev-dev"
+            echo "  Install with: sudo apk add --no-cache build-base cmake pkgconf-dev perl git linux-headers eudev-dev python3"
             ;;
         arch)
-            echo "  Install with: sudo pacman -S --needed base-devel cmake pkgconf perl git systemd"
+            echo "  Install with: sudo pacman -S --needed base-devel cmake pkgconf perl git systemd python"
             ;;
         *)
             print_native_build_deps_hint
+            return
             ;;
     esac
+    print_emsdk_python_install_hint
 }
 
 fido_platform_stamp() {

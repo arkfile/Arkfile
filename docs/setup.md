@@ -279,26 +279,27 @@ go version
 ```bash
 # Debian/Ubuntu
 sudo apt update && sudo apt install -y \
-  curl wget git build-essential pkg-config cmake perl \
+  curl wget git build-essential pkg-config cmake perl python3 \
   sqlite3 openssl ca-certificates \
   libsodium-dev libudev-dev tar gzip
 
 # RHEL 9 / AlmaLinux 9 / Rocky Linux 9 (EPEL required for libsodium-devel)
+# Note: system python3 is 3.9; emsdk needs Python 3.10+ so install python3.11
 sudo dnf install -y epel-release
 sudo dnf install -y \
-  curl wget git gcc gcc-c++ make cmake pkgconf perl \
+  curl wget git gcc gcc-c++ make cmake pkgconf perl python3.11 \
   sqlite openssl ca-certificates \
   libsodium-devel systemd-devel tar gzip
 
-# Fedora (EPEL not needed)
+# Fedora (EPEL not needed; python3 is already 3.10+)
 sudo dnf install -y \
-  curl wget git gcc gcc-c++ make cmake pkgconf perl \
+  curl wget git gcc gcc-c++ make cmake pkgconf perl python3 \
   sqlite openssl ca-certificates \
   libsodium-devel systemd-devel tar gzip
 
 # Alpine Linux
 sudo apk add --no-cache \
-  curl wget git gcc musl-dev make cmake pkgconf-dev perl \
+  curl wget git gcc musl-dev make cmake pkgconf-dev perl python3 \
   sqlite openssl ca-certificates \
   libsodium-dev libsodium-static eudev-dev linux-headers tar gzip
 ```
@@ -309,6 +310,11 @@ sudo apk add --no-cache \
 - **Build host:** `perl` (OpenSSL configure), `pkg-config`, and Linux **libudev development headers** (`libudev-dev` on Debian, `systemd-devel` on RHEL/Fedora, `eudev-dev` on Alpine) are required when compiling the CLIs.
 - **CLI runtime (Linux):** USB security keys need `libudev.so.1` at runtime. Install the runtime package if missing (`libudev1` / `systemd-libs` / `eudev`).
 - Vendored FIDO libraries install under `/var/tmp/arkfile-build/c-libs/fido/<platform>/lib/` (e.g. `linux-amd64/lib/`). CMake is forced to `CMAKE_INSTALL_LIBDIR=lib` (and OpenSSL `--libdir=lib`) so RHEL/Alma/Fedora hosts do not land archives in `lib64/`. Stale caches are rebuilt automatically when the platform stamp changes.
+
+**WASM / Emscripten (libopaque.js) Python note:**
+- Building the browser OPAQUE WASM module installs Emscripten via `vendor/emsdk`, which requires **Python 3.10 or newer**.
+- Deploy and build scripts call `ensure_emsdk_python` (in `scripts/setup/build-config.sh`), which prefers `python3.13` .. `python3.10`, then a new-enough `python3`, and exports `EMSDK_PYTHON` for emsdk.
+- On RHEL/Alma/Rocky 9, install `python3.11` (or newer). The default `/usr/bin/python3` (3.9) is not sufficient.
 
 **Development Dependencies (Optional):**
 For development and TypeScript compilation, install additional dependencies:

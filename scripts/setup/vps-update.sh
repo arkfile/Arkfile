@@ -162,6 +162,13 @@ fi
 print_status "SUCCESS" "Found Go at: $GO_BINARY"
 export GO_BINARY="$GO_BINARY"
 
+if ! ensure_emsdk_python; then
+    print_status "ERROR" "Python ${EMSDK_MIN_PYTHON_MAJOR}.${EMSDK_MIN_PYTHON_MINOR}+ is required for emsdk (libopaque WASM)"
+    print_emsdk_python_install_hint
+    exit 1
+fi
+print_status "INFO" "emsdk Python: $EMSDK_PYTHON ($("$EMSDK_PYTHON" --version 2>&1))"
+
 echo
 echo -e "${BLUE}${BANNER_TITLE}${NC}"
 echo

@@ -84,10 +84,26 @@ run_git_as_user() {
     fi
 }
 
+# Resolve and export EMSDK_PYTHON before any ./emsdk invocation.
+require_emsdk_python() {
+    if ensure_emsdk_python; then
+        print_status "INFO" "Using EMSDK_PYTHON=$EMSDK_PYTHON ($("$EMSDK_PYTHON" --version 2>&1))"
+        return 0
+    fi
+
+    print_status "ERROR" "Python ${EMSDK_MIN_PYTHON_MAJOR}.${EMSDK_MIN_PYTHON_MINOR}+ is required for emsdk"
+    print_emsdk_python_install_hint
+    return 1
+}
+
 # Install Emscripten via emsdk (local installation - no sudo needed)
 install_emscripten_emsdk() {
     print_status "INFO" "Installing Emscripten $EMSCRIPTEN_VERSION via emsdk..."
-    
+
+    if ! require_emsdk_python; then
+        return 1
+    fi
+
     local EMSDK_DIR="vendor/emsdk"
     
     # Clone emsdk if not already present
@@ -161,7 +177,11 @@ install_emscripten_emsdk() {
 # Ensure Emscripten is available
 ensure_emscripten() {
     print_status "INFO" "Checking for Emscripten..."
-    
+
+    if ! require_emsdk_python; then
+        return 1
+    fi
+
     # Priority 1: Check if local emsdk is already installed
     if [ -f "vendor/emsdk/emsdk_env.sh" ]; then
         print_status "INFO" "Found local emsdk installation, loading environment..."

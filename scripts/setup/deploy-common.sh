@@ -36,9 +36,15 @@ print_status() {
 
 # Run a command as the original (pre-sudo) user so Go build artifacts are not
 # root-owned. Falls back to running directly when not root.
+# Preserve EMSDK_PYTHON so emsdk keeps the Python 3.10+ interpreter selected
+# during deploy dependency checks (sudo -H otherwise drops the environment).
 run_as_user() {
     if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
-        sudo -u "$SUDO_USER" -H "$@"
+        if [ -n "${EMSDK_PYTHON:-}" ]; then
+            sudo -u "$SUDO_USER" -H env "EMSDK_PYTHON=$EMSDK_PYTHON" "$@"
+        else
+            sudo -u "$SUDO_USER" -H "$@"
+        fi
     else
         "$@"
     fi

@@ -362,6 +362,13 @@ if ! command -v bun >/dev/null 2>&1; then
     MISSING_DEPS="$MISSING_DEPS bun"
 fi
 
+# emsdk (libopaque WASM) needs Python 3.10+; Alma/RHEL 9 python3 is 3.9.
+if ! ensure_emsdk_python; then
+    MISSING_DEPS="$MISSING_DEPS $(emsdk_python_package_name)"
+else
+    print_status "INFO" "emsdk Python: $EMSDK_PYTHON ($("$EMSDK_PYTHON" --version 2>&1))"
+fi
+
 if [ -n "$MISSING_DEPS" ]; then
     print_status "ERROR" "Missing required dependencies:$MISSING_DEPS"
     echo ""
