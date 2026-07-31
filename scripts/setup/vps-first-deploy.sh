@@ -838,14 +838,8 @@ for cmd in gcc make cmake pkg-config git openssl curl bun perl; do
     fi
 done
 
-if ! pkg-config --exists libsodium 2>/dev/null; then
-    case "$OS_FAMILY" in
-        debian) MISSING_DEPS="$MISSING_DEPS libsodium-dev" ;;
-        alpine) MISSING_DEPS="$MISSING_DEPS libsodium-dev" ;;
-        arch)   MISSING_DEPS="$MISSING_DEPS libsodium" ;;
-        *)      MISSING_DEPS="$MISSING_DEPS libsodium-devel" ;;
-    esac
-fi
+# libsodium is vendored and built statically (vendor_c/jedisct1/libsodium);
+# do not require or link a host libsodium package.
 
 if [ "$(uname -s)" = "Linux" ] && ! pkg-config --exists libudev 2>/dev/null; then
     MISSING_DEPS="$MISSING_DEPS $(fido_udev_dev_package_name)"

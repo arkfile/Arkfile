@@ -73,7 +73,7 @@ test_alpine_dependencies() {
     echo "Testing Alpine package installation..."
     
     local result=$(podman run --rm $MOUNT_OPTIONS -w /app alpine:latest sh -c "
-        apk add --no-cache go gcc musl-dev libsodium-dev libsodium-static make git bash curl >/dev/null 2>&1 && echo 'SUCCESS' || echo 'FAILED'
+        apk add --no-cache go gcc musl-dev make git bash curl autoconf automake libtool >/dev/null 2>&1 && echo 'SUCCESS' || echo 'FAILED'
     " 2>/dev/null)
     
     if [[ "$result" == "SUCCESS" ]]; then
@@ -88,7 +88,7 @@ test_libopaque_build() {
     echo "Testing libopaque build..."
     
     local result=$(podman run --rm $MOUNT_OPTIONS -w /app alpine:latest sh -c "
-        apk add --no-cache go gcc musl-dev libsodium-dev libsodium-static make git bash curl >/dev/null 2>&1
+        apk add --no-cache go gcc musl-dev make git bash curl autoconf automake libtool >/dev/null 2>&1
         chmod +x scripts/setup/build-libopaque.sh
         
         if ./scripts/setup/build-libopaque.sh >/dev/null 2>&1; then
@@ -109,7 +109,7 @@ test_application_build() {
     echo "Testing application build..."
     
     local result=$(podman run --rm $MOUNT_OPTIONS -w /app alpine:latest sh -c "
-        apk add --no-cache go gcc musl-dev libsodium-dev libsodium-static make git bash curl >/dev/null 2>&1
+        apk add --no-cache go gcc musl-dev make git bash curl autoconf automake libtool >/dev/null 2>&1
         chmod +x scripts/setup/build-libopaque.sh
         ./scripts/setup/build-libopaque.sh >/dev/null 2>&1
         
@@ -144,7 +144,7 @@ test_basic_functionality() {
     echo "Testing basic functionality..."
     
     local result=$(podman run --rm $MOUNT_OPTIONS -w /app alpine:latest sh -c "
-        apk add --no-cache go gcc musl-dev libsodium-dev libsodium-static make git bash curl >/dev/null 2>&1
+        apk add --no-cache go gcc musl-dev make git bash curl autoconf automake libtool >/dev/null 2>&1
         chmod +x scripts/setup/build-libopaque.sh
         ./scripts/setup/build-libopaque.sh >/dev/null 2>&1
         go build -o app-alpine ./main.go >/dev/null 2>&1

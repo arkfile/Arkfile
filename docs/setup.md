@@ -280,34 +280,39 @@ go version
 # Debian/Ubuntu
 sudo apt update && sudo apt install -y \
   curl wget git build-essential pkg-config cmake perl python3 \
+  autoconf automake libtool \
   sqlite3 openssl ca-certificates \
-  libsodium-dev libudev-dev tar gzip
+  libudev-dev tar gzip
 
-# RHEL 9 / AlmaLinux 9 / Rocky Linux 9 (EPEL required for libsodium-devel)
+# RHEL 9 / AlmaLinux 9 / Rocky Linux 9
 # Note: system python3 is 3.9; emsdk needs Python 3.10+ so install python3.11
-sudo dnf install -y epel-release
 sudo dnf install -y \
   curl wget git gcc gcc-c++ make cmake pkgconf perl python3.11 \
+  autoconf automake libtool \
   sqlite openssl ca-certificates \
-  libsodium-devel systemd-devel tar gzip
+  systemd-devel tar gzip
 
-# Fedora (EPEL not needed; python3 is already 3.10+)
+# Fedora (python3 is already 3.10+)
 sudo dnf install -y \
   curl wget git gcc gcc-c++ make cmake pkgconf perl python3 \
+  autoconf automake libtool \
   sqlite openssl ca-certificates \
-  libsodium-devel systemd-devel tar gzip
+  systemd-devel tar gzip
 
 # Alpine Linux
 sudo apk add --no-cache \
   curl wget git gcc musl-dev make cmake pkgconf-dev perl python3 \
+  autoconf automake libtool \
   sqlite openssl ca-certificates \
-  libsodium-dev libsodium-static eudev-dev linux-headers tar gzip
+  eudev-dev linux-headers tar gzip
 ```
+
+libsodium is **vendored** under `vendor_c/jedisct1/libsodium` and built statically by `scripts/setup/build-libopaque.sh`. Do not install host `libsodium-dev` / `libsodium-devel` for Arkfile builds; a system shared libsodium can incorrectly end up as a dynamic CLI dependency when pkg-config is involved. Autotools (`autoconf`, `automake`, `libtool`) are required to build the vendored libsodium archive.
 
 **CLI MFA / FIDO build notes:**
 - `arkfile-client` and `arkfile-admin` statically link vendored `libfido2`, `libcbor`, `zlib`, OpenSSL `libcrypto`, and the OPAQUE C stack (`libopaque`, `liboprf`, libsodium). The server binary does not link the FIDO stack and remains fully static.
 - **CLI link model (Linux):** vendored C libraries are linked with `-Wl,-Bstatic`; OS libraries (`libudev`, `libc`, `libpthread`, etc.) are linked dynamically via `-Wl,-Bdynamic`. There is no `libudev.a` on glibc distros, so CLIs cannot be fully static when FIDO is enabled.
-- **Build host:** `perl` (OpenSSL configure), `pkg-config`, and Linux **libudev development headers** (`libudev-dev` on Debian, `systemd-devel` on RHEL/Fedora, `eudev-dev` on Alpine) are required when compiling the CLIs.
+- **Build host:** `perl` (OpenSSL configure), `pkg-config`, autotools (vendored libsodium), and Linux **libudev development headers** (`libudev-dev` on Debian, `systemd-devel` on RHEL/Fedora, `eudev-dev` on Alpine) are required when compiling the CLIs.
 - **CLI runtime (Linux):** USB security keys need `libudev.so.1` at runtime. Install the runtime package if missing (`libudev1` / `systemd-libs` / `eudev`).
 - Vendored FIDO libraries install under `/var/tmp/arkfile-build/c-libs/fido/<platform>/lib/` (e.g. `linux-amd64/lib/`). CMake is forced to `CMAKE_INSTALL_LIBDIR=lib` (and OpenSSL `--libdir=lib`) so RHEL/Alma/Fedora hosts do not land archives in `lib64/`. Stale caches are rebuilt automatically when the platform stamp changes.
 

@@ -342,15 +342,8 @@ for cmd in gcc make cmake pkg-config git openssl curl perl; do
     fi
 done
 
-# Check libsodium
-if ! pkg-config --exists libsodium 2>/dev/null; then
-    case "$OS_FAMILY" in
-        debian) MISSING_DEPS="$MISSING_DEPS libsodium-dev" ;;
-        alpine) MISSING_DEPS="$MISSING_DEPS libsodium-dev" ;;
-        arch)   MISSING_DEPS="$MISSING_DEPS libsodium" ;;
-        *)      MISSING_DEPS="$MISSING_DEPS libsodium-devel" ;;
-    esac
-fi
+# libsodium is vendored and built statically (vendor_c/jedisct1/libsodium);
+# do not require or link a host libsodium package.
 
 # Linux: libfido2 / CLI MFA build needs libudev development headers
 if [ "$(uname -s)" = "Linux" ] && ! pkg-config --exists libudev 2>/dev/null; then
@@ -373,7 +366,6 @@ if [ -n "$MISSING_DEPS" ]; then
     print_status "ERROR" "Missing required dependencies:$MISSING_DEPS"
     echo ""
     print_native_build_package_install_hint
-    echo "  Also install libsodium development package if missing (see docs/setup.md)."
     echo "  For bun: curl -fsSL https://bun.sh/install | bash"
     exit 1
 fi
