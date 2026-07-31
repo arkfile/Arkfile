@@ -125,8 +125,15 @@ check_go_version
 
 # Ensure Go dependencies are properly resolved
 if [ "$PRODUCTION_BUILD" = "true" ]; then
-    echo -e "${YELLOW}Production mode: Verifying checked-in vendor directory and lockfile state...${NC}"
-    # Verify vendor directory exists and hash matches
+    echo -e "${YELLOW}Production mode: Verifying vendor directory and lockfile state (fail-fast)...${NC}"
+
+    # Fail before WASM/FIDO/TS: go.sum/.vendor_cache hash alone can pass while go.mod
+    # disagrees with a stale vendor/ (inconsistent vendoring at link time).
+    if ! verify_go_mod_vendor_consistency; then
+        echo -e "${RED}[X] Aborting before expensive build steps due to Go module/vendor mismatch.${NC}" >&2
+        exit 1
+    fi
+
     VENDOR_CACHE=".vendor_cache"
     CURRENT_HASH=""
     CACHED_HASH=""
@@ -134,12 +141,12 @@ if [ "$PRODUCTION_BUILD" = "true" ]; then
         CURRENT_HASH=$(sha256sum go.sum | cut -d' ' -f1)
         CACHED_HASH=$(cat "$VENDOR_CACHE" 2>/dev/null || echo "")
     fi
-    if [ ! -d "vendor" ] || [ "$CURRENT_HASH" != "$CACHED_HASH" ]; then
-        echo -e "${RED}[X] Production build fail: Checked-in vendor/ dependencies are missing or out of sync with go.sum!${NC}" >&2
-        echo -e "${RED}[X] Please run a development/test deploy or updates first to securely sync vendor/ directory under version control.${NC}" >&2
+    if [ ! -d "vendor" ] || [ ! -f "go.sum" ] || [ -z "$CURRENT_HASH" ] || [ "$CURRENT_HASH" != "$CACHED_HASH" ]; then
+        echo -e "${RED}[X] Production build fail: vendor/ or go.sum missing, or .vendor_cache does not match go.sum!${NC}" >&2
+        print_go_vendor_sync_hint
         exit 1
     fi
-    echo -e "${GREEN}[OK] Checked-in vendor directory matches dependencies (no mutation allowed)${NC}"
+    echo -e "${GREEN}[OK] vendor/ lockfile cache matches go.sum (no mutation in production mode)${NC}"
 else
     echo -e "${YELLOW}Checking Go module dependencies...${NC}"
     fix_vendor_ownership
@@ -185,6 +192,12 @@ else
         CURRENT_HASH=$(sha256sum go.sum | cut -d' ' -f1)
         echo "$CURRENT_HASH" > "$VENDOR_CACHE"
         echo -e "${GREEN}[OK] Vendor directory synced with dependencies${NC}"
+    fi
+
+    # Confirm sync (or cache hit) actually satisfies -mod=vendor.
+    if ! verify_go_mod_vendor_consistency; then
+        echo -e "${RED}[X] Vendor still inconsistent after sync${NC}" >&2
+        exit 1
     fi
 fi
 

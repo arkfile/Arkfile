@@ -827,6 +827,12 @@ fi
 print_status "SUCCESS" "Found Go at: $GO_BINARY"
 export GO_BINARY="$GO_BINARY"
 
+print_status "INFO" "Verifying go.mod / vendor consistency (fail-fast)..."
+if ! verify_go_mod_vendor_consistency; then
+    print_status "ERROR" "Go module/vendor mismatch -- fix before starting a long deploy build"
+    exit 1
+fi
+
 OS_FAMILY=$(detect_package_os_family)
 print_status "INFO" "Detected OS family: $OS_FAMILY"
 

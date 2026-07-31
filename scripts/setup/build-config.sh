@@ -656,10 +656,62 @@ run_go_as_user() {
         return 1
     fi
     if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
-        sudo -u "$SUDO_USER" -H "$GO_BINARY" "$@"
+        sudo -u "$SUDO_USER" -H env "GOTOOLCHAIN=${GOTOOLCHAIN:-auto}" "$GO_BINARY" "$@"
     else
         "$GO_BINARY" "$@"
     fi
+}
+
+print_go_vendor_sync_hint() {
+    echo "    Fix with (from the Arkfile repo root, using Go matching go.mod):"
+    echo "      go mod tidy && go mod vendor && sha256sum go.sum | awk '{print \$1}' > .vendor_cache"
+}
+
+# Fail fast if go.mod disagrees with vendor/ (same rules as go build -mod=vendor).
+# Call after GO_BINARY is set, before expensive WASM/FIDO/TS work.
+# Returns 0 on success; prints [X] diagnostics and returns 1 on failure.
+verify_go_mod_vendor_consistency() {
+    local required_version list_out
+
+    if [ -z "${GO_BINARY:-}" ]; then
+        if ! GO_BINARY="$(find_go_binary)"; then
+            echo "[X] Go compiler not found; cannot verify vendor consistency" >&2
+            return 1
+        fi
+        export GO_BINARY
+    fi
+
+    if [ ! -f go.mod ]; then
+        echo "[X] go.mod missing; run this check from the Arkfile repo root" >&2
+        return 1
+    fi
+    if [ ! -d vendor ] || [ ! -f vendor/modules.txt ]; then
+        echo "[X] vendor/ is missing or incomplete (need vendor/modules.txt before -mod=vendor builds)" >&2
+        print_go_vendor_sync_hint
+        return 1
+    fi
+    if [ ! -f go.sum ]; then
+        echo "[X] go.sum is missing" >&2
+        print_go_vendor_sync_hint
+        return 1
+    fi
+
+    required_version="$(grep '^go [0-9]' go.mod | awk '{print $2}')"
+    if [ -n "$required_version" ]; then
+        export GOTOOLCHAIN="${GOTOOLCHAIN:-go${required_version}+auto}"
+    fi
+
+    # Cheap probe (seconds): same consistency rules as go build -mod=vendor.
+    # Note: `go list -m all` is not supported with -mod=vendor; list packages instead.
+    if ! list_out="$(run_go_as_user list -mod=vendor ./... 2>&1)"; then
+        echo "[X] go.mod and vendor/ are out of sync (inconsistent vendoring)" >&2
+        echo "$list_out" | head -n 25 >&2
+        print_go_vendor_sync_hint
+        return 1
+    fi
+
+    echo "[OK] go.mod and vendor/ are consistent (-mod=vendor)"
+    return 0
 }
 
 # =============================================================================

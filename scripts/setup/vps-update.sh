@@ -162,6 +162,12 @@ fi
 print_status "SUCCESS" "Found Go at: $GO_BINARY"
 export GO_BINARY="$GO_BINARY"
 
+print_status "INFO" "Verifying go.mod / vendor consistency (fail-fast)..."
+if ! verify_go_mod_vendor_consistency; then
+    print_status "ERROR" "Go module/vendor mismatch -- fix before starting a long update build"
+    exit 1
+fi
+
 if ! ensure_emsdk_python; then
     print_status "ERROR" "Python ${EMSDK_MIN_PYTHON_MAJOR}.${EMSDK_MIN_PYTHON_MINOR}+ is required for emsdk (libopaque WASM)"
     print_emsdk_python_install_hint
