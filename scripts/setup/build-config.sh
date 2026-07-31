@@ -391,19 +391,25 @@ fido_udev_dev_package_name() {
 # pkg-config search path for vendored FIDO static dependencies only.
 # Host PKG_CONFIG_PATH is intentionally excluded so system libcrypto/zlib are not
 # selected over the vendored static archives.
+# Prefer lib/ (forced install layout); include lib64/ as a fallback for partial
+# caches from RHEL/Alma cmake defaults before normalize_fido_libdir runs.
 fido_pkg_config_path() {
     local paths=""
+    local dir
 
-    if [ -d "${FIDO_PREFIX}/lib/pkgconfig" ]; then
-        paths="${FIDO_PREFIX}/lib/pkgconfig"
-    fi
-    if [ -d "${FIDO_PREFIX}/share/pkgconfig" ]; then
-        if [ -n "$paths" ]; then
-            paths="${paths}:${FIDO_PREFIX}/share/pkgconfig"
-        else
-            paths="${FIDO_PREFIX}/share/pkgconfig"
+    for dir in \
+        "${FIDO_PREFIX}/lib/pkgconfig" \
+        "${FIDO_PREFIX}/lib64/pkgconfig" \
+        "${FIDO_PREFIX}/share/pkgconfig"
+    do
+        if [ -d "$dir" ]; then
+            if [ -n "$paths" ]; then
+                paths="${paths}:${dir}"
+            else
+                paths="${dir}"
+            fi
         fi
-    fi
+    done
     echo "$paths"
 }
 

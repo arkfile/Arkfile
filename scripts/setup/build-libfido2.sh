@@ -12,6 +12,10 @@
 #   - git (on-demand source clone when vendor trees are absent)
 #   - Linux: libudev development headers (libudev.pc) for libfido2 configure
 #
+# Install layout: all static archives and .pc files go under ${FIDO_PREFIX}/lib
+# (CMAKE_INSTALL_LIBDIR=lib / OpenSSL --libdir=lib). RHEL/Alma/Fedora cmake
+# otherwise defaults to lib64, which breaks pkg-config and CGO -L paths.
+#
 # Platform-specific runtime deps for the final CLI link step are handled separately
 # via fido_cgo_extra_libs() in build-config.sh (e.g. -ludev on Linux).
 
@@ -103,6 +107,35 @@ install_fido_zlib_pc() {
     fi
 }
 
+# Move any lib64 leftovers into lib/ so CGO and pkg-config see one layout.
+# Also rewrite .pc libdir lines that still point at lib64 after relocate.
+normalize_fido_libdir() {
+    if [ ! -d "${FIDO_PREFIX}/lib64" ]; then
+        return 0
+    fi
+
+    mkdir -p "${FIDO_PREFIX}/lib" "${FIDO_PREFIX}/lib/pkgconfig"
+    local f tmp
+    for f in "${FIDO_PREFIX}/lib64/"*.a; do
+        [ -f "$f" ] || continue
+        mv -f "$f" "${FIDO_PREFIX}/lib/"
+    done
+    if [ -d "${FIDO_PREFIX}/lib64/pkgconfig" ]; then
+        for f in "${FIDO_PREFIX}/lib64/pkgconfig/"*.pc; do
+            [ -f "$f" ] || continue
+            mv -f "$f" "${FIDO_PREFIX}/lib/pkgconfig/"
+        done
+    fi
+    for f in "${FIDO_PREFIX}/lib/pkgconfig/"*.pc; do
+        [ -f "$f" ] || continue
+        if grep -q 'lib64' "$f" 2>/dev/null; then
+            tmp="${f}.tmp"
+            sed 's|/lib64|/lib|g' "$f" >"$tmp"
+            mv -f "$tmp" "$f"
+        fi
+    done
+}
+
 verify_fido_pkg_config() {
     local module
     local failed=0
@@ -122,6 +155,7 @@ verify_fido_pkg_config() {
     if [ "$failed" -ne 0 ]; then
         echo "[X] Vendored FIDO dependency .pc files are missing or incomplete"
         ls -la "${FIDO_PREFIX}/lib/pkgconfig" 2>/dev/null || true
+        ls -la "${FIDO_PREFIX}/lib64/pkgconfig" 2>/dev/null || true
         return 1
     fi
     return 0
@@ -223,6 +257,9 @@ ensure_fido_cache_fresh() {
 
 build_zlib() {
     local out="${FIDO_PREFIX}/lib/libz.a"
+    if [ ! -f "$out" ]; then
+        normalize_fido_libdir
+    fi
     if [ -f "$out" ]; then
         echo "[OK] libz.a exists"
         install_fido_zlib_pc
@@ -241,10 +278,12 @@ build_zlib() {
         cmake "$OLDPWD/$ZLIB_SRC" \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=OFF \
-            -DCMAKE_INSTALL_PREFIX="$FIDO_PREFIX"
+            -DCMAKE_INSTALL_PREFIX="$FIDO_PREFIX" \
+            -DCMAKE_INSTALL_LIBDIR=lib
         cmake --build . --parallel "$JOBS"
         cmake --install .
     )
+    normalize_fido_libdir
     install_fido_zlib_pc
 }
 
@@ -290,6 +329,10 @@ build_openssl() {
 
 build_libcbor() {
     local out="${FIDO_PREFIX}/lib/libcbor.a"
+    # Recover archives left in lib64 from earlier RHEL/Alma cmake installs.
+    if [ ! -f "$out" ]; then
+        normalize_fido_libdir
+    fi
     if [ -f "$out" ]; then
         echo "[OK] libcbor.a exists"
         return 0
@@ -308,14 +351,19 @@ build_libcbor() {
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=OFF \
             -DCMAKE_INSTALL_PREFIX="$FIDO_PREFIX" \
+            -DCMAKE_INSTALL_LIBDIR=lib \
             "${CMAKE_EXTRA_ARGS[@]}"
         cmake --build . --parallel "$JOBS"
         cmake --install .
     )
+    normalize_fido_libdir
 }
 
 build_libfido2() {
     local out="${FIDO_PREFIX}/lib/libfido2.a"
+    if [ ! -f "$out" ]; then
+        normalize_fido_libdir
+    fi
     if [ -f "$out" ]; then
         echo "[OK] libfido2.a exists"
         return 0
@@ -329,6 +377,7 @@ build_libfido2() {
 
     echo "[BUILD] libfido2..."
     require_linux_udev_dev
+    normalize_fido_libdir
     if ! verify_fido_pkg_config; then
         exit 1
     fi
@@ -343,11 +392,13 @@ build_libfido2() {
             -DBUILD_TOOLS=OFF \
             -DBUILD_TESTS=OFF \
             -DCMAKE_INSTALL_PREFIX="$FIDO_PREFIX" \
+            -DCMAKE_INSTALL_LIBDIR=lib \
             -DCRYPTO_BACKEND=openssl \
             "${CMAKE_EXTRA_ARGS[@]}"
         cmake --build . --parallel "$JOBS"
         cmake --install .
     )
+    normalize_fido_libdir
 }
 
 verify_fido_libraries() {

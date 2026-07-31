@@ -308,7 +308,7 @@ sudo apk add --no-cache \
 - **CLI link model (Linux):** vendored C libraries are linked with `-Wl,-Bstatic`; OS libraries (`libudev`, `libc`, `libpthread`, etc.) are linked dynamically via `-Wl,-Bdynamic`. There is no `libudev.a` on glibc distros, so CLIs cannot be fully static when FIDO is enabled.
 - **Build host:** `perl` (OpenSSL configure), `pkg-config`, and Linux **libudev development headers** (`libudev-dev` on Debian, `systemd-devel` on RHEL/Fedora, `eudev-dev` on Alpine) are required when compiling the CLIs.
 - **CLI runtime (Linux):** USB security keys need `libudev.so.1` at runtime. Install the runtime package if missing (`libudev1` / `systemd-libs` / `eudev`).
-- Vendored FIDO libraries install under `/var/tmp/arkfile-build/c-libs/fido/<platform>/` (e.g. `linux-amd64/`); stale caches are rebuilt automatically when the platform stamp changes.
+- Vendored FIDO libraries install under `/var/tmp/arkfile-build/c-libs/fido/<platform>/lib/` (e.g. `linux-amd64/lib/`). CMake is forced to `CMAKE_INSTALL_LIBDIR=lib` (and OpenSSL `--libdir=lib`) so RHEL/Alma/Fedora hosts do not land archives in `lib64/`. Stale caches are rebuilt automatically when the platform stamp changes.
 
 **Development Dependencies (Optional):**
 For development and TypeScript compilation, install additional dependencies:
