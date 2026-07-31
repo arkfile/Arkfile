@@ -1391,21 +1391,22 @@ run_files_standard() {
 
         # Stale revision: PUT with expected_revision 0 must return tags_revision_conflict
         # once tags_revision has advanced past 0 (add/replace above).
-        local tags_tok
+        local tags_tok conflict_body_file conflict_http
         tags_tok=$(jq -r '.access_token // empty' "$HOME/.arkfile-session.json" 2>/dev/null)
-        local conflict_http
-        conflict_http=$(curl -sk -o /tmp/arkfile-tags-conflict.json -w '%{http_code}' \
+        conflict_body_file=$(mktemp "$TEST_DATA_DIR/tags-conflict.XXXXXX")
+        conflict_http=$(curl -sk -o "$conflict_body_file" -w '%{http_code}' \
             -X PUT "$SERVER_URL/api/files/$UPLOADED_FILE_ID/tags" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $tags_tok" \
             -d '{"encrypted_tags":"","tags_nonce":"","expected_revision":0}' || true)
-        if [ "$conflict_http" = "409" ] && jq -e '.error == "tags_revision_conflict"' /tmp/arkfile-tags-conflict.json >/dev/null 2>&1; then
+        if [ "$conflict_http" = "409" ] && jq -e '.error == "tags_revision_conflict"' "$conflict_body_file" >/dev/null 2>&1; then
             record_test "tags_revision_conflict HTTP probe" "PASS"
         else
             error "Expected 409 tags_revision_conflict, got HTTP $conflict_http"
-            cat /tmp/arkfile-tags-conflict.json 2>/dev/null || true
+            cat "$conflict_body_file" 2>/dev/null || true
             record_test "tags_revision_conflict HTTP probe" "FAIL"
         fi
+        rm -f "$conflict_body_file"
 
         local tags_rm_out tags_rm_code
         safe_exec tags_rm_out tags_rm_code \
