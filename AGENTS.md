@@ -36,6 +36,16 @@ As you are implementing, updating or reviewing existing functions, go through th
 - Does it require additional review, updates, moving or potentially deletion?
 - Does it align with the vision and intended design of the app as being privacy-preserving for users end-to-end?
 
+## Implementation Preferences
+
+Prefer the simplest correct path that meets current needs. Avoid premature abstraction and unnecessary config layers, without sacrificing privacy, streaming behavior, or crypto correctness.
+
+Prefer existing project dependencies and established patterns before adding new packages or rewriting from scratch. Check what the current stack already provides first.
+
+Prefer proven cryptographic and systems patterns that preserve end-to-end encryption and the project's threat model. Do not invent novel protocols for authentication, key handling, sharing, or file encryption.
+
+Do not replace a working, e2e-proven path with unfinished complexity. Cut over only when the replacement is complete and tested (unit coverage where applicable, and the relevant e2e path before treating the change as done).
+
 ## Key Tools for Development
 
 In order to slowly build up the core functionality of the system and prove its correct and secure implementation, the following tools are critical to use, improve upon and maintain:

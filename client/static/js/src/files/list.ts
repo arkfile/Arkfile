@@ -107,6 +107,7 @@ let listNextCursor: string | null = null;
 let listHasMore = false;
 let listLoadInFlight = false;
 let listScrollWired = false;
+let listScrollbarWired = false;
 let selectionToolbarWired = false;
 let matchingFilterScanToken = 0;
 const seenFileIds = new Set<string>();
@@ -190,11 +191,152 @@ function wireFileListScroll(): void {
   }
   listScrollWired = true;
   filesList.addEventListener('scroll', () => {
+    updateFilesListScrollbar();
     const remaining = filesList.scrollHeight - filesList.scrollTop - filesList.clientHeight;
     if (remaining < 120) {
       void loadMoreFiles();
     }
   });
+  wireFilesListScrollbar(filesList);
+  updateFilesListScrollbar();
+}
+
+/**
+ * Always-visible custom scrollbar for #filesList. Native Firefox overlay bars
+ * hide on unhover; we hide the native bar and sync a permanent biolum thumb.
+ */
+function wireFilesListScrollbar(filesList: HTMLElement): void {
+  const rail = document.querySelector('.files-list-scrollbar') as HTMLElement | null;
+  const thumb = document.querySelector('.files-list-scrollbar-thumb') as HTMLElement | null;
+  if (!rail || !thumb || listScrollbarWired) {
+    return;
+  }
+  listScrollbarWired = true;
+
+  let dragging = false;
+  let dragPointerId: number | null = null;
+  let dragOffsetY = 0;
+
+  const stopDragging = () => {
+    dragging = false;
+    dragPointerId = null;
+    dragOffsetY = 0;
+    thumb.classList.remove('is-dragging');
+  };
+
+  const scrollFromRailY = (clientY: number, offsetWithinThumb: number) => {
+    const railRect = rail.getBoundingClientRect();
+    const thumbHeight = thumb.offsetHeight;
+    const maxTop = Math.max(0, rail.clientHeight - thumbHeight);
+    const y = Math.min(maxTop, Math.max(0, clientY - railRect.top - offsetWithinThumb));
+    const maxScroll = filesList.scrollHeight - filesList.clientHeight;
+    if (maxScroll <= 0 || maxTop <= 0) {
+      filesList.scrollTop = 0;
+      return;
+    }
+    filesList.scrollTop = (y / maxTop) * maxScroll;
+  };
+
+  // Wheel over the rail must still scroll the list (rail itself is not a scrollport).
+  rail.addEventListener(
+    'wheel',
+    (ev) => {
+      stopDragging();
+      filesList.scrollTop += ev.deltaY;
+      ev.preventDefault();
+    },
+    { passive: false },
+  );
+
+  // Wheel on the list must never leave a stuck drag/capture state.
+  filesList.addEventListener(
+    'wheel',
+    () => {
+      stopDragging();
+    },
+    { passive: true, capture: true },
+  );
+
+  thumb.addEventListener('pointerdown', (ev) => {
+    if (ev.button !== 0) return;
+    const thumbRect = thumb.getBoundingClientRect();
+    dragging = true;
+    dragPointerId = ev.pointerId;
+    dragOffsetY = ev.clientY - thumbRect.top;
+    thumb.classList.add('is-dragging');
+    ev.preventDefault();
+    ev.stopPropagation();
+  });
+
+  // Document-level move/up: avoid setPointerCapture
+  document.addEventListener('pointermove', (ev) => {
+    if (!dragging || ev.pointerId !== dragPointerId) return;
+    if ((ev.buttons & 1) === 0) {
+      stopDragging();
+      return;
+    }
+    scrollFromRailY(ev.clientY, dragOffsetY);
+  });
+
+  document.addEventListener('pointerup', (ev) => {
+    if (!dragging || ev.pointerId !== dragPointerId) return;
+    stopDragging();
+  });
+
+  document.addEventListener('pointercancel', () => {
+    stopDragging();
+  });
+
+  window.addEventListener('blur', () => {
+    stopDragging();
+  });
+
+  rail.addEventListener('pointerdown', (ev) => {
+    if (ev.button !== 0) return;
+    if (ev.target === thumb || thumb.contains(ev.target as Node)) {
+      return;
+    }
+    stopDragging();
+    // Jump so the thumb centers on the click, then stop (no sticky drag).
+    scrollFromRailY(ev.clientY, thumb.offsetHeight / 2);
+  });
+
+  window.addEventListener('resize', () => updateFilesListScrollbar());
+  if (typeof ResizeObserver !== 'undefined') {
+    const ro = new ResizeObserver(() => updateFilesListScrollbar());
+    ro.observe(filesList);
+    ro.observe(rail);
+  }
+}
+
+function updateFilesListScrollbar(): void {
+  const filesList = document.getElementById('filesList');
+  const rail = document.querySelector('.files-list-scrollbar') as HTMLElement | null;
+  const thumb = document.querySelector('.files-list-scrollbar-thumb') as HTMLElement | null;
+  if (!filesList || !rail || !thumb) {
+    return;
+  }
+
+  const scrollHeight = filesList.scrollHeight;
+  const clientHeight = filesList.clientHeight;
+  const scrollTop = filesList.scrollTop;
+  const railHeight = rail.clientHeight;
+
+  if (railHeight <= 0) {
+    return;
+  }
+
+  if (scrollHeight <= clientHeight + 1) {
+    thumb.style.height = `${railHeight}px`;
+    thumb.style.top = '0px';
+    return;
+  }
+
+  const thumbHeight = Math.max(24, (clientHeight / scrollHeight) * railHeight);
+  const maxTop = railHeight - thumbHeight;
+  const top = (scrollTop / (scrollHeight - clientHeight)) * maxTop;
+  thumb.style.height = `${thumbHeight}px`;
+  thumb.style.top = `${top}px`;
 }
 
 function setFileListLoadStatus(message: string): void {
@@ -203,6 +345,7 @@ function setFileListLoadStatus(message: string): void {
   let el = filesList.querySelector('.file-list-load-status') as HTMLElement | null;
   if (!message) {
     el?.remove();
+    updateFilesListScrollbar();
     return;
   }
   if (!el) {
@@ -211,6 +354,7 @@ function setFileListLoadStatus(message: string): void {
     filesList.appendChild(el);
   }
   el.textContent = message;
+  updateFilesListScrollbar();
 }
 
 // File Display (with client-side decryption)
@@ -564,11 +708,17 @@ function renderFilteredFileList(): void {
       activeFilterTags.length > 0 ? 'Scroll for more matches…' : 'Scroll for more files…',
     );
   }
+
+  updateFilesListScrollbar();
 }
 
 function ensureSelectionToolbar(): void {
   const filesList = document.getElementById('filesList');
-  const parent = filesList?.parentElement;
+  if (!filesList) return;
+  // Toolbar belongs above the scroll shell, not inside it.
+  const insertBeforeEl =
+    (filesList.closest('.files-list-scroll-shell') as HTMLElement | null) || filesList;
+  const parent = insertBeforeEl.parentElement;
   if (!parent) return;
 
   let toolbar = parent.querySelector('.file-list-toolbar') as HTMLElement | null;
@@ -582,7 +732,7 @@ function ensureSelectionToolbar(): void {
       <button type="button" id="clearSelectionBtn" class="btn-secondary">Clear selection</button>
       <span class="selection-count" id="selectionCount"></span>
     `;
-    parent.insertBefore(toolbar, filesList);
+    parent.insertBefore(toolbar, insertBeforeEl);
   }
 
   if (selectionToolbarWired) {

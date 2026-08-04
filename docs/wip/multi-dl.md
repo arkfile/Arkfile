@@ -6,7 +6,9 @@ Owners already encrypt and upload many files in one batch from the browser or `a
 
 ## Status
 
-Product code for pagination, selection, directory-handle batch download, and CLI/frontend batch state machines is landed. `e2e-test.sh` seeds a durable shared multi-download corpus (manifest at `/tmp/arkfile-e2e-test-data/multi-dl-corpus.json`) and exercises CLI multi-list/download against it; `e2e-playwright` reuses that corpus for selection, filter prune, account-then-custom batch order, and cancel (fallback download path; directory-picker write and browser cross-page scroll deferred). Developer should run `dev-reset.sh` then `e2e-test.sh` and `e2e-playwright.sh` for validation. Decisions below remain locked unless this document is explicitly revised.
+Complete for the planned multi-file select/download scope. Cursor-paginated owner list, selection UI (select all shown / select all matching filter / prune), frontend and CLI batch download state machines (account-then-custom, retries, summaries, cancel, reserved basenames, directory-handle sink with SW/Blob fallback), shared e2e corpus, and Playwright multi-select/download coverage are implemented and validated (`e2e-test.sh` and `e2e-playwright.sh` passing).
+
+Deferred follow-ups (not blocking this work): browser infinite-scroll / cross-page select-all under a reduced test page size; automated Playwright assertion of the live directory-picker write path (fallback path is covered). Decisions below remain the locked design record unless this document is explicitly revised.
 
 ## Overview
 
@@ -133,7 +135,7 @@ Seed a durable shared corpus (~18 small files: account + custom, tags `multi-a` 
 
 ### e2e-playwright.sh / e2e-playwright.ts
 
-Load the corpus manifest; verify select all shown + filter prune; select all matching filter for `multi-a`; batch download of one account + one custom (account before custom modal, fallback when directory picker is aborted); batch cancel. Directory-picker write path and infinite-scroll / cross-page select-all (needs a test page-size hook) remain deferred.
+Load the corpus manifest; verify select all shown + filter prune; select all matching filter for `multi-a`; batch download of one account + one custom (account before custom modal, fallback when directory picker is aborted); batch cancel. Covered and passing. Optional later: directory-picker write-path assertion; infinite-scroll / cross-page select-all with a test page-size hook.
 
 ## Out of Scope
 
@@ -146,12 +148,13 @@ Load the corpus manifest; verify select all shown + filter prune; select all mat
 
 ## Implementation Checklist
 
-- Cursor-paginate `ListFiles` / model query with `upload_date DESC, file_id DESC` and exact `has_more`
-- Remove `GET /api/files/metadata` and dead helpers
-- Frontend paged list and 80% height infinite scroll
-- CLI list and download cursor paging / full-scan behavior
-- Update `docs/api.md` and all unit / e2e / Playwright coverage for pagination
-- Selection model including select all shown and select all matching filter
-- Batch download machine on frontend and CLI (directory picker / `--output-dir`, safe partial output, cancellation, collisions, custom-password deferral, two-minute prompts, secret disposal, retries, summaries)
-- LLM agent runs relevant Go and TypeScript unit tests and fixes failures
-- Developer runs `dev-reset.sh` then `e2e-test.sh` and `e2e-playwright.sh`
+- [OK] Cursor-paginate `ListFiles` / model query with `upload_date DESC, file_id DESC` and exact `has_more`
+- [OK] Remove `GET /api/files/metadata` and dead helpers
+- [OK] Frontend paged list and 80% height infinite scroll
+- [OK] CLI list and download cursor paging / full-scan behavior
+- [OK] Update `docs/api.md` and unit / e2e / Playwright coverage for pagination and multi-download
+- [OK] Selection model including select all shown and select all matching filter
+- [OK] Batch download machine on frontend and CLI (directory picker / `--output-dir`, safe partial output, cancellation, collisions, custom-password deferral, two-minute prompts, secret disposal, retries, summaries)
+- [OK] Relevant Go and TypeScript unit tests green
+- [OK] Developer `dev-reset.sh` then `e2e-test.sh` and `e2e-playwright.sh` passed
+- Deferred: Playwright directory-picker write-path assertion; browser cross-page scroll/select-all with test page-size hook

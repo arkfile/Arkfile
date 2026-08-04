@@ -218,13 +218,13 @@ export async function downloadSelectedFiles(
         }
       ).showDirectoryPicker({ mode: 'readwrite' });
     } else {
-      showWarning(
-        'Folder picker is unavailable in this browser. Files will download to the browser download folder. The browser may ask permission for multiple downloads or block them.',
+      console.info(
+        '[arkfile-download-batch] Folder picker unavailable; using browser download folder. The browser may ask permission for multiple downloads or block them.',
       );
     }
   } catch {
-    showWarning(
-      'No download folder was chosen. Files will use the browser download folder.',
+    console.info(
+      '[arkfile-download-batch] No download folder chosen; using browser download folder.',
     );
   }
 

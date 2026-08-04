@@ -453,9 +453,68 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .bt
     margin-top: 2rem;
 }
 
-#filesList {
+/*
+ * Custom always-visible scrollbar: Firefox overlay scrollbars cannot be kept
+ * painted via scrollbar-color alone. Hide the native bar and draw a permanent
+ * depth-4 rail + biolum thumb beside #filesList.
+ */
+.files-list-scroll-shell {
+    --files-list-scrollbar-size: 12px;
+    display: flex;
+    align-items: stretch;
     max-height: 80vh;
-    overflow-y: auto;
+    border: 1px solid var(--depth-4);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--depth-1);
+}
+
+#filesList {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-height: 80vh;
+    overflow-y: scroll;
+    overflow-x: hidden;
+    /* Hide native scrollbar in all engines; custom rail/thumb stays visible */
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+#filesList::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+}
+
+.files-list-scrollbar {
+    flex: 0 0 var(--files-list-scrollbar-size);
+    width: var(--files-list-scrollbar-size);
+    background: var(--depth-4);
+    position: relative;
+    cursor: pointer;
+}
+
+.files-list-scrollbar-thumb {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    min-height: 24px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--biolum) 75%, var(--depth-4));
+    border: 2px solid var(--depth-4);
+    box-shadow: 0 0 6px color-mix(in srgb, var(--biolum) 30%, transparent);
+    cursor: grab;
+    box-sizing: border-box;
+    /* Position with top (not transform) for natural scrolling */
+    will-change: top, height;
+    touch-action: none;
+}
+
+.files-list-scrollbar-thumb:hover,
+.files-list-scrollbar-thumb.is-dragging {
+    background: var(--biolum);
+    cursor: grabbing;
 }
 
 .file-list-toolbar {
