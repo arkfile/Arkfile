@@ -260,12 +260,32 @@ function corpusCustomFiles(): MultiDlCorpusFile[] {
   return multiDlCorpus.files.filter((f) => f.password_type === 'custom');
 }
 
+async function dismissTagFilterSuggestions(page: Page): Promise<void> {
+  // Typing in #tagFilterInput opens a suggestions list that can cover the
+  // selection toolbar. Escape + blur closes it (same as outside-click handler).
+  const input = page.locator('#tagFilterInput');
+  if (await input.isVisible().catch(() => false)) {
+    await input.press('Escape').catch(() => {});
+    await input.blur().catch(() => {});
+  }
+  const suggestions = page.locator('#tagFilterSuggestions');
+  if (await suggestions.count()) {
+    await expect(suggestions).toBeHidden({ timeout: 5_000 }).catch(async () => {
+      await page.evaluate(() => {
+        document.getElementById('tagFilterSuggestions')?.classList.add('hidden');
+      });
+    });
+  }
+}
+
 async function clearTagFilter(page: Page): Promise<void> {
+  await dismissTagFilterSuggestions(page);
   const clearBtn = page.locator('#tagFilterClearBtn');
   if (await clearBtn.isVisible().catch(() => false)) {
     await clearBtn.click();
     await expect(clearBtn).toBeHidden({ timeout: 10_000 });
   }
+  await dismissTagFilterSuggestions(page);
 }
 
 async function applyTagFilter(page: Page, tag: string): Promise<void> {
@@ -275,18 +295,18 @@ async function applyTagFilter(page: Page, tag: string): Promise<void> {
   await expect(page.locator('#tagFilterChips .tag-chip', { hasText: tag })).toBeVisible({
     timeout: 10_000,
   });
+  await dismissTagFilterSuggestions(page);
 }
 
 async function clearFileSelection(page: Page): Promise<void> {
-  const clearBtn = page.locator('#clearSelectionBtn');
-  if (await clearBtn.isVisible().catch(() => false)) {
-    await clearBtn.click();
-  }
-  // Empty or missing count means nothing selected.
+  await dismissTagFilterSuggestions(page);
   const countText = (await page.locator('#selectionCount').textContent())?.trim() ?? '';
-  if (countText !== '') {
-    await clearBtn.click();
+  if (countText === '') {
+    return;
   }
+  const clearBtn = page.locator('#clearSelectionBtn');
+  await clearBtn.click();
+  await expect(page.locator('#selectionCount')).toHaveText('', { timeout: 5_000 });
 }
 
 /** Force the fallback download path (no File System Access directory write). */
@@ -850,8 +870,10 @@ test.describe.serial('Arkfile Playwright E2E', () => {
 
     const multiACount = corpusFilesWithTag('multi-a').length;
     logStep('multi-select', `Selecting all matching filter multi-a (expect ${multiACount})...`);
-    await applyTagFilter(sharedPage, 'multi-a');
+    // Clear selection before focusing the filter input so the suggestions
+    // dropdown cannot intercept toolbar clicks.
     await clearFileSelection(sharedPage);
+    await applyTagFilter(sharedPage, 'multi-a');
 
     await sharedPage.locator('#selectAllMatchingFilterBtn').click();
     await expect(sharedPage.locator('#selectionCount')).toContainText(`${multiACount} selected`, {

@@ -2952,13 +2952,19 @@ run_admin_operations() {
         record_test "Admin system-status" "FAIL"
     fi
 
-    # Verify storage stats reflect uploaded files
-    # files: test_file.bin + tags_upload_seed + custom + extra A/B/C
-    # (delete_test.bin was already deleted)
-    if echo "$system_status_output" | grep -q "Total Files: 6"; then
+    # Verify storage stats reflect uploaded files at this point (before admin
+    # delete of CUSTOM_FILE_ID): test_file.bin + tags_upload_seed + custom +
+    # extra A/B/C + durable multi-dl corpus. delete_test.bin was already removed;
+    # the large 3-file batch upload was also deleted after its scenario.
+    local corpus_count=0
+    if [ -f "$MULTI_DL_CORPUS_FILE" ]; then
+        corpus_count=$(jq '.files | length' "$MULTI_DL_CORPUS_FILE" 2>/dev/null || echo 0)
+    fi
+    local expected_total_files=$((6 + corpus_count))
+    if echo "$system_status_output" | grep -q "Total Files: ${expected_total_files}"; then
         record_test "Admin system-status file count" "PASS"
     else
-        error "Storage stats: expected Total Files: 6"
+        error "Storage stats: expected Total Files: ${expected_total_files} (6 baseline + ${corpus_count} corpus)"
         record_test "Admin system-status file count" "FAIL"
     fi
 
