@@ -76,6 +76,23 @@ else
     exit 1
 fi
 
+# Shared multi-download corpus seeded by e2e-test.sh (left on the test user)
+MULTI_DL_CORPUS_PATH="$TEST_DATA_DIR/multi-dl-corpus.json"
+section "Checking multi-download corpus manifest"
+if [ -f "$MULTI_DL_CORPUS_PATH" ]; then
+    CORPUS_COUNT=$(jq '.files | length' "$MULTI_DL_CORPUS_PATH" 2>/dev/null || echo 0)
+    if [ "$CORPUS_COUNT" -lt 16 ]; then
+        error "multi-dl corpus has $CORPUS_COUNT files (need at least 16): $MULTI_DL_CORPUS_PATH"
+        error "Re-run 'sudo bash scripts/testing/e2e-test.sh' after a fresh dev-reset."
+        exit 1
+    fi
+    success "Multi-dl corpus loaded ($CORPUS_COUNT files) from $MULTI_DL_CORPUS_PATH"
+else
+    error "Multi-dl corpus manifest not found: $MULTI_DL_CORPUS_PATH"
+    error "Run 'sudo bash scripts/testing/e2e-test.sh' first (corpus is seeded in files_custom_password)."
+    exit 1
+fi
+
 # Check arkfile-client
 section "Checking arkfile-client"
 if [ -x "$CLIENT" ]; then
@@ -249,6 +266,7 @@ export REG_FLOW_FILE_NAME
 export REG_FLOW_USERNAME
 export REG_FLOW_PASSWORD
 export REG_FLOW_CUSTOM_PASSWORD
+export MULTI_DL_CORPUS_PATH
 
 # Run Playwright
 PLAYWRIGHT_EXIT_CODE=0

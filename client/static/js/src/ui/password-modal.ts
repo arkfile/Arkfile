@@ -30,6 +30,11 @@ export interface PasswordPromptOptions {
   submitLabel?: string;
   /** Label for the cancel button */
   cancelLabel?: string;
+  /**
+   * When set, show a live countdown and auto-dismiss with 'timeout'
+   * after this many milliseconds with no submit/cancel.
+   */
+  timeoutMs?: number;
 }
 
 /**
@@ -77,6 +82,9 @@ function createModalHTML(options: PasswordPromptOptions): string {
   ` : '';
 
   const fieldLabel = options.showCacheDuration ? 'Account Password' : 'File Password';
+  const countdownBlock = options.timeoutMs && options.timeoutMs > 0
+    ? `<p class="password-modal-countdown" id="password-modal-countdown" aria-live="polite"></p>`
+    : '';
 
   return `
     <div id="${MODAL_OVERLAY_ID}" class="password-modal-overlay">
@@ -89,6 +97,7 @@ function createModalHTML(options: PasswordPromptOptions): string {
         </div>
         <div class="password-modal-body">
           <p class="password-modal-message">${escapeHtml(options.message)}</p>
+          ${countdownBlock}
           ${hintBlock}
           <form id="password-modal-form" class="password-modal-form">
             <div class="password-modal-field">
@@ -116,6 +125,13 @@ function createModalHTML(options: PasswordPromptOptions): string {
       </div>
     </div>
   `;
+}
+
+function formatCountdown(remainingMs: number): string {
+  const totalSec = Math.max(0, Math.ceil(remainingMs / 1000));
+  const minutes = Math.floor(totalSec / 60);
+  const seconds = totalSec % 60;
+  return `Time remaining: ${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
 // Modal CSS (injected once)
@@ -194,6 +210,13 @@ const MODAL_STYLES = `
     margin: 0 0 20px 0;
     color: var(--foam-2);
     line-height: 1.5;
+  }
+
+  .password-modal-countdown {
+    margin: -12px 0 16px 0;
+    color: var(--foam-1);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.875rem;
   }
 
   .password-modal-form {
@@ -333,16 +356,18 @@ function escapeHtml(text: string): string {
 
 // Modal Functions
 
-let currentResolve: ((result: PasswordPromptResult | null) => void) | null = null;
+export type PasswordPromptOutcome = PasswordPromptResult | null | 'timeout';
+
+let currentResolve: ((result: PasswordPromptOutcome) => void) | null = null;
 let currentReject: ((error: Error) => void) | null = null;
 
 /**
  * Shows the password prompt modal
- * 
+ *
  * @param options - Modal configuration options
- * @returns Promise that resolves with the password and options, or null if cancelled
+ * @returns Promise that resolves with the password and options, null if cancelled, or 'timeout' when timeoutMs elapses
  */
-export function showPasswordPrompt(options: PasswordPromptOptions): Promise<PasswordPromptResult | null> {
+export function showPasswordPrompt(options: PasswordPromptOptions): Promise<PasswordPromptOutcome> {
   return new Promise((resolve, reject) => {
     // Close any existing modal
     hidePasswordPrompt();
@@ -366,6 +391,7 @@ export function showPasswordPrompt(options: PasswordPromptOptions): Promise<Pass
     const cancelBtn = document.getElementById('password-modal-cancel-btn');
     const closeBtn = document.getElementById('password-modal-close-btn');
     const durationSelect = document.getElementById('password-modal-duration') as HTMLSelectElement | null;
+    const countdownEl = document.getElementById('password-modal-countdown');
     
     if (!overlay || !form || !input || !cancelBtn || !closeBtn) {
       reject(new Error('Failed to create password modal'));
@@ -376,6 +402,31 @@ export function showPasswordPrompt(options: PasswordPromptOptions): Promise<Pass
     
     // Focus input
     setTimeout(() => input.focus(), 100);
+
+    let countdownInterval: ReturnType<typeof setInterval> | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const clearCountdownTimers = () => {
+      if (countdownInterval !== undefined) {
+        clearInterval(countdownInterval);
+        countdownInterval = undefined;
+      }
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+        timeoutId = undefined;
+      }
+    };
+
+    const settle = (outcome: PasswordPromptOutcome) => {
+      if (!currentResolve) {
+        return;
+      }
+      clearCountdownTimers();
+      const resolveFn = currentResolve;
+      currentResolve = null;
+      input.value = '';
+      hidePasswordPrompt();
+      resolveFn(outcome);
+    };
     
     // Handle form submission
     const handleSubmit = (e: Event) => {
@@ -395,33 +446,20 @@ export function showPasswordPrompt(options: PasswordPromptOptions): Promise<Pass
         }
         // value of 0 means "don't remember" - cacheDuration stays undefined
       }
-      
-      // Save and clear the resolve reference BEFORE hidePasswordPrompt,
-      // because hidePasswordPrompt calls currentResolve(null) as a safety net.
-      const resolve = currentResolve;
-      currentResolve = null;
-      
-      hidePasswordPrompt();
-      
-      if (resolve) {
-        resolve({
-          password,
-          cacheDuration,
-        });
-      }
+
+      settle({
+        password,
+        cacheDuration,
+      });
     };
     
     // Handle cancel
     const handleCancel = () => {
-      // Save and clear the resolve reference BEFORE hidePasswordPrompt
-      const resolve = currentResolve;
-      currentResolve = null;
-      
-      hidePasswordPrompt();
-      
-      if (resolve) {
-        resolve(null);
-      }
+      settle(null);
+    };
+
+    const handleTimeout = () => {
+      settle('timeout');
     };
     
     // Handle overlay click (close on background click)
@@ -444,9 +482,24 @@ export function showPasswordPrompt(options: PasswordPromptOptions): Promise<Pass
     closeBtn.addEventListener('click', handleCancel);
     overlay.addEventListener('click', handleOverlayClick);
     document.addEventListener('keydown', handleKeydown);
+
+    if (options.timeoutMs && options.timeoutMs > 0 && countdownEl) {
+      const deadline = Date.now() + options.timeoutMs;
+      const tick = () => {
+        const remaining = deadline - Date.now();
+        countdownEl.textContent = formatCountdown(remaining);
+        if (remaining <= 0) {
+          handleTimeout();
+        }
+      };
+      tick();
+      countdownInterval = setInterval(tick, 1000);
+      timeoutId = setTimeout(handleTimeout, options.timeoutMs);
+    }
     
     // Store cleanup function
     (overlay as any)._cleanup = () => {
+      clearCountdownTimers();
       form.removeEventListener('submit', handleSubmit);
       cancelBtn.removeEventListener('click', handleCancel);
       closeBtn.removeEventListener('click', handleCancel);
@@ -490,11 +543,11 @@ export function isPasswordPromptVisible(): boolean {
 
 /**
  * Shows a password prompt for Account Key re-entry (cache expired)
- * 
+ *
  * @returns Promise that resolves with password and cache duration, or null if cancelled
  */
-export function promptForAccountKeyPassword(): Promise<PasswordPromptResult | null> {
-  return showPasswordPrompt({
+export async function promptForAccountKeyPassword(): Promise<PasswordPromptResult | null> {
+  const outcome = await showPasswordPrompt({
     title: 'Account Key Required',
     message: 'Your cached Account Key has expired. Please enter your account password again to continue.',
     showCacheDuration: true,
@@ -502,6 +555,10 @@ export function promptForAccountKeyPassword(): Promise<PasswordPromptResult | nu
     submitLabel: 'Continue',
     cancelLabel: 'Cancel',
   });
+  if (!outcome || outcome === 'timeout') {
+    return null;
+  }
+  return outcome;
 }
 
 /**

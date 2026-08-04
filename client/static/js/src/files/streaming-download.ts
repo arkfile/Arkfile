@@ -133,6 +133,12 @@ export interface StreamingDownloadOptions {
   showProgressUI?: boolean;
   /** AbortController for cancellation */
   abortController?: AbortController;
+  /**
+   * When set, decrypt chunks are written here instead of SW/Blob.
+   * Used for multi-download into a user-chosen directory (File System Access API).
+   * The manager closes the writable after the stream finishes (success or failure).
+   */
+  writableSink?: FileSystemWritableFileStream;
 }
 
 /**
@@ -156,7 +162,9 @@ export interface StreamingDownloadResult {
   error?: string | undefined;
   /** True if the SW streaming path was used. */
   streamedViaSw?: boolean | undefined;
-  /** SHA-256 verification outcome (both SW and Blob fallback paths). */
+  /** True if bytes were written to a File System Access API writable sink. */
+  writtenToWritable?: boolean | undefined;
+  /** SHA-256 verification outcome (SW, Blob, and writable paths). */
   hashVerification?: HashVerification | undefined;
   /** Computed SHA-256 hex when hashing ran (match or mismatch). */
   computedSha256Hex?: string | undefined;
@@ -258,6 +266,7 @@ export class StreamingDownloadManager {
         filename,
         sha256sum,
         ...(streamResult.streamedViaSw !== undefined ? { streamedViaSw: streamResult.streamedViaSw } : {}),
+        ...(streamResult.writtenToWritable !== undefined ? { writtenToWritable: streamResult.writtenToWritable } : {}),
         ...(streamResult.hashVerification !== undefined ? { hashVerification: streamResult.hashVerification } : {}),
         ...(streamResult.computedSha256Hex !== undefined ? { computedSha256Hex: streamResult.computedSha256Hex } : {}),
         ...(streamResult.blobUrl !== undefined ? { blobUrl: streamResult.blobUrl } : {}),
@@ -329,6 +338,7 @@ export class StreamingDownloadManager {
         filename,
         ...(sha256sum !== undefined ? { sha256sum } : {}),
         ...(streamResult.streamedViaSw !== undefined ? { streamedViaSw: streamResult.streamedViaSw } : {}),
+        ...(streamResult.writtenToWritable !== undefined ? { writtenToWritable: streamResult.writtenToWritable } : {}),
         ...(streamResult.hashVerification !== undefined ? { hashVerification: streamResult.hashVerification } : {}),
         ...(streamResult.computedSha256Hex !== undefined ? { computedSha256Hex: streamResult.computedSha256Hex } : {}),
         ...(streamResult.blobUrl !== undefined ? { blobUrl: streamResult.blobUrl } : {}),
@@ -517,10 +527,71 @@ export class StreamingDownloadManager {
     logPrefix: string,
   ): Promise<{
     streamedViaSw?: boolean;
+    writtenToWritable?: boolean;
     hashVerification?: HashVerification;
     computedSha256Hex?: string;
     blobUrl?: string;
   }> {
+    const writable = this.options.writableSink;
+    if (writable) {
+      debugLog(`${logPrefix} Using File System Access writable sink`);
+      const chunks = chunksFactory();
+      const wantHash = typeof expectedSha256Hex === 'string' && expectedSha256Hex.length === 64;
+      const hasher = wantHash ? sha256.create() : null;
+      let chunkIndex = 0;
+      let closed = false;
+      try {
+        for await (const chunk of chunks) {
+          if (this.options.abortController?.signal.aborted) {
+            throw new Error('Download cancelled');
+          }
+          if (hasher) hasher.update(chunk);
+          // Copy into a fresh ArrayBuffer-backed view for FileSystemWritableFileStream typings.
+          const writeView = new Uint8Array(chunk.byteLength);
+          writeView.set(chunk);
+          await writable.write(writeView);
+          chunkIndex++;
+          this.reportProgress(
+            'downloading',
+            chunkIndex,
+            totalChunks,
+            Math.min(chunkIndex * (contentLength / Math.max(totalChunks, 1)), contentLength),
+            contentLength,
+          );
+        }
+        await writable.close();
+        closed = true;
+
+        let hashVerification: HashVerification = 'skipped';
+        let computedSha256Hex: string | undefined;
+        if (hasher && expectedSha256Hex) {
+          computedSha256Hex = bytesToHex(hasher.digest());
+          hashVerification = constantTimeHexEqual(computedSha256Hex, expectedSha256Hex) ? 'match' : 'mismatch';
+          if (hashVerification === 'mismatch') {
+            console.warn(`${logPrefix} SHA-256 verification FAILED for writable-sink download`);
+          }
+        }
+        return {
+          writtenToWritable: true,
+          hashVerification,
+          ...(computedSha256Hex !== undefined ? { computedSha256Hex } : {}),
+        };
+      } catch (err: unknown) {
+        if (!closed) {
+          try {
+            await writable.abort();
+          } catch {
+            try {
+              await writable.close();
+            } catch {
+              // ignore cleanup errors
+            }
+          }
+        }
+        throw err instanceof Error ? err : new Error(String(err));
+      }
+    }
+
     if (isSwAvailable()) {
       debugLog(`${logPrefix} Using SW streaming download path`);
       try {

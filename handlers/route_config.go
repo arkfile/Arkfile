@@ -145,7 +145,6 @@ func RegisterRoutes() {
 	// Files - require authentication and MFA
 
 	mfaProtectedGroup.GET("/api/files", ListFiles)
-	mfaProtectedGroup.GET("/api/files/metadata", ListRecentFileMetadata)
 	mfaProtectedGroup.POST("/api/files/metadata/batch", GetFileMetadataBatch)
 	mfaProtectedGroup.GET("/api/files/:fileId/meta", GetFileMeta)
 	mfaProtectedGroup.PUT("/api/files/:fileId/tags", UpdateFileTags)

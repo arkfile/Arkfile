@@ -24,7 +24,8 @@
  * Prerequisites:
  *   - Server deployed via scripts/dev-reset.sh
  *   - scripts/testing/e2e-test.sh has run (test user exists, approved, MFA configured;
- *     require_approval=false via run_enable_auto_approval)
+ *     require_approval=false via run_enable_auto_approval;
+ *     multi-dl corpus written to /tmp/arkfile-e2e-test-data/multi-dl-corpus.json)
  *   - Environment variables set by scripts/testing/e2e-playwright.sh
  *
  * Run via: sudo bash scripts/testing/e2e-playwright.sh
@@ -35,6 +36,19 @@ import { execFileSync, execSync } from 'child_process';
 import { createHash } from 'crypto';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
+
+interface MultiDlCorpusFile {
+  file_id: string;
+  filename: string;
+  password_type: 'account' | 'custom' | string;
+  tags: string[];
+  sha256: string;
+}
+
+interface MultiDlCorpus {
+  custom_password: string;
+  files: MultiDlCorpusFile[];
+}
 
 // ============================================================================
 // Environment Variables (set by e2e-playwright.sh)
@@ -61,6 +75,7 @@ const REG_FLOW_FILE_NAME = process.env.REG_FLOW_FILE_NAME!;
 const REG_FLOW_USERNAME = process.env.REG_FLOW_USERNAME!;
 const REG_FLOW_PASSWORD = process.env.REG_FLOW_PASSWORD!;
 const REG_FLOW_CUSTOM_PASSWORD = process.env.REG_FLOW_CUSTOM_PASSWORD!;
+const MULTI_DL_CORPUS_PATH = process.env.MULTI_DL_CORPUS_PATH || '';
 const CLIENT_BIN = '/opt/arkfile/bin/arkfile-client';
 
 // Directories
@@ -74,6 +89,7 @@ let shareAUrl = '';
 let shareBUrl = '';
 let shareCUrl = '';
 let shareAId = '';
+let multiDlCorpus: MultiDlCorpus | null = null;
 
 // ============================================================================
 // Helper Functions
@@ -225,6 +241,64 @@ function findFileItem(page: Page, filename: string) {
   });
 }
 
+function findFileItemById(page: Page, fileId: string) {
+  return page.locator(`.file-item[data-file-id="${fileId}"]`);
+}
+
+function corpusFilesWithTag(tag: string): MultiDlCorpusFile[] {
+  if (!multiDlCorpus) return [];
+  return multiDlCorpus.files.filter((f) => f.tags.includes(tag));
+}
+
+function corpusAccountFiles(): MultiDlCorpusFile[] {
+  if (!multiDlCorpus) return [];
+  return multiDlCorpus.files.filter((f) => f.password_type === 'account');
+}
+
+function corpusCustomFiles(): MultiDlCorpusFile[] {
+  if (!multiDlCorpus) return [];
+  return multiDlCorpus.files.filter((f) => f.password_type === 'custom');
+}
+
+async function clearTagFilter(page: Page): Promise<void> {
+  const clearBtn = page.locator('#tagFilterClearBtn');
+  if (await clearBtn.isVisible().catch(() => false)) {
+    await clearBtn.click();
+    await expect(clearBtn).toBeHidden({ timeout: 10_000 });
+  }
+}
+
+async function applyTagFilter(page: Page, tag: string): Promise<void> {
+  await clearTagFilter(page);
+  await page.fill('#tagFilterInput', tag);
+  await page.locator('#tagFilterInput').press('Enter');
+  await expect(page.locator('#tagFilterChips .tag-chip', { hasText: tag })).toBeVisible({
+    timeout: 10_000,
+  });
+}
+
+async function clearFileSelection(page: Page): Promise<void> {
+  const clearBtn = page.locator('#clearSelectionBtn');
+  if (await clearBtn.isVisible().catch(() => false)) {
+    await clearBtn.click();
+  }
+  // Empty or missing count means nothing selected.
+  const countText = (await page.locator('#selectionCount').textContent())?.trim() ?? '';
+  if (countText !== '') {
+    await clearBtn.click();
+  }
+}
+
+/** Force the fallback download path (no File System Access directory write). */
+async function stubDirectoryPickerAbort(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    (window as Window & {
+      showDirectoryPicker?: (opts?: { mode?: string }) => Promise<unknown>;
+    }).showDirectoryPicker = () =>
+      Promise.reject(new DOMException('The user aborted a request.', 'AbortError'));
+  });
+}
+
 /**
  * Click a button (Download or Share) within a specific file item.
  */
@@ -243,7 +317,7 @@ test.beforeAll(() => {
     'CUSTOM_FILE_PATH', 'CUSTOM_FILE_SHA256', 'CUSTOM_FILE_NAME',
     'TEST_USERNAME', 'TEST_PASSWORD', 'CUSTOM_FILE_PASSWORD',
     'SHARE_A_PASSWORD', 'SHARE_B_PASSWORD', 'SHARE_C_PASSWORD',
-    'PLAYWRIGHT_TEMP_DIR',
+    'PLAYWRIGHT_TEMP_DIR', 'MULTI_DL_CORPUS_PATH',
   ];
   for (const key of required) {
     if (!process.env[key]) {
@@ -257,6 +331,16 @@ test.beforeAll(() => {
   if (!existsSync(CUSTOM_FILE_PATH)) {
     throw new Error(`Custom test file not found: ${CUSTOM_FILE_PATH}`);
   }
+  if (!existsSync(MULTI_DL_CORPUS_PATH)) {
+    throw new Error(`Multi-dl corpus manifest not found: ${MULTI_DL_CORPUS_PATH}`);
+  }
+
+  multiDlCorpus = JSON.parse(readFileSync(MULTI_DL_CORPUS_PATH, 'utf8')) as MultiDlCorpus;
+  if (!multiDlCorpus.files || multiDlCorpus.files.length < 16) {
+    throw new Error(
+      `Multi-dl corpus too small (${multiDlCorpus.files?.length ?? 0}); need at least 16 files`,
+    );
+  }
 
   execSync(`mkdir -p "${DOWNLOADS_DIR}"`);
 
@@ -265,6 +349,7 @@ test.beforeAll(() => {
   console.log(`[i] User: ${TEST_USERNAME}`);
   console.log(`[i] Test file: ${TEST_FILE_NAME} (${TEST_FILE_SHA256.substring(0, 16)}...)`);
   console.log(`[i] Custom file: ${CUSTOM_FILE_NAME} (${CUSTOM_FILE_SHA256.substring(0, 16)}...)`);
+  console.log(`[i] Multi-dl corpus: ${multiDlCorpus.files.length} files from ${MULTI_DL_CORPUS_PATH}`);
 });
 
 // ============================================================================
@@ -732,6 +817,128 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await expect(updatedItem.locator('.tag-chip', { hasText: 'PC-1' })).toHaveCount(0);
 
     console.log('[OK] Owner file tags UI verified');
+  });
+
+  // --------------------------------------------------------------------------
+  // Multi-select / multi-download (shared corpus from e2e-test.sh)
+  // --------------------------------------------------------------------------
+  test('Multi-select: select all shown and filter prune', async () => {
+    if (!multiDlCorpus) throw new Error('multi-dl corpus not loaded');
+
+    const multiACount = corpusFilesWithTag('multi-a').length;
+
+    logStep('multi-select', 'Filtering by multi-a and selecting all shown...');
+    await applyTagFilter(sharedPage, 'multi-a');
+    await expect(sharedPage.locator('#selectAllShownCheckbox')).toBeVisible({ timeout: 15_000 });
+    await sharedPage.locator('#selectAllShownCheckbox').check();
+    await expect(sharedPage.locator('#selectionCount')).toContainText(`${multiACount} selected`, {
+      timeout: 10_000,
+    });
+
+    logStep('multi-select', 'Switching filter to multi-decoy (disjoint) to prune selection to empty...');
+    await applyTagFilter(sharedPage, 'multi-decoy');
+    // multi-a and multi-decoy sets do not overlap, so prune clears the selection.
+    await expect(sharedPage.locator('#selectionCount')).toHaveText('', { timeout: 10_000 });
+
+    await clearTagFilter(sharedPage);
+    await clearFileSelection(sharedPage);
+    console.log('[OK] Select all shown + filter prune verified');
+  });
+
+  test('Multi-select: select all matching filter (multi-a)', async () => {
+    if (!multiDlCorpus) throw new Error('multi-dl corpus not loaded');
+
+    const multiACount = corpusFilesWithTag('multi-a').length;
+    logStep('multi-select', `Selecting all matching filter multi-a (expect ${multiACount})...`);
+    await applyTagFilter(sharedPage, 'multi-a');
+    await clearFileSelection(sharedPage);
+
+    await sharedPage.locator('#selectAllMatchingFilterBtn').click();
+    await expect(sharedPage.locator('#selectionCount')).toContainText(`${multiACount} selected`, {
+      timeout: 60_000,
+    });
+
+    await clearTagFilter(sharedPage);
+    await clearFileSelection(sharedPage);
+    console.log('[OK] Select all matching filter verified');
+  });
+
+  test('Multi-download: account file before custom password prompt', async () => {
+    if (!multiDlCorpus) throw new Error('multi-dl corpus not loaded');
+
+    const accountFile = corpusAccountFiles().find((f) => f.filename.startsWith('e2e-multi-'));
+    const customFile = corpusCustomFiles().find((f) => f.tags.includes('multi-a'));
+    if (!accountFile || !customFile) {
+      throw new Error('Corpus missing account/custom files needed for batch order test');
+    }
+
+    logStep('multi-download', `Selecting ${accountFile.filename} + ${customFile.filename}...`);
+    await clearTagFilter(sharedPage);
+    await clearFileSelection(sharedPage);
+
+    await expect(findFileItemById(sharedPage, accountFile.file_id)).toBeVisible({ timeout: 30_000 });
+    await expect(findFileItemById(sharedPage, customFile.file_id)).toBeVisible({ timeout: 30_000 });
+    await findFileItemById(sharedPage, accountFile.file_id).locator('.file-select').check();
+    await findFileItemById(sharedPage, customFile.file_id).locator('.file-select').check();
+    await expect(sharedPage.locator('#selectionCount')).toContainText('2 selected');
+
+    await stubDirectoryPickerAbort(sharedPage);
+
+    const downloadPromise = sharedPage.waitForEvent('download', { timeout: 120_000 });
+    await sharedPage.locator('#downloadSelectedBtn').click();
+
+    // Account file should start without a custom-password modal.
+    const download = await downloadPromise;
+    const savePath = await saveDownload(download, `batch-account-${accountFile.filename}`);
+    const actualHash = createHash('sha256').update(readFileSync(savePath)).digest('hex');
+    expect(actualHash).toBe(accountFile.sha256);
+    logStep('multi-download', 'Account file downloaded; waiting for custom password modal...');
+
+    const passwordInput = sharedPage.locator('#password-modal-input');
+    await passwordInput.waitFor({ state: 'visible', timeout: 60_000 });
+    await expect(sharedPage.locator('#password-modal-countdown')).toBeVisible();
+    await passwordInput.fill(CUSTOM_FILE_PASSWORD);
+
+    const customDownloadPromise = sharedPage.waitForEvent('download', { timeout: 120_000 });
+    await sharedPage.locator('#password-modal-submit-btn').click();
+    const customDownload = await customDownloadPromise;
+    const customPath = await saveDownload(customDownload, `batch-custom-${customFile.filename}`);
+    const customHash = createHash('sha256').update(readFileSync(customPath)).digest('hex');
+    expect(customHash).toBe(customFile.sha256);
+
+    await expect(sharedPage.locator('body')).toContainText(/Round 1:/i, { timeout: 30_000 });
+    await clearFileSelection(sharedPage);
+    console.log('[OK] Batch download account-then-custom order verified');
+  });
+
+  test('Multi-download: cancel aborts remaining files', async () => {
+    if (!multiDlCorpus) throw new Error('multi-dl corpus not loaded');
+
+    const targets = corpusAccountFiles()
+      .filter((f) => f.filename.startsWith('e2e-multi-'))
+      .slice(0, 3);
+    if (targets.length < 3) {
+      throw new Error('Need at least 3 account corpus files for cancel test');
+    }
+
+    logStep('multi-download', `Selecting ${targets.length} account files then cancelling...`);
+    await clearTagFilter(sharedPage);
+    await clearFileSelection(sharedPage);
+    for (const f of targets) {
+      await findFileItemById(sharedPage, f.file_id).locator('.file-select').check();
+    }
+
+    await stubDirectoryPickerAbort(sharedPage);
+    await sharedPage.locator('#downloadSelectedBtn').click();
+
+    const cancelBtn = sharedPage.locator('#progress-indicator .cancel-button');
+    await cancelBtn.waitFor({ state: 'visible', timeout: 30_000 });
+    await cancelBtn.click();
+
+    await expect(sharedPage.locator('body')).toContainText(/cancel/i, { timeout: 60_000 });
+    await expect(sharedPage.locator('#downloadSelectedBtn')).toBeEnabled({ timeout: 30_000 });
+    await clearFileSelection(sharedPage);
+    console.log('[OK] Batch download cancel verified');
   });
 
   // --------------------------------------------------------------------------

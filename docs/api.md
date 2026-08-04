@@ -177,14 +177,15 @@ All file operations require TOTP authentication unless otherwise noted.
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| GET | `/api/files` | List files owned by the user (includes opaque `encrypted_tags` / `tags_nonce` / `tags_revision` when present) | MFA |
-| GET | `/api/files/metadata` | List recent file metadata (lightweight; no tags) | MFA |
+| GET | `/api/files` | Cursor-paginated owner file list (includes opaque `encrypted_tags` / `tags_nonce` / `tags_revision` when present) | MFA |
 | POST | `/api/files/metadata/batch` | Get metadata for multiple files (lightweight; no tags) | MFA |
 | GET | `/api/files/:fileId/meta` | Get metadata for a single file (includes tags fields and `tags_revision`) | MFA |
 | PUT | `/api/files/:fileId/tags` | Replace opaque owner tags under optimistic concurrency | MFA |
 | DELETE | `/api/files/:fileId` | Delete a file | MFA |
 
-Owner file tags are optional client-encrypted organization metadata. `POST /api/uploads/init` accepts optional opaque `encrypted_tags` and `tags_nonce` (both present or both omitted). When non-empty, `encrypted_tags` must be at most 1024 base64 characters and `tags_nonce` must decode to exactly 12 bytes; violations return `invalid_tags`. `PUT /api/files/:fileId/tags` requires `expected_revision` plus both tag fields. A non-empty list sends ciphertext and nonce; removing the final tag sends both fields as empty strings. On success the server increments `tags_revision` and returns the new revision. A stale `expected_revision` returns HTTP 409 with code `tags_revision_conflict` and no refreshed metadata. Official clients may add one tag or a comma-separated list in a single update, while remove/replace stay single-tag; the server cannot inspect plaintext lists. Lightweight metadata endpoints do not include tags. Filtering is client-side after decrypt.
+`GET /api/files` is newest-first (`upload_date DESC`, then `file_id DESC`) and uses opaque cursor pagination. Query params: `limit` (default 100, max 500) and optional `cursor` (the prior response's `next_cursor`). The response includes `files`, `storage`, `limit`, `returned`, `has_more`, and `next_cursor` (`null` when exhausted). Clients must treat `cursor` / `next_cursor` as opaque. Malformed cursors return HTTP 400 with message `invalid cursor`. Tag filtering remains client-side after decrypt; the server never accepts plaintext tag query params.
+
+Owner file tags are optional client-encrypted organization metadata. `POST /api/uploads/init` accepts optional opaque `encrypted_tags` and `tags_nonce` (both present or both omitted). When non-empty, `encrypted_tags` must be at most 1024 base64 characters and `tags_nonce` must decode to exactly 12 bytes; violations return `invalid_tags`. `PUT /api/files/:fileId/tags` requires `expected_revision` plus both tag fields. A non-empty list sends ciphertext and nonce; removing the final tag sends both fields as empty strings. On success the server increments `tags_revision` and returns the new revision. A stale `expected_revision` returns HTTP 409 with code `tags_revision_conflict` and no refreshed metadata. Official clients may add one tag or a comma-separated list in a single update, while remove/replace stay single-tag; the server cannot inspect plaintext lists. The lightweight `POST /api/files/metadata/batch` endpoint does not include tags.
 
 #### Chunked Uploads
 
@@ -475,17 +476,22 @@ All error responses use the structure:
 
 ## Pagination & Common Query Params
 
-Endpoints returning lists (`/api/files`, `/api/shares`, `/api/admin/credits`, etc.) accept:
+`GET /api/files` uses opaque cursor pagination:
 
-* `?limit=` (default 100, max 100)  
-* `?offset=` (0-based)  
+* `?limit=` (default 100, max 500)
+* `?cursor=` (omit on the first page; pass `next_cursor` from the previous response)
 
 Example:
 
 ```bash
 curl -H "Authorization: Bearer $TOK" \
-  "https://localhost:8443/api/files?limit=25&offset=50"
+  "https://localhost:8443/api/files?limit=25"
+
+curl -H "Authorization: Bearer $TOK" \
+  "https://localhost:8443/api/files?limit=25&cursor=$NEXT_CURSOR"
 ```
+
+Other list endpoints such as `/api/shares` may still use `limit` / `offset` where documented on those routes.
 
 ---
 

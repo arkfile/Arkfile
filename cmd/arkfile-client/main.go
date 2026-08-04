@@ -30,9 +30,12 @@ import (
 
 // Password entry timeouts and limits
 const (
-	PasswordTimeoutInteractive = 60 * time.Second // TTY prompt timeout
-	PasswordTimeoutPipe        = 10 * time.Second // Piped stdin timeout
-	MaxPasswordAttempts        = 3                // Max strength-check retries
+	PasswordTimeoutInteractive     = 60 * time.Second // TTY prompt timeout
+	PasswordTimeoutBatchCustom     = 2 * time.Minute  // Batch custom-password prompt wait
+	PasswordTimeoutPipe            = 10 * time.Second // Piped stdin timeout
+	MaxPasswordAttempts            = 3                // Max strength-check retries
+	MaxBatchCustomPasswordAttempts = 3                // Per custom file per round
+	MaxBatchDownloadRounds         = 3                // Retry rounds for multi-download
 )
 
 const Usage = `arkfile-client - Unified file vault CLI with streaming encryption
@@ -176,8 +179,12 @@ type ServerFileInfo struct {
 
 // ServerFileListResponse represents the server's file list response format
 type ServerFileListResponse struct {
-	Files   []ServerFileInfo `json:"files"`
-	Storage interface{}      `json:"storage"`
+	Files      []ServerFileInfo `json:"files"`
+	Storage    interface{}      `json:"storage"`
+	Limit      int              `json:"limit"`
+	Returned   int              `json:"returned"`
+	HasMore    bool             `json:"has_more"`
+	NextCursor *string          `json:"next_cursor"`
 }
 
 var globalAgent *Agent
@@ -1720,10 +1727,15 @@ func withPasswordStdin(enabled bool) func() {
 // readPassword reads a password from the controlling terminal (echo off), or from
 // stdin when the active command set --password-stdin.
 func readPassword(prompt string) ([]byte, error) {
+	return readPasswordWithTimeout(prompt, PasswordTimeoutInteractive)
+}
+
+// readPasswordWithTimeout is like readPassword but uses an explicit TTY wait limit.
+func readPasswordWithTimeout(prompt string, timeout time.Duration) ([]byte, error) {
 	if passwordFromStdin {
 		return secureinput.ReadPasswordFromStdin(PasswordTimeoutPipe)
 	}
-	return secureinput.ReadPassword(prompt, PasswordTimeoutInteractive)
+	return secureinput.ReadPassword(prompt, timeout)
 }
 
 // readPasswordWithStrengthCheck prompts for password, validates strength, loops until valid.

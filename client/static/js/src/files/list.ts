@@ -5,18 +5,7 @@
  * The server returns encrypted metadata (filenames, SHA-256 hashes) which
  * must be decrypted client-side using the Account Key.
  *
- * Server response shape (GET /api/files):
- * {
- *   files: [{
- *     file_id, storage_id, password_type,
- *     encrypted_password_hint?, password_hint_nonce?,
- *     encrypted_filename, filename_nonce,
- *     encrypted_sha256sum, sha256sum_nonce,
- *     encrypted_fek, size_bytes, upload_date,
- *     size_readable
- *   }, ...],
- *   storage: { total_readable, limit_readable, usage_percent, ... }
- * }
+ * GET /api/files is cursor-paginated (limit + cursor / next_cursor / has_more).
  */
 
 import { authenticatedFetch, getUsernameFromToken, getCurrentUser, fetchAdminContacts } from '../utils/auth';
@@ -40,6 +29,18 @@ import {
   type FileTagsParams,
 } from '../crypto/file-tags';
 import { openEditTagsModal, wireEditTagsModal, type TagMutationTarget } from './tags';
+import {
+  clearSelection,
+  getSelectedCount,
+  isFileSelected,
+  onSelectionChange,
+  pruneSelectionTo,
+  replaceSelection,
+  selectVisible,
+  setFileSelected,
+  visibleSelectionState,
+} from './selection';
+import { downloadSelectedFiles } from './download-batch';
 
 // Types (match server response, snake_case)
 
@@ -73,10 +74,14 @@ export interface FilesResponse {
     limit_readable: string;
     usage_percent: number;
   };
+  limit?: number;
+  returned?: number;
+  has_more?: boolean;
+  next_cursor?: string | null;
 }
 
 /** A file entry after client-side metadata decryption */
-interface DecryptedFileEntry {
+export interface DecryptedFileEntry {
   file_id: string;
   owner_username: string;
   password_type: 'account' | 'custom';
@@ -92,49 +97,147 @@ interface DecryptedFileEntry {
   metadata_decrypted: boolean;
 }
 
+const OWNER_FILE_PAGE_LIMIT = 100;
+
 let decryptedListCache: DecryptedFileEntry[] = [];
 let activeFilterTags: string[] = [];
 let tagFilterParams: FileTagsParams | null = null;
 let tagFilterWired = false;
+let listNextCursor: string | null = null;
+let listHasMore = false;
+let listLoadInFlight = false;
+let listScrollWired = false;
+let selectionToolbarWired = false;
+let matchingFilterScanToken = 0;
+const seenFileIds = new Set<string>();
+
+export function getDecryptedListCache(): readonly DecryptedFileEntry[] {
+  return decryptedListCache;
+}
+
+export function getActiveFilterTags(): readonly string[] {
+  return activeFilterTags;
+}
 
 // File Loading
 
 export async function loadFiles(): Promise<void> {
+  listNextCursor = null;
+  listHasMore = false;
+  seenFileIds.clear();
+  decryptedListCache = [];
+  clearSelection();
   try {
-    const response = await authenticatedFetch('/api/files');
-
-    if (response.ok) {
-      const data: FilesResponse = await response.json();
-      await displayFiles(data);
-    } else {
+    const data = await fetchOwnerFilePage(null);
+    if (!data) {
       showError('Failed to load files.');
+      return;
     }
+    await displayFiles(data, { append: false });
+    wireFileListScroll();
+    ensureSelectionToolbar();
   } catch (error) {
     console.error('Load files error:', error);
     showError('An error occurred while loading files.');
   }
 }
 
+async function fetchOwnerFilePage(cursor: string | null): Promise<FilesResponse | null> {
+  const params = new URLSearchParams();
+  params.set('limit', String(OWNER_FILE_PAGE_LIMIT));
+  if (cursor) {
+    params.set('cursor', cursor);
+  }
+  const response = await authenticatedFetch(`/api/files?${params.toString()}`);
+  if (!response.ok) {
+    return null;
+  }
+  return response.json() as Promise<FilesResponse>;
+}
+
+async function loadMoreFiles(): Promise<void> {
+  if (!listHasMore || listLoadInFlight || !listNextCursor) {
+    return;
+  }
+  listLoadInFlight = true;
+  setFileListLoadStatus(activeFilterTags.length > 0 ? 'Loading more matches…' : 'Loading more files…');
+  try {
+    const data = await fetchOwnerFilePage(listNextCursor);
+    if (!data) {
+      showError('Failed to load more files.');
+      return;
+    }
+    await displayFiles(data, { append: true });
+  } catch (error) {
+    console.error('Load more files error:', error);
+    showError('An error occurred while loading more files.');
+  } finally {
+    listLoadInFlight = false;
+    if (!listHasMore) {
+      setFileListLoadStatus('');
+    } else if (activeFilterTags.length > 0) {
+      setFileListLoadStatus('Scroll for more matches…');
+    } else {
+      setFileListLoadStatus('');
+    }
+  }
+}
+
+function wireFileListScroll(): void {
+  const filesList = document.getElementById('filesList');
+  if (!filesList || listScrollWired) {
+    return;
+  }
+  listScrollWired = true;
+  filesList.addEventListener('scroll', () => {
+    const remaining = filesList.scrollHeight - filesList.scrollTop - filesList.clientHeight;
+    if (remaining < 120) {
+      void loadMoreFiles();
+    }
+  });
+}
+
+function setFileListLoadStatus(message: string): void {
+  const filesList = document.getElementById('filesList');
+  if (!filesList) return;
+  let el = filesList.querySelector('.file-list-load-status') as HTMLElement | null;
+  if (!message) {
+    el?.remove();
+    return;
+  }
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'file-list-load-status';
+    filesList.appendChild(el);
+  }
+  el.textContent = message;
+}
+
 // File Display (with client-side decryption)
 
-export async function displayFiles(data: FilesResponse): Promise<void> {
+export async function displayFiles(
+  data: FilesResponse,
+  options: { append?: boolean } = {},
+): Promise<void> {
+  const append = options.append === true;
   const filesList = document.getElementById('filesList');
   if (!filesList) return;
 
-  filesList.innerHTML = '';
+  if (!append) {
+    filesList.innerHTML = '';
+  }
 
-  if (!data.files || data.files.length === 0) {
+  listHasMore = !!data.has_more;
+  listNextCursor = data.next_cursor ?? null;
+
+  if ((!data.files || data.files.length === 0) && decryptedListCache.length === 0) {
     filesList.innerHTML = '<div class="no-files">No files uploaded yet.</div>';
     updateStorageInfo(data.storage);
     return;
   }
 
-  // Try to get the Account Key for metadata decryption.
-  // If cached, use it silently. If not cached (e.g. after page refresh),
-  // show a banner prompting the user to enter their password.
   let username = getUsernameFromToken();
   if (!username) {
-    // Cache miss (e.g. page reload): fetch from server to populate.
     const userInfo = await getCurrentUser(true);
     username = userInfo?.username ?? null;
   }
@@ -143,8 +246,7 @@ export async function displayFiles(data: FilesResponse): Promise<void> {
     accountKey = await getCachedAccountKey(username, undefined);
   }
 
-  // If account key is not available, show a banner to let the user unlock
-  if (!accountKey && username && data.files.length > 0) {
+  if (!append && !accountKey && username && data.files.length > 0) {
     const banner = document.createElement('div');
     banner.className = 'decrypt-banner';
 
@@ -156,8 +258,7 @@ export async function displayFiles(data: FilesResponse): Promise<void> {
     decryptBtn.addEventListener('click', async () => {
       const key = await getAccountKey(username);
       if (key) {
-        // Re-render the file list with the newly derived account key
-        await displayFiles(data);
+        await loadFiles();
       }
     });
 
@@ -166,9 +267,38 @@ export async function displayFiles(data: FilesResponse): Promise<void> {
     filesList.appendChild(banner);
   }
 
-  // Decrypt metadata for each file (or fall back to placeholders)
+  const decryptedFiles = await decryptServerFiles(data.files, accountKey);
+  if (append) {
+    for (const entry of decryptedFiles) {
+      if (seenFileIds.has(entry.file_id)) {
+        continue;
+      }
+      seenFileIds.add(entry.file_id);
+      decryptedListCache.push(entry);
+    }
+  } else {
+    seenFileIds.clear();
+    decryptedListCache = [];
+    for (const entry of decryptedFiles) {
+      if (seenFileIds.has(entry.file_id)) {
+        continue;
+      }
+      seenFileIds.add(entry.file_id);
+      decryptedListCache.push(entry);
+    }
+  }
+
+  await ensureTagFilterReady(!!accountKey);
+  renderFilteredFileList();
+  updateStorageInfo(data.storage);
+}
+
+async function decryptServerFiles(
+  files: ServerFileEntry[],
+  accountKey: Uint8Array | null,
+): Promise<DecryptedFileEntry[]> {
   const decryptedFiles: DecryptedFileEntry[] = [];
-  for (const file of data.files) {
+  for (const file of files) {
     const entry: DecryptedFileEntry = {
       file_id: file.file_id,
       owner_username: file.owner_username,
@@ -250,20 +380,25 @@ export async function displayFiles(data: FilesResponse): Promise<void> {
 
     decryptedFiles.push(entry);
   }
+  return decryptedFiles;
+}
 
-  decryptedListCache = decryptedFiles;
-  await ensureTagFilterReady(!!accountKey);
-  renderFilteredFileList();
-
-  // Update storage info
-  updateStorageInfo(data.storage);
+function getVisibleDecryptedFiles(): DecryptedFileEntry[] {
+  return decryptedListCache.filter((file) => {
+    if (activeFilterTags.length === 0) {
+      return true;
+    }
+    if (!file.tags_available) {
+      return false;
+    }
+    return fileHasAllTags(file.tags, activeFilterTags);
+  });
 }
 
 function renderFilteredFileList(): void {
   const filesList = document.getElementById('filesList');
   if (!filesList) return;
 
-  // Keep decrypt banner if present as first child with that class
   const banner = filesList.querySelector('.decrypt-banner');
   filesList.innerHTML = '';
   if (banner) {
@@ -271,22 +406,35 @@ function renderFilteredFileList(): void {
   }
 
   let undecryptableSkipped = 0;
-  const visible = decryptedListCache.filter((file) => {
-    if (activeFilterTags.length === 0) {
-      return true;
-    }
-    if (!file.tags_available) {
+  for (const file of decryptedListCache) {
+    if (activeFilterTags.length > 0 && !file.tags_available) {
       undecryptableSkipped += 1;
-      return false;
     }
-    return fileHasAllTags(file.tags, activeFilterTags);
-  });
+  }
+  const visible = getVisibleDecryptedFiles();
+  pruneSelectionTo(visible.map((f) => f.file_id));
 
   updateTagFilterChrome(undecryptableSkipped, visible.length, decryptedListCache.length);
+  updateSelectionToolbar(visible.map((f) => f.file_id));
 
   for (const file of visible) {
     const fileElement = document.createElement('div');
     fileElement.className = 'file-item';
+    fileElement.dataset.fileId = file.file_id;
+    fileElement.dataset.filename = file.filename;
+    fileElement.dataset.passwordType = file.password_type;
+
+    const selectBox = document.createElement('input');
+    selectBox.type = 'checkbox';
+    selectBox.className = 'file-select';
+    selectBox.checked = isFileSelected(file.file_id);
+    selectBox.setAttribute('aria-label', `Select ${file.filename}`);
+    selectBox.dataset.fileId = file.file_id;
+    selectBox.addEventListener('change', () => {
+      setFileSelected(file.file_id, selectBox.checked);
+      updateSelectionToolbar(visible.map((f) => f.file_id));
+    });
+    fileElement.appendChild(selectBox);
 
     const fileInfo = document.createElement('div');
     fileInfo.className = 'file-info';
@@ -410,6 +558,147 @@ function renderFilteredFileList(): void {
     fileElement.appendChild(fileActions);
     filesList.appendChild(fileElement);
   }
+
+  if (listHasMore) {
+    setFileListLoadStatus(
+      activeFilterTags.length > 0 ? 'Scroll for more matches…' : 'Scroll for more files…',
+    );
+  }
+}
+
+function ensureSelectionToolbar(): void {
+  const filesList = document.getElementById('filesList');
+  const parent = filesList?.parentElement;
+  if (!parent) return;
+
+  let toolbar = parent.querySelector('.file-list-toolbar') as HTMLElement | null;
+  if (!toolbar) {
+    toolbar = document.createElement('div');
+    toolbar.className = 'file-list-toolbar';
+    toolbar.innerHTML = `
+      <label class="select-all-shown"><input type="checkbox" id="selectAllShownCheckbox"> Select all shown</label>
+      <button type="button" id="selectAllMatchingFilterBtn" class="btn-secondary">Select all matching filter</button>
+      <button type="button" id="downloadSelectedBtn" class="btn-primary" disabled>Download selected</button>
+      <button type="button" id="clearSelectionBtn" class="btn-secondary">Clear selection</button>
+      <span class="selection-count" id="selectionCount"></span>
+    `;
+    parent.insertBefore(toolbar, filesList);
+  }
+
+  if (selectionToolbarWired) {
+    return;
+  }
+  selectionToolbarWired = true;
+
+  const selectAllShown = document.getElementById('selectAllShownCheckbox') as HTMLInputElement | null;
+  selectAllShown?.addEventListener('change', () => {
+    const visibleIds = getVisibleDecryptedFiles().map((f) => f.file_id);
+    if (selectAllShown.checked) {
+      selectVisible(visibleIds);
+    } else {
+      for (const id of visibleIds) {
+        setFileSelected(id, false);
+      }
+    }
+    renderFilteredFileList();
+  });
+
+  document.getElementById('selectAllMatchingFilterBtn')?.addEventListener('click', () => {
+    void selectAllMatchingFilter();
+  });
+
+  document.getElementById('clearSelectionBtn')?.addEventListener('click', () => {
+    clearSelection();
+    renderFilteredFileList();
+  });
+
+  document.getElementById('downloadSelectedBtn')?.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    const selected = getVisibleDecryptedFiles().filter((f) => isFileSelected(f.file_id));
+    // Include selected IDs that may still be in cache but filtered out of view only if still selected after prune.
+    const targets = decryptedListCache.filter((f) => isFileSelected(f.file_id));
+    void downloadSelectedFiles(targets.length > 0 ? targets : selected);
+  });
+
+  onSelectionChange(() => {
+    updateSelectionToolbar(getVisibleDecryptedFiles().map((f) => f.file_id));
+  });
+}
+
+function updateSelectionToolbar(visibleIds: string[]): void {
+  const countEl = document.getElementById('selectionCount');
+  const downloadBtn = document.getElementById('downloadSelectedBtn') as HTMLButtonElement | null;
+  const selectAllShown = document.getElementById('selectAllShownCheckbox') as HTMLInputElement | null;
+  const n = getSelectedCount();
+  if (countEl) {
+    countEl.textContent = n > 0 ? `${n} selected` : '';
+  }
+  if (downloadBtn) {
+    downloadBtn.disabled = n === 0;
+    downloadBtn.textContent = n > 0 ? `Download selected (${n})` : 'Download selected';
+  }
+  if (selectAllShown) {
+    const state = visibleSelectionState(visibleIds);
+    selectAllShown.checked = state === 'all';
+    selectAllShown.indeterminate = state === 'some';
+  }
+}
+
+async function selectAllMatchingFilter(): Promise<void> {
+  const scanToken = ++matchingFilterScanToken;
+  const filterSnapshot = activeFilterTags.slice();
+  const matched = new Map<string, DecryptedFileEntry>();
+
+  for (const file of decryptedListCache) {
+    if (filterSnapshot.length === 0) {
+      matched.set(file.file_id, file);
+      continue;
+    }
+    if (file.tags_available && fileHasAllTags(file.tags, filterSnapshot)) {
+      matched.set(file.file_id, file);
+    }
+  }
+
+  setFileListLoadStatus(`Loading matches… ${matched.size} so far`);
+  while (listHasMore && listNextCursor) {
+    if (scanToken !== matchingFilterScanToken) {
+      setFileListLoadStatus('');
+      return;
+    }
+    if (activeFilterTags.join('\0') !== filterSnapshot.join('\0')) {
+      setFileListLoadStatus('');
+      showError('Tag filter changed; select-all matching filter was cancelled.');
+      return;
+    }
+    await loadMoreFiles();
+    for (const file of decryptedListCache) {
+      if (matched.has(file.file_id)) {
+        continue;
+      }
+      if (filterSnapshot.length === 0) {
+        matched.set(file.file_id, file);
+        continue;
+      }
+      if (file.tags_available && fileHasAllTags(file.tags, filterSnapshot)) {
+        matched.set(file.file_id, file);
+      }
+    }
+    setFileListLoadStatus(`Loading matches… ${matched.size} so far`);
+  }
+
+  if (scanToken !== matchingFilterScanToken) {
+    return;
+  }
+  if (activeFilterTags.join('\0') !== filterSnapshot.join('\0')) {
+    setFileListLoadStatus('');
+    showError('Tag filter changed; select-all matching filter was cancelled.');
+    return;
+  }
+
+  replaceSelection(matched.keys());
+  setFileListLoadStatus('');
+  renderFilteredFileList();
+  showSuccess(`Selected ${matched.size} file(s) matching the current filter.`);
 }
 
 async function ensureTagFilterReady(metadataUnlocked: boolean): Promise<void> {
@@ -456,6 +745,7 @@ function wireTagFilterOnce(): void {
     }
   });
   clearBtn?.addEventListener('click', () => {
+    matchingFilterScanToken += 1;
     activeFilterTags = [];
     renderFilteredFileList();
   });
@@ -508,6 +798,7 @@ function addFilterTag(tag: string): void {
     showError(`At most ${tagFilterParams.maxTagsPerFilterQuery} filter tags`);
     return;
   }
+  matchingFilterScanToken += 1;
   activeFilterTags.push(tag);
   renderFilteredFileList();
 }
@@ -528,6 +819,7 @@ function updateTagFilterChrome(undecryptableSkipped: number, visible: number, to
       removeBtn.className = 'tag-chip-remove';
       removeBtn.textContent = 'x';
       removeBtn.addEventListener('click', () => {
+        matchingFilterScanToken += 1;
         activeFilterTags = activeFilterTags.filter((t) => t.toLowerCase() !== tag.toLowerCase());
         renderFilteredFileList();
       });

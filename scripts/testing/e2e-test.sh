@@ -5,8 +5,10 @@
 #
 # Groups (execution order is defined in main()):
 #   preflight, platform_bootstrap, user_onboarding, user_authentication,
-#   files_standard, files_custom_password, shares, admin_operations,
-#   security_rate_limits, storage_replication, billing, payments, teardown, report
+#   files_standard, opaque_reregistration, files_custom_password (includes shared
+#   multi-dl corpus seed + CLI multi-download checks + multi-dl-corpus.json handoff
+#   for e2e-playwright), shares, admin_operations, security_rate_limits,
+#   storage_replication, billing, payments, teardown, report
 
 set -eo pipefail
 
@@ -81,6 +83,8 @@ MFA_SECRET_FILE="$TEST_DATA_DIR/mfa-secret"
 BACKUP_CODE_PRIMARY_FILE="$TEST_DATA_DIR/backup-code-primary"
 BACKUP_CODE_REENROLL_FILE="$TEST_DATA_DIR/backup-code-reenroll"
 MFA_ADMIN_RESET_DONE_FILE="$TEST_DATA_DIR/mfa-admin-reset-done"
+MULTI_DL_CORPUS_FILE="$TEST_DATA_DIR/multi-dl-corpus.json"
+MULTI_DL_CORPUS_DIR="$TEST_DATA_DIR/multi-dl-corpus"
 LOG_FILE="$TEST_DATA_DIR/e2e-test.log"
 
 # Initialize log file
@@ -1235,7 +1239,286 @@ run_files_custom_password() {
 
     rm -f "$custom_test_file"
 
+    # Shared multi-download corpus for CLI checks here and Playwright reuse later.
+    # Uses the existing user session (no new login/logout). Files are left on the
+    # server; admin delete below targets CUSTOM_FILE_ID only, not this corpus.
+    seed_and_verify_multi_dl_corpus
+
     success "Custom-password file operations complete"
+}
+
+# Upload a durable 16-file corpus (12 account + 4 custom), exercise CLI multi-download,
+# and write multi-dl-corpus.json for e2e-playwright.sh.
+seed_and_verify_multi_dl_corpus() {
+    scenario "Seeding shared multi-download corpus (16 small files)"
+
+    rm -rf "$MULTI_DL_CORPUS_DIR"
+    mkdir -p "$MULTI_DL_CORPUS_DIR"
+    chmod 700 "$MULTI_DL_CORPUS_DIR"
+    rm -f "$MULTI_DL_CORPUS_FILE"
+
+    local staging="$MULTI_DL_CORPUS_DIR/staging"
+    mkdir -p "$staging"
+    local manifest_tmp="$MULTI_DL_CORPUS_DIR/manifest-partial.jsonl"
+    : > "$manifest_tmp"
+
+    # Generate tiny plaintext files used by the corpus batches.
+    local i
+    for i in $(seq -w 1 16); do
+        $CLIENT generate-test-file \
+            --filename "$staging/e2e-multi-${i}.bin" \
+            --size 2048 \
+            --pattern random >/dev/null 2>&1
+    done
+    # Basename collision pair (same plaintext name, different paths) for CLI --output-dir.
+    mkdir -p "$staging/dup_a" "$staging/dup_b"
+    $CLIENT generate-test-file --filename "$staging/dup_a/photo.png" --size 1024 --pattern zeros >/dev/null 2>&1
+    $CLIENT generate-test-file --filename "$staging/dup_b/photo.png" --size 1024 --pattern sequential >/dev/null 2>&1
+
+    # Append one uploaded file's metadata line to the JSONL staging file.
+    # Args: file_id filename password_type tags_csv sha256
+    append_corpus_entry() {
+        local file_id="$1" filename="$2" password_type="$3" tags_csv="$4" sha256="$5"
+        local tags_json
+        if [ -z "$tags_csv" ]; then
+            tags_json='[]'
+        else
+            tags_json=$(printf '%s' "$tags_csv" | jq -Rc 'split(",")')
+        fi
+        jq -nc \
+            --arg file_id "$file_id" \
+            --arg filename "$filename" \
+            --arg password_type "$password_type" \
+            --arg sha256 "$sha256" \
+            --argjson tags "$tags_json" \
+            '{file_id:$file_id, filename:$filename, password_type:$password_type, tags:$tags, sha256:$sha256}' \
+            >> "$manifest_tmp"
+    }
+
+    # Upload one batch; tags and password type apply to every file in the batch.
+    # Args: password_type tags_csv file_path...
+    upload_corpus_batch() {
+        local password_type="$1"
+        local tags_csv="$2"
+        shift 2
+        local -a paths=("$@")
+        local -a file_args=()
+        local p
+        for p in "${paths[@]}"; do
+            file_args+=(--file "$p")
+        done
+
+        local up_out up_code
+        if [ "$password_type" = "custom" ]; then
+            # Build a single bash -c string with shell-quoted --file paths.
+            local file_cli=""
+            for p in "${paths[@]}"; do
+                file_cli+=" --file $(printf '%q' "$p")"
+            done
+            safe_exec up_out up_code \
+                bash -c "printf '%s\n' $(printf '%q' "$CUSTOM_FILE_PASSWORD") | $(printf '%q' "$CLIENT") \
+                --server-url $(printf '%q' "$SERVER_URL") \
+                --tls-insecure \
+                upload \
+                --password-stdin \
+                --password-type custom \
+                --tags $(printf '%q' "$tags_csv") \
+                $file_cli"
+        else
+            safe_exec up_out up_code \
+                $CLIENT \
+                --server-url "$SERVER_URL" \
+                --tls-insecure \
+                upload \
+                --password-type account \
+                --tags "$tags_csv" \
+                "${file_args[@]}"
+        fi
+
+        if [ $up_code -ne 0 ]; then
+            error "Corpus batch upload failed (type=$password_type tags=$tags_csv):"
+            echo "$up_out"
+            return 1
+        fi
+
+        # Pair [OK] lines with input paths in order.
+        local ok_lines
+        ok_lines=$(echo "$up_out" | grep '^\[OK\]' || true)
+        local idx=0
+        while IFS= read -r ok_line; do
+            [ -z "$ok_line" ] && continue
+            local fid
+            fid=$(echo "$ok_line" | grep -o 'file_id=[^ )]*' | cut -d= -f2)
+            local path="${paths[$idx]}"
+            local base sha
+            base=$(basename "$path")
+            sha=$(sha256sum "$path" | awk '{print $1}')
+            if [ -z "$fid" ]; then
+                error "Could not parse file_id from corpus upload line: $ok_line"
+                return 1
+            fi
+            append_corpus_entry "$fid" "$base" "$password_type" "$tags_csv" "$sha"
+            idx=$((idx + 1))
+        done <<< "$ok_lines"
+
+        if [ "$idx" -ne "${#paths[@]}" ]; then
+            error "Corpus batch expected ${#paths[@]} OK lines, got $idx"
+            return 1
+        fi
+        return 0
+    }
+
+    local batch_ok=true
+    # 01-06 account multi-a
+    upload_corpus_batch account "multi-a" \
+        "$staging/e2e-multi-01.bin" "$staging/e2e-multi-02.bin" "$staging/e2e-multi-03.bin" \
+        "$staging/e2e-multi-04.bin" "$staging/e2e-multi-05.bin" "$staging/e2e-multi-06.bin" \
+        || batch_ok=false
+    # 07-10 account multi-a,multi-b
+    upload_corpus_batch account "multi-a,multi-b" \
+        "$staging/e2e-multi-07.bin" "$staging/e2e-multi-08.bin" \
+        "$staging/e2e-multi-09.bin" "$staging/e2e-multi-10.bin" \
+        || batch_ok=false
+    # 11-12 account multi-decoy
+    upload_corpus_batch account "multi-decoy" \
+        "$staging/e2e-multi-11.bin" "$staging/e2e-multi-12.bin" \
+        || batch_ok=false
+    # Collision pair (account, multi-a) -- both named photo.png
+    upload_corpus_batch account "multi-a" \
+        "$staging/dup_a/photo.png" "$staging/dup_b/photo.png" \
+        || batch_ok=false
+    # 13-14 custom multi-a
+    upload_corpus_batch custom "multi-a" \
+        "$staging/e2e-multi-13.bin" "$staging/e2e-multi-14.bin" \
+        || batch_ok=false
+    # 15-16 custom multi-decoy
+    upload_corpus_batch custom "multi-decoy" \
+        "$staging/e2e-multi-15.bin" "$staging/e2e-multi-16.bin" \
+        || batch_ok=false
+
+    # Total entries: 6+4+2+2+2+2 = 18. Plan was ~16; 18 is fine (still << page size).
+    # Keep calling it the multi-dl corpus; Playwright will use counts from the manifest.
+
+    if [ "$batch_ok" != true ]; then
+        record_test "Multi-dl corpus seed (18 files)" "FAIL"
+        return 0
+    fi
+
+    local entry_count
+    entry_count=$(wc -l < "$manifest_tmp" | tr -d ' ')
+    if [ "$entry_count" -ne 18 ]; then
+        error "Corpus manifest expected 18 entries, got $entry_count"
+        record_test "Multi-dl corpus seed (18 files)" "FAIL"
+        return 0
+    fi
+
+    jq -n \
+        --arg custom_password "$CUSTOM_FILE_PASSWORD" \
+        --slurpfile files <(jq -s '.' "$manifest_tmp") \
+        '{custom_password:$custom_password, files:$files[0]}' \
+        > "$MULTI_DL_CORPUS_FILE"
+    chmod 600 "$MULTI_DL_CORPUS_FILE"
+    record_test "Multi-dl corpus seed (18 files)" "PASS"
+    info "Wrote corpus manifest: $MULTI_DL_CORPUS_FILE ($entry_count files)"
+
+    # CLI multi-download coverage against the corpus (same session).
+    scenario "CLI multi-download against shared corpus"
+
+    local multi_a_count
+    multi_a_count=$(jq '[.files[] | select(.tags | index("multi-a"))] | length' "$MULTI_DL_CORPUS_FILE")
+    local list_tags_out list_tags_code
+    safe_exec list_tags_out list_tags_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure list-files --tags 'multi-a' --json
+    if [ $list_tags_code -eq 0 ] \
+        && echo "$list_tags_out" | jq -e --argjson n "$multi_a_count" 'type == "array" and length == $n' >/dev/null 2>&1; then
+        record_test "Corpus list-files --tags multi-a count" "PASS"
+    else
+        error "Expected $multi_a_count multi-a files in list-files --json; got:"
+        echo "$list_tags_out" | head -c 2000
+        record_test "Corpus list-files --tags multi-a count" "FAIL"
+    fi
+
+    local corpus_dl_dir="$MULTI_DL_CORPUS_DIR/cli-download-out"
+    mkdir -p "$corpus_dl_dir"
+    local dry_out dry_code
+    safe_exec dry_out dry_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+        download --tags 'multi-a' --output-dir "$corpus_dl_dir" --dry-run
+    if [ $dry_code -eq 0 ] && echo "$dry_out" | grep -q "Dry run: ${multi_a_count} file"; then
+        record_test "Corpus download --tags multi-a --dry-run" "PASS"
+    else
+        warning "Corpus dry-run unexpected: $dry_out"
+        record_test "Corpus download --tags multi-a --dry-run" "FAIL"
+    fi
+
+    # Account-only multi download (avoids interactive custom prompts / password-stdin limit).
+    local account_ids=()
+    local account_id account_pick=0
+    while IFS= read -r account_id && [ "$account_pick" -lt 5 ]; do
+        [ -z "$account_id" ] && continue
+        account_ids+=(--file-id "$account_id")
+        account_pick=$((account_pick + 1))
+    done < <(jq -r '.files[] | select(.password_type=="account" and (.tags|index("multi-decoy")|not)) | .file_id' "$MULTI_DL_CORPUS_FILE")
+
+    local acct_dl_out acct_dl_code
+    safe_exec acct_dl_out acct_dl_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+        download "${account_ids[@]}" --output-dir "$corpus_dl_dir"
+    if [ $acct_dl_code -eq 0 ] \
+        && echo "$acct_dl_out" | grep -q "Batch download finished. Account succeeded: ${account_pick}. Custom succeeded: 0. Unresolved failures: 0. Skipped: 0."; then
+        record_test "Corpus account multi-download --output-dir (${account_pick} files)" "PASS"
+    else
+        warning "Corpus account multi-download failed: $acct_dl_out"
+        record_test "Corpus account multi-download --output-dir (${account_pick} files)" "FAIL"
+    fi
+
+    # Basename collision: both photo.png corpus entries into one directory.
+    local photo_ids=()
+    while IFS= read -r account_id; do
+        [ -z "$account_id" ] && continue
+        photo_ids+=(--file-id "$account_id")
+    done < <(jq -r '.files[] | select(.filename=="photo.png") | .file_id' "$MULTI_DL_CORPUS_FILE")
+    local collision_dir="$MULTI_DL_CORPUS_DIR/cli-collision-out"
+    mkdir -p "$collision_dir"
+    local coll_out coll_code
+    safe_exec coll_out coll_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+        download "${photo_ids[@]}" --output-dir "$collision_dir"
+    if [ $coll_code -eq 0 ] \
+        && [ -f "$collision_dir/photo.png" ] \
+        && [ -f "$collision_dir/photo-1.png" ]; then
+        record_test "Corpus basename collision rename (photo.png / photo-1.png)" "PASS"
+    else
+        warning "Corpus collision download unexpected: $coll_out"
+        ls -la "$collision_dir" 2>/dev/null || true
+        record_test "Corpus basename collision rename (photo.png / photo-1.png)" "FAIL"
+    fi
+
+    # One corpus custom via single-file --password-stdin (multi-custom stdin unsupported).
+    local custom_id custom_sha custom_name
+    custom_id=$(jq -r '.files[] | select(.password_type=="custom") | .file_id' "$MULTI_DL_CORPUS_FILE" | head -n 1)
+    custom_sha=$(jq -r --arg id "$custom_id" '.files[] | select(.file_id==$id) | .sha256' "$MULTI_DL_CORPUS_FILE")
+    custom_name=$(jq -r --arg id "$custom_id" '.files[] | select(.file_id==$id) | .filename' "$MULTI_DL_CORPUS_FILE")
+    local custom_out_path="$MULTI_DL_CORPUS_DIR/cli-custom-one.bin"
+    local cust_dl_out cust_dl_code
+    safe_exec cust_dl_out cust_dl_code \
+        bash -c "printf '%s\n' '$CUSTOM_FILE_PASSWORD' | $CLIENT \
+        --server-url '$SERVER_URL' \
+        --tls-insecure \
+        download \
+        --password-stdin \
+        --file-id '$custom_id' \
+        --output '$custom_out_path'"
+    if [ $cust_dl_code -eq 0 ]; then
+        record_test "Corpus single custom download --password-stdin" "PASS"
+        assert_sha256_matches "$custom_out_path" "$custom_sha" "Corpus custom file SHA256 ($custom_name)"
+    else
+        error "Corpus custom download failed: $cust_dl_out"
+        record_test "Corpus single custom download --password-stdin" "FAIL"
+    fi
+
+    rm -rf "$staging"
+    info "Multi-dl corpus CLI verification complete (files retained for Playwright)"
 }
 
 run_files_standard() {
@@ -1850,6 +2133,37 @@ run_files_standard() {
         else
             record_test "Multi-file batch: all 3 files in list" "FAIL"
         fi
+
+        # Multi-file download: dry-run lists all three IDs, then download to output-dir
+        local batch_dl_dir="$TEST_DATA_DIR/batch_download_out"
+        mkdir -p "$batch_dl_dir"
+        local dry_out dry_code
+        local dry_args=()
+        while IFS= read -r batch_id; do
+            [ -z "$batch_id" ] && continue
+            dry_args+=(--file-id "$batch_id")
+        done <<< "$batch_ids"
+        safe_exec dry_out dry_code \
+            $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+            download "${dry_args[@]}" --output-dir "$batch_dl_dir" --dry-run
+        if [ $dry_code -eq 0 ] && echo "$dry_out" | grep -q "Dry run: 3 file"; then
+            record_test "Multi-file download dry-run (3 files)" "PASS"
+        else
+            warning "Multi-file download dry-run unexpected: $dry_out"
+            record_test "Multi-file download dry-run (3 files)" "FAIL"
+        fi
+
+        local batch_dl_out batch_dl_code
+        safe_exec batch_dl_out batch_dl_code \
+            $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+            download "${dry_args[@]}" --output-dir "$batch_dl_dir"
+        if [ $batch_dl_code -eq 0 ] && echo "$batch_dl_out" | grep -q "Batch download finished. Account succeeded: 3. Custom succeeded: 0. Unresolved failures: 0. Skipped: 0."; then
+            record_test "Multi-file download to output-dir (3 files)" "PASS"
+        else
+            warning "Multi-file download failed: $batch_dl_out"
+            record_test "Multi-file download to output-dir (3 files)" "FAIL"
+        fi
+        rm -rf "$batch_dl_dir"
 
         # Clean up: delete all 3 uploaded batch files to keep quota clean
         while IFS= read -r batch_id; do

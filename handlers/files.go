@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -17,9 +18,11 @@ import (
 )
 
 const (
-	defaultMetadataPageLimit = 100
-	maxMetadataPageLimit     = 500
-	maxMetadataBatchSize     = 500
+	defaultOwnerFilePageLimit = 100
+	maxOwnerFilePageLimit     = 500
+	defaultMetadataPageLimit  = 100
+	maxMetadataPageLimit      = 500
+	maxMetadataBatchSize      = 500
 )
 
 type FileMetadataBatchRequest struct {
@@ -56,6 +59,24 @@ func parseLimitOffset(c echo.Context, defaultLimit, maxLimit int) (int, int, err
 	}
 
 	return limit, offset, nil
+}
+
+func parseOwnerFileListLimit(c echo.Context) (int, error) {
+	limit := defaultOwnerFilePageLimit
+	if limitStr := c.QueryParam("limit"); limitStr != "" {
+		parsed, err := strconv.Atoi(limitStr)
+		if err != nil {
+			return 0, fmt.Errorf("invalid limit")
+		}
+		if parsed < 1 {
+			return 0, fmt.Errorf("limit must be at least 1")
+		}
+		if parsed > maxOwnerFilePageLimit {
+			parsed = maxOwnerFilePageLimit
+		}
+		limit = parsed
+	}
+	return limit, nil
 }
 
 // GetFileMeta returns encrypted file metadata needed for download initialization
@@ -125,35 +146,6 @@ func GetFileMeta(c echo.Context) error {
 		resp["tags_nonce"] = file.TagsNonce
 	}
 	return c.JSON(http.StatusOK, resp)
-}
-
-// ListRecentFileMetadata returns a paginated recent metadata listing for the
-// authenticated owner. This endpoint is intended for owner-side local metadata
-// decryption workflows and does not expose FEKs or chunk/download details.
-func ListRecentFileMetadata(c echo.Context) error {
-	username := auth.GetUsernameFromToken(c)
-	if username == "" {
-		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid authentication token")
-	}
-
-	limit, offset, err := parseLimitOffset(c, defaultMetadataPageLimit, maxMetadataPageLimit)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
-	}
-
-	files, err := models.GetRecentFileMetadataByOwner(database.DB, username, limit, offset)
-	if err != nil {
-		logging.ErrorLogger.Printf("ListRecentFileMetadata failed for user '%s': %v", username, err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file metadata")
-	}
-
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"files":    files,
-		"limit":    limit,
-		"offset":   offset,
-		"returned": len(files),
-		"has_more": len(files) == limit,
-	})
 }
 
 // GetFileMetadataBatch returns lightweight encrypted metadata for an explicit
@@ -237,7 +229,8 @@ func GetFileEnvelope(c echo.Context) error {
 	})
 }
 
-// ListFiles returns a list of files owned by the user with encrypted metadata
+// ListFiles returns a cursor-paginated list of files owned by the user with encrypted metadata.
+// Query params: limit (default 100, max 500), cursor (opaque next_cursor from a prior response).
 func ListFiles(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
 	if username == "" {
@@ -245,37 +238,38 @@ func ListFiles(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid authentication token")
 	}
 
-	// Verify database connection
 	if database.DB == nil {
 		logging.Log(logging.ERROR, "ListFiles: Database connection is nil")
 		return echo.NewHTTPError(http.StatusInternalServerError, "Database connection error")
 	}
 
-	// Test database connection with a simple ping
 	if err := database.DB.Ping(); err != nil {
 		logging.Log(logging.ERROR, "ListFiles: Database ping failed: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Database connection error")
 	}
 
-	// Get files using the models function with encrypted metadata support
-	files, err := models.GetFilesByOwner(database.DB, username)
+	limit, err := parseOwnerFileListLimit(c)
 	if err != nil {
-		logging.Log(logging.ERROR, "ListFiles: GetFilesByOwner failed for user '%s': %v", username, err)
-		// Log the specific SQL error details if available
-		if sqlErr, ok := err.(interface{ Error() string }); ok {
-			logging.Log(logging.ERROR, "ListFiles: SQL Error details: %s", sqlErr.Error())
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	cursor := strings.TrimSpace(c.QueryParam("cursor"))
+
+	page, err := models.GetFilesByOwnerPage(database.DB, username, limit, cursor)
+	if err != nil {
+		if errors.Is(err, models.ErrInvalidOwnerFileListCursor) {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid cursor")
 		}
+		logging.Log(logging.ERROR, "ListFiles: GetFilesByOwnerPage failed for user '%s': %v", username, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve files")
 	}
 
-	// Prepare response data structure for files
 	type FileListResponseItem struct {
 		*models.FileMetadataForClient
 		SizeReadable string `json:"size_readable"`
 	}
 
-	var fileList []FileListResponseItem
-	for _, file := range files {
+	fileList := make([]FileListResponseItem, 0, len(page.Files))
+	for _, file := range page.Files {
 		clientMeta := file.ToClientMetadata()
 		fileList = append(fileList, FileListResponseItem{
 			FileMetadataForClient: clientMeta,
@@ -283,11 +277,17 @@ func ListFiles(c echo.Context) error {
 		})
 	}
 
-	// Get user's storage information
 	user, err := models.GetUserByUsername(database.DB, username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to get user storage info: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get storage info")
+	}
+
+	var nextCursor interface{}
+	if page.NextCursor != "" {
+		nextCursor = page.NextCursor
+	} else {
+		nextCursor = nil
 	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
@@ -301,6 +301,10 @@ func ListFiles(c echo.Context) error {
 			"available_readable": formatBytes(user.StorageLimitBytes - user.TotalStorageBytes),
 			"usage_percent":      user.GetStorageUsagePercent(),
 		},
+		"limit":       limit,
+		"returned":    len(fileList),
+		"has_more":    page.HasMore,
+		"next_cursor": nextCursor,
 	})
 }
 

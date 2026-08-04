@@ -22,6 +22,10 @@
  * insufficient. Check hashVerification BEFORE triggerBrowserDownloadFromUrl;
  * revoke the Blob URL on mismatch and do not claim success.
  *
+ * Directory-handle path (multi-download): writes through FileSystemWritableFileStream
+ * into a temporary entry, verifies SHA-256, then moves/renames to the reserved
+ * basename when the browser supports it.
+ *
  * SECURITY: All FEK decryption happens client-side using Argon2id-derived keys.
  * The server NEVER sees the plaintext FEK or the user's password.
  */
@@ -47,6 +51,7 @@ import { debugLog } from '../utils/debug-log.js';
 
 import { deriveFileEncryptionKey } from '../crypto/file-encryption';
 import { getAccountKey, decryptFEK, parseEncryptedFEKHeader } from '../crypto/metadata-helpers';
+import { secureWipe } from '../crypto/primitives.js';
 
 const LOG_PREFIX = '[arkfile-download]';
 const INTEGRITY_PANEL_ID = 'download-integrity-panel';
@@ -77,24 +82,128 @@ interface FileMetaResponse {
  * 3. For custom-password files, prompt for the file password and derive custom key
  * 4. Decrypt FEK
  * 5. Stream-decrypt all chunks via the streaming manager:
+ *    - Directory writable sink (batch multi-download)
  *    - SW path (preferred): bytes flow to the browser's download manager via
  *      the Service Worker; SHA-256 verified inline (may be post-write on disk).
  *    - Blob fallback: accumulate incrementally; check hash before trigger.
  * 6. Show integrity panel (expected digest, inline result, Verify File entry).
  */
+export interface DownloadFileOptions {
+  /** When set, skip the custom-password modal and use this password for FEK unwrap. */
+  customPassword?: string;
+  /** When true, failures throw instead of only showing toasts (batch orchestration). */
+  throwOnFailure?: boolean;
+  /** Abort in-flight chunk transfers (batch Cancel). */
+  abortController?: AbortController;
+  /** When set with reservedFilename, write into this directory via FS Access API. */
+  directoryHandle?: FileSystemDirectoryHandle;
+  /** Final basename reserved for this target (collision-safe). */
+  reservedFilename?: string;
+  /** Override built-in progress UI (batch owns its own progress chrome). */
+  showProgressUI?: boolean;
+}
+
+function fileSystemFileHandleSupportsMove(): boolean {
+  return typeof (FileSystemFileHandle.prototype as unknown as { move?: unknown }).move === 'function';
+}
+
+async function removeDirectoryEntryBestEffort(
+  directoryHandle: FileSystemDirectoryHandle,
+  name: string,
+): Promise<void> {
+  try {
+    await directoryHandle.removeEntry(name);
+  } catch (err) {
+    console.warn(
+      `${LOG_PREFIX} Could not remove partial directory entry "${name}":`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+/**
+ * Stream-decrypt into a directory handle using a temporary entry, then publish
+ * to the reserved basename when move/rename is available.
+ */
+async function downloadFileToDirectory(
+  fileId: string,
+  fek: Uint8Array,
+  metadataDecryptionKey: Uint8Array,
+  directoryHandle: FileSystemDirectoryHandle,
+  reservedFilename: string,
+  abortController: AbortController | undefined,
+  showProgressUI: boolean,
+): Promise<StreamingDownloadResult> {
+  const supportsMove = fileSystemFileHandleSupportsMove();
+  const tempName = `.arkfile-dl-${crypto.randomUUID()}.tmp`;
+  const writeName = supportsMove ? tempName : reservedFilename;
+  let createdName: string | null = null;
+
+  try {
+    if (abortController?.signal.aborted) {
+      throw new Error('Download cancelled');
+    }
+
+    const fileHandle = await directoryHandle.getFileHandle(writeName, { create: true });
+    createdName = writeName;
+    const writable = await fileHandle.createWritable();
+
+    const result = await downloadFileChunked(fileId, fek, null, {
+      accountKey: metadataDecryptionKey,
+      showProgressUI,
+      writableSink: writable,
+      ...(abortController ? { abortController } : {}),
+    });
+
+    if (!result.success) {
+      throw new Error(result.error || 'Download failed.');
+    }
+    if (result.hashVerification === 'mismatch') {
+      throw new Error('integrity_mismatch');
+    }
+
+    if (supportsMove && createdName !== reservedFilename) {
+      const movable = fileHandle as FileSystemFileHandle & {
+        move: (name: string) => Promise<void>;
+      };
+      await movable.move(reservedFilename);
+      createdName = reservedFilename;
+    }
+
+    return { ...result, writtenToWritable: true };
+  } catch (err) {
+    if (createdName) {
+      await removeDirectoryEntryBestEffort(directoryHandle, createdName);
+      // If publish renamed already, also try removing the reserved name on failure paths above.
+      if (createdName !== reservedFilename) {
+        await removeDirectoryEntryBestEffort(directoryHandle, reservedFilename);
+      }
+    }
+    throw err instanceof Error ? err : new Error(String(err));
+  }
+}
+
 export async function downloadFile(
   fileId: string,
   hint: string,
   expectedHash: string,
   passwordType: string,
+  options: DownloadFileOptions = {},
 ): Promise<void> {
   const t0 = Date.now();
   debugLog(`${LOG_PREFIX} downloadFile() invoked (passwordType=${passwordType})`);
+  const showProgressUI = options.showProgressUI !== false;
+  const fail = (message: string, err?: unknown): never | void => {
+    if (options.throwOnFailure) {
+      throw err instanceof Error ? err : new Error(message);
+    }
+  };
 
   try {
     if (!isAuthenticated()) {
       console.error(`${LOG_PREFIX} No auth token available`);
       showError('Not authenticated. Please log in again.');
+      fail('Not authenticated');
       return;
     }
 
@@ -107,6 +216,7 @@ export async function downloadFile(
     if (!username) {
       console.error(`${LOG_PREFIX} Username could not be determined`);
       showError('Username not found. Please log in again.');
+      fail('Username not found');
       return;
     }
 
@@ -118,6 +228,7 @@ export async function downloadFile(
       const errorData = await metaResponse.json().catch(() => ({}));
       console.error(`${LOG_PREFIX} Metadata fetch failed: HTTP ${metaResponse.status}`);
       showError(errorData.message || 'Failed to retrieve file metadata.');
+      fail(errorData.message || 'Failed to retrieve file metadata.');
       return;
     }
     const meta: FileMetaResponse = await metaResponse.json();
@@ -136,6 +247,7 @@ export async function downloadFile(
       const accountKey = await getAccountKey(username);
       if (!accountKey) {
         debugLog(`${LOG_PREFIX} Account key resolution cancelled or failed`);
+        fail('Account key resolution cancelled');
         return;
       }
       metadataDecryptionKey = accountKey;
@@ -147,6 +259,7 @@ export async function downloadFile(
       } catch (error) {
         console.error(`${LOG_PREFIX} Failed to decrypt FEK with account key:`, error instanceof Error ? error.message : error);
         showError('Failed to decrypt file key. Your password may be incorrect.');
+        fail('Failed to decrypt file key', error);
         return;
       }
     } else {
@@ -155,77 +268,119 @@ export async function downloadFile(
       const accountKey = await getAccountKey(username);
       if (!accountKey) {
         debugLog(`${LOG_PREFIX} Account key resolution cancelled or failed`);
+        fail('Account key resolution cancelled');
         return;
       }
       metadataDecryptionKey = accountKey;
 
-      const hintText = hint || meta.password_hint || '';
-      const promptResult = await showPasswordPrompt({
-        title: 'File Password Required',
-        message: 'This file is encrypted with a custom password.',
-        ...(hintText ? { hint: hintText } : {}),
-        showCacheDuration: false,
-        submitLabel: 'Decrypt',
-        cancelLabel: 'Cancel',
-      });
-      if (!promptResult) {
-        debugLog(`${LOG_PREFIX} Custom password prompt cancelled`);
-        return;
-      }
-      const password = promptResult.password;
-
-      try {
-        showProgress({
-          title: 'Deriving Custom Key',
-          message: 'Running Argon2id key derivation -- this may take a few seconds...',
-          indeterminate: true,
+      let password = options.customPassword || '';
+      if (!password) {
+        const hintText = hint || meta.password_hint || '';
+        const promptResult = await showPasswordPrompt({
+          title: 'File Password Required',
+          message: 'This file is encrypted with a custom password.',
+          ...(hintText ? { hint: hintText } : {}),
+          showCacheDuration: false,
+          submitLabel: 'Decrypt',
+          cancelLabel: 'Cancel',
         });
+        if (!promptResult || promptResult === 'timeout') {
+          debugLog(`${LOG_PREFIX} Custom password prompt cancelled`);
+          fail('prompt_cancelled');
+          return;
+        }
+        password = promptResult.password;
+      }
+
+      let customKey: Uint8Array | null = null;
+      try {
+        if (showProgressUI) {
+          showProgress({
+            title: 'Deriving Custom Key',
+            message: 'Running Argon2id key derivation -- this may take a few seconds...',
+            indeterminate: true,
+          });
+        }
 
         const tKdf = Date.now();
-        const customKey = await deriveFileEncryptionKey(password, envelopeHeader.salt, 'custom');
+        customKey = await deriveFileEncryptionKey(password, envelopeHeader.salt, 'custom');
+        password = '';
         debugLog(`${LOG_PREFIX} Custom key derived (Argon2id) in ${Date.now() - tKdf}ms`);
-        hideProgress();
+        if (showProgressUI) {
+          hideProgress();
+        }
 
         const tDec = Date.now();
         fek = await decryptFEK(meta.encrypted_fek, customKey, meta.file_id);
         debugLog(`${LOG_PREFIX} FEK decrypted with custom key in ${Date.now() - tDec}ms`);
       } catch (error) {
-        hideProgress();
+        if (showProgressUI) {
+          hideProgress();
+        }
+        password = '';
         console.error(`${LOG_PREFIX} Failed to decrypt FEK with custom password:`, error instanceof Error ? error.message : error);
         const toast = showError('Failed to decrypt file key. Check your password.');
         toast.setAttribute('data-testid', 'wrong-custom-password');
+        fail('wrong_custom_password', error);
         return;
+      } finally {
+        password = '';
+        if (customKey) {
+          secureWipe(customKey);
+          customKey = null;
+        }
       }
     }
 
-    if (isSwAvailable()) {
-      showSwStreamingTip();
-    } else {
-      showBlobBufferWarning(meta.size_bytes);
+    const useDirectory =
+      options.directoryHandle !== undefined &&
+      typeof options.reservedFilename === 'string' &&
+      options.reservedFilename.length > 0;
+
+    if (!useDirectory) {
+      if (isSwAvailable()) {
+        showSwStreamingTip();
+      } else {
+        showBlobBufferWarning(meta.size_bytes);
+      }
     }
 
     try {
-      // Stream-decrypt all chunks via the streaming download manager.
-      // Picks the SW path when available; falls back to Blob only when safe.
       debugLog(`${LOG_PREFIX} Beginning chunked streaming download...`);
-      const result: StreamingDownloadResult = await downloadFileChunked(
-        fileId,
-        fek,
-        null,
-        {
-          accountKey: metadataDecryptionKey,
-          showProgressUI: true,
-          onProgress: (progress) => {
-            if (progress.stage === 'error') {
-              console.error(`${LOG_PREFIX} Streaming progress error:`, progress.error);
-            }
+
+      let result: StreamingDownloadResult;
+      if (useDirectory && options.directoryHandle && options.reservedFilename) {
+        result = await downloadFileToDirectory(
+          fileId,
+          fek,
+          metadataDecryptionKey,
+          options.directoryHandle,
+          options.reservedFilename,
+          options.abortController,
+          showProgressUI,
+        );
+      } else {
+        result = await downloadFileChunked(
+          fileId,
+          fek,
+          null,
+          {
+            accountKey: metadataDecryptionKey,
+            showProgressUI,
+            ...(options.abortController ? { abortController: options.abortController } : {}),
+            onProgress: (progress) => {
+              if (progress.stage === 'error') {
+                console.error(`${LOG_PREFIX} Streaming progress error:`, progress.error);
+              }
+            },
           },
-        },
-      );
+        );
+      }
 
       if (!result.success) {
         if (result.error === 'Download cancelled') {
           debugLog(`${LOG_PREFIX} Download cancelled by user`);
+          fail('cancelled');
           return;
         }
         console.error(`${LOG_PREFIX} Streaming download returned failure: ${result.error}`);
@@ -233,12 +388,21 @@ export async function downloadFile(
           showPartialDownloadWarning();
         }
         showError(result.error || 'Download failed.');
+        fail(result.error || 'download_failed');
         return;
       }
 
-      if (!result.filename) {
+      if (result.hashVerification === 'mismatch') {
+        console.error(`${LOG_PREFIX} SHA-256 verification failed`);
+        showError('Download integrity check failed. The file was not saved as successful.');
+        fail('integrity_mismatch');
+        return;
+      }
+
+      if (!result.filename && !result.writtenToWritable) {
         console.error(`${LOG_PREFIX} Result missing filename`);
         showError('Download completed but filename is missing.');
+        fail('missing_filename');
         return;
       }
 
@@ -250,8 +414,13 @@ export async function downloadFile(
         console.warn(`${LOG_PREFIX} SHA-256 metadata mismatch -- possible tampering or stale list view`);
       }
 
+      if (result.writtenToWritable) {
+        debugLog(`${LOG_PREFIX} File written to directory handle (total elapsed ${Date.now() - t0}ms, hash_verification=${result.hashVerification ?? 'n/a'})`);
+        return;
+      }
+
       const integrity = {
-        filename: result.filename,
+        filename: result.filename || options.reservedFilename || fileId,
         expectedSha256: result.sha256sum,
         computedSha256: result.computedSha256Hex,
         hashVerification: result.hashVerification,
@@ -268,6 +437,7 @@ export async function downloadFile(
       if (!result.blobUrl) {
         console.error(`${LOG_PREFIX} Result missing blobUrl on fallback path`);
         showError('Download completed but no file data was produced.');
+        fail('missing_blob');
         return;
       }
 
@@ -275,13 +445,15 @@ export async function downloadFile(
       if (decision.blockBlobTrigger) {
         console.warn(`${LOG_PREFIX} Blob download blocked due to hash mismatch; revoking Blob URL`);
         URL.revokeObjectURL(result.blobUrl);
+        fail('integrity_mismatch');
         return;
       }
 
       debugLog(`${LOG_PREFIX} Triggering browser download from blob URL (SW unavailable, total elapsed ${Date.now() - t0}ms)`);
-      triggerBrowserDownloadFromUrl(result.blobUrl, result.filename);
+      triggerBrowserDownloadFromUrl(result.blobUrl, result.filename || fileId);
     } finally {
       dismissBlobBufferWarning();
+      secureWipe(fek);
     }
   } catch (error) {
     dismissBlobBufferWarning();
@@ -289,6 +461,9 @@ export async function downloadFile(
     const msg = error instanceof Error ? error.message : '';
     if (/partial file may already/i.test(msg)) {
       showPartialDownloadWarning();
+    }
+    if (options.throwOnFailure) {
+      throw error instanceof Error ? error : new Error(msg || 'download_failed');
     }
     showError('An error occurred during file download.');
   }

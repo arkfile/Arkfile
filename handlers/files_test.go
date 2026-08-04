@@ -200,58 +200,6 @@ func TestDeleteFile_StorageError(t *testing.T) {
 	mockStorage.AssertExpectations(t)
 }
 
-// TestListRecentFileMetadata tests the GET /api/files/metadata endpoint
-func TestListRecentFileMetadata(t *testing.T) {
-	username := "testuser"
-
-	c, rec, mockDB, _ := setupTestEnv(t, http.MethodGet, "/api/files/metadata", nil)
-	c.SetParamNames("limit", "offset")
-
-	claims := &auth.Claims{Username: username}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	c.Set("user", token)
-
-	// Setup mock DB response for models.GetRecentFileMetadataByOwner.
-	// owner_username is included so the client can rebuild
-	// metadata AAD without a second round-trip.
-	query := `SELECT file_id, owner_username, password_type, filename_nonce, encrypted_filename,
-		       sha256sum_nonce, encrypted_sha256sum, size_bytes, upload_date
-		FROM file_metadata
-		WHERE owner_username = \?
-		ORDER BY upload_date DESC
-		LIMIT \? OFFSET \?`
-
-	rows := sqlmock.NewRows([]string{
-		"file_id", "owner_username", "password_type", "filename_nonce", "encrypted_filename",
-		"sha256sum_nonce", "encrypted_sha256sum", "size_bytes", "upload_date",
-	}).AddRow(
-		"file-1", username, "account", "nonce1", "encName1", "shaNonce1", "encSha1", 1024, "2024-01-01 12:00:00",
-	)
-
-	mockDB.ExpectQuery(query).WithArgs(username, 100, 0).WillReturnRows(rows)
-
-	err := ListRecentFileMetadata(c)
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusOK, rec.Code)
-
-	var resp map[string]interface{}
-	err = json.Unmarshal(rec.Body.Bytes(), &resp)
-	require.NoError(t, err)
-
-	assert.Equal(t, float64(100), resp["limit"])
-	assert.Equal(t, float64(0), resp["offset"])
-	assert.Equal(t, float64(1), resp["returned"])
-	assert.Equal(t, false, resp["has_more"])
-
-	files := resp["files"].([]interface{})
-	assert.Len(t, files, 1)
-	file0 := files[0].(map[string]interface{})
-	assert.Equal(t, "file-1", file0["file_id"])
-	assert.Equal(t, "encName1", file0["encrypted_filename"])
-
-	assert.NoError(t, mockDB.ExpectationsWereMet())
-}
-
 // TestGetFileMetadataBatch tests the POST /api/files/metadata/batch endpoint
 func TestGetFileMetadataBatch(t *testing.T) {
 	username := "testuser"
@@ -316,13 +264,11 @@ func TestListFiles_NoFiles(t *testing.T) {
 	// Mock DB.Ping()
 	mockDB.ExpectPing()
 
-	// Mock GetFilesByOwner - returns empty result set
-	filesSQL := `SELECT id, file_id, storage_id, owner_username, COALESCE\(encrypted_password_hint, ''\), COALESCE\(password_hint_nonce, ''\), COALESCE\(encrypted_tags, ''\), COALESCE\(tags_nonce, ''\), COALESCE\(tags_revision, 0\), password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, COALESCE\(encrypted_stream_sha256sum, ''\), encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes, upload_date FROM file_metadata WHERE owner_username = \? ORDER BY upload_date DESC`
-	mockDB.ExpectQuery(filesSQL).WithArgs(username).WillReturnRows(
+	filesSQL := `SELECT id, file_id, storage_id, owner_username, COALESCE\(encrypted_password_hint, ''\), COALESCE\(password_hint_nonce, ''\), COALESCE\(encrypted_tags, ''\), COALESCE\(tags_nonce, ''\), COALESCE\(tags_revision, 0\), password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, COALESCE\(encrypted_stream_sha256sum, ''\), encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes, upload_date FROM file_metadata WHERE owner_username = \? ORDER BY upload_date DESC, file_id DESC LIMIT \?`
+	mockDB.ExpectQuery(filesSQL).WithArgs(username, 101).WillReturnRows(
 		sqlmock.NewRows([]string{"id", "file_id", "storage_id", "owner_username", "encrypted_password_hint", "password_hint_nonce", "encrypted_tags", "tags_nonce", "tags_revision", "password_type", "filename_nonce", "encrypted_filename", "sha256sum_nonce", "encrypted_sha256sum", "encrypted_stream_sha256sum", "encrypted_fek", "size_bytes", "padded_size", "chunk_count", "chunk_size_bytes", "upload_date"}),
 	)
 
-	// Mock GetUserByUsername for storage info
 	getUserSQL := `SELECT id, username, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE username = \?`
 	userRows := sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
 		AddRow(int64(1), username, time.Now(), int64(0), models.DefaultStorageLimit, true, nil, nil, false)
@@ -336,11 +282,13 @@ func TestListFiles_NoFiles(t *testing.T) {
 	err = json.Unmarshal(rec.Body.Bytes(), &resp)
 	require.NoError(t, err)
 
-	// Files should be nil or empty
-	files := resp["files"]
-	assert.Nil(t, files, "files should be nil for empty list")
+	files := resp["files"].([]interface{})
+	assert.Len(t, files, 0)
+	assert.Equal(t, float64(100), resp["limit"])
+	assert.Equal(t, float64(0), resp["returned"])
+	assert.Equal(t, false, resp["has_more"])
+	assert.Nil(t, resp["next_cursor"])
 
-	// Storage info should be present
 	storage := resp["storage"].(map[string]interface{})
 	assert.Equal(t, float64(0), storage["total_bytes"])
 	assert.NotEmpty(t, storage["limit_readable"])
@@ -359,11 +307,11 @@ func TestListFiles_WithFiles(t *testing.T) {
 
 	mockDB.ExpectPing()
 
-	filesSQL := `SELECT id, file_id, storage_id, owner_username, COALESCE\(encrypted_password_hint, ''\), COALESCE\(password_hint_nonce, ''\), COALESCE\(encrypted_tags, ''\), COALESCE\(tags_nonce, ''\), COALESCE\(tags_revision, 0\), password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, COALESCE\(encrypted_stream_sha256sum, ''\), encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes, upload_date FROM file_metadata WHERE owner_username = \? ORDER BY upload_date DESC`
+	filesSQL := `SELECT id, file_id, storage_id, owner_username, COALESCE\(encrypted_password_hint, ''\), COALESCE\(password_hint_nonce, ''\), COALESCE\(encrypted_tags, ''\), COALESCE\(tags_nonce, ''\), COALESCE\(tags_revision, 0\), password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, COALESCE\(encrypted_stream_sha256sum, ''\), encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes, upload_date FROM file_metadata WHERE owner_username = \? ORDER BY upload_date DESC, file_id DESC LIMIT \?`
 	fileRows := sqlmock.NewRows([]string{"id", "file_id", "storage_id", "owner_username", "encrypted_password_hint", "password_hint_nonce", "encrypted_tags", "tags_nonce", "tags_revision", "password_type", "filename_nonce", "encrypted_filename", "sha256sum_nonce", "encrypted_sha256sum", "encrypted_stream_sha256sum", "encrypted_fek", "size_bytes", "padded_size", "chunk_count", "chunk_size_bytes", "upload_date"}).
-		AddRow(int64(1), "file-1", "stor-1", username, "", "", "", "", int64(0), "account", "nonce1", "encName1", "shaNonce1", "encSha1", "", "encFek1", int64(1024), nil, int64(1), int64(16777216), "2024-01-01 12:00:00").
-		AddRow(int64(2), "file-2", "stor-2", username, "encHint", "hintNonce", "", "", int64(0), "custom", "nonce2", "encName2", "shaNonce2", "encSha2", "", "encFek2", int64(2048), nil, int64(1), int64(16777216), "2024-01-02 12:00:00")
-	mockDB.ExpectQuery(filesSQL).WithArgs(username).WillReturnRows(fileRows)
+		AddRow(int64(2), "file-2", "stor-2", username, "encHint", "hintNonce", "", "", int64(0), "custom", "nonce2", "encName2", "shaNonce2", "encSha2", "", "encFek2", int64(2048), nil, int64(1), int64(16777216), "2024-01-02 12:00:00").
+		AddRow(int64(1), "file-1", "stor-1", username, "", "", "", "", int64(0), "account", "nonce1", "encName1", "shaNonce1", "encSha1", "", "encFek1", int64(1024), nil, int64(1), int64(16777216), "2024-01-01 12:00:00")
+	mockDB.ExpectQuery(filesSQL).WithArgs(username, 101).WillReturnRows(fileRows)
 
 	getUserSQL := `SELECT id, username, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE username = \?`
 	userRows := sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
@@ -380,14 +328,18 @@ func TestListFiles_WithFiles(t *testing.T) {
 
 	files := resp["files"].([]interface{})
 	assert.Equal(t, 2, len(files))
+	assert.Equal(t, float64(100), resp["limit"])
+	assert.Equal(t, float64(2), resp["returned"])
+	assert.Equal(t, false, resp["has_more"])
+	assert.Nil(t, resp["next_cursor"])
 
 	file0 := files[0].(map[string]interface{})
-	assert.Equal(t, "file-1", file0["file_id"])
-	assert.Equal(t, "account", file0["password_type"])
+	assert.Equal(t, "file-2", file0["file_id"])
+	assert.Equal(t, "custom", file0["password_type"])
 
 	file1 := files[1].(map[string]interface{})
-	assert.Equal(t, "file-2", file1["file_id"])
-	assert.Equal(t, "custom", file1["password_type"])
+	assert.Equal(t, "file-1", file1["file_id"])
+	assert.Equal(t, "account", file1["password_type"])
 
 	storage := resp["storage"].(map[string]interface{})
 	assert.Equal(t, float64(3072), storage["total_bytes"])
@@ -406,14 +358,76 @@ func TestListFiles_DBError(t *testing.T) {
 
 	mockDB.ExpectPing()
 
-	filesSQL := `SELECT id, file_id, storage_id, owner_username, COALESCE\(encrypted_password_hint, ''\), COALESCE\(password_hint_nonce, ''\), COALESCE\(encrypted_tags, ''\), COALESCE\(tags_nonce, ''\), COALESCE\(tags_revision, 0\), password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, COALESCE\(encrypted_stream_sha256sum, ''\), encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes, upload_date FROM file_metadata WHERE owner_username = \? ORDER BY upload_date DESC`
-	mockDB.ExpectQuery(filesSQL).WithArgs(username).WillReturnError(fmt.Errorf("database connection lost"))
+	filesSQL := `SELECT id, file_id, storage_id, owner_username, COALESCE\(encrypted_password_hint, ''\), COALESCE\(password_hint_nonce, ''\), COALESCE\(encrypted_tags, ''\), COALESCE\(tags_nonce, ''\), COALESCE\(tags_revision, 0\), password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, COALESCE\(encrypted_stream_sha256sum, ''\), encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes, upload_date FROM file_metadata WHERE owner_username = \? ORDER BY upload_date DESC, file_id DESC LIMIT \?`
+	mockDB.ExpectQuery(filesSQL).WithArgs(username, 101).WillReturnError(fmt.Errorf("database connection lost"))
 
 	err := ListFiles(c)
 	require.Error(t, err)
 	httpErr, ok := err.(*echo.HTTPError)
 	require.True(t, ok)
 	assert.Equal(t, http.StatusInternalServerError, httpErr.Code)
+
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+func TestListFiles_InvalidCursor(t *testing.T) {
+	username := "user-bad-cursor"
+
+	c, _, mockDB, _ := setupTestEnv(t, http.MethodGet, "/api/files?cursor=not-a-valid-cursor", nil)
+	claims := &auth.Claims{Username: username}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	mockDB.ExpectPing()
+
+	err := ListFiles(c)
+	require.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+	assert.Equal(t, "invalid cursor", httpErr.Message)
+
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+func TestListFiles_HasMoreAndNextCursor(t *testing.T) {
+	username := "user-paged"
+
+	c, rec, mockDB, _ := setupTestEnv(t, http.MethodGet, "/api/files?limit=1", nil)
+	claims := &auth.Claims{Username: username}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	mockDB.ExpectPing()
+
+	filesSQL := `SELECT id, file_id, storage_id, owner_username, COALESCE\(encrypted_password_hint, ''\), COALESCE\(password_hint_nonce, ''\), COALESCE\(encrypted_tags, ''\), COALESCE\(tags_nonce, ''\), COALESCE\(tags_revision, 0\), password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, COALESCE\(encrypted_stream_sha256sum, ''\), encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes, upload_date FROM file_metadata WHERE owner_username = \? ORDER BY upload_date DESC, file_id DESC LIMIT \?`
+	fileRows := sqlmock.NewRows([]string{"id", "file_id", "storage_id", "owner_username", "encrypted_password_hint", "password_hint_nonce", "encrypted_tags", "tags_nonce", "tags_revision", "password_type", "filename_nonce", "encrypted_filename", "sha256sum_nonce", "encrypted_sha256sum", "encrypted_stream_sha256sum", "encrypted_fek", "size_bytes", "padded_size", "chunk_count", "chunk_size_bytes", "upload_date"}).
+		AddRow(int64(2), "file-newer", "stor-2", username, "", "", "", "", int64(0), "account", "nonce2", "encName2", "shaNonce2", "encSha2", "", "encFek2", int64(2048), nil, int64(1), int64(16777216), "2024-01-02 12:00:00").
+		AddRow(int64(1), "file-older", "stor-1", username, "", "", "", "", int64(0), "account", "nonce1", "encName1", "shaNonce1", "encSha1", "", "encFek1", int64(1024), nil, int64(1), int64(16777216), "2024-01-01 12:00:00")
+	mockDB.ExpectQuery(filesSQL).WithArgs(username, 2).WillReturnRows(fileRows)
+
+	getUserSQL := `SELECT id, username, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE username = \?`
+	userRows := sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+		AddRow(int64(1), username, time.Now(), int64(3072), models.DefaultStorageLimit, true, nil, nil, false)
+	mockDB.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(userRows)
+
+	err := ListFiles(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]interface{}
+	err = json.Unmarshal(rec.Body.Bytes(), &resp)
+	require.NoError(t, err)
+
+	files := resp["files"].([]interface{})
+	assert.Len(t, files, 1)
+	assert.Equal(t, "file-newer", files[0].(map[string]interface{})["file_id"])
+	assert.Equal(t, float64(1), resp["limit"])
+	assert.Equal(t, float64(1), resp["returned"])
+	assert.Equal(t, true, resp["has_more"])
+	nextCursor, ok := resp["next_cursor"].(string)
+	require.True(t, ok)
+	assert.NotEmpty(t, nextCursor)
 
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }

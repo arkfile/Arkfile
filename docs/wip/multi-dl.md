@@ -6,7 +6,7 @@ Owners already encrypt and upload many files in one batch from the browser or `a
 
 ## Status
 
-Planning. Decisions below are locked for implementation unless this document is explicitly revised. Paginated `GET /api/files` and client adoption of that pagination must land before selection UI or batch download work.
+Product code for pagination, selection, directory-handle batch download, and CLI/frontend batch state machines is landed. `e2e-test.sh` seeds a durable shared multi-download corpus (manifest at `/tmp/arkfile-e2e-test-data/multi-dl-corpus.json`) and exercises CLI multi-list/download against it; `e2e-playwright` reuses that corpus for selection, filter prune, account-then-custom batch order, and cancel (fallback download path; directory-picker write and browser cross-page scroll deferred). Developer should run `dev-reset.sh` then `e2e-test.sh` and `e2e-playwright.sh` for validation. Decisions below remain locked unless this document is explicitly revised.
 
 ## Overview
 
@@ -129,11 +129,11 @@ TypeScript coverage for selection, collision helper, reserved names across retri
 
 ### e2e-test.sh
 
-Seed multi-file uploads with tags; exercise paginated list; `download --tags` into `--output-dir` with SHA-256 checks; collision renames; `--dry-run`; mixed account and custom password behavior as far as the harness can drive interactively or via documented non-interactive policy; summary line assertions.
+Seed a durable shared corpus (~18 small files: account + custom, tags `multi-a` / `multi-a,multi-b` / `multi-decoy`, plus a `photo.png` collision pair) during `files_custom_password` with no extra login/logout; write `multi-dl-corpus.json` for Playwright. CLI checks: `list-files --tags`, `download --tags --dry-run`, account multi-download into `--output-dir` with summary line, basename collision rename, and one custom file via single-file `--password-stdin`. Keep the separate large 3-file batch upload test (still deleted afterward). Do not admin-delete corpus files.
 
-### e2e-playwright.sh
+### e2e-playwright.sh / e2e-playwright.ts
 
-Infinite scroll; select all shown; select all matching filter when matches span pages; directory picker path or fallback download path; custom password prompts after account files; batch summary UI; multi-file upload UI if still uncovered.
+Load the corpus manifest; verify select all shown + filter prune; select all matching filter for `multi-a`; batch download of one account + one custom (account before custom modal, fallback when directory picker is aborted); batch cancel. Directory-picker write path and infinite-scroll / cross-page select-all (needs a test page-size hook) remain deferred.
 
 ## Out of Scope
 

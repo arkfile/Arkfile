@@ -362,7 +362,7 @@ export async function shareFile(fileId: string, passwordType: string): Promise<v
         submitLabel: 'Continue',
         cancelLabel: 'Cancel',
       });
-      if (!promptResult) return;
+      if (!promptResult || promptResult === 'timeout') return;
       const customPw = promptResult.password;
       try {
         showProgress({

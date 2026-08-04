@@ -677,6 +677,7 @@ CREATE INDEX IF NOT EXISTS idx_users_is_admin ON users(is_admin);
 -- UNIQUE constraints already serve point lookups.
 CREATE INDEX IF NOT EXISTS idx_file_metadata_owner ON file_metadata(owner_username);
 CREATE INDEX IF NOT EXISTS idx_file_metadata_upload_date ON file_metadata(upload_date);
+CREATE INDEX IF NOT EXISTS idx_file_metadata_owner_upload_file ON file_metadata(owner_username, upload_date, file_id);
 
 -- OPAQUE authentication indexes
 CREATE INDEX IF NOT EXISTS idx_opaque_user_data_username ON opaque_user_data(username);

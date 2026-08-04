@@ -11,6 +11,19 @@ import (
 	"github.com/google/uuid"
 )
 
+const ownerFileSelectColumns = `id, file_id, storage_id, owner_username, COALESCE(encrypted_password_hint, ''), COALESCE(password_hint_nonce, ''),
+			   COALESCE(encrypted_tags, ''), COALESCE(tags_nonce, ''), COALESCE(tags_revision, 0), password_type,
+			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum,
+			   COALESCE(encrypted_stream_sha256sum, ''), encrypted_fek, size_bytes, padded_size,
+			   chunk_count, chunk_size_bytes, upload_date`
+
+// OwnerFilePage is one cursor page of owner files for GET /api/files.
+type OwnerFilePage struct {
+	Files      []*File
+	HasMore    bool
+	NextCursor string
+}
+
 // SHA-256 fields on File / file_metadata:
 //
 //	Sha256sumNonce + EncryptedSha256sum
@@ -330,159 +343,161 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 	return file, nil
 }
 
-// GetFilesByOwner retrieves all files owned by a specific user
-func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
+// GetFilesByOwnerPage retrieves one page of files owned by a user, newest first.
+// cursor is opaque; empty means the first page. limit is the maximum number of
+// files to return (the query fetches limit+1 to compute has_more exactly).
+func GetFilesByOwnerPage(db *sql.DB, ownerUsername string, limit int, cursor string) (*OwnerFilePage, error) {
 	if db == nil {
 		return nil, errors.New("database connection is nil")
 	}
+	if limit < 1 {
+		return nil, fmt.Errorf("limit must be at least 1")
+	}
 
-	query := `
-		SELECT id, file_id, storage_id, owner_username, COALESCE(encrypted_password_hint, ''), COALESCE(password_hint_nonce, ''),
-			   COALESCE(encrypted_tags, ''), COALESCE(tags_nonce, ''), COALESCE(tags_revision, 0), password_type,
-			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, 
-			   COALESCE(encrypted_stream_sha256sum, ''), encrypted_fek, size_bytes, padded_size,
-			   chunk_count, chunk_size_bytes, upload_date 
-		FROM file_metadata WHERE owner_username = ? ORDER BY upload_date DESC`
+	var (
+		rows *sql.Rows
+		err  error
+	)
 
-	rows, err := db.Query(query, ownerUsername)
+	cursor = strings.TrimSpace(cursor)
+	if cursor == "" {
+		query := `
+			SELECT ` + ownerFileSelectColumns + `
+			FROM file_metadata
+			WHERE owner_username = ?
+			ORDER BY upload_date DESC, file_id DESC
+			LIMIT ?`
+		rows, err = db.Query(query, ownerUsername, limit+1)
+	} else {
+		cursorTime, cursorFileID, cerr := DecodeOwnerFileListCursor(cursor)
+		if cerr != nil {
+			return nil, ErrInvalidOwnerFileListCursor
+		}
+		cursorTimeStr := FormatOwnerFileListCursorTime(cursorTime)
+		query := `
+			SELECT ` + ownerFileSelectColumns + `
+			FROM file_metadata
+			WHERE owner_username = ?
+			  AND (upload_date < ? OR (upload_date = ? AND file_id < ?))
+			ORDER BY upload_date DESC, file_id DESC
+			LIMIT ?`
+		rows, err = db.Query(query, ownerUsername, cursorTimeStr, cursorTimeStr, cursorFileID, limit+1)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("sql query failed for user '%s': %w", ownerUsername, err)
 	}
 	defer rows.Close()
 
-	var files []*File
+	files := make([]*File, 0, limit)
 	for rows.Next() {
-		file := &File{}
-		var encryptedStreamSha256sum string
-		var sizeBytes interface{}
-		var paddedSize interface{}
-		var chunkCount interface{}
-		var chunkSizeBytes interface{}
-		var uploadDateStr string
-		var tagsRevision interface{}
-
-		err := rows.Scan(
-			&file.ID, &file.FileID, &file.StorageID, &file.OwnerUsername,
-			&file.EncryptedPasswordHint, &file.PasswordHintNonce,
-			&file.EncryptedTags, &file.TagsNonce, &tagsRevision, &file.PasswordType,
-			&file.FilenameNonce, &file.EncryptedFilename,
-			&file.Sha256sumNonce, &file.EncryptedSha256sum,
-			&encryptedStreamSha256sum, &file.EncryptedFEK,
-			&sizeBytes, &paddedSize,
-			&chunkCount, &chunkSizeBytes, &uploadDateStr,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan row for user '%s': %w", ownerUsername, err)
+		file, scanErr := scanFileRow(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("failed to scan row for user '%s': %w", ownerUsername, scanErr)
 		}
-		file.TagsRevision = coerceInt64(tagsRevision, 0)
-
-		// Convert sizeBytes from interface{} to int64
-		switch v := sizeBytes.(type) {
-		case int64:
-			file.SizeBytes = v
-		case float64:
-			file.SizeBytes = int64(v)
-		case nil:
-			file.SizeBytes = 0
-		default:
-			return nil, fmt.Errorf("unexpected type for size_bytes: %T", v)
-		}
-
-		// Convert paddedSize from interface{} to sql.NullInt64
-		switch v := paddedSize.(type) {
-		case int64:
-			file.PaddedSize = sql.NullInt64{Int64: v, Valid: true}
-		case float64:
-			file.PaddedSize = sql.NullInt64{Int64: int64(v), Valid: true}
-		case nil:
-			file.PaddedSize = sql.NullInt64{Valid: false}
-		default:
-			file.PaddedSize = sql.NullInt64{Valid: false}
-		}
-
-		// Convert chunkCount from interface{} to int64
-		switch v := chunkCount.(type) {
-		case int64:
-			file.ChunkCount = v
-		case float64:
-			file.ChunkCount = int64(v)
-		case nil:
-			file.ChunkCount = 1
-		default:
-			file.ChunkCount = 1
-		}
-
-		// Convert chunkSizeBytes from interface{} to int64
-		switch v := chunkSizeBytes.(type) {
-		case int64:
-			file.ChunkSizeBytes = v
-		case float64:
-			file.ChunkSizeBytes = int64(v)
-		case nil:
-			file.ChunkSizeBytes = crypto.PlaintextChunkSize()
-		default:
-			file.ChunkSizeBytes = crypto.PlaintextChunkSize()
-		}
-
-		// Parse timestamp string to time.Time
-		if parsedTime, parseErr := time.Parse("2006-01-02 15:04:05", uploadDateStr); parseErr == nil {
-			file.UploadDate = parsedTime
-		} else if parsedTime, parseErr := time.Parse(time.RFC3339, uploadDateStr); parseErr == nil {
-			file.UploadDate = parsedTime
-		} else if uploadDateStr != "" {
-			// Skip if parsing fails - no logging needed in this bulk operation
-		}
-
-		// Handle nullable encrypted_stream_sha256sum
-		if encryptedStreamSha256sum != "" {
-			file.EncryptedStreamSha256sum = sql.NullString{String: encryptedStreamSha256sum, Valid: true}
-		}
-
 		files = append(files, file)
 	}
-
 	if err = rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows iteration error for user '%s': %w", ownerUsername, err)
 	}
 
-	return files, nil
+	page := &OwnerFilePage{Files: files}
+	if len(files) > limit {
+		page.HasMore = true
+		page.Files = files[:limit]
+	}
+	if page.HasMore && len(page.Files) > 0 {
+		last := page.Files[len(page.Files)-1]
+		next, encErr := EncodeOwnerFileListCursor(last.UploadDate, last.FileID)
+		if encErr != nil {
+			return nil, fmt.Errorf("failed to encode next cursor for user '%s': %w", ownerUsername, encErr)
+		}
+		page.NextCursor = next
+	}
+	return page, nil
 }
 
-// GetRecentFileMetadataByOwner retrieves a paginated recent metadata view for
-// files owned by a specific user, ordered by upload date descending.
-func GetRecentFileMetadataByOwner(db *sql.DB, ownerUsername string, limit, offset int) ([]*FileMetadataListItem, error) {
-	if db == nil {
-		return nil, errors.New("database connection is nil")
-	}
+func scanFileRow(scanner interface {
+	Scan(dest ...interface{}) error
+}) (*File, error) {
+	file := &File{}
+	var encryptedStreamSha256sum string
+	var sizeBytes interface{}
+	var paddedSize interface{}
+	var chunkCount interface{}
+	var chunkSizeBytes interface{}
+	var uploadDateStr string
+	var tagsRevision interface{}
 
-	query := `
-		SELECT file_id, owner_username, password_type, filename_nonce, encrypted_filename,
-		       sha256sum_nonce, encrypted_sha256sum, size_bytes, upload_date
-		FROM file_metadata
-		WHERE owner_username = ?
-		ORDER BY upload_date DESC
-		LIMIT ? OFFSET ?`
-
-	rows, err := db.Query(query, ownerUsername, limit, offset)
+	err := scanner.Scan(
+		&file.ID, &file.FileID, &file.StorageID, &file.OwnerUsername,
+		&file.EncryptedPasswordHint, &file.PasswordHintNonce,
+		&file.EncryptedTags, &file.TagsNonce, &tagsRevision, &file.PasswordType,
+		&file.FilenameNonce, &file.EncryptedFilename,
+		&file.Sha256sumNonce, &file.EncryptedSha256sum,
+		&encryptedStreamSha256sum, &file.EncryptedFEK,
+		&sizeBytes, &paddedSize,
+		&chunkCount, &chunkSizeBytes, &uploadDateStr,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("recent metadata query failed for user '%s': %w", ownerUsername, err)
+		return nil, err
 	}
-	defer rows.Close()
+	file.TagsRevision = coerceInt64(tagsRevision, 0)
 
-	var files []*FileMetadataListItem
-	for rows.Next() {
-		item, err := scanFileMetadataListItem(rows)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan recent metadata row for user '%s': %w", ownerUsername, err)
-		}
-		files = append(files, item)
-	}
-
-	if err = rows.Err(); err != nil {
-		return nil, fmt.Errorf("recent metadata rows iteration error for user '%s': %w", ownerUsername, err)
+	switch v := sizeBytes.(type) {
+	case int64:
+		file.SizeBytes = v
+	case float64:
+		file.SizeBytes = int64(v)
+	case nil:
+		file.SizeBytes = 0
+	default:
+		return nil, fmt.Errorf("unexpected type for size_bytes: %T", v)
 	}
 
-	return files, nil
+	switch v := paddedSize.(type) {
+	case int64:
+		file.PaddedSize = sql.NullInt64{Int64: v, Valid: true}
+	case float64:
+		file.PaddedSize = sql.NullInt64{Int64: int64(v), Valid: true}
+	case nil:
+		file.PaddedSize = sql.NullInt64{Valid: false}
+	default:
+		file.PaddedSize = sql.NullInt64{Valid: false}
+	}
+
+	switch v := chunkCount.(type) {
+	case int64:
+		file.ChunkCount = v
+	case float64:
+		file.ChunkCount = int64(v)
+	case nil:
+		file.ChunkCount = 1
+	default:
+		file.ChunkCount = 1
+	}
+
+	switch v := chunkSizeBytes.(type) {
+	case int64:
+		file.ChunkSizeBytes = v
+	case float64:
+		file.ChunkSizeBytes = int64(v)
+	case nil:
+		file.ChunkSizeBytes = crypto.PlaintextChunkSize()
+	default:
+		file.ChunkSizeBytes = crypto.PlaintextChunkSize()
+	}
+
+	if parsedTime, parseErr := time.Parse(ownerFileListCursorTimeLayout, uploadDateStr); parseErr == nil {
+		file.UploadDate = parsedTime
+	} else if parsedTime, parseErr := time.Parse(time.RFC3339, uploadDateStr); parseErr == nil {
+		file.UploadDate = parsedTime
+	}
+
+	if encryptedStreamSha256sum != "" {
+		file.EncryptedStreamSha256sum = sql.NullString{String: encryptedStreamSha256sum, Valid: true}
+	}
+
+	return file, nil
 }
 
 // GetFileMetadataBatchByOwner retrieves lightweight metadata for an explicit

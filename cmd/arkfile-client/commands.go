@@ -812,12 +812,22 @@ func uploadChunk(client *HTTPClient, session *AuthSession, uploadID string, chun
 
 func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []string) error {
 	fs := flag.NewFlagSet("download", flag.ExitOnError)
-	fileID := fs.String("file-id", "", "File ID to download")
-	outputPath := fs.String("output", "", "Output file path (default: decrypted filename)")
-	passwordStdin := fs.Bool("password-stdin", false, "Read custom file password from stdin")
+	var fileIDs multiStringFlag
+	fs.Var(&fileIDs, "file-id", "File ID to download (repeatable)")
+	outputPath := fs.String("output", "", "Output file path for a single-file download (default: decrypted filename)")
+	outputDir := fs.String("output-dir", "", "Destination directory for multi-file download")
+	tagsFilter := fs.String("tags", "", "Select all owner files matching these tags (client-side AND) then download")
+	dryRun := fs.Bool("dry-run", false, "List download targets without downloading")
+	pageLimit := fs.Int("limit", 100, "Server page size while scanning for --tags")
+	passwordStdin := fs.Bool("password-stdin", false, "Read custom file password from stdin (single custom-password file only)")
 
 	fs.Usage = func() {
-		fmt.Printf("Usage: arkfile-client download --file-id FILE_ID [--output PATH] [--password-stdin]\n\nDownload and decrypt a file using streaming per-chunk AES-GCM.\n")
+		fmt.Printf("Usage:\n"+
+			"  arkfile-client download --file-id FILE_ID [--output PATH] [--password-stdin]\n"+
+			"  arkfile-client download --file-id ID [--file-id ID ...] --output-dir DIR\n"+
+			"  arkfile-client download --tags TAGS --output-dir DIR [--dry-run]\n\n"+
+			"Download and decrypt using streaming per-chunk AES-GCM.\n"+
+			"Multi-file downloads are sequential. Custom-password files run after account-password files.\n")
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -825,17 +835,86 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 	}
 	defer withPasswordStdin(*passwordStdin)()
 
-	if *fileID == "" {
-		return fmt.Errorf("--file-id is required")
-	}
-
-	ctx, stop := interruptContext()
-	defer stop()
-
 	session, err := requireSession(config)
 	if err != nil {
 		return err
 	}
+
+	targets := append([]string{}, fileIDs...)
+	if strings.TrimSpace(*tagsFilter) != "" {
+		parsed, perr := crypto.ParseFilterTags(*tagsFilter)
+		if perr != nil {
+			return fmt.Errorf("invalid --tags filter: %w", perr)
+		}
+		listed, lerr := fetchAllOwnerFiles(client, session, *pageLimit)
+		if lerr != nil {
+			return lerr
+		}
+		accountKey := getOptionalAccountKey(client, session)
+		if accountKey == nil {
+			return fmt.Errorf("Account Key required to filter by tags")
+		}
+		defer clearBytes(accountKey)
+		seen := make(map[string]struct{})
+		for _, id := range targets {
+			seen[id] = struct{}{}
+		}
+		for _, f := range listed.Files {
+			if _, ok := seen[f.FileID]; ok {
+				continue
+			}
+			owner := f.OwnerUsername
+			if owner == "" {
+				owner = session.Username
+			}
+			tags := []string{}
+			if f.EncryptedTags != "" && f.TagsNonce != "" {
+				plaintext, derr := decryptMetadataField(
+					f.EncryptedTags, f.TagsNonce, accountKey,
+					f.FileID, crypto.AADFieldTags, owner,
+				)
+				if derr != nil {
+					continue
+				}
+				if plaintext != "" {
+					tags = strings.Split(plaintext, ",")
+				}
+			}
+			if crypto.FileHasAllTags(tags, parsed) {
+				targets = append(targets, f.FileID)
+				seen[f.FileID] = struct{}{}
+			}
+		}
+	}
+
+	if len(targets) == 0 {
+		return fmt.Errorf("at least one --file-id or matching --tags selection is required")
+	}
+
+	if *dryRun {
+		for _, id := range targets {
+			fmt.Println(id)
+		}
+		fmt.Printf("Dry run: %d file(s)\n", len(targets))
+		return nil
+	}
+
+	if len(targets) > 1 || strings.TrimSpace(*tagsFilter) != "" {
+		if strings.TrimSpace(*outputDir) == "" {
+			return fmt.Errorf("--output-dir is required for multi-file download")
+		}
+		if err := os.MkdirAll(*outputDir, 0o700); err != nil {
+			return fmt.Errorf("failed to create output directory: %w", err)
+		}
+		return downloadOwnerFilesBatch(client, config, session, targets, *outputDir)
+	}
+
+	if *passwordStdin && len(targets) != 1 {
+		return fmt.Errorf("--password-stdin is only supported for a single-file download")
+	}
+
+	ctx, stop := interruptContext()
+	defer stop()
 
 	accountKey, err := requireAccountKey(client, config)
 	if err != nil {
@@ -843,54 +922,353 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 	}
 	defer clearBytes(accountKey)
 
-	// Fetch file metadata
-	metaReq, err := http.NewRequestWithContext(ctx, "GET", client.baseURL+"/api/files/"+*fileID+"/meta", nil)
+	return downloadOneOwnerFile(ctx, client, session, accountKey, targets[0], *outputPath, nil)
+}
+
+type batchPendingFile struct {
+	FileID       string
+	Filename     string
+	PasswordType string
+}
+
+type batchFileOutcome struct {
+	FileID       string
+	Filename     string
+	PasswordType string
+	Reason       string
+}
+
+func downloadOwnerFilesBatch(client *HTTPClient, config *ClientConfig, session *AuthSession, fileIDs []string, outputDir string) error {
+	ctx, stop := interruptContext()
+	defer stop()
+
+	accountKey, err := requireAccountKey(client, config)
 	if err != nil {
-		return fmt.Errorf("failed to create metadata request: %w", err)
+		return err
+	}
+	defer clearBytes(accountKey)
+
+	pending := make([]batchPendingFile, 0, len(fileIDs))
+	for _, id := range fileIDs {
+		meta, merr := fetchOwnerFileMeta(ctx, client, session, id)
+		if merr != nil {
+			fmt.Fprintf(os.Stderr, "[X] %s: failed to fetch metadata: %v\n", id, merr)
+			continue
+		}
+		owner := meta.OwnerUsername
+		if owner == "" {
+			owner = session.Username
+		}
+		name := id + ".bin"
+		if meta.EncryptedFilename != "" && meta.FilenameNonce != "" {
+			if decrypted, derr := decryptMetadataField(
+				meta.EncryptedFilename, meta.FilenameNonce, accountKey,
+				id, crypto.AADFieldFilename, owner,
+			); derr == nil && decrypted != "" {
+				name = decrypted
+			}
+		}
+		pending = append(pending, batchPendingFile{
+			FileID:       id,
+			Filename:     name,
+			PasswordType: meta.PasswordType,
+		})
+	}
+
+	if len(pending) == 0 {
+		return fmt.Errorf("no downloadable files in selection")
+	}
+
+	reserveItems := make([]struct {
+		Key      string
+		Filename string
+	}, 0, len(pending))
+	existing, _ := os.ReadDir(outputDir)
+	already := make([]string, 0, len(existing))
+	for _, e := range existing {
+		if !e.IsDir() {
+			already = append(already, e.Name())
+		}
+	}
+	for _, p := range pending {
+		reserveItems = append(reserveItems, struct {
+			Key      string
+			Filename string
+		}{Key: p.FileID, Filename: p.Filename})
+	}
+	reserved := reserveBasenames(reserveItems, already)
+
+	work := append([]batchPendingFile(nil), pending...)
+	var totalAccountOK, totalCustomOK, totalSkipped int
+
+	for round := 1; round <= MaxBatchDownloadRounds && len(work) > 0; round++ {
+		accountFirst := make([]batchPendingFile, 0, len(work))
+		customLast := make([]batchPendingFile, 0, len(work))
+		for _, p := range work {
+			if p.PasswordType == "custom" {
+				customLast = append(customLast, p)
+			} else {
+				accountFirst = append(accountFirst, p)
+			}
+		}
+
+		var accountOK, accountFail, customOK, customFail []batchFileOutcome
+		var skipped []batchFileOutcome
+		abortRound := false
+
+		for i, p := range accountFirst {
+			if err := ctx.Err(); err != nil {
+				abortRound = true
+				for _, rest := range accountFirst[i:] {
+					skipped = append(skipped, batchFileOutcome{
+						FileID: rest.FileID, Filename: rest.Filename, PasswordType: rest.PasswordType, Reason: "cancelled",
+					})
+				}
+				for _, rest := range customLast {
+					skipped = append(skipped, batchFileOutcome{
+						FileID: rest.FileID, Filename: rest.Filename, PasswordType: rest.PasswordType, Reason: "cancelled",
+					})
+				}
+				break
+			}
+			outName := reserved[p.FileID]
+			if outName == "" {
+				outName = p.Filename
+			}
+			finalPath := filepath.Join(outputDir, outName)
+			if err := downloadOneOwnerFile(ctx, client, session, accountKey, p.FileID, finalPath, nil); err != nil {
+				reason := err.Error()
+				if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+					reason = "cancelled"
+					abortRound = true
+				}
+				accountFail = append(accountFail, batchFileOutcome{
+					FileID: p.FileID, Filename: p.Filename, PasswordType: "account", Reason: reason,
+				})
+				fmt.Fprintf(os.Stderr, "[X] %s (%s): %s\n", p.Filename, p.FileID, reason)
+				if abortRound {
+					for _, rest := range accountFirst[i+1:] {
+						skipped = append(skipped, batchFileOutcome{
+							FileID: rest.FileID, Filename: rest.Filename, PasswordType: rest.PasswordType, Reason: "cancelled",
+						})
+					}
+					for _, rest := range customLast {
+						skipped = append(skipped, batchFileOutcome{
+							FileID: rest.FileID, Filename: rest.Filename, PasswordType: rest.PasswordType, Reason: "cancelled",
+						})
+					}
+					break
+				}
+				continue
+			}
+			accountOK = append(accountOK, batchFileOutcome{
+				FileID: p.FileID, Filename: p.Filename, PasswordType: "account",
+			})
+			fmt.Printf("[OK] %s -> %s\n", p.FileID, finalPath)
+		}
+
+		if !abortRound {
+			for i, p := range customLast {
+				if err := ctx.Err(); err != nil {
+					abortRound = true
+					for _, rest := range customLast[i:] {
+						skipped = append(skipped, batchFileOutcome{
+							FileID: rest.FileID, Filename: rest.Filename, PasswordType: rest.PasswordType, Reason: "cancelled",
+						})
+					}
+					break
+				}
+
+				outName := reserved[p.FileID]
+				if outName == "" {
+					outName = p.Filename
+				}
+				finalPath := filepath.Join(outputDir, outName)
+
+				succeeded := false
+				lastReason := "download_failed"
+
+				for attempt := 1; attempt <= MaxBatchCustomPasswordAttempts; attempt++ {
+					if err := ctx.Err(); err != nil {
+						lastReason = "cancelled"
+						abortRound = true
+						break
+					}
+
+					customPass, perr := readPasswordWithTimeout(
+						fmt.Sprintf("Enter custom password for '%s' (attempt %d/%d, wait up to 2 minutes): ",
+							p.Filename, attempt, MaxBatchCustomPasswordAttempts),
+						PasswordTimeoutBatchCustom,
+					)
+					if perr != nil {
+						if strings.Contains(perr.Error(), "timed out") {
+							lastReason = "prompt_timeout"
+							fmt.Fprintf(os.Stderr, "[!] %s: password prompt timed out\n", p.Filename)
+							continue
+						}
+						if passwordFromStdin || strings.Contains(perr.Error(), "no controlling terminal") {
+							lastReason = "prompt_cancelled"
+							fmt.Fprintf(os.Stderr, "[X] %s: custom password required interactively: %v\n", p.Filename, perr)
+							break
+						}
+						lastReason = perr.Error()
+						continue
+					}
+
+					derr := downloadOneOwnerFile(ctx, client, session, accountKey, p.FileID, finalPath, customPass)
+					clearBytes(customPass)
+					if derr == nil {
+						succeeded = true
+						break
+					}
+					if errors.Is(derr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+						lastReason = "cancelled"
+						abortRound = true
+						break
+					}
+					if strings.Contains(derr.Error(), "wrong password") || strings.Contains(derr.Error(), "unwrap FEK") {
+						lastReason = "wrong_custom_password"
+						fmt.Fprintf(os.Stderr, "[!] %s: wrong custom password (attempt %d/%d)\n", p.Filename, attempt, MaxBatchCustomPasswordAttempts)
+						continue
+					}
+					lastReason = derr.Error()
+					fmt.Fprintf(os.Stderr, "[X] %s (%s): %v\n", p.Filename, p.FileID, derr)
+					break
+				}
+
+				if succeeded {
+					customOK = append(customOK, batchFileOutcome{
+						FileID: p.FileID, Filename: p.Filename, PasswordType: "custom",
+					})
+					fmt.Printf("[OK] %s -> %s\n", p.FileID, finalPath)
+				} else {
+					customFail = append(customFail, batchFileOutcome{
+						FileID: p.FileID, Filename: p.Filename, PasswordType: "custom", Reason: lastReason,
+					})
+					if lastReason == "cancelled" {
+						for _, rest := range customLast[i+1:] {
+							skipped = append(skipped, batchFileOutcome{
+								FileID: rest.FileID, Filename: rest.Filename, PasswordType: rest.PasswordType, Reason: "cancelled",
+							})
+						}
+						break
+					}
+				}
+			}
+		}
+
+		fmt.Printf("Round %d:\n", round)
+		fmt.Printf("  Account password -- succeeded: %d, failed: %d\n", len(accountOK), len(accountFail))
+		fmt.Printf("  Custom password -- succeeded: %d, failed: %d\n", len(customOK), len(customFail))
+		if len(skipped) > 0 {
+			fmt.Printf("  Skipped: %d\n", len(skipped))
+		}
+		for _, f := range append(append(accountFail, customFail...), skipped...) {
+			fmt.Fprintf(os.Stderr, "  [X] %s: %s\n", f.Filename, f.Reason)
+		}
+
+		totalAccountOK += len(accountOK)
+		totalCustomOK += len(customOK)
+		totalSkipped += len(skipped)
+
+		failedOnly := append(append([]batchPendingFile(nil), batchOutcomesToPending(accountFail)...), batchOutcomesToPending(customFail)...)
+		work = failedOnly
+
+		if abortRound || len(work) == 0 || round >= MaxBatchDownloadRounds {
+			break
+		}
+
+		if passwordFromStdin {
+			fmt.Fprintf(os.Stderr, "[!] %d file(s) failed; not prompting for retry without a TTY interactive session.\n", len(work))
+			break
+		}
+		fmt.Printf("%d file(s) failed in round %d. Retry failed downloads? [y/N]: ", len(work), round)
+		var answer string
+		if _, scanErr := fmt.Scanln(&answer); scanErr != nil || (answer != "y" && answer != "Y" && answer != "yes" && answer != "YES") {
+			break
+		}
+	}
+
+	fmt.Printf(
+		"Batch download finished. Account succeeded: %d. Custom succeeded: %d. Unresolved failures: %d. Skipped: %d.\n",
+		totalAccountOK, totalCustomOK, len(work), totalSkipped,
+	)
+	if len(work) > 0 || totalSkipped > 0 {
+		return fmt.Errorf("batch download incomplete")
+	}
+	return nil
+}
+
+func batchOutcomesToPending(outcomes []batchFileOutcome) []batchPendingFile {
+	out := make([]batchPendingFile, 0, len(outcomes))
+	for _, o := range outcomes {
+		if o.Reason == "cancelled" || o.Reason == "skipped" {
+			continue
+		}
+		out = append(out, batchPendingFile{
+			FileID:       o.FileID,
+			Filename:     o.Filename,
+			PasswordType: o.PasswordType,
+		})
+	}
+	return out
+}
+
+func fetchOwnerFileMeta(ctx context.Context, client *HTTPClient, session *AuthSession, fileID string) (*ServerFileInfo, error) {
+	metaReq, err := http.NewRequestWithContext(ctx, "GET", client.baseURL+"/api/files/"+fileID+"/meta", nil)
+	if err != nil {
+		return nil, err
 	}
 	metaReq.Header.Set("Authorization", "Bearer "+session.AccessToken)
-
 	metaResp, err := client.client.Do(metaReq)
+	if err != nil {
+		return nil, err
+	}
+	defer metaResp.Body.Close()
+	if metaResp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("server returned HTTP %d", metaResp.StatusCode)
+	}
+	var fileMeta ServerFileInfo
+	if err := decodeJSONResponse(metaResp, &fileMeta); err != nil {
+		return nil, err
+	}
+	return &fileMeta, nil
+}
+
+func downloadOneOwnerFile(
+	ctx context.Context,
+	client *HTTPClient,
+	session *AuthSession,
+	accountKey []byte,
+	fileID string,
+	outputPath string,
+	injectedCustomPassword []byte,
+) error {
+	fileMeta, err := fetchOwnerFileMeta(ctx, client, session, fileID)
 	if err != nil {
 		return fmt.Errorf("failed to fetch file metadata: %w", err)
 	}
-	defer metaResp.Body.Close()
 
-	if metaResp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server returned HTTP %d for metadata request", metaResp.StatusCode)
-	}
-
-	var fileMeta ServerFileInfo
-	if err := decodeJSONResponse(metaResp, &fileMeta); err != nil {
-		return fmt.Errorf("failed to decode file metadata: %w", err)
-	}
-
-	// Owner of the file is needed to reconstruct metadata AAD. Owner
-	// endpoint should populate `owner_username`; fall back to the
-	// authenticated user (which must equal the owner for /api/files
-	// access to succeed).
 	ownerUsername := fileMeta.OwnerUsername
 	if ownerUsername == "" {
 		ownerUsername = session.Username
 	}
 
-	// Decrypt filename for output path
-	if *outputPath == "" && fileMeta.EncryptedFilename != "" && fileMeta.FilenameNonce != "" {
-		decryptedName, err := decryptMetadataField(
+	if outputPath == "" && fileMeta.EncryptedFilename != "" && fileMeta.FilenameNonce != "" {
+		decryptedName, derr := decryptMetadataField(
 			fileMeta.EncryptedFilename, fileMeta.FilenameNonce, accountKey,
-			*fileID, crypto.AADFieldFilename, ownerUsername,
+			fileID, crypto.AADFieldFilename, ownerUsername,
 		)
-		if err != nil {
-			logVerbose("Warning: failed to decrypt filename: %v", err)
-			*outputPath = *fileID + ".bin"
+		if derr != nil {
+			logVerbose("Warning: failed to decrypt filename: %v", derr)
+			outputPath = fileID + ".bin"
 		} else {
-			*outputPath = decryptedName
+			outputPath = decryptedName
 		}
-	} else if *outputPath == "" {
-		*outputPath = *fileID + ".bin"
+	} else if outputPath == "" {
+		outputPath = fileID + ".bin"
 	}
 
-	// Determine KEK based on password type
 	var kek []byte
 	envelopeHeader, err := parseFEKEnvelopeHeader(fileMeta.EncryptedFEK)
 	if err != nil {
@@ -913,18 +1291,28 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 		if fileMeta.EncryptedPasswordHint != "" && fileMeta.PasswordHintNonce != "" {
 			if hintText, herr := decryptMetadataField(
 				fileMeta.EncryptedPasswordHint, fileMeta.PasswordHintNonce, accountKey,
-				*fileID, crypto.AADFieldPasswordHint, ownerUsername,
+				fileID, crypto.AADFieldPasswordHint, ownerUsername,
 			); herr == nil && hintText != "" {
 				fmt.Printf("Password hint: %s\n", hintText)
 			} else if herr != nil {
 				logVerbose("Warning: failed to decrypt password hint: %v", herr)
 			}
 		}
-		customPass, err := readPassword(fmt.Sprintf("Enter custom password for '%s': ", *outputPath))
-		if err != nil {
-			return fmt.Errorf("failed to read custom password: %w", err)
+		ownsCustomPass := false
+		var customPass []byte
+		if len(injectedCustomPassword) > 0 {
+			// Caller retains ownership and must clearBytes the injected buffer.
+			customPass = injectedCustomPassword
+		} else {
+			customPass, err = readPassword(fmt.Sprintf("Enter custom password for '%s': ", outputPath))
+			if err != nil {
+				return fmt.Errorf("failed to read custom password: %w", err)
+			}
+			ownsCustomPass = true
 		}
-		defer clearBytes(customPass)
+		if ownsCustomPass {
+			defer clearBytes(customPass)
+		}
 
 		kek, err = crypto.DeriveCustomPasswordKey(customPass, envelopeHeader.Salt)
 		if err != nil {
@@ -935,22 +1323,21 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 		return fmt.Errorf("unsupported password type: %s", fileMeta.PasswordType)
 	}
 
-	// Unwrap FEK
 	if fileMeta.EncryptedFEK == "" {
 		return fmt.Errorf("file metadata missing encrypted FEK")
 	}
 
-	fek, _, err := unwrapFEK(fileMeta.EncryptedFEK, kek, *fileID)
+	fek, _, err := unwrapFEK(fileMeta.EncryptedFEK, kek, fileID)
 	if err != nil {
 		return fmt.Errorf("failed to unwrap FEK (wrong password?): %w", err)
 	}
 	defer clearBytes(fek)
 
-	logVerbose("Downloading %s (%s)...", *outputPath, formatFileSize(fileMeta.SizeBytes))
+	logVerbose("Downloading %s (%s)...", outputPath, formatFileSize(fileMeta.SizeBytes))
 
 	var verifiedSHA256 string
-	if err := writeAtomicOutput(*outputPath, func(outFile *os.File) error {
-		if err := doChunkedDownload(ctx, client, session, *fileID, fek, fileMeta, outFile); err != nil {
+	if err := writeAtomicOutput(outputPath, func(outFile *os.File) error {
+		if err := doChunkedDownload(ctx, client, session, fileID, fek, *fileMeta, outFile); err != nil {
 			return fmt.Errorf("download failed: %w", err)
 		}
 		if err := ctx.Err(); err != nil {
@@ -962,7 +1349,7 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 		}
 		expectedSHA256, err := decryptMetadataField(
 			fileMeta.EncryptedSHA256, fileMeta.SHA256Nonce, accountKey,
-			*fileID, crypto.AADFieldSha256, ownerUsername,
+			fileID, crypto.AADFieldSha256, ownerUsername,
 		)
 		if err != nil {
 			fmt.Printf("  [!] WARNING: Could not decrypt expected SHA-256: %v\n", err)
@@ -982,7 +1369,7 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 	}
 
 	fmt.Printf("Download complete!\n")
-	fmt.Printf("  Saved to: %s\n", *outputPath)
+	fmt.Printf("  Saved to: %s\n", outputPath)
 	fmt.Printf("  Size: %s\n", formatFileSize(fileMeta.SizeBytes))
 	if verifiedSHA256 != "" {
 		fmt.Printf("  [OK] SHA-256 verified: %s\n", verifiedSHA256)
@@ -1089,14 +1476,15 @@ func handleListFilesCommand(client *HTTPClient, config *ClientConfig, args []str
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
 	rawOutput := fs.Bool("raw", false, "Output raw server response (no decryption)")
 	tagsFilter := fs.String("tags", "", "Client-side AND filter by comma-separated tags after decrypt")
-	limit := fs.Int("limit", 100, "Maximum number of files to list")
-	offset := fs.Int("offset", 0, "Offset for pagination")
+	limit := fs.Int("limit", 100, "Server page size while scanning the full owner list (default 100, max 500)")
 
 	fs.Usage = func() {
-		fmt.Printf("Usage: arkfile-client list-files [--json|--raw] [--tags TAGS] [--limit N] [--offset N]\n\n" +
-			"List owner files. With --tags, filter client-side after decrypt (AND match).\n" +
+		fmt.Printf("Usage: arkfile-client list-files [--json|--raw] [--tags TAGS] [--limit N]\n\n" +
+			"List owner files. Walks cursor pages until the list is exhausted.\n" +
+			"With --tags, filter client-side after decrypt (AND match).\n" +
+			"--limit sets the server page size used while scanning, not a total-result cap.\n" +
 			"--json emits decrypted tags as a string array ([] when untagged, null when unavailable).\n" +
-			"--raw prints the opaque server response without inventing plaintext tags.\n")
+			"--raw prints the merged opaque file list without inventing plaintext tags.\n")
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -1117,37 +1505,15 @@ func handleListFilesCommand(client *HTTPClient, config *ClientConfig, args []str
 		return err
 	}
 
-	// Fetch file list
-	url := fmt.Sprintf("/api/files?limit=%d&offset=%d", *limit, *offset)
-	req, err := http.NewRequest("GET", client.baseURL+url, nil)
+	fileList, err := fetchAllOwnerFiles(client, session, *limit)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
-
-	resp, err := client.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to fetch file list: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server returned HTTP %d", resp.StatusCode)
+		return err
 	}
 
 	if *rawOutput {
-		// Just dump the raw response (opaque fields only; no plaintext tags).
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return fmt.Errorf("failed to read response: %w", err)
-		}
-		fmt.Println(string(body))
-		return nil
-	}
-
-	var fileList ServerFileListResponse
-	if err := decodeJSONResponse(resp, &fileList); err != nil {
-		return fmt.Errorf("failed to decode file list: %w", err)
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(fileList)
 	}
 
 	accountKey := getOptionalAccountKey(client, session)
