@@ -959,6 +959,77 @@ export interface BatchUploadOptions extends Omit<UploadOptions, 'onProgress'> {
 }
 
 /**
+ * Aggregate outcome reasons for toast/console display.
+ * Counts identical reasons; never includes filenames.
+ */
+export function aggregateUploadOutcomeReasons(
+  outcomes: BatchUploadFileOutcome[],
+): string {
+  const counts = new Map<string, number>();
+  for (const outcome of outcomes) {
+    const reason = (outcome.reason || 'Unknown error').trim() || 'Unknown error';
+    counts.set(reason, (counts.get(reason) || 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .map(([reason, count]) => (count > 1 ? `${count}x ${reason}` : reason))
+    .join('; ');
+}
+
+/**
+ * Short fatal abort label for batch summaries.
+ */
+export function shortenFatalUploadReason(reason: string): string {
+  const lower = reason.toLowerCase();
+  if (lower.includes('cancelled') || lower.includes('canceled')) {
+    return 'Cancelled';
+  }
+  if (lower.includes('storage') || lower.includes('quota') || lower.includes('limit')) {
+    return 'Storage full';
+  }
+  if (lower.includes('session') || lower.includes('expired') || lower.includes('auth')) {
+    return 'Session expired';
+  }
+  if (lower.includes('too many') || lower.includes('in progress')) {
+    return 'Too many uploads in progress';
+  }
+  return reason.length > 40 ? `${reason.slice(0, 40)}...` : reason;
+}
+
+/**
+ * Build a multi-file upload summary: success count, failure count, and
+ * distinct failure reasons (no filenames).
+ */
+export function formatBatchUploadSummary(result: BatchUploadResult): string {
+  const ok = result.succeeded.length;
+  const failed = result.failed.length;
+  const skipped = result.skipped.length;
+
+  let summary = `${ok} succeeded, ${failed} failed`;
+  if (failed > 0) {
+    summary += ` (${aggregateUploadOutcomeReasons(result.failed)})`;
+  }
+  if (skipped > 0) {
+    summary += `. ${skipped} skipped (${aggregateUploadOutcomeReasons(result.skipped)})`;
+  }
+  if (result.fatal) {
+    summary += `. Aborted: ${shortenFatalUploadReason(result.fatal.reason)}`;
+  }
+  return `${summary}.`;
+}
+
+/**
+ * Log a batch upload summary. Strips plaintext digests; never logs filenames.
+ */
+export function logBatchUploadSummary(summary: string, hasFailures: boolean): void {
+  const safe = summary.replace(/\b[a-fA-F0-9]{64}\b/g, '[digest]');
+  if (hasFailures) {
+    console.warn(`[upload] ${safe}`);
+  } else {
+    console.log(`[upload] ${safe}`);
+  }
+}
+
+/**
  * Upload an array of files sequentially using the existing per-file
  * pipeline. The account key (and custom password / hint) are resolved
  * once at the top and reused for every file.
@@ -1276,65 +1347,32 @@ export async function handleFileUpload(): Promise<void> {
 
     if (abortController.signal.aborted || batchResult.fatal?.reason.toLowerCase().includes('cancelled')) {
       showWarning('Upload cancelled.');
+      console.warn('[upload] Upload cancelled.');
     } else if (fileCount === 1) {
       if (batchResult.succeeded.length === 1) {
         showSuccess(`File uploaded successfully! File ID: ${batchResult.succeeded[0].fileId}`);
       } else if (batchResult.failed.length === 1) {
-        showError(`Upload failed: ${batchResult.failed[0].reason}`);
+        const reason = batchResult.failed[0].reason || 'Unknown error';
+        const summary = `Upload failed: ${reason}`;
+        showWarning(summary);
+        logBatchUploadSummary(summary, true);
       } else if (batchResult.fatal) {
-        showError(`Upload failed: ${batchResult.fatal.reason}`);
+        const summary = `Upload failed: ${batchResult.fatal.reason}`;
+        showWarning(summary);
+        logBatchUploadSummary(summary, true);
       }
     } else {
-      const ok = batchResult.succeeded.length;
-      const failed = batchResult.failed.length;
-      const skipped = batchResult.skipped.length;
-      let summary = `${ok} of ${fileCount} files uploaded.`;
-      if (failed > 0) {
-        if (batchResult.fatal) {
-          // Fatal abort: just say how many failed, no verbose filename+reason samples
-          // (the abort line below already explains why)
-          summary += ` ${failed} failed.`;
-        } else {
-          // Non-fatal failures: show up to 3 filenames only (no reason text)
-          const samples = batchResult.failed
-            .slice(0, 3)
-            .map((f) => f.name)
-            .join(', ');
-          summary += ` ${failed} failed (${samples}${batchResult.failed.length > 3 ? ', ...' : ''}).`;
-        }
-      }
-      if (skipped > 0) {
-        summary += ` ${skipped} skipped.`;
-      }
-      if (batchResult.fatal) {
-        // Use a short human-readable reason instead of the raw server error message
-        const reason = batchResult.fatal.reason.toLowerCase();
-        let shortReason: string;
-        if (reason.includes('cancelled') || reason.includes('canceled')) {
-          shortReason = 'Cancelled';
-        } else if (reason.includes('storage') || reason.includes('quota') || reason.includes('limit')) {
-          shortReason = 'Storage full';
-        } else if (reason.includes('session') || reason.includes('expired') || reason.includes('auth')) {
-          shortReason = 'Session expired';
-        } else if (reason.includes('too many') || reason.includes('in progress')) {
-          shortReason = 'Too many uploads in progress';
-        } else {
-          shortReason = batchResult.fatal.reason.slice(0, 40);
-        }
-        summary += ` Aborted: ${shortReason}.`;
-      }
-      if (failed === 0 && skipped === 0 && !batchResult.fatal) {
-        // All files succeeded with no abort.
-        showSuccess(summary);
-      } else if (batchResult.fatal) {
-        // Batch was aborted (quota, auth, etc.) -- amber warning regardless of how
-        // many files succeeded before the abort. Never use green for an abort.
-        showWarning(summary);
-      } else if (ok > 0) {
-        // Some files failed non-fatally but no abort -- partial success in green.
+      const summary = formatBatchUploadSummary(batchResult);
+      const hasFailures =
+        batchResult.failed.length > 0
+        || batchResult.skipped.length > 0
+        || Boolean(batchResult.fatal);
+      logBatchUploadSummary(summary, hasFailures);
+      if (!hasFailures) {
         showSuccess(summary);
       } else {
-        showError(summary);
+        // Any failure, skip, or abort uses warning colors -- never green.
+        showWarning(summary);
       }
     }
 

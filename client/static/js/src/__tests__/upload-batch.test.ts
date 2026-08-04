@@ -53,11 +53,79 @@ import {
   AccountDisabledError,
   TooManyInProgressUploadsError,
   isFatalUploadError,
+  aggregateUploadOutcomeReasons,
+  formatBatchUploadSummary,
+  shortenFatalUploadReason,
+  logBatchUploadSummary,
+  type BatchUploadResult,
 } from '../files/upload.js';
 
 // ============================================================================
 // Typed error classes
 // ============================================================================
+
+describe('Batch upload summary helpers', () => {
+  test('aggregateUploadOutcomeReasons groups identical reasons with counts', () => {
+    const text = aggregateUploadOutcomeReasons([
+      { name: 'a.txt', reason: 'Duplicate file detected' },
+      { name: 'b.txt', reason: 'Duplicate file detected' },
+      { name: 'c.txt', reason: 'Network error' },
+    ]);
+    expect(text).toBe('2x Duplicate file detected; Network error');
+  });
+
+  test('formatBatchUploadSummary includes success/failure counts and reasons', () => {
+    const result: BatchUploadResult = {
+      succeeded: [{ name: 'ok.txt', fileId: 'id-1' }],
+      failed: [
+        { name: 'a.txt', reason: 'Duplicate file detected (already uploaded as abc)' },
+        { name: 'b.txt', reason: 'Duplicate file detected (already uploaded as abc)' },
+      ],
+      skipped: [],
+    };
+    expect(formatBatchUploadSummary(result)).toBe(
+      '1 succeeded, 2 failed (2x Duplicate file detected (already uploaded as abc)).',
+    );
+  });
+
+  test('formatBatchUploadSummary includes skipped and abort lines', () => {
+    const result: BatchUploadResult = {
+      succeeded: [{ name: 'ok.txt', fileId: 'id-1' }],
+      failed: [{ name: 'a.txt', reason: 'Quota exceeded' }],
+      skipped: [
+        { name: 'b.txt', reason: 'Aborted after fatal error' },
+        { name: 'c.txt', reason: 'Aborted after fatal error' },
+      ],
+      fatal: { name: 'a.txt', reason: 'storage quota exceeded' },
+    };
+    expect(formatBatchUploadSummary(result)).toBe(
+      '1 succeeded, 1 failed (Quota exceeded). 2 skipped (2x Aborted after fatal error). Aborted: Storage full.',
+    );
+  });
+
+  test('shortenFatalUploadReason maps common abort causes', () => {
+    expect(shortenFatalUploadReason('session token expired')).toBe('Session expired');
+    expect(shortenFatalUploadReason('too many in progress uploads')).toBe('Too many uploads in progress');
+  });
+
+  test('logBatchUploadSummary redacts sha256 digests and omits filenames', () => {
+    const warnCalls: unknown[][] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnCalls.push(args); };
+    try {
+      const digest = 'a'.repeat(64);
+      logBatchUploadSummary(`0 succeeded, 1 failed (bad ${digest}).`, true);
+      expect(warnCalls).toHaveLength(1);
+      const logged = String(warnCalls[0][0]);
+      expect(logged).toContain('[upload]');
+      expect(logged).toContain('[digest]');
+      expect(logged).not.toContain(digest);
+      expect(logged).not.toMatch(/\.txt\b/);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+});
 
 describe('Typed upload error classes', () => {
   test('AuthExpiredError has correct name and message', () => {
