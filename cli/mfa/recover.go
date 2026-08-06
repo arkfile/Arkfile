@@ -1,10 +1,10 @@
 package mfa
 
 import (
-	"bufio"
 	"fmt"
-	"os"
 	"strings"
+
+	"github.com/arkfile/Arkfile/cli/secureinput"
 )
 
 // RecoverConfig drives path-B backup-code recovery and factor replacement.
@@ -37,9 +37,7 @@ func PickResetMethod(nonInteractive bool, methodFlag Method) (Method, error) {
 	fmt.Println("Which second factor are you replacing?")
 	fmt.Println("  1) Authenticator app (TOTP)")
 	fmt.Println("  2) Security key (WebAuthn)")
-	fmt.Print("Enter 1 or 2: ")
-	reader := bufio.NewReader(os.Stdin)
-	line, err := reader.ReadString('\n')
+	line, err := secureinput.ReadLine("Enter 1 or 2: ", secureinput.DefaultInteractiveTimeout)
 	if err != nil {
 		return "", err
 	}

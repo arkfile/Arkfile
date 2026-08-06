@@ -28,10 +28,12 @@ Run the following:
 - Login as arkfile-dev-admin:
 
 ```
+TOTP_CODE=$(/opt/arkfile/bin/arkfile-client generate-totp --secret "ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D")
 printf 'DevAdmin2025!SecureInitialPassword\n' | /opt/arkfile/bin/arkfile-admin \
   --server-url https://localhost:8443 --tls-insecure \
   login --username arkfile-dev-admin \
-  --totp-secret "ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D" \
+  --password-stdin \
+  --totp-code "$TOTP_CODE" \
   --save-session
 ```
 

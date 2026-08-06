@@ -144,9 +144,26 @@ record_test() {
 
 # HELPER FUNCTIONS
 
+generate_totp_code() {
+    local secret="$1"
+    local code
+    code=$("$CLIENT" generate-totp --secret "$secret" 2>/dev/null)
+    if [ -z "$code" ]; then
+        return 1
+    fi
+    printf '%s\n' "$code"
+}
+
 admin_login_with_totp() {
     local test_name="$1"
     wait_for_totp_window
+
+    local totp_code
+    totp_code=$(generate_totp_code "$ADMIN_TOTP_SECRET") || {
+        error "Could not generate admin TOTP code"
+        record_test "$test_name" "FAIL"
+        return
+    }
     
     local out code
     safe_exec out code bash -c "printf '%s\n' '$ADMIN_PASSWORD' | $ADMIN \
@@ -155,7 +172,7 @@ admin_login_with_totp() {
         --username '$ADMIN_USERNAME' \
         login \
         --password-stdin \
-        --totp-secret '$ADMIN_TOTP_SECRET' \
+        --totp-code '$totp_code' \
         --save-session"
         
     if [ $code -eq 0 ] && echo "$out" | grep -q "Admin login successful"; then
@@ -178,6 +195,13 @@ user_login_with_totp() {
         return
     fi
 
+    local totp_code
+    totp_code=$(generate_totp_code "$TEST_USER_TOTP_SECRET") || {
+        error "Could not generate user TOTP code"
+        record_test "$test_name" "FAIL"
+        return
+    }
+
     local out code
     safe_exec out code bash -c "printf '%s\n' '$TEST_PASSWORD' | $CLIENT \
         --server-url '$SERVER_URL' \
@@ -185,7 +209,7 @@ user_login_with_totp() {
         --username '$TEST_USERNAME' \
         login \
         --password-stdin \
-        --totp-secret '$TEST_USER_TOTP_SECRET' \
+        --totp-code '$totp_code' \
         --save-session \
         --cache-key"
 
@@ -543,9 +567,9 @@ safe_exec() {
 
 # Wait for next TOTP window to avoid replay protection.
 # The server records each used TOTP code and rejects reuse within the same
-# 30-second window. This is needed before any login that uses --totp-secret,
-# since a previous operation (e.g., server bootstrap validation, or a prior
-# login in the same test run) may have consumed the current window.
+# 30-second window. This is needed before any login that uses a generated
+# --totp-code, since a previous operation (e.g., server bootstrap validation,
+# or a prior login in the same test run) may have consumed the current window.
 wait_for_totp_window() {
     local current_seconds
     current_seconds=$(date +%s)
@@ -4845,6 +4869,13 @@ run_opaque_reregistration() {
     # password-match check (the user owns files), leaving the account flagged
     # and unchanged so the correct password can still re-register afterward.
     scenario "Re-registration rejects an incorrect password (no changes made)"
+    wait_for_totp_window
+    local bad_totp_code
+    bad_totp_code=$(generate_totp_code "$TEST_USER_TOTP_SECRET") || {
+        error "Could not generate TOTP code for wrong-password re-registration check"
+        record_test "Re-registration wrong-password rejected" "FAIL"
+        return 0
+    }
     local bad_out bad_code
     safe_exec bad_out bad_code bash -c "printf '%s\n' 'WrongPassword2026!DoesNotMatch' | $CLIENT \
         --server-url '$SERVER_URL' \
@@ -4852,7 +4883,7 @@ run_opaque_reregistration() {
         --username '$TEST_USERNAME' \
         login \
         --password-stdin \
-        --totp-secret '$TEST_USER_TOTP_SECRET' \
+        --totp-code '$bad_totp_code' \
         --non-interactive"
     if [ $bad_code -ne 0 ] && echo "$bad_out" | grep -qi "does not match"; then
         record_test "Re-registration wrong-password rejected" "PASS"
@@ -4865,6 +4896,12 @@ run_opaque_reregistration() {
     # straight into the existing MFA flow within the same login attempt.
     scenario "Re-registering $TEST_USERNAME with the correct password"
     wait_for_totp_window
+    local rr_totp_code
+    rr_totp_code=$(generate_totp_code "$TEST_USER_TOTP_SECRET") || {
+        error "Could not generate TOTP code for re-registration login"
+        record_test "OPAQUE re-registration + login" "FAIL"
+        return 0
+    }
     local rr_out rr_code
     safe_exec rr_out rr_code bash -c "printf '%s\n' '$TEST_PASSWORD' | $CLIENT \
         --server-url '$SERVER_URL' \
@@ -4872,7 +4909,7 @@ run_opaque_reregistration() {
         --username '$TEST_USERNAME' \
         login \
         --password-stdin \
-        --totp-secret '$TEST_USER_TOTP_SECRET' \
+        --totp-code '$rr_totp_code' \
         --save-session \
         --cache-key"
     if [ $rr_code -eq 0 ] && echo "$rr_out" | grep -q "Login successful"; then

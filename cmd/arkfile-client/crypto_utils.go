@@ -359,7 +359,7 @@ func isSeekableFile(filePath string) error {
 }
 
 // generateTOTPCode generates a current TOTP code from a base32 secret.
-// Used by --totp-secret flag on login to avoid needing a separate TOTP binary.
+// Used by generate-totp and the deprecated --totp-secret login flag.
 func generateTOTPCode(secret string) (string, error) {
 	code, err := totp.GenerateCode(secret, time.Now().UTC())
 	if err != nil {

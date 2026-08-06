@@ -1,11 +1,11 @@
 package mfa
 
 import (
-	"bufio"
 	"flag"
 	"fmt"
-	"os"
 	"strings"
+
+	"github.com/arkfile/Arkfile/cli/secureinput"
 )
 
 // RunManageCommand handles `mfa` subcommands for credential self-service.
@@ -73,8 +73,10 @@ func runManageRemove(args []string, req Requester, token string) error {
 		return fmt.Errorf("--credential-id is required")
 	}
 	if !*confirm {
-		fmt.Printf("Remove MFA credential %s? All sessions will be signed out. [y/N]: ", *credentialID)
-		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		line, err := secureinput.ReadLine(
+			fmt.Sprintf("Remove MFA credential %s? All sessions will be signed out. [y/N]: ", *credentialID),
+			secureinput.DefaultInteractiveTimeout,
+		)
 		if err != nil {
 			return err
 		}
@@ -107,8 +109,10 @@ func runManageRegenerateBackupCodes(args []string, req Requester, token string) 
 		return err
 	}
 	if !*confirm {
-		fmt.Print("Generate new backup codes? Old unused codes stop working immediately. [y/N]: ")
-		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		line, err := secureinput.ReadLine(
+			"Generate new backup codes? Old unused codes stop working immediately. [y/N]: ",
+			secureinput.DefaultInteractiveTimeout,
+		)
 		if err != nil {
 			return err
 		}

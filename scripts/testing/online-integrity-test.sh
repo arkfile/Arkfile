@@ -191,14 +191,19 @@ wait_for_fresh_totp_window() {
 
 admin_login() {
     wait_for_fresh_totp_window
-    local output
+    local totp_code output
+    totp_code="$("$CLIENT" generate-totp --secret "$ADMIN_TOTP_SECRET" 2>/dev/null)"
+    if [ -z "$totp_code" ]; then
+        log_error "Could not generate admin TOTP code"
+        return 1
+    fi
     if ! output="$(printf '%s\n' "$ADMIN_PASSWORD" | "$ADMIN" \
         --server-url "$SERVER_URL" \
         --tls-insecure \
         --username "$ADMIN_USERNAME" \
         login \
         --password-stdin \
-        --totp-secret "$ADMIN_TOTP_SECRET" \
+        --totp-code "$totp_code" \
         --save-session 2>&1)"; then
         log_error "Admin login failed"
         printf '%s\n' "$output" >&2
@@ -393,13 +398,19 @@ register_integrity_user() {
     fi
 
     wait_for_fresh_totp_window
+    local login_code
+    login_code="$("$CLIENT" generate-totp --secret "$secret" 2>/dev/null)"
+    if [ -z "$login_code" ]; then
+        log_error "Could not generate integrity user TOTP code"
+        return 1
+    fi
     if ! output="$(printf '%s\n' "$ACCOUNT_PASSWORD" | "$CLIENT" \
         --server-url "$SERVER_URL" \
         --tls-insecure \
         --username "$INTEGRITY_USERNAME" \
         login \
         --password-stdin \
-        --totp-secret "$secret" \
+        --totp-code "$login_code" \
         --save-session \
         --cache-key 2>&1)"; then
         log_error "Integrity user login failed"

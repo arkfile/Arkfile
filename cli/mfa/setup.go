@@ -1,13 +1,14 @@
 package mfa
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 	"time"
+	"unicode"
 
+	"github.com/arkfile/Arkfile/cli/secureinput"
 	"github.com/arkfile/Arkfile/clictap"
 	"github.com/pquerna/otp/totp"
 )
@@ -79,9 +80,7 @@ func PickMethod(nonInteractive bool, methodFlag Method) (Method, error) {
 	fmt.Println("Choose second factor method:")
 	fmt.Println("  1) Authenticator app (TOTP)")
 	fmt.Println("  2) Security key (WebAuthn)")
-	fmt.Print("Enter 1 or 2: ")
-	reader := bufio.NewReader(os.Stdin)
-	line, err := reader.ReadString('\n')
+	line, err := secureinput.ReadLine("Enter 1 or 2: ", secureinput.DefaultInteractiveTimeout)
 	if err != nil {
 		return "", err
 	}
@@ -93,6 +92,31 @@ func PickMethod(nonInteractive bool, methodFlag Method) (Method, error) {
 	default:
 		return "", fmt.Errorf("invalid method selection")
 	}
+}
+
+func validateTOTPCode(code string) error {
+	code = strings.TrimSpace(code)
+	if len(code) != 6 {
+		return fmt.Errorf("TOTP code must be exactly 6 digits")
+	}
+	for _, r := range code {
+		if !unicode.IsDigit(r) {
+			return fmt.Errorf("TOTP code must be exactly 6 digits")
+		}
+	}
+	return nil
+}
+
+func readInteractiveTOTPCode(prompt string) (string, error) {
+	code, err := secureinput.ReadLine(prompt, secureinput.DefaultInteractiveTimeout)
+	if err != nil {
+		return "", err
+	}
+	code = strings.TrimSpace(code)
+	if err := validateTOTPCode(code); err != nil {
+		return "", err
+	}
+	return code, nil
 }
 
 // SetupResult is returned after interactive or scripted MFA enrollment.
@@ -212,15 +236,18 @@ func runTOTPSetup(req Requester, cfg SetupConfig) (*APIResponse, error) {
 	fmt.Printf("3. Enter this secret key: %s\n", secret)
 	fmt.Println("=======================================")
 
-	code := cfg.VerifyCode
+	code := strings.TrimSpace(cfg.VerifyCode)
 	if code == "" {
-		fmt.Print("Enter the 6-digit code from your app: ")
-		reader := bufio.NewReader(os.Stdin)
-		line, err := reader.ReadString('\n')
+		if cfg.NonInteractive {
+			return nil, fmt.Errorf("non-interactive mode: --verify CODE required to complete TOTP setup")
+		}
+		var err error
+		code, err = readInteractiveTOTPCode("Enter the 6-digit code from your app: ")
 		if err != nil {
 			return nil, err
 		}
-		code = strings.TrimSpace(line)
+	} else if err := validateTOTPCode(code); err != nil {
+		return nil, err
 	}
 
 	verify, err := req("POST", "/api/mfa/verify", map[string]string{"code": code}, cfg.Token)
@@ -287,9 +314,10 @@ func completeWebAuthnLogin(req Requester, cfg LoginMFAConfig) (*APIResponse, err
 }
 
 func completeTOTPLogin(req Requester, cfg LoginMFAConfig) (*APIResponse, error) {
-	code := cfg.TOTPCode
-	if code == "" && cfg.TOTPSecret != "" {
-		generated, err := totp.GenerateCode(cfg.TOTPSecret, time.Now().UTC())
+	code := strings.TrimSpace(cfg.TOTPCode)
+	if code == "" && strings.TrimSpace(cfg.TOTPSecret) != "" {
+		fmt.Fprintln(os.Stderr, "[!] --totp-secret places the durable TOTP secret on the process command line; prefer generating a short-lived code with arkfile-client generate-totp and passing --totp-code")
+		generated, err := totp.GenerateCode(strings.TrimSpace(cfg.TOTPSecret), time.Now().UTC())
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate TOTP code from secret: %w", err)
 		}
@@ -297,15 +325,15 @@ func completeTOTPLogin(req Requester, cfg LoginMFAConfig) (*APIResponse, error) 
 	}
 	if code == "" {
 		if cfg.NonInteractive {
-			return nil, fmt.Errorf("non-interactive mode: --totp-code, --totp-secret, or --backup-code required")
+			return nil, fmt.Errorf("non-interactive mode: --totp-code or --backup-code required")
 		}
-		fmt.Print("Enter TOTP code: ")
-		reader := bufio.NewReader(os.Stdin)
-		line, err := reader.ReadString('\n')
+		var err error
+		code, err = readInteractiveTOTPCode("Enter TOTP code: ")
 		if err != nil {
 			return nil, err
 		}
-		code = strings.TrimSpace(line)
+	} else if err := validateTOTPCode(code); err != nil {
+		return nil, err
 	}
 
 	resp, err := req("POST", "/api/mfa/auth", map[string]interface{}{
@@ -421,9 +449,7 @@ func PickLoginMethod(nonInteractive bool, methods []map[string]string, methodFla
 		}
 		fmt.Printf("  %d) %s\n", i+1, label)
 	}
-	fmt.Print("Enter number: ")
-	reader := bufio.NewReader(os.Stdin)
-	line, err := reader.ReadString('\n')
+	line, err := secureinput.ReadLine("Enter number: ", secureinput.DefaultInteractiveTimeout)
 	if err != nil {
 		return "", "", err
 	}

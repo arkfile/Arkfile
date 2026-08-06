@@ -2,6 +2,17 @@ package mfa
 
 import "testing"
 
+func TestValidateTOTPCode(t *testing.T) {
+	if err := validateTOTPCode("123456"); err != nil {
+		t.Fatalf("valid code rejected: %v", err)
+	}
+	for _, bad := range []string{"", "12345", "1234567", "12a456", "abcdef"} {
+		if err := validateTOTPCode(bad); err == nil {
+			t.Fatalf("expected error for %q", bad)
+		}
+	}
+}
+
 func TestExtractOptionsJSON(t *testing.T) {
 	raw, err := extractOptionsJSON(map[string]interface{}{
 		"options": map[string]interface{}{

@@ -4,7 +4,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"crypto/tls"
 	"encoding/base64"
@@ -858,7 +857,7 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 	saveSession := fs.Bool("save-session", true, "Save session for future use")
 	keyTTL := fs.Int("key-ttl", DefaultKeyTTLHours, "Account key TTL in hours (1-4, default 1)")
 	totpCode := fs.String("totp-code", "", "TOTP code for non-interactive login")
-	totpSecret := fs.String("totp-secret", "", "TOTP secret -- CLI generates the code internally (for scripted/test use)")
+	totpSecret := fs.String("totp-secret", "", "Deprecated: durable TOTP secret on argv; prefer generate-totp + --totp-code")
 	backupCode := fs.String("backup-code", "", "10-character backup code for one-shot emergency login")
 	mfaMethod := fs.String("mfa-method", "", "Second factor method for login: totp or webauthn")
 	credentialID := fs.String("credential-id", "", "WebAuthn credential id when multiple security keys are enrolled")
@@ -1079,10 +1078,11 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 		// Non-interactive mode without explicit flag: don't cache
 		shouldCache = false
 	} else {
-		// Interactive prompt
-		fmt.Print("Cache account key in agent for this session? (y/N): ")
-		reader := bufio.NewReader(os.Stdin)
-		answer, _ := reader.ReadString('\n')
+		answer, err := secureinput.ReadLine("Cache account key in agent for this session? (y/N): ", PasswordTimeoutInteractive)
+		if err != nil {
+			clearBytes(password)
+			return fmt.Errorf("failed to read cache preference: %w", err)
+		}
 		answer = strings.TrimSpace(strings.ToLower(answer))
 		shouldCache = (answer == "y" || answer == "yes")
 	}

@@ -1,13 +1,12 @@
 package main
 
 import (
-	"bufio"
 	"flag"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/arkfile/Arkfile/cli/mfa"
+	"github.com/arkfile/Arkfile/cli/secureinput"
 )
 
 func handleMFACommand(client *HTTPClient, config *AdminConfig, args []string) error {
@@ -58,9 +57,7 @@ func handleRecoverMFACommand(client *HTTPClient, config *AdminConfig, args []str
 
 	backupCode := strings.TrimSpace(*codeFlag)
 	if backupCode == "" {
-		fmt.Print("Enter your 10-character backup code: ")
-		reader := bufio.NewReader(os.Stdin)
-		input, err := reader.ReadString('\n')
+		input, err := secureinput.ReadLine("Enter your 10-character backup code: ", secureinput.DefaultInteractiveTimeout)
 		if err != nil {
 			return fmt.Errorf("failed to read backup code: %w", err)
 		}

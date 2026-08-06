@@ -1,9 +1,11 @@
 package secureinput
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/term"
@@ -25,6 +27,10 @@ var openControllingTTY = func() (*os.File, error) {
 var readPasswordInteractive = func(fd int) ([]byte, error) {
 	return term.ReadPassword(fd)
 }
+
+// readLineInteractive reads one echoed line from a terminal file.
+// Overridable in tests.
+var readLineInteractive = readLineFromTerminal
 
 // ReadPassword reads a password from the controlling terminal with echo off.
 // Use for interactive prompts. Does not read from stdin pipes -- that keeps
@@ -63,6 +69,30 @@ func ReadPasswordFromStdin(timeout time.Duration) ([]byte, error) {
 	return readPasswordFromPipe(os.Stdin, timeout)
 }
 
+// ReadLine reads one interactive line with echo enabled from the controlling
+// terminal. Unlike ReadPassword, typed or pasted characters remain visible.
+// It does not read from stdin pipes, so password/--token pipes cannot steal
+// TOTP codes or menu selections. Use explicit flags for non-interactive input.
+func ReadLine(prompt string, timeout time.Duration) (string, error) {
+	if timeout <= 0 {
+		timeout = DefaultInteractiveTimeout
+	}
+
+	if tty, err := openControllingTTY(); err == nil {
+		defer tty.Close()
+		return readLineInteractive(tty, prompt, timeout)
+	}
+
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return "", fmt.Errorf("failed to stat stdin: %w", err)
+	}
+	if (fi.Mode() & os.ModeCharDevice) == 0 {
+		return "", fmt.Errorf("no controlling terminal for interactive prompt; use an explicit non-interactive flag such as --totp-code")
+	}
+	return readLineInteractive(os.Stdin, prompt, timeout)
+}
+
 func readPasswordFromTerminal(f *os.File, prompt string, timeout time.Duration) ([]byte, error) {
 	if prompt != "" {
 		if _, err := fmt.Fprint(f, prompt); err != nil {
@@ -89,6 +119,42 @@ func readPasswordFromTerminal(f *os.File, prompt string, timeout time.Duration) 
 		return nil, err
 	case <-time.After(timeout):
 		return nil, fmt.Errorf("password input timed out after %s", timeout)
+	}
+}
+
+func readLineFromTerminal(f *os.File, prompt string, timeout time.Duration) (string, error) {
+	if prompt != "" {
+		if _, err := fmt.Fprint(f, prompt); err != nil {
+			return "", fmt.Errorf("failed to write prompt: %w", err)
+		}
+	}
+
+	type readResult struct {
+		line string
+		err  error
+	}
+	ch := make(chan readResult, 1)
+	go func() {
+		line, err := bufio.NewReader(f).ReadString('\n')
+		if err != nil {
+			if err == io.EOF && strings.TrimSpace(line) != "" {
+				ch <- readResult{line: line}
+				return
+			}
+			ch <- readResult{err: err}
+			return
+		}
+		ch <- readResult{line: line}
+	}()
+
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			return "", res.err
+		}
+		return strings.TrimRight(res.line, "\r\n"), nil
+	case <-time.After(timeout):
+		return "", fmt.Errorf("interactive input timed out after %s", timeout)
 	}
 }
 
