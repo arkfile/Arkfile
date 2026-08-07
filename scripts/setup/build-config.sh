@@ -251,14 +251,67 @@ opaque_cgo_ldflags() {
     echo "-L./${LIBOPAQUE_SRC} -L./${LIBOPRF_SRC} -lopaque -loprf ${repo_root}/${LIBSODIUM_A}"
 }
 
+# Go module path used for -ldflags -X injection into config.Version / config.GitCommit.
+ARKFILE_GO_MODULE="${ARKFILE_GO_MODULE:-github.com/arkfile/Arkfile}"
+
+# Release version for binaries (override with VERSION=...).
+# Prefer a v* git tag when present; otherwise the default in config/version.go.
+resolve_build_version() {
+    local tagged fallback repo_root
+    if [ -n "${VERSION:-}" ]; then
+        echo "$VERSION"
+        return 0
+    fi
+    tagged="$(git describe --tags --match 'v*' --dirty 2>/dev/null || true)"
+    if [ -n "$tagged" ]; then
+        echo "$tagged"
+        return 0
+    fi
+    repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+    fallback="$(grep -E '^\s*var Version\s*=' "${repo_root}/config/version.go" 2>/dev/null | sed -n 's/.*"\([^"]*\)".*/\1/p' | head -1)"
+    if [ -n "$fallback" ]; then
+        echo "$fallback"
+        return 0
+    fi
+    echo "unknown"
+}
+
+# Short git commit for binaries (override with GIT_COMMIT=...).
+resolve_git_commit() {
+    local commit dirty
+    if [ -n "${GIT_COMMIT:-}" ]; then
+        echo "$GIT_COMMIT"
+        return 0
+    fi
+    commit="$(git rev-parse --short HEAD 2>/dev/null || true)"
+    if [ -z "$commit" ]; then
+        echo "unknown"
+        return 0
+    fi
+    dirty="$(git status --porcelain 2>/dev/null || true)"
+    if [ -n "$dirty" ]; then
+        echo "${commit}-dirty"
+        return 0
+    fi
+    echo "$commit"
+}
+
+# -X fragments shared by server and CLI ldflags.
+version_go_ldflags_x() {
+    local version commit
+    version="$(resolve_build_version)"
+    commit="$(resolve_git_commit)"
+    echo "-X ${ARKFILE_GO_MODULE}/config.Version=${version} -X ${ARKFILE_GO_MODULE}/config.GitCommit=${commit}"
+}
+
 # Go -ldflags for the server binary (fully static).
 server_go_ldflags() {
-    echo '-s -w -buildid= -extldflags "-static"'
+    echo "-s -w -buildid= -extldflags \"-static\" $(version_go_ldflags_x)"
 }
 
 # Go -ldflags for FIDO-enabled CLIs (vendored C static; OS libs dynamic).
 cli_go_ldflags() {
-    echo '-s -w -buildid='
+    echo "-s -w -buildid= $(version_go_ldflags_x)"
 }
 
 # CGO CFLAGS for FIDO-enabled CLIs.
@@ -371,8 +424,19 @@ verify_cli_binary_linking() {
     return 0
 }
 
-# Debian / RHEL / Alpine / Arch for package-manager hints.
+# Debian / RHEL / SUSE / Alpine / Arch for package-manager hints.
 detect_package_os_family() {
+    local id id_like
+    if [ -f /etc/os-release ]; then
+        id="$(. /etc/os-release 2>/dev/null; printf '%s' "${ID:-}")"
+        id_like="$(. /etc/os-release 2>/dev/null; printf '%s' "${ID_LIKE:-}")"
+        case "${id_like} ${id}" in
+            *suse*|*opensuse*|*sles*)
+                echo "suse"
+                return 0
+                ;;
+        esac
+    fi
     if [ -f /etc/debian_version ]; then
         echo "debian"
     elif [ -f /etc/alpine-release ]; then
@@ -386,11 +450,37 @@ detect_package_os_family() {
     fi
 }
 
+# True when this Debian-family host looks like Devuan (for eudev notes).
+is_devuan_host() {
+    local id id_like
+    if [ -f /etc/os-release ]; then
+        id="$(. /etc/os-release 2>/dev/null; printf '%s' "${ID:-}")"
+        id_like="$(. /etc/os-release 2>/dev/null; printf '%s' "${ID_LIKE:-}")"
+        case "${id}" in
+            devuan) return 0 ;;
+        esac
+        case "${id_like}" in
+            *devuan*) return 0 ;;
+        esac
+    fi
+    [ -f /etc/devuan_version ]
+}
+
 # Linux libudev development package name (libfido2 build + CLI runtime).
 fido_udev_dev_package_name() {
     case "$(detect_package_os_family)" in
-        debian) echo "libudev-dev" ;;
+        debian)
+            if is_devuan_host; then
+                # Devuan 6 Excalibur may ship libudev-dev or eudev development packages.
+                if command -v apt-cache >/dev/null 2>&1 && apt-cache show libeudev-dev >/dev/null 2>&1; then
+                    echo "libeudev-dev"
+                    return 0
+                fi
+            fi
+            echo "libudev-dev"
+            ;;
         rhel)   echo "systemd-devel" ;;
+        suse)   echo "libudev-devel" ;;
         alpine) echo "eudev-dev" ;;
         arch)   echo "systemd" ;;
         *)      echo "libudev-dev" ;;
@@ -531,6 +621,7 @@ emsdk_python_package_name() {
     case "$(detect_package_os_family)" in
         debian) echo "python3" ;;
         rhel)   echo "python3.11" ;;
+        suse)   echo "python3" ;;
         alpine) echo "python3" ;;
         arch)   echo "python" ;;
         *)      echo "python3.11" ;;
@@ -541,11 +632,14 @@ print_emsdk_python_install_hint() {
     echo "    Python ${EMSDK_MIN_PYTHON_MAJOR}.${EMSDK_MIN_PYTHON_MINOR}+ is required for emsdk (libopaque WASM)."
     case "$(detect_package_os_family)" in
         debian)
-            echo "      Debian/Ubuntu: apt install -y python3  # 3.10+ on Debian 12 / Ubuntu 22.04+"
+            echo "      Debian/Ubuntu/Devuan: apt install -y python3  # 3.10+ on current stable releases"
             ;;
         rhel)
             echo "      RHEL/Alma/Rocky 9: dnf install -y python3.11  # system python3 is 3.9 and will not work"
             echo "      Fedora:            dnf install -y python3"
+            ;;
+        suse)
+            echo "      openSUSE/SLES: zypper install -y python3"
             ;;
         alpine)
             echo "      Alpine: apk add --no-cache python3"
@@ -561,9 +655,12 @@ print_emsdk_python_install_hint() {
 
 print_native_build_deps_hint() {
     echo "    FIDO/CLI build host packages (vendored libfido2 stack):"
-    echo "      Debian/Ubuntu: apt install -y build-essential cmake pkg-config perl git libudev-dev python3"
+    echo "      Debian/Ubuntu: apt install -y build-essential cmake pkg-config perl git libudev-dev autoconf automake libtool python3"
+    echo "      Devuan 6:      apt install -y build-essential cmake pkg-config perl git autoconf automake libtool python3"
+    echo "                    plus libudev-dev or libeudev-dev / eudev (udev package set varies by release)"
     echo "      Alpine:        apk add --no-cache build-base cmake pkgconf-dev perl git linux-headers eudev-dev python3"
-    echo "      RHEL/Alma/Rocky/Fedora: dnf install -y gcc gcc-c++ make cmake pkgconf perl git systemd-devel python3.11"
+    echo "      RHEL/Alma/Rocky/Fedora: dnf install -y gcc gcc-c++ make cmake pkgconf perl git systemd-devel autoconf automake libtool python3.11"
+    echo "      openSUSE/SLES: zypper install -y gcc gcc-c++ make cmake pkg-config perl git libudev-devel autoconf automake libtool python3"
     echo "      Arch:          pacman -S --needed base-devel cmake pkgconf perl git systemd python"
     echo "      FreeBSD:       pkg install cmake gmake perl5 git pkgconf python3"
     echo "      OpenBSD:       pkg_add cmake gmake perl git python3"
@@ -571,13 +668,30 @@ print_native_build_deps_hint() {
     print_emsdk_python_install_hint
 }
 
+# Group A standalone arkfile-client build deps (no TypeScript / WASM / emsdk).
+print_client_build_deps_hint() {
+    echo "    Standalone arkfile-client build packages (Group A glibc Linux amd64):"
+    echo "      Debian/Ubuntu: sudo apt install -y build-essential cmake pkg-config perl git autoconf automake libtool libudev-dev"
+    echo "      Devuan 6 Excalibur: same as Debian-family; use libudev-dev or libeudev-dev depending on the udev stack"
+    echo "      RHEL/Alma/Rocky/Fedora: sudo dnf install -y gcc gcc-c++ make cmake pkgconf perl git autoconf automake libtool systemd-devel"
+    echo "      openSUSE/SLES: sudo zypper install -y gcc gcc-c++ make cmake pkg-config perl git autoconf automake libtool libudev-devel"
+    echo "      Arch: sudo pacman -S --needed base-devel cmake pkgconf perl git systemd"
+    echo "    Also required: Go matching go.mod. Runtime USB keys need libudev.so.1 (libudev1 / systemd-libs / eudev / Arch systemd)."
+}
+
 print_native_build_package_install_hint() {
     case "$(detect_package_os_family)" in
         debian)
-            echo "  Install with: sudo apt install -y build-essential cmake pkg-config perl git libudev-dev python3"
+            echo "  Install with: sudo apt install -y build-essential cmake pkg-config perl git libudev-dev autoconf automake libtool python3"
+            if is_devuan_host; then
+                echo "  Devuan note: if libudev-dev is unavailable, install libeudev-dev (or the eudev development package for your release)."
+            fi
             ;;
         rhel)
-            echo "  Install with: sudo dnf install -y gcc gcc-c++ make cmake pkgconf perl git systemd-devel python3.11"
+            echo "  Install with: sudo dnf install -y gcc gcc-c++ make cmake pkgconf perl git systemd-devel autoconf automake libtool python3.11"
+            ;;
+        suse)
+            echo "  Install with: sudo zypper install -y gcc gcc-c++ make cmake pkg-config perl git libudev-devel autoconf automake libtool python3"
             ;;
         alpine)
             echo "  Install with: sudo apk add --no-cache build-base cmake pkgconf-dev perl git linux-headers eudev-dev python3"

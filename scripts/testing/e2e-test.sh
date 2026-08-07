@@ -16,11 +16,23 @@ set -eo pipefail
 
 # Parse arguments
 BOOTSTRAP_TOKEN=""
+CLIENT_PATH_OVERRIDE=""
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
-        --bootstrap-token) BOOTSTRAP_TOKEN="$2"; shift ;;
-        *) echo "Unknown parameter passed: $1"; exit 1 ;;
+        --bootstrap-token)
+            BOOTSTRAP_TOKEN="$2"
+            shift
+            ;;
+        --client-path)
+            CLIENT_PATH_OVERRIDE="$2"
+            shift
+            ;;
+        *)
+            echo "Unknown parameter passed: $1"
+            echo "Usage: $0 [--bootstrap-token TOKEN] [--client-path /path/to/arkfile-client]"
+            exit 1
+            ;;
     esac
     shift
 done
@@ -62,16 +74,43 @@ DUMMY_SHARE_PASSWORD='DummyP@ssw0rd#2026!Nope'
 # Server & Paths
 SERVER_URL="${SERVER_URL:-https://localhost:8443}"
 
-# Binary location - require deployed location
+# Binary locations: deploy client by default; optional --client-path for standalone builds.
+# Admin always stays on the deploy path. Reject /tmp clients (sticky world-writable dir).
 BUILD_DIR="/opt/arkfile/bin"
-if [ ! -x "$BUILD_DIR/arkfile-client" ]; then
-    echo "[X] arkfile-client binary not found or not executable at $BUILD_DIR/arkfile-client"
+ADMIN="$BUILD_DIR/arkfile-admin"
+
+if [ -n "$CLIENT_PATH_OVERRIDE" ]; then
+    if [[ "$CLIENT_PATH_OVERRIDE" != /* ]]; then
+        echo "[X] --client-path must be an absolute path (got: $CLIENT_PATH_OVERRIDE)"
+        exit 1
+    fi
+    case "$CLIENT_PATH_OVERRIDE" in
+        /tmp|/tmp/*)
+            echo "[X] --client-path must not point under /tmp (got: $CLIENT_PATH_OVERRIDE)"
+            echo "    Install a standalone client (for example via scripts/setup/build-client.sh)"
+            echo "    and pass --client-path /opt/arkfile-cli/arkfile-client"
+            exit 1
+            ;;
+    esac
+    if [ ! -x "$CLIENT_PATH_OVERRIDE" ] || [ ! -f "$CLIENT_PATH_OVERRIDE" ]; then
+        echo "[X] --client-path is not an executable file: $CLIENT_PATH_OVERRIDE"
+        exit 1
+    fi
+    CLIENT="$CLIENT_PATH_OVERRIDE"
+else
+    if [ ! -x "$BUILD_DIR/arkfile-client" ]; then
+        echo "[X] arkfile-client binary not found or not executable at $BUILD_DIR/arkfile-client"
+        echo "    Run 'sudo ./scripts/dev-reset.sh' to build and deploy first."
+        exit 1
+    fi
+    CLIENT="$BUILD_DIR/arkfile-client"
+fi
+
+if [ ! -x "$ADMIN" ]; then
+    echo "[X] arkfile-admin binary not found or not executable at $ADMIN"
     echo "    Run 'sudo ./scripts/dev-reset.sh' to build and deploy first."
     exit 1
 fi
-
-CLIENT="$BUILD_DIR/arkfile-client"
-ADMIN="$BUILD_DIR/arkfile-admin"
 
 # Test Data Directory
 # MUST be in /tmp

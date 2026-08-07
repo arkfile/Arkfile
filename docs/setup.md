@@ -19,7 +19,9 @@ Run the following:
 
 - `sudo ./scripts/dev-reset.sh` -- idempotent setup/reset of local dev testing environment (creates `arkfile-dev-admin` user)
 
-- `./scripts/testing/e2e-test.sh` -- full, end-to-end functional test suite using Go CLI client utils
+- `./scripts/testing/e2e-test.sh` -- full, end-to-end functional test suite using Go CLI client utils (default client: `/opt/arkfile/bin/arkfile-client`)
+
+- Optional parity check with a standalone-built client (after `sudo bash scripts/setup/build-client.sh`): `./scripts/testing/e2e-test.sh --client-path /opt/arkfile-cli/arkfile-client`
 
 - Register a new user, e.g. `USERNAME00`, locally in the browser via: https://localhost:8443/ [Get Started]
 
@@ -314,9 +316,25 @@ libsodium is **vendored** under `vendor_c/jedisct1/libsodium` and built statical
 **CLI MFA / FIDO build notes:**
 - `arkfile-client` and `arkfile-admin` statically link vendored `libfido2`, `libcbor`, `zlib`, OpenSSL `libcrypto`, and the OPAQUE C stack (`libopaque`, `liboprf`, libsodium). The server binary does not link the FIDO stack and remains fully static.
 - **CLI link model (Linux):** vendored C libraries are linked with `-Wl,-Bstatic`; OS libraries (`libudev`, `libc`, `libpthread`, etc.) are linked dynamically via `-Wl,-Bdynamic`. There is no `libudev.a` on glibc distros, so CLIs cannot be fully static when FIDO is enabled.
-- **Build host:** `perl` (OpenSSL configure), `pkg-config`, autotools (vendored libsodium), and Linux **libudev development headers** (`libudev-dev` on Debian, `systemd-devel` on RHEL/Fedora, `eudev-dev` on Alpine) are required when compiling the CLIs.
-- **CLI runtime (Linux):** USB security keys need `libudev.so.1` at runtime. Install the runtime package if missing (`libudev1` / `systemd-libs` / `eudev`).
-- Vendored FIDO libraries install under `/var/tmp/arkfile-build/c-libs/fido/<platform>/lib/` (e.g. `linux-amd64/lib/`). CMake is forced to `CMAKE_INSTALL_LIBDIR=lib` (and OpenSSL `--libdir=lib`) so RHEL/Alma/Fedora hosts do not land archives in `lib64/`. Stale caches are rebuilt automatically when the platform stamp changes.
+- **Build host:** `perl` (OpenSSL configure), `pkg-config`, autotools (vendored libsodium), and Linux **libudev development headers** (`libudev-dev` on Debian/Ubuntu, `libudev-dev` or `libeudev-dev` on Devuan 6 Excalibur, `systemd-devel` on RHEL/Fedora, `libudev-devel` on openSUSE/SLES, `systemd` on Arch, `eudev-dev` on Alpine) are required when compiling the CLIs.
+- **CLI runtime (Linux):** USB security keys need `libudev.so.1` at runtime. Install the runtime package if missing (`libudev1` / `systemd-libs` / `eudev` / Arch `systemd`).
+- Vendored FIDO libraries for the full-stack deploy path install under `/var/tmp/arkfile-build/c-libs/fido/<platform>/lib/` (e.g. `linux-amd64/lib/`). CMake is forced to `CMAKE_INSTALL_LIBDIR=lib` (and OpenSSL `--libdir=lib`) so RHEL/Alma/Fedora hosts do not land archives in `lib64/`. Stale caches are rebuilt automatically when the platform stamp changes.
+
+**Standalone `arkfile-client` build (Group A glibc Linux amd64):**
+
+The full-stack path (`dev-reset.sh` / `build.sh`) remains the primary proven way to build and deploy Arkfile on Linux, including the client under `/opt/arkfile/bin/arkfile-client`. A separate entrypoint builds only the portable CLI without SeaweedFS, rqlite, TypeScript, WASM, or a destructive reset:
+
+```bash
+# From the Arkfile repo root on Debian, Ubuntu, Devuan 6, RHEL/Alma/Rocky/Fedora, openSUSE/SLES, or Arch (amd64):
+sudo bash scripts/setup/build-client.sh
+```
+
+- Build workspace: `/tmp/arkfile-client-build` (not `/var/tmp/arkfile-build`). Opaque/libsodium `.a` files may still be written in-tree under `vendor_c/` as with the deploy build; FIDO artifacts and the finished binary use the client build root.
+- Install path: `/opt/arkfile-cli/arkfile-client` (does not overwrite `/opt/arkfile/bin/arkfile-client`).
+- `dev-reset.sh` must not remove `/tmp/arkfile-client-build` or `/opt/arkfile-cli`.
+- Version output embeds release version and short git commit: `/opt/arkfile-cli/arkfile-client -V`
+- Prove parity after a normal `dev-reset` + e2e baseline: `bash scripts/testing/e2e-test.sh --client-path /opt/arkfile-cli/arkfile-client` (`arkfile-admin` always stays `/opt/arkfile/bin/arkfile-admin`; `--client-path` rejects `/tmp`).
+- Alpine, macOS, FreeBSD client, OpenBSD, and Windows client packaging are not covered by this Group A path yet. A green Devuan client build does not mean Arkfile server deploy on Devuan is supported. See `docs/wip/cli-builder.md`.
 
 **WASM / Emscripten (libopaque.js) Python note:**
 - Building the browser OPAQUE WASM module installs Emscripten via `vendor/emsdk`, which requires **Python 3.10 or newer**.

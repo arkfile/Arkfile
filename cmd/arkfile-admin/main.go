@@ -112,6 +112,7 @@ GLOBAL OPTIONS:
     --config FILE       Configuration file path
     --username USER     Admin username for authentication
     --verbose, -v       Verbose output
+    --version, -V       Show version and git commit
     --help, -h          Show help
 
 EXAMPLES:
@@ -138,13 +139,14 @@ func main() {
 		helpFlag    = flag.Bool("help", false, "Show help information")
 		hFlag       = flag.Bool("h", false, "Show help information (short)")
 		versionFlag = flag.Bool("version", false, "Show version information")
+		VFlag       = flag.Bool("V", false, "Show version information (short)")
 	)
 
 	flag.Parse()
 
 	verbose = *verboseFlag || *vFlag
 
-	if *versionFlag {
+	if *versionFlag || *VFlag {
 		printVersion()
 		return
 	}
@@ -454,7 +456,7 @@ func main() {
 }
 
 func printVersion() {
-	fmt.Printf("arkfile-admin %s\n", config.Version)
+	fmt.Printf("arkfile-admin %s (commit %s)\n", config.Version, config.GitCommit)
 }
 
 func printUsage() {

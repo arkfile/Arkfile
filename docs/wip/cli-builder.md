@@ -8,9 +8,18 @@ This work is intentionally separate from `docs/wip/freebsd-dev.md`. FreeBSD serv
 
 ## Status
 
-Locked decisions below define the Group A implementation target. No dedicated standalone client-builder entrypoint exists yet beyond the full-stack `build.sh` path. Code changes have not started; this document is the source of truth for the first implementation pass.
+Group A tooling is implemented in-tree. Debian amd64 is the first validated host: `sudo bash scripts/setup/build-client.sh` produced `/opt/arkfile-cli/arkfile-client`, and `bash scripts/testing/e2e-test.sh --client-path /opt/arkfile-cli/arkfile-client` passed 100% (parity with the deploy client path). Remaining Group A hosts still need native proof before the matrix is called green: Ubuntu, Devuan 6 Excalibur, RHEL-family (RHEL/Alma/Rocky/Fedora), openSUSE/SLES, and Arch. FreeBSD server work (`freebsd-dev.md`) and Group B+ client targets wait until Group A validation is done.
 
-Product priority for this WIP: ship `arkfile-client` build infra for all Group A operating systems first. FreeBSD server work (`freebsd-dev.md`) and Group B+ client targets wait until Group A is green.
+### Validation progress (Group A amd64)
+
+| Host family | Build (`build-client.sh`) | e2e with `--client-path` | Notes |
+|---|---|---|---|
+| Debian | [OK] | [OK] 100% | First proven host; CGO build matches `build.sh` (direct `$GO_BINARY`, not `run_go_as_user`) |
+| Ubuntu | pending | pending | Same Debian-family recipe |
+| Devuan 6 Excalibur | pending | pending | Confirm `libudev-dev` vs `libeudev-dev` on the reference host |
+| RHEL / Alma / Rocky / Fedora | pending | pending | `systemd-devel` for udev headers |
+| openSUSE / SLES | pending | pending | `libudev-devel` |
+| Arch | pending | pending | `pacman` + `systemd` for udev headers |
 
 ## Overview
 
@@ -50,8 +59,9 @@ Native builds on glibc Linux amd64, with family-specific dependency notes but on
 - Debian-family: Debian, Ubuntu, Devuan 6 Excalibur
 - RHEL-family: RHEL, Alma, Rocky, Fedora
 - SUSE-family: openSUSE, SLES
+- Arch-family: Arch Linux (and Arch-based hosts that use pacman with the same package set)
 
-This group reuses the link model already documented for Linux CLIs (vendored C archives linked statically; OS libraries such as libudev and libc linked dynamically). Success means documented dependency lists per family (apt / dnf / zypper), `detect_package_os_family` awareness including SUSE, a single client entrypoint that builds under `/tmp/arkfile-client-build` and installs to `/opt/arkfile-cli/arkfile-client`, verified linking, and functional proof via `e2e-test.sh` against both the deploy client and the standalone install (see Proof Loop).
+This group reuses the link model already documented for Linux CLIs (vendored C archives linked statically; OS libraries such as libudev and libc linked dynamically). Success means documented dependency lists per family (apt / dnf / zypper / pacman), `detect_package_os_family` awareness including SUSE and Arch, a single client entrypoint that builds under `/tmp/arkfile-client-build` and installs to `/opt/arkfile-cli/arkfile-client`, verified linking, and functional proof via `e2e-test.sh` against both the deploy client and the standalone install (see Proof Loop).
 
 Devuan belongs here rather than Group B because client builds care about glibc, apt, and CGO/FIDO headers, not about whether the machine runs systemd. The same Debian-family recipe applies, with an explicit note that udev development and runtime packages may be `libudev` or `eudev` depending on the Devuan release. A green Devuan client build does not mean Arkfile server deploy on Devuan is supported. Non-systemd service management for hosting Arkfile remains out of scope here and is covered separately in `freebsd-dev.md`.
 
