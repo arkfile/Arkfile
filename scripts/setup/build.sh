@@ -60,6 +60,18 @@ fix_vendor_ownership() {
             sudo chown -R "$CURRENT_USER:$CURRENT_USER" vendor_c/ 2>/dev/null || true
         fi
     fi
+    if [ "$EUID" -ne 0 ] && [ -z "$SUDO_USER" ]; then
+        local dependency_dir dependency_owner current_user
+        current_user=$(whoami)
+        for dependency_dir in node_modules client/static/js/node_modules; do
+            [ -d "$dependency_dir" ] || continue
+            dependency_owner=$(stat -c '%U' "$dependency_dir" 2>/dev/null || echo "unknown")
+            if [ "$dependency_owner" != "$current_user" ] && [ "$dependency_owner" != "unknown" ]; then
+                echo -e "${YELLOW}${dependency_dir} is owned by ${dependency_owner}; correcting ownership...${NC}"
+                sudo chown -R "$current_user:$current_user" "$dependency_dir"
+            fi
+        done
+    fi
 }
 
 # Function to check Go version requirements from go.mod
@@ -301,22 +313,23 @@ echo -e "${GREEN}Source directory: $(pwd)${NC}"
 # Build libopaque WASM/JS library
 echo -e "${YELLOW}Building libopaque WASM/JS library...${NC}"
 
-# Check if we should skip WASM library building (respects SKIP_C_LIBS flag)
-if [ "$PRODUCTION_BUILD" = "true" ] && [ "${SKIP_C_LIBS}" = "true" ]; then
-    echo -e "${RED}[X] Production builds cannot skip the trace-free WASM rebuild${NC}"
-    exit 1
-fi
-if [ "${SKIP_C_LIBS}" = "true" ]; then
+# Production builds always regenerate WASM from clean pinned sources so a
+# development trace artifact cannot enter a deployment. Native C caches remain
+# independently reusable when their source/platform stamps match.
+REBUILD_WASM=true
+if [ "$PRODUCTION_BUILD" = "true" ]; then
+    echo -e "${YELLOW}Production build: rebuilding trace-free WASM from pinned sources${NC}"
+elif [ "${SKIP_C_LIBS}" = "true" ]; then
     # Verify WASM files exist in client directory
     if [ -f "client/static/js/libopaque.js" ] && [ -f "client/static/js/libopaque.debug.js" ]; then
         echo -e "${GREEN}[OK] Skipping WASM library rebuild (libraries already exist)${NC}"
+        REBUILD_WASM=false
     else
         echo -e "${YELLOW}[WARNING] Expected WASM libraries missing, forcing rebuild...${NC}"
-        SKIP_C_LIBS="false"
     fi
 fi
 
-if [ "${SKIP_C_LIBS}" != "true" ]; then
+if [ "$REBUILD_WASM" = "true" ]; then
     # Use the dedicated WASM build script (includes validation and proper error handling)
     if ! ARKFILE_PRODUCTION_BUILD="$PRODUCTION_BUILD" ./scripts/setup/build-libopaque-wasm.sh; then
         echo -e "${RED}[X] Failed to build libopaque WASM library${NC}"
@@ -358,20 +371,36 @@ echo -e "${GREEN}Using Bun $(${BUN_CMD} --version) for TypeScript compilation${N
 BUN_DIR=$(dirname "${BUN_CMD}")
 export PATH="${BUN_DIR}:${PATH}"
 
-pushd client/static/js > /dev/null
-
-# Always ensure dependencies are up to date.
+# Always install from the workspace root. The single root lockfile covers the
+# frontend and Playwright dependencies, including all transitive resolutions.
 # --frozen-lockfile refuses to install if package.json
 # and bun.lock disagree. This prevents supply-chain drift on every deploy and
 # enforces that any dependency-version change must be a deliberate, reviewed
 # update to both files.
+if [ -d "client/static/js/node_modules" ]; then
+    echo "Removing legacy nested node_modules before workspace install..."
+    rm -rf client/static/js/node_modules
+fi
 echo "Ensuring Bun dependencies are installed (frozen lockfile)..."
 ${BUN_CMD} install --frozen-lockfile || {
     echo -e "${RED}[X] Failed to install dependencies (frozen lockfile)${NC}"
     echo -e "${YELLOW}If package.json was changed, regenerate bun.lock with:${NC}"
-    echo -e "${YELLOW}  cd client/static/js && bun install${NC}"
+    echo -e "${YELLOW}  bun install${NC}"
     exit 1
 }
+
+echo "Running Bun high-severity vulnerability audit..."
+if ! ${BUN_CMD} audit --audit-level=high; then
+    if [ "$PRODUCTION_BUILD" = "true" ]; then
+        echo -e "${RED}[X] Failing production build due to high-severity Bun dependency vulnerabilities.${NC}" >&2
+        exit 1
+    fi
+    echo -e "${YELLOW}[WARNING] Bun found high-severity dependency vulnerabilities.${NC}"
+else
+    echo -e "${GREEN}[OK] Bun dependency audit passed${NC}"
+fi
+
+pushd client/static/js > /dev/null
 
 # Verify source files exist
 if [ ! -f "src/app.ts" ]; then
@@ -388,7 +417,13 @@ fi
 
 # Check build cache
 CACHE_FILE=".buildcache"
-TS_HASH=$(find src -name "*.ts" -type f -exec sha256sum {} \; | sha256sum)
+TS_HASH=$(
+    {
+        find src -name "*.ts" -type f -print0 | sort -z | xargs -0 sha256sum
+        sha256sum package.json ../../../package.json ../../../bun.lock ../../../tsconfig.json ../../../tsconfig.sw.json
+        printf 'bun=%s\n' "$(${BUN_CMD} --version)"
+    } | sha256sum
+)
 BUILD_HASH=$(cat ${CACHE_FILE} 2>/dev/null || true)
 
 if [ "${TS_HASH}" = "${BUILD_HASH}" ] && [ -f "dist/app.js" ]; then
@@ -618,32 +653,114 @@ run_security_audits_and_sbom() {
         fi
     fi
 
-    # 2. Generate and save Software Bill of Materials (SBOM)
-    echo "Generating SBOM..."
-    local sbom_file="${BUILD_DIR}/sbom-dependencies.json"
-    
-    # Generate list of Go dependencies
-    local go_deps
-    go_deps=$("$GO_BINARY" list -m -json all 2>/dev/null | jq -s '.' 2>/dev/null || echo "[]")
-    
-    # Generate list of Bun dependencies
-    local bun_deps="{}"
-    if [ -f "client/static/js/package.json" ]; then
-        bun_deps=$(cat client/static/js/package.json | jq '.dependencies + .devDependencies' 2>/dev/null || echo "{}")
+    # 2. Generate a CycloneDX SBOM from go.mod and the complete Bun lockfile.
+    echo "Generating CycloneDX SBOM..."
+    local syft_bin=""
+    local syft_version="${SYFT_VERSION#v}"
+    if [ -n "$gopath" ]; then
+        syft_bin="$gopath/bin/syft"
+    fi
+    if [ ! -x "$syft_bin" ] || ! "$syft_bin" version 2>/dev/null | grep -Fq "$syft_version"; then
+        echo "Installing pinned Syft ${SYFT_VERSION}..."
+        if ! run_go_as_user install "github.com/anchore/syft/cmd/syft@${SYFT_VERSION}"; then
+            echo -e "${RED}[X] Failed to install pinned Syft ${SYFT_VERSION}${NC}"
+            exit 1
+        fi
+    fi
+    if [ ! -x "$syft_bin" ]; then
+        echo -e "${RED}[X] Syft binary not found after installation${NC}"
+        exit 1
     fi
 
-    # Write unified SBOM json
-    cat > "$sbom_file" <<EOF
+    local sbom_file="${BUILD_DIR}/sbom.cdx.json"
+    local sbom_base="${BUILD_DIR}/sbom.cdx.base.json"
+    if ! "$syft_bin" dir:. \
+        --source-name Arkfile \
+        --source-version "$VERSION" \
+        --exclude './node_modules/**' \
+        --exclude './client/static/js/node_modules/**' \
+        --exclude './vendor/**' \
+        --exclude './vendor_c/**' \
+        -o "cyclonedx-json=${sbom_base}"; then
+        echo -e "${RED}[X] Syft failed to generate the dependency SBOM${NC}"
+        exit 1
+    fi
+    if ! jq \
+        --arg openssl "$OPENSSL_VERSION" \
+        --arg openssl_commit "$OPENSSL_COMMIT" \
+        --arg libfido2 "$LIBFIDO2_VERSION" \
+        --arg libfido2_commit "$LIBFIDO2_COMMIT" \
+        --arg libcbor "$LIBCBOR_VERSION" \
+        --arg libcbor_commit "$LIBCBOR_COMMIT" \
+        --arg zlib "$ZLIB_VERSION" \
+        --arg zlib_commit "$ZLIB_COMMIT" \
+        --arg libsodium "$VENDOR_C_LIBSODIUM_TAG" \
+        --arg libsodium_commit "$VENDOR_C_LIBSODIUM_COMMIT" \
+        --arg libsodium_js "$LIBSODIUM_JS_VERSION" \
+        --arg libsodium_js_commit "$LIBSODIUM_JS_COMMIT" \
+        --arg libopaque "$VENDOR_C_LIBOPAQUE_COMMIT" \
+        --arg liboprf "$VENDOR_C_LIBOPRF_COMMIT" \
+        '
+        .components = ((.components // []) + [
+          {"type":"library","name":"openssl-libcrypto","version":$openssl,"properties":[{"name":"arkfile:source-commit","value":$openssl_commit}]},
+          {"type":"library","name":"libfido2","version":$libfido2,"properties":[{"name":"arkfile:source-commit","value":$libfido2_commit}]},
+          {"type":"library","name":"libcbor","version":$libcbor,"properties":[{"name":"arkfile:source-commit","value":$libcbor_commit}]},
+          {"type":"library","name":"zlib","version":$zlib,"properties":[{"name":"arkfile:source-commit","value":$zlib_commit}]},
+          {"type":"library","name":"libsodium-native","version":$libsodium,"properties":[{"name":"arkfile:source-commit","value":$libsodium_commit}]},
+          {"type":"library","name":"libsodium.js","version":$libsodium_js,"properties":[{"name":"arkfile:source-commit","value":$libsodium_js_commit}]},
+          {"type":"library","name":"libopaque","version":$libopaque},
+          {"type":"library","name":"liboprf","version":$liboprf}
+        ])
+        ' "$sbom_base" >"$sbom_file"; then
+        echo -e "${RED}[X] Failed to add native and deployment dependencies to SBOM${NC}"
+        exit 1
+    fi
+    rm -f "$sbom_base"
+    
+    # Retain a concise build inventory alongside the standard SBOM.
+    local inventory_file="${BUILD_DIR}/build-dependencies.json"
+    local go_deps
+    go_deps=$("$GO_BINARY" list -m -json all 2>/dev/null | jq -s '.' 2>/dev/null || echo "[]")
+    local bun_deps="{}"
+    if [ -f "bun.lock" ]; then
+        bun_deps=$("$BUN_CMD" pm ls --all 2>/dev/null | jq -Rs 'split("\n") | map(select(length > 0))' 2>/dev/null || echo "[]")
+    fi
+
+    cat > "$inventory_file" <<EOF
 {
-  "sbom_version": "1.0",
   "build_time": "${BUILD_TIME}",
   "arkfile_version": "${VERSION}",
   "go_version": "$("$GO_BINARY" version)",
   "go_dependencies": ${go_deps},
-  "bun_dependencies": ${bun_deps}
+  "bun_dependencies": ${bun_deps},
+  "native_dependencies": {
+    "openssl": "${OPENSSL_VERSION}",
+    "openssl_commit": "${OPENSSL_COMMIT}",
+    "libfido2": "${LIBFIDO2_VERSION}",
+    "libfido2_commit": "${LIBFIDO2_COMMIT}",
+    "libcbor": "${LIBCBOR_VERSION}",
+    "libcbor_commit": "${LIBCBOR_COMMIT}",
+    "zlib": "${ZLIB_VERSION}",
+    "zlib_commit": "${ZLIB_COMMIT}",
+    "libsodium": "${VENDOR_C_LIBSODIUM_TAG}",
+    "libsodium_commit": "${VENDOR_C_LIBSODIUM_COMMIT}",
+    "libsodium_js": "${LIBSODIUM_JS_VERSION}",
+    "libsodium_js_commit": "${LIBSODIUM_JS_COMMIT}",
+    "libopaque_commit": "${VENDOR_C_LIBOPAQUE_COMMIT}",
+    "liboprf_commit": "${VENDOR_C_LIBOPRF_COMMIT}"
+  },
+  "deployment_dependencies": {
+    "caddy": "${CADDY_VERSION}",
+    "caddy_desec_module": "${CADDY_DESEC_MODULE}"
+  },
+  "build_tools": {
+    "emscripten": "${EMSCRIPTEN_VERSION}",
+    "syft": "${SYFT_VERSION}"
+  }
 }
 EOF
     echo -e "${GREEN}[OK] SBOM generated at: ${sbom_file}${NC}"
+    echo -e "${GREEN}[OK] Build dependency inventory generated at: ${inventory_file}${NC}"
 }
 
 run_security_audits_and_sbom

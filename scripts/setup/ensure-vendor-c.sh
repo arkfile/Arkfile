@@ -21,15 +21,54 @@ clone_pinned_repo() {
 
     mkdir -p "$(dirname "$dest")"
 
-    if [ -d "$dest/.git" ]; then
-        echo "[INFO] Updating existing clone: $dest ($ref_kind $ref)"
-        git -C "$dest" fetch --depth 1 origin "$ref" 2>/dev/null || git -C "$dest" fetch --depth 1 origin 2>/dev/null || true
+    if git -C "$dest" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        local current_commit target_commit
+        current_commit=$(git -C "$dest" rev-parse HEAD)
         if [ "$ref_kind" = "tag" ]; then
-            git -C "$dest" checkout -f "$ref"
+            git -C "$dest" fetch --depth 1 origin "refs/tags/${ref}:refs/tags/${ref}" 2>/dev/null || true
+            target_commit=$(git -C "$dest" rev-list -n 1 "$ref" 2>/dev/null || true)
         else
-            git -C "$dest" checkout -f "$ref"
+            git -C "$dest" fetch --depth 1 origin "$ref" 2>/dev/null || true
+            target_commit="$ref"
         fi
+        if [ -z "$target_commit" ] || ! git -C "$dest" cat-file -e "${target_commit}^{commit}" 2>/dev/null; then
+            echo "[X] Unable to resolve pinned $ref_kind $ref for $dest" >&2
+            return 1
+        fi
+        if [ "$dest" = "$LIBSODIUM_DIR" ] && [ "$target_commit" != "$VENDOR_C_LIBSODIUM_COMMIT" ]; then
+            echo "[X] libsodium tag $ref resolved to $target_commit; expected $VENDOR_C_LIBSODIUM_COMMIT" >&2
+            return 1
+        fi
+        if [ "$current_commit" != "$target_commit" ]; then
+            if [ -n "$(git -C "$dest" status --porcelain 2>/dev/null)" ]; then
+                echo "[X] Refusing to replace modified vendored source: $dest" >&2
+                echo "    Expected: $target_commit" >&2
+                echo "    Current:  $current_commit" >&2
+                return 1
+            fi
+            echo "[INFO] Updating existing clone: $dest ($ref_kind $ref)"
+            git -C "$dest" checkout --detach "$target_commit"
+        fi
+        if [ "$dest" = "$VENDOR_C_LIBOPAQUE_DIR" ]; then
+            if ! git -C "$dest" diff --quiet HEAD -- src ':(exclude)src/oprf/**'; then
+                echo "[X] Pinned libopaque C source has local modifications: $dest/src" >&2
+                return 1
+            fi
+        elif [ "$dest" = "$VENDOR_C_LIBOPRF_DIR" ]; then
+            if ! git -C "$dest" diff --quiet HEAD -- src; then
+                echo "[X] Pinned liboprf source has local modifications: $dest/src" >&2
+                return 1
+            fi
+        elif ! git -C "$dest" diff --quiet HEAD -- .; then
+            echo "[X] Pinned vendored source has local tracked modifications: $dest" >&2
+            return 1
+        fi
+        echo "[OK] Verified vendored source pin: $dest ($target_commit)"
         return 0
+    fi
+    if [ -e "$dest" ]; then
+        echo "[X] Existing vendored source is not a verifiable Git checkout: $dest" >&2
+        return 1
     fi
 
     echo "[INFO] Cloning $url into $dest ($ref_kind $ref)"
@@ -38,6 +77,16 @@ clone_pinned_repo() {
     else
         git clone "$url" "$dest"
         git -C "$dest" checkout -f "$ref"
+    fi
+    local cloned_commit
+    cloned_commit=$(git -C "$dest" rev-parse HEAD)
+    if [ "$ref_kind" = "commit" ] && [ "$cloned_commit" != "$ref" ]; then
+        echo "[X] Cloned source is $cloned_commit; expected $ref" >&2
+        return 1
+    fi
+    if [ "$dest" = "$LIBSODIUM_DIR" ] && [ "$cloned_commit" != "$VENDOR_C_LIBSODIUM_COMMIT" ]; then
+        echo "[X] Cloned libsodium tag is $cloned_commit; expected $VENDOR_C_LIBSODIUM_COMMIT" >&2
+        return 1
     fi
 }
 
@@ -95,40 +144,34 @@ vendor_c_sources_present() {
 ensure_vendor_c_sources() {
     migrate_legacy_vendor_paths
 
-    if vendor_c_sources_present; then
-        echo "[OK] C vendor sources present under $VENDOR_C_ROOT"
-        return 0
+    if ! command -v git >/dev/null 2>&1; then
+        echo "[X] git is required to verify vendored C sources"
+        print_native_build_deps_hint
+        return 1
     fi
-
-    echo "[INFO] C vendor sources missing; initializing under $VENDOR_C_ROOT..."
-
-    try_git_submodules || true
 
     if ! vendor_c_sources_present; then
-        if ! command -v git >/dev/null 2>&1; then
-            echo "[X] git is required to fetch vendored C sources"
-            print_native_build_deps_hint
-            return 1
-        fi
-
-        clone_pinned_repo \
-            "https://github.com/stef/libopaque.git" \
-            "$VENDOR_C_LIBOPAQUE_DIR" \
-            "$VENDOR_C_LIBOPAQUE_COMMIT" \
-            commit
-
-        clone_pinned_repo \
-            "https://github.com/stef/liboprf.git" \
-            "$VENDOR_C_LIBOPRF_DIR" \
-            "$VENDOR_C_LIBOPRF_COMMIT" \
-            commit
-
-        clone_pinned_repo \
-            "https://github.com/jedisct1/libsodium.git" \
-            "$LIBSODIUM_DIR" \
-            "$VENDOR_C_LIBSODIUM_TAG" \
-            tag
+        echo "[INFO] C vendor sources missing; initializing under $VENDOR_C_ROOT..."
+        try_git_submodules || true
     fi
+
+    clone_pinned_repo \
+        "https://github.com/stef/libopaque.git" \
+        "$VENDOR_C_LIBOPAQUE_DIR" \
+        "$VENDOR_C_LIBOPAQUE_COMMIT" \
+        commit
+
+    clone_pinned_repo \
+        "https://github.com/stef/liboprf.git" \
+        "$VENDOR_C_LIBOPRF_DIR" \
+        "$VENDOR_C_LIBOPRF_COMMIT" \
+        commit
+
+    clone_pinned_repo \
+        "https://github.com/jedisct1/libsodium.git" \
+        "$LIBSODIUM_DIR" \
+        "$VENDOR_C_LIBSODIUM_TAG" \
+        tag
 
     if ! vendor_c_sources_present; then
         echo "[X] Failed to provision C vendor sources under $VENDOR_C_ROOT"

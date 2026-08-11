@@ -5,14 +5,17 @@
 # with automated Emscripten installation
 
 set -e
+set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=build-config.sh
 source "$SCRIPT_DIR/build-config.sh"
 
-# Absolute paths -- VENDOR_C_LIBOPAQUE_DIR is repo-relative; do not use it after cd.
+# Build from clean copies under BUILD_WASM so generated files and nested
+# dependency checkouts never modify the pinned source submodules.
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-LIBOPAQUE_JS_DIR="$REPO_ROOT/$VENDOR_C_LIBOPAQUE_DIR/js"
+LIBOPAQUE_WASM_SOURCE="$BUILD_WASM/source/libopaque"
+LIBOPAQUE_JS_DIR="$LIBOPAQUE_WASM_SOURCE/js"
 LIBSODIUM_JS_DIR="$LIBOPAQUE_JS_DIR/libsodium.js"
 
 # Colors for output
@@ -25,10 +28,6 @@ NC='\033[0m'
 echo -e "${BLUE}Building libopaque.js WASM library${NC}"
 echo "===================================="
 
-# Configuration - Latest stable versions
-EMSCRIPTEN_VERSION="3.1.74"
-LIBSODIUM_JS_VERSION="0.7.16"
-
 # Build configuration - passed to make (not modifying submodule Makefile)
 # LIBOPRFHOME: Path to liboprf source (relative to js/ directory)
 # DEFINES: Compiler defines (-DTRACE for debug logging, empty for production)
@@ -38,7 +37,7 @@ LIBSODIUM_JS_VERSION="0.7.16"
 #   - dev-reset.sh sets LIBOPAQUE_DEFINES="-DTRACE" for verbose debug output
 #   - local-deploy.sh / test-deploy.sh leave it empty (no trace logging)
 #   - Default: empty (production-safe, no cryptographic debug dumps in browser console)
-LIBOPRFHOME_PATH="../../liboprf/src"
+LIBOPRFHOME_PATH="$REPO_ROOT/$LIBOPRF_SRC"
 BUILD_DEFINES="${LIBOPAQUE_DEFINES:-}"
 if [[ "$BUILD_DEFINES" == *"-DNORANDOM"* ]]; then
     echo "ERROR: Insecure -DNORANDOM build flag is forbidden" >&2
@@ -201,8 +200,14 @@ ensure_emscripten() {
                 print_status "WARNING" "Installed version ($CURRENT_VER) differs from target ($EMSCRIPTEN_VERSION)"
                 print_status "INFO" "Updating to target version..."
                 if ! install_emscripten_emsdk; then
-                    print_status "WARNING" "Failed to update, continuing with current version"
+                    print_status "ERROR" "Failed to activate pinned Emscripten $EMSCRIPTEN_VERSION"
+                    return 1
                 fi
+            fi
+            CURRENT_VER=$(emcc --version | head -n1 | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1)
+            if [ "$CURRENT_VER" != "$EMSCRIPTEN_VERSION" ]; then
+                print_status "ERROR" "Active Emscripten ($CURRENT_VER) does not match pin $EMSCRIPTEN_VERSION"
+                return 1
             fi
             return 0
         fi
@@ -234,42 +239,59 @@ ensure_emscripten() {
     return 1
 }
 
-# Update libsodium.js to target version
-update_libsodium_js() {
-    local LIBSODIUM_DIR="$LIBSODIUM_JS_DIR"
-    
-    if [ ! -d "$LIBSODIUM_DIR" ]; then
-        print_status "INFO" "libsodium.js not found, will be initialized during build"
-        return 0
+# Prepare exact, clean WASM sources without changing vendor_c.
+prepare_wasm_source() {
+    local opaque_commit
+    opaque_commit=$(git -C "$REPO_ROOT/$VENDOR_C_LIBOPAQUE_DIR" rev-parse HEAD 2>/dev/null || true)
+    if [ "$opaque_commit" != "$VENDOR_C_LIBOPAQUE_COMMIT" ]; then
+        print_status "ERROR" "libopaque source does not match pinned commit $VENDOR_C_LIBOPAQUE_COMMIT"
+        return 1
     fi
-    
-    print_status "INFO" "Checking libsodium.js version..."
-    
-    cd "$LIBSODIUM_DIR"
-    
-    # Fetch latest tags
-    run_git_as_user fetch --tags 2>/dev/null || true
-    
-    # Check current version
-    CURRENT_TAG=$(run_git_as_user describe --tags --exact-match 2>/dev/null || echo "unknown")
-    
-    if [ "$CURRENT_TAG" = "$LIBSODIUM_JS_VERSION" ]; then
-        print_status "SUCCESS" "libsodium.js already at version $LIBSODIUM_JS_VERSION"
-        cd "$REPO_ROOT"
-        return 0
+
+    print_status "INFO" "Preparing clean libopaque WASM source at $LIBOPAQUE_WASM_SOURCE..."
+    rm -rf "$LIBOPAQUE_WASM_SOURCE"
+    mkdir -p "$(dirname "$LIBOPAQUE_WASM_SOURCE")"
+    # A local clone is required instead of git archive because upstream marks
+    # /js as export-ignore, which would omit the WASM Makefile and wrappers.
+    if ! run_git_as_user clone --no-checkout --no-hardlinks \
+        "$REPO_ROOT/$VENDOR_C_LIBOPAQUE_DIR" "$LIBOPAQUE_WASM_SOURCE"; then
+        print_status "ERROR" "Failed to clone pinned libopaque source"
+        return 1
     fi
-    
-    print_status "INFO" "Updating libsodium.js from $CURRENT_TAG to $LIBSODIUM_JS_VERSION..."
-    
-    # Checkout the target version
-    if run_git_as_user checkout "$LIBSODIUM_JS_VERSION" 2>/dev/null; then
-        print_status "SUCCESS" "libsodium.js updated to $LIBSODIUM_JS_VERSION"
-    else
-        print_status "WARNING" "Could not checkout $LIBSODIUM_JS_VERSION, using current version"
+    if ! run_git_as_user -C "$LIBOPAQUE_WASM_SOURCE" checkout --detach "$VENDOR_C_LIBOPAQUE_COMMIT"; then
+        print_status "ERROR" "Failed to check out pinned libopaque commit"
+        return 1
     fi
-    
-    cd "$REPO_ROOT"
-    return 0
+    if [ "$(git -C "$LIBOPAQUE_WASM_SOURCE" rev-parse HEAD 2>/dev/null || true)" != "$VENDOR_C_LIBOPAQUE_COMMIT" ] ||
+       [ ! -f "$LIBOPAQUE_JS_DIR/Makefile" ] ||
+       [ ! -f "$LIBOPAQUE_JS_DIR/wrapper/libopaque-pre.js" ]; then
+        print_status "ERROR" "Prepared libopaque source is incomplete or not pinned"
+        return 1
+    fi
+
+    # libopaque includes these as <oprf/...>. The native build creates the same
+    # staging directory in its source tree; reproduce it inside the clean WASM
+    # clone without modifying either pinned vendor checkout.
+    mkdir -p "$LIBOPAQUE_WASM_SOURCE/src/oprf"
+    cp "$REPO_ROOT/$LIBOPRF_SRC/toprf.h" "$LIBOPAQUE_WASM_SOURCE/src/oprf/toprf.h"
+    cp "$REPO_ROOT/$LIBOPRF_SRC/oprf.h" "$LIBOPAQUE_WASM_SOURCE/src/oprf/oprf.h"
+
+    rm -rf "$LIBSODIUM_JS_DIR"
+    print_status "INFO" "Cloning libsodium.js $LIBSODIUM_JS_VERSION..."
+    if ! run_git_as_user clone --depth 1 --branch "$LIBSODIUM_JS_VERSION" \
+        https://github.com/jedisct1/libsodium.js.git "$LIBSODIUM_JS_DIR"; then
+        print_status "ERROR" "Failed to clone pinned libsodium.js"
+        return 1
+    fi
+    if [ "$(git -C "$LIBSODIUM_JS_DIR" describe --tags --exact-match 2>/dev/null || true)" != "$LIBSODIUM_JS_VERSION" ] ||
+       [ "$(git -C "$LIBSODIUM_JS_DIR" rev-parse HEAD 2>/dev/null || true)" != "$LIBSODIUM_JS_COMMIT" ]; then
+        print_status "ERROR" "libsodium.js checkout does not match $LIBSODIUM_JS_VERSION @ $LIBSODIUM_JS_COMMIT"
+        return 1
+    fi
+    if ! ensure_libsodium_js_submodules; then
+        return 1
+    fi
+    print_status "SUCCESS" "Pinned WASM source prepared"
 }
 
 # Validate that we're not using -DNORANDOM (security check)
@@ -306,11 +328,7 @@ ensure_libsodium_js_submodules() {
     return 0
 }
 
-# Patch emscripten.sh for compatibility with Emscripten 3.1.74+
-# The upstream libsodium (1.0.18) emscripten.sh uses flags that are incompatible
-# with modern Emscripten's upstream LLVM backend. We patch at build time (not in
-# the submodule commit) because libsodium.js/Makefile runs `git submodule update`
-# and restores the pristine emscripten.sh after any early patch.
+# Patch legacy emscripten.sh flags only if the pinned source still contains them.
 # Flags removed:
 #   -sRUNNING_JS_OPTS=1              - removed from Emscripten, causes "not a valid option" error
 #   --llvm-lto 1                     - no-op with upstream LLVM backend (Emscripten 2.x+)
@@ -336,7 +354,7 @@ patch_emscripten_for_modern_emcc() {
 
     print_status "INFO" "Patching emscripten.sh for Emscripten $EMSCRIPTEN_VERSION compatibility..."
 
-    # Remove flags incompatible with upstream LLVM backend (Emscripten 3.x)
+    # Remove flags incompatible with the upstream LLVM backend.
     # Handle both "-sFLAG=1" and "-s FLAG=1" forms (libsodium uses the space form)
     sed -i \
         -e 's/-sRUNNING_JS_OPTS=1//g' \
@@ -351,7 +369,7 @@ patch_emscripten_for_modern_emcc() {
         "$EMSCRIPTEN_SH"
 
     if ! grep -q "# ARKFILE-PATCHED" "$EMSCRIPTEN_SH"; then
-        sed -i '1s/^/# ARKFILE-PATCHED for Emscripten 3.x compatibility\n/' "$EMSCRIPTEN_SH"
+        sed -i '1s/^/# ARKFILE-PATCHED for modern Emscripten compatibility\n/' "$EMSCRIPTEN_SH"
     fi
 
     print_status "SUCCESS" "emscripten.sh patched for modern Emscripten"
@@ -359,9 +377,6 @@ patch_emscripten_for_modern_emcc() {
 }
 
 prepare_libsodium_js_for_build() {
-    if ! ensure_libsodium_js_submodules; then
-        exit 1
-    fi
     if ! patch_emscripten_for_modern_emcc; then
         exit 1
     fi
@@ -400,7 +415,7 @@ build_wasm_library() {
     
     # WASM-compatible CFLAGS - same as upstream but without -march=native
     # The $(SODIUMDIR), $(LIBOPRFHOME), and $(DEFINES) are expanded by make
-    WASM_LIBOPAQUE_CFLAGS='-I$(SODIUMDIR)/include -I$(LIBOPRFHOME) -Wall -O2 -g -fno-stack-protector -D_FORTIFY_SOURCE=2 -fasynchronous-unwind-tables -fpic -Werror=format-security -Werror=implicit-function-declaration -ftrapv $(DEFINES)'
+    WASM_LIBOPAQUE_CFLAGS='-I$(SODIUMDIR)/include -I$(LIBOPRFHOME) -Wall -O2 -g -fno-stack-protector -D_FORTIFY_SOURCE=2 -DHAVE_SODIUM_HKDF=1 -fasynchronous-unwind-tables -fpic -Werror=format-security -Werror=implicit-function-declaration -ftrapv $(DEFINES)'
     
     # Step 1: Build libopaque.so with emcc (WASM shared library)
     # This is CRITICAL - we must build libopaque with emcc, not use the native libopaque.a from ../src/
@@ -408,7 +423,8 @@ build_wasm_library() {
     print_status "INFO" "  LIBOPRFHOME=$LIBOPRFHOME_PATH"
     print_status "INFO" "  DEFINES=$BUILD_DEFINES"
     
-    if ! make LIBOPRFHOME="$LIBOPRFHOME_PATH" DEFINES="$BUILD_DEFINES" LIBOPAQUE_CFLAGS="$WASM_LIBOPAQUE_CFLAGS" libopaque; then
+    if ! make LIBOPRFHOME="$LIBOPRFHOME_PATH" DEFINES="$BUILD_DEFINES" \
+        LIBOPAQUE_CFLAGS="$WASM_LIBOPAQUE_CFLAGS" SODIUM_NEWER_THAN_1_0_18=0 libopaque; then
         print_status "ERROR" "Failed to build libopaque.so (WASM shared library)"
         exit 1
     fi
@@ -429,7 +445,9 @@ build_wasm_library() {
     # The upstream Makefile has -L../src which would link against native x86 libopaque.a
     WASM_LDFLAGS='-L. -lopaque -Wl,-z,defs -Wl,-z,relro -Wl,-z,noexecstack'
     
-    if ! make LIBOPRFHOME="$LIBOPRFHOME_PATH" DEFINES="$BUILD_DEFINES" LIBOPAQUE_CFLAGS="$WASM_LIBOPAQUE_CFLAGS" LDFLAGS="$WASM_LDFLAGS" libopaquejs; then
+    if ! make LIBOPRFHOME="$LIBOPRFHOME_PATH" DEFINES="$BUILD_DEFINES" \
+        LIBOPAQUE_CFLAGS="$WASM_LIBOPAQUE_CFLAGS" SODIUM_NEWER_THAN_1_0_18=0 \
+        LDFLAGS="$WASM_LDFLAGS" libopaquejs; then
         print_status "ERROR" "Failed to build libopaque.js"
         exit 1
     fi
@@ -495,8 +513,9 @@ main() {
         exit 1
     fi
     
-    # Update libsodium.js to target version
-    update_libsodium_js
+    if ! prepare_wasm_source; then
+        exit 1
+    fi
 
     # Build the WASM library (patches emscripten.sh after submodule init, inside build)
     build_wasm_library

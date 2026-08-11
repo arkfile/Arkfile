@@ -26,7 +26,7 @@ Replace SeaweedFS MD5 with a pinned SHA-256 (verified). `scripts/setup/05-setup-
 
 Add a production build mode that refuses dependency mutation (verified). `scripts/setup/build.sh` runs `go mod tidy` and `go mod vendor` whenever `go mod download` or the vendor-consistency check fails (around lines 113-176). That is convenient during development but non-standard for a production deploy/update, because it can alter `go.mod`, `go.sum`, or `vendor/` on the VPS and mask unreviewed dependency drift. A production build mode should use the checked-in vendor/lock state and fail closed if module or vendor state is inconsistent rather than silently mutating it. The Bun side is already correct here: the frontend build uses `bun install --frozen-lockfile` (around line 353), which refuses to install on a package.json/bun.lock mismatch, and that pattern is the model to mirror on the Go side.
 
-Add vulnerability scanning and an SBOM to the build (verified absent). `scripts/setup/build.sh` runs neither `govulncheck` nor `bun audit` and emits no SBOM. Adding these (failing the build on high-severity findings, emitting an SBOM artifact) closes a supply-chain visibility gap and is a reasonable launch prerequisite for software that will hold other people's encrypted data.
+Vulnerability scanning and SBOM generation are implemented in `scripts/setup/build.sh`. Production builds fail on non-whitelisted `govulncheck` findings and high-severity `bun audit` findings. A pinned Syft release emits a CycloneDX SBOM from `go.mod` and the root Bun workspace lockfile, and the build augments it with the native crypto, FIDO, WASM, Caddy, and deSEC components that source-only package discovery cannot infer.
 
 ## Second batch: update-path and least-privilege correctness
 

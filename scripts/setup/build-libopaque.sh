@@ -125,6 +125,37 @@ LIBSODIUM_DIR="$LIBSODIUM_DIR"
 LIBSODIUM_INCLUDE_DIR="$LIBSODIUM_INCLUDE"
 LIBSODIUM_STATIC_ARCHIVE="$LIBSODIUM_A"
 
+invalidate_stale_native_crypto_build() {
+    local expected_stamp existing_stamp=""
+    expected_stamp=$(native_crypto_platform_stamp)
+    if [ -f "$NATIVE_CRYPTO_BUILD_STAMP" ]; then
+        existing_stamp=$(cat "$NATIVE_CRYPTO_BUILD_STAMP" 2>/dev/null || true)
+    fi
+    if [ "$existing_stamp" = "$expected_stamp" ] &&
+       [ -f "$LIBSODIUM_STATIC_ARCHIVE" ] &&
+       file "$LIBSODIUM_STATIC_ARCHIVE" 2>/dev/null | grep -q "archive"; then
+        return 0
+    fi
+
+    if [ -f "$LIBSODIUM_STATIC_ARCHIVE" ] || [ -n "$existing_stamp" ]; then
+        echo "[INFO] Native crypto source, toolchain, or platform changed; clearing stale artifacts..."
+    fi
+    if [ -f "$LIBSODIUM_DIR/Makefile" ]; then
+        (
+            cd "$LIBSODIUM_DIR"
+            "$MAKE_CMD" distclean >/dev/null 2>&1 || true
+        )
+    fi
+    rm -f "$LIBSODIUM_STATIC_ARCHIVE" "$NATIVE_CRYPTO_BUILD_STAMP"
+    return 1
+}
+
+write_native_crypto_build_stamp() {
+    mkdir -p "$BUILD_CLIBS"
+    native_crypto_platform_stamp >"$NATIVE_CRYPTO_BUILD_STAMP"
+    echo "[OK] Recorded native crypto build stamp: $(cat "$NATIVE_CRYPTO_BUILD_STAMP")"
+}
+
 build_libsodium_vendored() {
     echo "[BUILD] Building vendored libsodium statically..."
 
@@ -140,15 +171,9 @@ build_libsodium_vendored() {
         exit 1
     fi
 
-    # If the static archive already exists, skip the rebuild. The submodule
-    # commit pin is the source of truth; once built, the artifact is reused.
-    if [ -f "$LIBSODIUM_STATIC_ARCHIVE" ]; then
-        if file "$LIBSODIUM_STATIC_ARCHIVE" | grep -q "archive"; then
-            echo "[OK] Vendored libsodium already built: $LIBSODIUM_STATIC_ARCHIVE"
-            return 0
-        fi
-        echo "[WARNING] Existing libsodium.a is not a valid archive; rebuilding..."
-        rm -f "$LIBSODIUM_STATIC_ARCHIVE"
+    if invalidate_stale_native_crypto_build; then
+        echo "[OK] Vendored libsodium already built for the pinned source and platform: $LIBSODIUM_STATIC_ARCHIVE"
+        return 0
     fi
 
     if ! require_autotools; then
@@ -252,8 +277,9 @@ build_static_libraries() {
 
     NOISE_INCLUDES="-Inoise_xk/include -Inoise_xk/include/karmel -Inoise_xk/include/karmel/minimal"
 
-    $MAKE_CMD CFLAGS="$CFLAGS -I$SODIUM_INCLUDE_ABS $NOISE_INCLUDES" \
+    $MAKE_CMD CFLAGS="$CFLAGS -DHAVE_SODIUM_HKDF=1 -I$SODIUM_INCLUDE_ABS $NOISE_INCLUDES" \
               LDFLAGS="$LDFLAGS -Lnoise_xk" \
+              PKGCONF_MISSING=0 SODIUM_MISSING=0 SODIUM_NEWER_THAN_1_0_18=0 \
               AR=ar ARFLAGS=rcs liboprf.a
 
     # Build libopaque static library
@@ -266,7 +292,8 @@ build_static_libraries() {
     ln -sf ../../../liboprf/src/toprf.h oprf/toprf.h 2>/dev/null || true
     ln -sf ../../../liboprf/src/oprf.h oprf/oprf.h 2>/dev/null || true
 
-    $MAKE_CMD CFLAGS="$CFLAGS -I../../liboprf/src -I. -I$SODIUM_INCLUDE_ABS" \
+    $MAKE_CMD CFLAGS="$CFLAGS -DHAVE_SODIUM_HKDF=1 -I../../liboprf/src -I. -I$SODIUM_INCLUDE_ABS" \
+              SODIUM_NEWER_THAN_1_0_18=0 \
               AR=ar ARFLAGS=rcs libopaque.a
 
     echo "[OK] Static libraries built successfully"
@@ -321,6 +348,7 @@ main() {
     cd "$SCRIPT_START_DIR"
 
     if verify_static_libraries; then
+        write_native_crypto_build_stamp
         echo "[OK] Static library build completed successfully!"
     else
         echo "[X] Static library verification failed"

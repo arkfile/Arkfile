@@ -15,10 +15,11 @@ export BUILD_ROOT="${ARKFILE_BUILD_DIR:-/var/tmp/arkfile-build}"
 # CADDY / DNS-01 (deSEC) BUILD PINS (VPS deploy via xcaddy)
 # =============================================================================
 # github.com/caddy-dns/desec tags start at v1.0.0 (v0.2.x is libdns/desec, not this module).
-# desec v1.1.0 is published against caddy/v2 v2.10.2 -- keep those aligned.
+# deSEC v1.1.0 and Caddy v2.11.4 both resolve the stable libdns v1.1.1 API.
 export XCADDY_VERSION="${XCADDY_VERSION:-v0.4.6}"
-export CADDY_VERSION="${CADDY_VERSION:-v2.10.2}"
+export CADDY_VERSION="${CADDY_VERSION:-v2.11.4}"
 export CADDY_DESEC_MODULE="${CADDY_DESEC_MODULE:-github.com/caddy-dns/desec@v1.1.0}"
+export SYFT_VERSION="${SYFT_VERSION:-v1.48.0}"
 
 # =============================================================================
 # BUILD SUBDIRECTORIES
@@ -58,7 +59,20 @@ export OPRF_C_SOURCE="$LIBOPRF_SRC/oprf.c"
 
 export VENDOR_C_LIBOPAQUE_COMMIT="${VENDOR_C_LIBOPAQUE_COMMIT:-6e9ac92f9a2289679e04b0b0c5fdc307bb3de54e}"
 export VENDOR_C_LIBOPRF_COMMIT="${VENDOR_C_LIBOPRF_COMMIT:-a8c0410c1cfab9e8dddc8c5f6197d4f7226f6228}"
-export VENDOR_C_LIBSODIUM_TAG="${VENDOR_C_LIBSODIUM_TAG:-1.0.20}"
+export VENDOR_C_LIBSODIUM_TAG="${VENDOR_C_LIBSODIUM_TAG:-1.0.22-RELEASE}"
+export VENDOR_C_LIBSODIUM_COMMIT="${VENDOR_C_LIBSODIUM_COMMIT:-77e1ce5d6dee871c49ef211222ba18ef0c486bda}"
+
+export LIBFIDO2_VERSION="${LIBFIDO2_VERSION:-1.17.0}"
+export LIBFIDO2_COMMIT="${LIBFIDO2_COMMIT:-b974e7cf2ee7392134cc12c08b76a068cf250dd8}"
+export LIBCBOR_VERSION="${LIBCBOR_VERSION:-0.14.0}"
+export LIBCBOR_COMMIT="${LIBCBOR_COMMIT:-6730c20ab487c0b4dc5fb3fea918937085355bac}"
+export ZLIB_VERSION="${ZLIB_VERSION:-1.3.2}"
+export ZLIB_COMMIT="${ZLIB_COMMIT:-da607da739fa6047df13e66a2af6b8bec7c2a498}"
+export OPENSSL_VERSION="${OPENSSL_VERSION:-3.5.7}"
+export OPENSSL_COMMIT="${OPENSSL_COMMIT:-8cf17aaeb4599f8af87fefd810b5b5fee90fe69e}"
+export EMSCRIPTEN_VERSION="${EMSCRIPTEN_VERSION:-4.0.23}"
+export LIBSODIUM_JS_VERSION="${LIBSODIUM_JS_VERSION:-0.8.4}"
+export LIBSODIUM_JS_COMMIT="${LIBSODIUM_JS_COMMIT:-2830fcf2ce8cefd3fdc7e1efc9fc1cee1d2d95b7}"
 
 # =============================================================================
 # C LIBRARY PATHS
@@ -71,6 +85,7 @@ export NOISE_XK_A="$LIBOPRF_SRC/noise_xk/liboprf-noiseXK.a"
 export LIBSODIUM_DIR="$VENDOR_C_ROOT/jedisct1/libsodium"
 export LIBSODIUM_INCLUDE="$LIBSODIUM_DIR/src/libsodium/include"
 export LIBSODIUM_A="$LIBSODIUM_DIR/src/libsodium/.libs/libsodium.a"
+export NATIVE_CRYPTO_BUILD_STAMP="$BUILD_CLIBS/native-crypto-build.stamp"
 
 # CLI FIDO2 stack (libfido2 + libcbor + zlib + libcrypto); not linked by the server.
 # Paths are set by init_fido_paths() after detect_build_platform() (per BUILD_PLATFORM).
@@ -276,21 +291,29 @@ resolve_build_version() {
     echo "unknown"
 }
 
-# Short git commit for binaries (override with GIT_COMMIT=...).
+# Short pushed git commit for binaries (override with GIT_COMMIT=...).
+# Use the newest commit shared by HEAD and its upstream tracking branch. This
+# identifies the clean GitHub-backed base of a dirty or locally-ahead checkout
+# without claiming code that exists only locally or only on the remote branch.
 resolve_git_commit() {
-    local commit dirty
+    local commit upstream
     if [ -n "${GIT_COMMIT:-}" ]; then
         echo "$GIT_COMMIT"
         return 0
     fi
+
+    upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+    if [ -n "$upstream" ]; then
+        commit="$(git merge-base HEAD "$upstream" 2>/dev/null || true)"
+        if [ -n "$commit" ]; then
+            git rev-parse --short "$commit"
+            return 0
+        fi
+    fi
+
     commit="$(git rev-parse --short HEAD 2>/dev/null || true)"
     if [ -z "$commit" ]; then
         echo "unknown"
-        return 0
-    fi
-    dirty="$(git status --porcelain 2>/dev/null || true)"
-    if [ -n "$dirty" ]; then
-        echo "${commit}-dirty"
         return 0
     fi
     echo "$commit"
@@ -515,7 +538,7 @@ fido_pkg_config_path() {
 # Write libcrypto.pc so libfido2 finds the vendored archive (not system OpenSSL).
 write_fido_libcrypto_pc() {
     local prefix="$1"
-    local version="${2:-3.0.15}"
+    local version="${2:-$OPENSSL_VERSION}"
 
     mkdir -p "${prefix}/lib/pkgconfig"
     cat >"${prefix}/lib/pkgconfig/libcrypto.pc" <<EOF
@@ -708,27 +731,55 @@ print_native_build_package_install_hint() {
 }
 
 fido_platform_stamp() {
-    local openssl_target
+    local openssl_target compiler_target compiler_version
     detect_build_platform
     if ! openssl_target="$(detect_openssl_configure_target)"; then
         openssl_target="unsupported"
     fi
-    echo "${BUILD_PLATFORM}:${openssl_target}"
+    compiler_target=$(cc -dumpmachine 2>/dev/null || echo unknown)
+    compiler_version=$(cc -dumpfullversion -dumpversion 2>/dev/null || echo unknown)
+    echo "fido-v2:${BUILD_PLATFORM}:${openssl_target}:${compiler_target}:${compiler_version}:static:openssl-${OPENSSL_COMMIT}:libfido2-${LIBFIDO2_COMMIT}:libcbor-${LIBCBOR_COMMIT}:zlib-${ZLIB_COMMIT}"
 }
 
 fido_cache_valid() {
-    if [ ! -f "$FIDO_LIB" ]; then
-        return 1
-    fi
     if [ ! -f "$FIDO_BUILD_STAMP_FILE" ]; then
         return 1
     fi
     if [ "$(cat "$FIDO_BUILD_STAMP_FILE" 2>/dev/null)" != "$(fido_platform_stamp)" ]; then
         return 1
     fi
-    if ! file "$FIDO_LIB" 2>/dev/null | grep -q "archive"; then
-        return 1
-    fi
+    local archive
+    for archive in \
+        "$FIDO_PREFIX/lib/libfido2.a" \
+        "$FIDO_PREFIX/lib/libcbor.a" \
+        "$FIDO_PREFIX/lib/libz.a" \
+        "$FIDO_PREFIX/lib/libcrypto.a"
+    do
+        [ -f "$archive" ] || return 1
+        file "$archive" 2>/dev/null | grep -q "archive" || return 1
+    done
+    return 0
+}
+
+native_crypto_platform_stamp() {
+    detect_build_platform
+    local sodium_commit opaque_commit oprf_commit compiler_target compiler_version
+    sodium_commit=$(git -C "$LIBSODIUM_DIR" rev-parse HEAD 2>/dev/null || echo unknown)
+    opaque_commit=$(git -C "$VENDOR_C_LIBOPAQUE_DIR" rev-parse HEAD 2>/dev/null || echo unknown)
+    oprf_commit=$(git -C "$VENDOR_C_LIBOPRF_DIR" rev-parse HEAD 2>/dev/null || echo unknown)
+    compiler_target=$(cc -dumpmachine 2>/dev/null || echo unknown)
+    compiler_version=$(cc -dumpfullversion -dumpversion 2>/dev/null || echo unknown)
+    echo "native-crypto-v2:${BUILD_PLATFORM}:${compiler_target}:${compiler_version}:static-no-pie-no-pthreads:libsodium-${sodium_commit}:libopaque-${opaque_commit}:liboprf-${oprf_commit}"
+}
+
+native_crypto_cache_valid() {
+    [ -f "$NATIVE_CRYPTO_BUILD_STAMP" ] || return 1
+    [ "$(cat "$NATIVE_CRYPTO_BUILD_STAMP" 2>/dev/null)" = "$(native_crypto_platform_stamp)" ] || return 1
+    local archive
+    for archive in "$LIBOPAQUE_A" "$LIBOPRF_A" "$LIBSODIUM_A"; do
+        [ -f "$archive" ] || return 1
+        file "$archive" 2>/dev/null | grep -q "archive" || return 1
+    done
     return 0
 }
 
@@ -768,6 +819,9 @@ fix_go_ownership() {
         [ -d "vendor" ] && chown -R "$SUDO_USER:$SUDO_USER" vendor/ 2>/dev/null || true
         [ -d "vendor_c" ] && chown -R "$SUDO_USER:$SUDO_USER" vendor_c/ 2>/dev/null || true
         [ -f ".vendor_cache" ] && chown "$SUDO_USER:$SUDO_USER" .vendor_cache 2>/dev/null || true
+        [ -f "bun.lock" ] && chown "$SUDO_USER:$SUDO_USER" bun.lock 2>/dev/null || true
+        [ -d "node_modules" ] && chown -R "$SUDO_USER:$SUDO_USER" node_modules/ 2>/dev/null || true
+        [ -d "client/static/js/node_modules" ] && chown -R "$SUDO_USER:$SUDO_USER" client/static/js/node_modules/ 2>/dev/null || true
         [ -d "$BUILD_ROOT" ] && chown -R "$SUDO_USER:$SUDO_USER" "$BUILD_ROOT/" 2>/dev/null || true
     fi
 }
@@ -870,18 +924,9 @@ clean_build_dir() {
     fi
 }
 
-# Check if C libraries exist and are valid.
-# Also verifies vendored libsodium static archive.
+# Check whether every native C dependency cache matches its source and platform.
 c_libs_exist() {
-    if [ -f "$LIBOPAQUE_A" ] && [ -f "$LIBOPRF_A" ] && [ -f "$LIBSODIUM_A" ]; then
-        # Verify they're actual archive files
-        if file "$LIBOPAQUE_A" | grep -q "archive" && \
-           file "$LIBOPRF_A" | grep -q "archive" && \
-           file "$LIBSODIUM_A" | grep -q "archive"; then
-            return 0
-        fi
-    fi
-    return 1
+    native_crypto_cache_valid && fido_cache_valid
 }
 
 # Check if WASM files exist

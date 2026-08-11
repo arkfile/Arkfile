@@ -16,12 +16,12 @@
   },
   "devDependencies": {
     "@types/zxcvbn": "4.4.5",
-    "bun-types": "1.3.2",
+    "bun-types": "1.3.10",
     "typescript": "5.9.2"
   },
   "dependencies": {
-    "@noble/hashes": "2.0.1",
-    "@simplewebauthn/browser": "13.1.2",
+    "@noble/hashes": "2.3.0",
+    "@simplewebauthn/browser": "13.3.0",
     "zxcvbn": "4.4.2"
   }
 }

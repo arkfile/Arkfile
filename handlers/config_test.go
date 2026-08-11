@@ -90,3 +90,29 @@ func TestGetOpaqueConfig(t *testing.T) {
 		}
 	})
 }
+
+func TestGetVersionIncludesPushedCommit(t *testing.T) {
+	originalVersion := config.Version
+	originalCommit := config.GitCommit
+	config.Version = "v1.2.3"
+	config.GitCommit = "abc1234"
+	t.Cleanup(func() {
+		config.Version = originalVersion
+		config.GitCommit = originalCommit
+	})
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/version", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	if assert.NoError(t, GetVersion(c)) {
+		assert.Equal(t, http.StatusOK, rec.Code)
+		var body map[string]string
+		assert.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+		assert.Equal(t, map[string]string{
+			"version": "v1.2.3",
+			"commit":  "abc1234",
+		}, body)
+	}
+}

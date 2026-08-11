@@ -20,20 +20,17 @@
 # via fido_cgo_extra_libs() in build-config.sh (e.g. -ludev on Linux).
 
 set -e
+set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=build-config.sh
 source "$SCRIPT_DIR/build-config.sh"
 
-LIBFIDO2_VERSION="${LIBFIDO2_VERSION:-1.14.0}"
-LIBCBOR_VERSION="${LIBCBOR_VERSION:-0.11.0}"
-ZLIB_VERSION="${ZLIB_VERSION:-1.3.1}"
-OPENSSL_VERSION="${OPENSSL_VERSION:-3.0.15}"
-
 FIDO_VENDOR="${VENDOR_C_ROOT}/yubico"
 FIDO_SRC="${FIDO_VENDOR}/libfido2"
 CBOR_SRC="${FIDO_VENDOR}/libcbor"
 ZLIB_SRC="${VENDOR_C_ROOT}/madler/zlib"
+ZLIB_BUILD_SOURCE="${BUILD_CLIBS}/zlib-source"
 OPENSSL_SRC="${VENDOR_C_ROOT}/openssl/openssl"
 
 JOBS="${JOBS:-$(get_parallel_jobs)}"
@@ -205,16 +202,53 @@ clone_tag() {
     local url="$1"
     local dest="$2"
     local tag="$3"
-
-    if [ -d "$dest/.git" ] || [ -f "$dest/CMakeLists.txt" ] || [ -f "$dest/configure" ]; then
-        echo "[OK] Source present: $dest"
-        return 0
-    fi
+    local expected_commit="$4"
+    local current_commit target_commit
 
     require_git
+    if [ -d "$dest/.git" ]; then
+        git -C "$dest" fetch --depth 1 origin "refs/tags/${tag}:refs/tags/${tag}" 2>/dev/null || true
+        target_commit=$(git -C "$dest" rev-list -n 1 "$tag" 2>/dev/null || true)
+        current_commit=$(git -C "$dest" rev-parse HEAD 2>/dev/null || true)
+        if [ -z "$target_commit" ]; then
+            echo "[X] Could not resolve pinned tag $tag in $dest"
+            exit 1
+        fi
+        if [ "$target_commit" != "$expected_commit" ]; then
+            echo "[X] Tag $tag resolved to $target_commit; expected $expected_commit"
+            exit 1
+        fi
+        if [ "$current_commit" != "$target_commit" ]; then
+            if [ -n "$(git -C "$dest" status --porcelain 2>/dev/null)" ]; then
+                echo "[X] Refusing to replace modified source tree at $dest"
+                echo "    Expected tag: $tag ($target_commit)"
+                echo "    Current commit: $current_commit"
+                exit 1
+            fi
+            echo "[INFO] Updating $dest to pinned tag $tag..."
+            git -C "$dest" checkout --detach "$target_commit"
+        fi
+        if ! git -C "$dest" diff --quiet HEAD -- .; then
+            echo "[X] Pinned source has local tracked modifications: $dest"
+            exit 1
+        fi
+        echo "[OK] Source pin verified: $dest ($tag @ $target_commit)"
+        return 0
+    fi
+    if [ -e "$dest" ]; then
+        echo "[X] Existing source tree is not a Git clone and cannot be verified: $dest"
+        exit 1
+    fi
+
     echo "[INFO] Cloning $url ($tag) into $dest..."
     mkdir -p "$(dirname "$dest")"
     git clone --depth 1 --branch "$tag" "$url" "$dest"
+    target_commit=$(git -C "$dest" rev-list -n 1 "$tag")
+    current_commit=$(git -C "$dest" rev-parse HEAD)
+    if [ "$target_commit" != "$expected_commit" ] || [ "$current_commit" != "$expected_commit" ]; then
+        echo "[X] Cloned source does not match pinned tag and commit: $tag @ $expected_commit"
+        exit 1
+    fi
 }
 
 # =============================================================================
@@ -233,6 +267,7 @@ invalidate_fido_cache() {
         rm -rf "$FIDO_PREFIX"
     fi
     rm -rf "${BUILD_CLIBS}/zlib-build" \
+           "$ZLIB_BUILD_SOURCE" \
            "${BUILD_CLIBS}/openssl-build" \
            "${BUILD_CLIBS}/libcbor-build" \
            "${BUILD_CLIBS}/libfido2-build"
@@ -255,6 +290,34 @@ ensure_fido_cache_fresh() {
 # Component builds
 # =============================================================================
 
+prepare_zlib_build_source() {
+    require_git
+    if [ -d "$ZLIB_SRC/.git" ]; then
+        git -C "$ZLIB_SRC" fetch --depth 1 origin "refs/tags/v${ZLIB_VERSION}:refs/tags/v${ZLIB_VERSION}" 2>/dev/null || true
+    elif [ -e "$ZLIB_SRC" ]; then
+        echo "[X] Existing zlib source tree is not a Git clone: $ZLIB_SRC"
+        exit 1
+    else
+        echo "[INFO] Cloning zlib v${ZLIB_VERSION} into $ZLIB_SRC..."
+        mkdir -p "$(dirname "$ZLIB_SRC")"
+        git clone --depth 1 --branch "v${ZLIB_VERSION}" "https://github.com/madler/zlib.git" "$ZLIB_SRC"
+    fi
+
+    local target_commit
+    target_commit=$(git -C "$ZLIB_SRC" rev-list -n 1 "v${ZLIB_VERSION}" 2>/dev/null || true)
+    if [ "$target_commit" != "$ZLIB_COMMIT" ]; then
+        echo "[X] zlib tag v${ZLIB_VERSION} resolved to $target_commit; expected $ZLIB_COMMIT"
+        exit 1
+    fi
+
+    rm -rf "$ZLIB_BUILD_SOURCE"
+    mkdir -p "$ZLIB_BUILD_SOURCE"
+    if ! git -C "$ZLIB_SRC" archive "$ZLIB_COMMIT" | tar -x -C "$ZLIB_BUILD_SOURCE"; then
+        echo "[X] Failed to export pinned zlib source commit $ZLIB_COMMIT"
+        exit 1
+    fi
+}
+
 build_zlib() {
     local out="${FIDO_PREFIX}/lib/libz.a"
     if [ ! -f "$out" ]; then
@@ -266,7 +329,7 @@ build_zlib() {
         return 0
     fi
 
-    clone_tag "https://github.com/madler/zlib.git" "$ZLIB_SRC" "v${ZLIB_VERSION}"
+    prepare_zlib_build_source
 
     local build_dir="${BUILD_CLIBS}/zlib-build"
     rm -rf "$build_dir"
@@ -275,7 +338,7 @@ build_zlib() {
     echo "[BUILD] zlib..."
     (
         cd "$build_dir"
-        cmake "$OLDPWD/$ZLIB_SRC" \
+        cmake "$ZLIB_BUILD_SOURCE" \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=OFF \
             -DCMAKE_INSTALL_PREFIX="$FIDO_PREFIX" \
@@ -295,7 +358,7 @@ build_openssl() {
         return 0
     fi
 
-    clone_tag "https://github.com/openssl/openssl.git" "$OPENSSL_SRC" "openssl-${OPENSSL_VERSION}"
+    clone_tag "https://github.com/openssl/openssl.git" "$OPENSSL_SRC" "openssl-${OPENSSL_VERSION}" "$OPENSSL_COMMIT"
 
     local build_dir="${BUILD_CLIBS}/openssl-build"
     rm -rf "$build_dir"
@@ -338,7 +401,7 @@ build_libcbor() {
         return 0
     fi
 
-    clone_tag "https://github.com/PJK/libcbor.git" "$CBOR_SRC" "v${LIBCBOR_VERSION}"
+    clone_tag "https://github.com/PJK/libcbor.git" "$CBOR_SRC" "v${LIBCBOR_VERSION}" "$LIBCBOR_COMMIT"
 
     local build_dir="${BUILD_CLIBS}/libcbor-build"
     rm -rf "$build_dir"
@@ -369,7 +432,7 @@ build_libfido2() {
         return 0
     fi
 
-    clone_tag "https://github.com/Yubico/libfido2.git" "$FIDO_SRC" "${LIBFIDO2_VERSION}"
+    clone_tag "https://github.com/Yubico/libfido2.git" "$FIDO_SRC" "${LIBFIDO2_VERSION}" "$LIBFIDO2_COMMIT"
 
     local build_dir="${BUILD_CLIBS}/libfido2-build"
     rm -rf "$build_dir"

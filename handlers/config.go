@@ -53,5 +53,6 @@ func GetFileTagsConfig(c echo.Context) error {
 func GetVersion(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{
 		"version": config.Version,
+		"commit":  config.GitCommit,
 	})
 }

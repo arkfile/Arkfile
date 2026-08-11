@@ -18,16 +18,17 @@ show_help() {
     cat << EOF2
 Arkfile ${UPDATE_KIND_LABEL} Update Script
 
-Rebuilds Go binaries, TypeScript frontend, and static assets, then redeploys them
-to an existing ${UPDATE_KIND_LABEL_LOWER} deployment without touching data, keys, or configuration.
+Rebuilds Go binaries, TypeScript/WASM frontend assets, and pinned Caddy, then
+redeploys them to an existing ${UPDATE_KIND_LABEL_LOWER} deployment without
+touching data, keys, or secrets.
 
 Usage:
   sudo bash scripts/${UPDATE_SCRIPT_NAME} [OPTIONS]
 
 Options:
-  --force-rebuild-all    Force rebuild of C libraries (libopaque/liboprf) and WASM.
-                         Use this when libopaque or liboprf source has changed.
-                         By default, existing C libraries are reused (fast update).
+  --force-rebuild-all    Delete all cached C libraries before building.
+                         Version/platform stamps otherwise rebuild changed
+                         dependencies automatically. WASM and Caddy always rebuild.
   -h, --help             Show this help message
 
 Requirements:
@@ -207,8 +208,6 @@ echo -e "${CYAN}Step 1: Build${NC}"
 fix_go_ownership
 
 decide_skip_c_libs_for_update
-# Rebuild WASM so no development trace artifact can enter deployment.
-SKIP_C_LIBS=false
 
 # Always do a fresh TypeScript build
 clear_frontend_build_caches
@@ -218,6 +217,14 @@ unset LIBOPAQUE_DEFINES
 
 run_application_build "update-$(date +%Y%m%d-%H%M%S)" --production
 verify_build_tree_artifacts
+if ! build_caddy_binary "$BUILD_BIN/caddy"; then
+    print_status "ERROR" "Caddy build failed"
+    exit 1
+fi
+if ! add_caddy_to_sbom; then
+    print_status "ERROR" "Caddy SBOM generation failed"
+    exit 1
+fi
 print_status "SUCCESS" "Build complete"
 
 echo
@@ -235,6 +242,7 @@ echo -e "${CYAN}Step 3: Backup and deploy binaries and static assets${NC}"
 backup_binaries_before_overwrite "caddy arkfile"
 
 install_binaries_from_build
+install_caddy_binary_from_build
 sync_static_assets_from_build
 
 print_status "INFO" "Deploying updated systemd service files (fail closed on copy failure)..."

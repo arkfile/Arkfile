@@ -200,6 +200,114 @@ run_application_build() {
     fix_go_ownership
 }
 
+build_caddy_binary() {
+    local output_path="$1"
+    local gopath xcaddy_bin
+
+    print_status "INFO" "Installing pinned xcaddy ${XCADDY_VERSION}..."
+    if ! run_as_user "$GO_BINARY" install "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"; then
+        print_status "ERROR" "Failed to install pinned xcaddy"
+        return 1
+    fi
+    gopath=$(run_as_user "$GO_BINARY" env GOPATH 2>/dev/null | tr -d '\r')
+    xcaddy_bin="${gopath}/bin/xcaddy"
+    if [ -z "$gopath" ] || [ ! -x "$xcaddy_bin" ]; then
+        print_status "ERROR" "xcaddy binary not found after installation"
+        return 1
+    fi
+
+    mkdir -p "$(dirname "$output_path")"
+    rm -f "$output_path"
+    print_status "INFO" "Building Caddy ${CADDY_VERSION} with ${CADDY_DESEC_MODULE}..."
+    if ! run_as_user "$xcaddy_bin" build "$CADDY_VERSION" \
+        --with "$CADDY_DESEC_MODULE" \
+        --output "$output_path"; then
+        print_status "ERROR" "Failed to build pinned Caddy with the deSEC module"
+        return 1
+    fi
+    chmod 755 "$output_path"
+    verify_caddy_binary "$output_path"
+}
+
+add_caddy_to_sbom() {
+    local app_sbom="$BUILD_ROOT/sbom.cdx.json"
+    local caddy_sbom="$BUILD_ROOT/sbom.caddy.cdx.json"
+    local merged_sbom="$BUILD_ROOT/sbom.merged.cdx.json"
+    local gopath syft_bin
+
+    [ -f "$app_sbom" ] || {
+        print_status "ERROR" "Application SBOM missing before Caddy augmentation"
+        return 1
+    }
+    gopath=$(run_as_user "$GO_BINARY" env GOPATH 2>/dev/null | tr -d '\r')
+    syft_bin="${gopath}/bin/syft"
+    if [ ! -x "$syft_bin" ]; then
+        print_status "ERROR" "Pinned Syft binary missing before Caddy SBOM generation"
+        return 1
+    fi
+    if ! run_as_user "$syft_bin" "file:$BUILD_BIN/caddy" \
+        --source-name Caddy \
+        --source-version "${CADDY_VERSION#v}" \
+        -o "cyclonedx-json=${caddy_sbom}"; then
+        print_status "ERROR" "Failed to generate Caddy binary SBOM"
+        return 1
+    fi
+    if ! jq -s '
+        .[0].components = (((.[0].components // []) + (.[1].components // [])) |
+            unique_by(."bom-ref" // ((.type // "") + ":" + (.name // "") + ":" + (.version // "")))) |
+        .[0].dependencies = (((.[0].dependencies // []) + (.[1].dependencies // [])) |
+            unique_by(.ref)) |
+        .[0]
+    ' "$app_sbom" "$caddy_sbom" >"$merged_sbom"; then
+        print_status "ERROR" "Failed to merge Caddy components into application SBOM"
+        return 1
+    fi
+    mv "$merged_sbom" "$app_sbom"
+    rm -f "$caddy_sbom"
+    print_status "SUCCESS" "Added Caddy and transitive modules to CycloneDX SBOM"
+}
+
+verify_caddy_binary() {
+    local caddy_binary="$1"
+    local expected_version="${CADDY_VERSION#v}"
+    local desec_package="${CADDY_DESEC_MODULE%@*}"
+    local desec_version="${CADDY_DESEC_MODULE##*@}"
+    local actual_version
+
+    if [ ! -x "$caddy_binary" ]; then
+        print_status "ERROR" "Caddy candidate is not executable: $caddy_binary"
+        return 1
+    fi
+    actual_version=$("$caddy_binary" version 2>/dev/null | awk '{print $1}')
+    if [ "$actual_version" != "v${expected_version}" ]; then
+        print_status "ERROR" "Caddy candidate version is $actual_version; expected v${expected_version}"
+        return 1
+    fi
+    if ! "$caddy_binary" list-modules 2>/dev/null | grep -qx "dns.providers.desec"; then
+        print_status "ERROR" "Caddy candidate does not contain dns.providers.desec"
+        return 1
+    fi
+    if ! "$GO_BINARY" version -m "$caddy_binary" 2>/dev/null |
+        awk -v package="$desec_package" -v version="$desec_version" '
+            $1 == "dep" && $2 == package && $3 == version { found = 1 }
+            END { exit(found ? 0 : 1) }
+        '; then
+        print_status "ERROR" "Caddy candidate does not contain pinned ${CADDY_DESEC_MODULE}"
+        return 1
+    fi
+    print_status "SUCCESS" "Verified Caddy $actual_version with dns.providers.desec"
+}
+
+install_caddy_binary_from_build() {
+    verify_caddy_binary "$BUILD_BIN/caddy"
+    install -m 755 -o root -g root "$BUILD_BIN/caddy" /usr/local/bin/caddy
+    if command -v setcap >/dev/null 2>&1; then
+        setcap cap_net_bind_service=+ep /usr/local/bin/caddy
+    fi
+    verify_caddy_binary /usr/local/bin/caddy
+    print_status "SUCCESS" "Caddy deployed to /usr/local/bin/caddy"
+}
+
 # Verify critical outputs under BUILD_* after a successful build.
 verify_build_tree_artifacts() {
     [ -f "$BUILD_BIN/arkfile" ] || { print_status "ERROR" "arkfile binary missing after build"; exit 1; }
@@ -230,6 +338,12 @@ backup_binaries_before_overwrite() {
     BACKUP_DIR="$ARKFILE_DIR/backups/bin-$(date +%Y%m%d-%H%M%S)"
     mkdir -p "$BACKUP_DIR"
     cp "$ARKFILE_DIR/bin/arkfile" "$ARKFILE_DIR/bin/arkfile-client" "$ARKFILE_DIR/bin/arkfile-admin" "$BACKUP_DIR/" 2>/dev/null || true
+    if [ -x /usr/local/bin/caddy ]; then
+        cp /usr/local/bin/caddy "$BACKUP_DIR/caddy"
+    fi
+    if [ -f /etc/caddy/Caddyfile ]; then
+        cp /etc/caddy/Caddyfile "$BACKUP_DIR/Caddyfile"
+    fi
 
     if systemctl is-active --quiet rqlite 2>/dev/null; then
         print_status "INFO" "Backing up rqlite physical database..."
@@ -256,6 +370,15 @@ backup_binaries_before_overwrite() {
             if [ -d "$BACKUP_DIR" ]; then
                 cp "$BACKUP_DIR"/arkfile* "$ARKFILE_DIR/bin/" 2>/dev/null || true
                 chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/bin"
+                if [ -f "$BACKUP_DIR/caddy" ]; then
+                    install -m 755 -o root -g root "$BACKUP_DIR/caddy" /usr/local/bin/caddy
+                    if command -v setcap >/dev/null 2>&1; then
+                        setcap cap_net_bind_service=+ep /usr/local/bin/caddy 2>/dev/null || true
+                    fi
+                fi
+                if [ -f "$BACKUP_DIR/Caddyfile" ]; then
+                    install -m 644 -o root -g root "$BACKUP_DIR/Caddyfile" /etc/caddy/Caddyfile
+                fi
                 if [ -d "$BACKUP_DIR/rqlite" ]; then
                     systemctl stop rqlite 2>/dev/null || true
                     rm -rf "$ARKFILE_DIR/var/lib/rqlite" 2>/dev/null || true

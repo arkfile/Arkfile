@@ -8,6 +8,6 @@
 	path = vendor_c/jedisct1/libsodium
 	url = https://github.com/jedisct1/libsodium.git
 	# Pin to a stable tag via:
-	#   git -C vendor_c/jedisct1/libsodium checkout 1.0.20
+	#   git -C vendor_c/jedisct1/libsodium checkout 1.0.22-RELEASE
 	# The WASM path uses an independent libsodium pin under
 	# vendor_c/stef/libopaque/js/libsodium.js (see build-libopaque-wasm.sh).

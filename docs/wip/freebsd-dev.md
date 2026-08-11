@@ -167,7 +167,7 @@ In `05-setup-seaweedfs.sh`:
 ### Build and link policy
 
 - Bun: require native `pkg install bun`; fail with FreeBSD-oriented guidance.
-- Emscripten: Linux retains pinned emsdk 3.1.74. FreeBSD selects native `emcc` from `pkg install emscripten`, rejects an unvalidated version, and never invokes emsdk installation. Validate the existing libsodium compatibility patch against the selected FreeBSD version.
+- Emscripten: Linux retains pinned emsdk 4.0.23. FreeBSD selects native `emcc` from `pkg install emscripten`, rejects an unvalidated version, and never invokes emsdk installation. Validate the existing libsodium compatibility patch against the selected FreeBSD version.
 - Server on Linux: retain the current fully static flags and verifier without weakening or broadening accepted dependencies.
 - Server on FreeBSD: statically embed libopaque/liboprf/libsodium, permit evidenced FreeBSD base runtime libraries dynamically, and reject shared crypto or unexpected ports dependencies. Report build metadata accurately (do not emit unconditional `staticLinking: true`).
 - CLI FIDO: continue vendored static crypto/FIDO archives plus evidenced OS runtime libraries. Extend verifier parsing for FreeBSD `ldd` output and its base libraries; reject unexpected `/usr/local/lib` dependencies.

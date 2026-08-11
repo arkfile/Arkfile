@@ -39,8 +39,10 @@ async function populateInstanceInfo(): Promise<void> {
 
     const data = await resp.json();
     const version = data?.version || 'unknown';
+    const commit = data?.commit || 'unknown';
     const hostname = window.location.hostname;
-    const text = `Arkfile Instance: ${hostname} (${version})`;
+    const build = commit === 'unknown' ? version : `${version}, commit ${commit}`;
+    const text = `Arkfile Instance: ${hostname} (${build})`;
     for (const el of elements) {
       el.textContent = text;
     }

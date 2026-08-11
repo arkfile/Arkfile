@@ -191,5 +191,6 @@ playwright/.cache/
 pid/
 *.pid
 *.lock
+!/bun.lock
 core.*
 dump.*

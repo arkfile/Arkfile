@@ -426,55 +426,15 @@ GLOBALEOF
 }
 
 build_and_install_caddy() {
-    # Pins: XCADDY_VERSION, CADDY_VERSION, CADDY_DESEC_MODULE from build-config.sh
-    print_status "INFO" "Installing xcaddy build tool (pinned to ${XCADDY_VERSION})..."
-    if ! run_as_user "$GO_BINARY" install "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"; then
-        print_status "ERROR" "Failed to install xcaddy"
+    if ! build_caddy_binary "$BUILD_BIN/caddy"; then
         exit 1
     fi
-
-    local xcaddy_bin=""
-    if [ -n "$SUDO_USER" ] && [ -x "/home/$SUDO_USER/go/bin/xcaddy" ]; then
-        xcaddy_bin="/home/$SUDO_USER/go/bin/xcaddy"
-    elif [ -x "/root/go/bin/xcaddy" ]; then
-        xcaddy_bin="/root/go/bin/xcaddy"
-    elif command -v xcaddy >/dev/null 2>&1; then
-        xcaddy_bin="$(command -v xcaddy)"
-    else
-        print_status "ERROR" "xcaddy binary not found after installation"
+    if ! add_caddy_to_sbom; then
         exit 1
     fi
-
-    print_status "INFO" "Building Caddy (pinned to ${CADDY_VERSION}) with deSEC module (pinned to ${CADDY_DESEC_MODULE})..."
-    rm -f caddy 2>/dev/null || true
-    if ! run_as_user env PATH="$PATH" "$xcaddy_bin" build "${CADDY_VERSION}" --with "${CADDY_DESEC_MODULE}"; then
-        print_status "ERROR" "Failed to build Caddy"
+    if ! install_caddy_binary_from_build; then
         exit 1
     fi
-
-    install -m 755 caddy /usr/local/bin/caddy
-    rm -f caddy
-
-    # Grant Caddy the capability to bind privileged ports (80, 443) without running as root
-    if command -v setcap >/dev/null 2>&1; then
-        setcap cap_net_bind_service=+ep /usr/local/bin/caddy
-        print_status "SUCCESS" "Granted Caddy cap_net_bind_service capability"
-    else
-        # setcap not available -- install libcap and try again
-        if command -v dnf >/dev/null 2>&1; then
-            dnf install -y libcap 2>/dev/null || true
-        elif command -v apt-get >/dev/null 2>&1; then
-            apt-get install -y libcap2-bin 2>/dev/null || true
-        fi
-        if command -v setcap >/dev/null 2>&1; then
-            setcap cap_net_bind_service=+ep /usr/local/bin/caddy
-            print_status "SUCCESS" "Granted Caddy cap_net_bind_service capability"
-        else
-            print_status "WARNING" "setcap not available; Caddy may not be able to bind port 443 without root"
-        fi
-    fi
-
-    print_status "SUCCESS" "Custom Caddy installed at /usr/local/bin/caddy"
 }
 
 configure_caddy() {
