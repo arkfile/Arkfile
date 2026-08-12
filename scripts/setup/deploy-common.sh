@@ -202,7 +202,7 @@ run_application_build() {
 
 build_caddy_binary() {
     local output_path="$1"
-    local gopath xcaddy_bin
+    local gopath xcaddy_bin go_bin_dir caddy_build_path
 
     print_status "INFO" "Installing pinned xcaddy ${XCADDY_VERSION}..."
     if ! run_as_user "$GO_BINARY" install "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"; then
@@ -218,8 +218,12 @@ build_caddy_binary() {
 
     mkdir -p "$(dirname "$output_path")"
     rm -f "$output_path"
+    # xcaddy launches `go` by name. sudo -u applies a restricted PATH, so add
+    # the directory containing the Go binary found during deploy preflight.
+    go_bin_dir="$(dirname "$GO_BINARY")"
+    caddy_build_path="${go_bin_dir}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     print_status "INFO" "Building Caddy ${CADDY_VERSION} with ${CADDY_DESEC_MODULE}..."
-    if ! run_as_user "$xcaddy_bin" build "$CADDY_VERSION" \
+    if ! run_as_user env "PATH=$caddy_build_path" "$xcaddy_bin" build "$CADDY_VERSION" \
         --with "$CADDY_DESEC_MODULE" \
         --output "$output_path"; then
         print_status "ERROR" "Failed to build pinned Caddy with the deSEC module"
