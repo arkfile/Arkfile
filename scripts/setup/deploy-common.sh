@@ -190,10 +190,15 @@ decide_skip_c_libs_for_update() {
 run_application_build() {
     local version="$1"
     shift
-    export VERSION="$version"
-    export SKIP_C_LIBS="$SKIP_C_LIBS"
     fix_go_ownership
-    if ! run_as_user ./scripts/setup/build.sh --build-only "$@"; then
+    # sudo -u sanitizes the environment. Pass build identity and cache policy
+    # explicitly so build.sh does not fall back to git describe --dirty or
+    # silently rebuild C libraries that the deploy path chose to reuse.
+    if ! run_as_user env \
+        "VERSION=$version" \
+        "GIT_COMMIT=${GIT_COMMIT:-}" \
+        "SKIP_C_LIBS=$SKIP_C_LIBS" \
+        ./scripts/setup/build.sh --build-only "$@"; then
         print_status "ERROR" "Build failed"
         exit 1
     fi
