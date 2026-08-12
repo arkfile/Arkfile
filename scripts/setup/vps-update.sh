@@ -233,6 +233,8 @@ if ! add_caddy_to_sbom; then
 fi
 print_status "SUCCESS" "Build complete"
 
+prepare_update_rollback "caddy arkfile"
+
 echo
 echo -e "${CYAN}Step 2: Stop services (caddy + arkfile)${NC}"
 
@@ -246,7 +248,6 @@ echo
 echo -e "${CYAN}Step 3: Backup and deploy binaries and static assets${NC}"
 
 backup_binaries_before_overwrite "caddy arkfile"
-
 install_binaries_from_build
 install_caddy_binary_from_build
 sync_static_assets_from_build
@@ -342,6 +343,8 @@ if [ "$arkfile_ready" != "true" ]; then
 fi
 print_status "SUCCESS" "Arkfile is ready on localhost:8443"
 
+commit_application_update
+
 print_status "INFO" "Starting Caddy..."
 systemctl start caddy
 caddy_ready=false
@@ -358,6 +361,8 @@ if [ "$caddy_ready" != "true" ]; then
     exit 1
 fi
 print_status "SUCCESS" "Public HTTPS endpoint is ready at https://${DOMAIN}"
+
+commit_update_rollback
 
 echo
 echo -e "${CYAN}Step 5: Health verification${NC}"

@@ -227,6 +227,8 @@ run_application_build "update-$(date +%Y%m%d-%H%M%S)"
 verify_build_tree_artifacts
 print_status "SUCCESS" "Build complete"
 
+prepare_update_rollback "arkfile"
+
 echo
 echo -e "${CYAN}Step 2: Stop arkfile service${NC}"
 
@@ -239,7 +241,6 @@ echo
 echo -e "${CYAN}Step 3: Deploy binaries and static assets${NC}"
 
 backup_binaries_before_overwrite "arkfile"
-
 install_binaries_from_build
 sync_static_assets_from_build
 
@@ -278,6 +279,8 @@ if [ "$arkfile_ready" != "true" ]; then
     exit 1
 fi
 print_status "SUCCESS" "Arkfile is ready on localhost:${TLS_PORT}"
+
+commit_update_rollback
 
 echo
 echo -e "${CYAN}Step 5: Health verification${NC}"

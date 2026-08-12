@@ -1,11 +1,11 @@
 /**
- * Sitewide footer: admin contact (plain text), instance info.
+ * Sitewide footer: admin contact (plain text), server host and commit.
  */
 
 import { fetchAdminContacts } from '../utils/auth.js';
 
 /**
- * Populate Contact Admin spans and instance info in all sitewide footers.
+ * Populate Contact Admin spans and server/commit info in all sitewide footers.
  */
 export async function initSitewideFooters(): Promise<void> {
   void populateAdminContacts();
@@ -33,21 +33,36 @@ async function populateInstanceInfo(): Promise<void> {
   const elements = document.querySelectorAll<HTMLElement>('.footer-instance-info');
   if (elements.length === 0) return;
 
+  const host = window.location.hostname.trim();
+  let commit = '';
+
   try {
     const resp = await fetch('/api/version');
-    if (!resp.ok) return;
-
-    const data = await resp.json();
-    const version = data?.version || 'unknown';
-    const commit = data?.commit || 'unknown';
-    const hostname = window.location.hostname;
-    const build = commit === 'unknown' ? version : `${version}, commit ${commit}`;
-    const text = `Arkfile Instance: ${hostname} (${build})`;
-    for (const el of elements) {
-      el.textContent = text;
+    if (resp.ok) {
+      const data = await resp.json();
+      const raw = typeof data?.commit === 'string' ? data.commit.trim() : '';
+      if (raw !== '' && raw !== 'unknown') {
+        commit = raw;
+      }
     }
   } catch {
     // Cosmetic only
+  }
+
+  const hasCommit = commit !== '';
+  let text = '';
+  if (host && hasCommit) {
+    text = `Arkfile Server: ${host} -- Commit: ${commit}`;
+  } else if (host) {
+    text = `Arkfile Server: ${host}`;
+  } else if (hasCommit) {
+    text = `Commit: ${commit}`;
+  } else {
+    return;
+  }
+
+  for (const el of elements) {
+    el.textContent = text;
   }
 }
 

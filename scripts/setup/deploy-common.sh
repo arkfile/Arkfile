@@ -63,6 +63,10 @@ stop_service_if_running() {
             systemctl kill "$service_name" 2>/dev/null || true
             sleep 2
         }
+        if systemctl is-active --quiet "$service_name" 2>/dev/null; then
+            print_status "ERROR" "$service_name is still active after stop attempts"
+            return 1
+        fi
         print_status "SUCCESS" "$service_name stopped"
     else
         print_status "INFO" "$service_name not running"
@@ -189,7 +193,12 @@ decide_skip_c_libs_for_update() {
 # (pass --production for VPS builds; omit for local).
 run_application_build() {
     local version="$1"
+    local go_bin_dir build_user_path
     shift
+    VERSION="$version"
+    export VERSION
+    go_bin_dir="$(dirname "$GO_BINARY")"
+    build_user_path="${go_bin_dir}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     fix_go_ownership
     # sudo -u sanitizes the environment. Pass build identity and cache policy
     # explicitly so build.sh does not fall back to git describe --dirty or
@@ -198,6 +207,7 @@ run_application_build() {
         "VERSION=$version" \
         "GIT_COMMIT=${GIT_COMMIT:-}" \
         "SKIP_C_LIBS=$SKIP_C_LIBS" \
+        "PATH=$build_user_path" \
         ./scripts/setup/build.sh --build-only "$@"; then
         print_status "ERROR" "Build failed"
         exit 1
@@ -335,74 +345,197 @@ verify_deployed_app_artifacts() {
     [ -f "$ARKFILE_DIR/client/static/js/libopaque.js" ] || { print_status "ERROR" "libopaque.js missing"; exit 1; }
 }
 
-# Backup live binaries (and rqlite data if running), prune to 3 backups, install rollback trap.
+# Restore every artifact overwritten by an update.
+rollback_on_failure() {
+    local exit_code=$?
+    local rollback_failed=false service_name absent_artifact
+    if [ "$exit_code" -eq 0 ]; then
+        return 0
+    fi
+    set +e
+
+    print_status "ERROR" "Update failed with exit code $exit_code! Triggering automatic rollback to previous version..."
+    # shellcheck disable=SC2086
+    systemctl stop $BACKUP_ROLLBACK_SERVICES 2>/dev/null || rollback_failed=true
+    if [ "${BACKUP_COMPLETE:-false}" = "true" ] && [ -d "${BACKUP_DIR:-}" ]; then
+        if [ "${BACKUP_APPLICATION_COMMITTED:-false}" != "true" ]; then
+            cp "$BACKUP_DIR"/arkfile* "$ARKFILE_DIR/bin/" 2>/dev/null || rollback_failed=true
+            chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/bin" || rollback_failed=true
+        fi
+        if [ -f "$BACKUP_DIR/caddy" ]; then
+            install -m 755 -o root -g root "$BACKUP_DIR/caddy" /usr/local/bin/caddy || rollback_failed=true
+            if command -v setcap >/dev/null 2>&1; then
+                setcap cap_net_bind_service=+ep /usr/local/bin/caddy 2>/dev/null || true
+            fi
+        fi
+        if [ -f "$BACKUP_DIR/Caddyfile" ]; then
+            install -m 644 -o root -g root "$BACKUP_DIR/Caddyfile" /etc/caddy/Caddyfile || rollback_failed=true
+        fi
+        if [ "${BACKUP_APPLICATION_COMMITTED:-false}" != "true" ] && [ -d "$BACKUP_DIR/client-static" ]; then
+            rm -rf "$ARKFILE_DIR/client/static" 2>/dev/null || rollback_failed=true
+            mkdir -p "$ARKFILE_DIR/client" || rollback_failed=true
+            cp -a "$BACKUP_DIR/client-static" "$ARKFILE_DIR/client/static" || rollback_failed=true
+            chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/client" || rollback_failed=true
+        fi
+        if [ "${BACKUP_APPLICATION_COMMITTED:-false}" != "true" ] && [ -d "$BACKUP_DIR/database" ]; then
+            rm -rf "$ARKFILE_DIR/database" 2>/dev/null || rollback_failed=true
+            cp -a "$BACKUP_DIR/database" "$ARKFILE_DIR/database" || rollback_failed=true
+            chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/database" || rollback_failed=true
+        fi
+        if [ -d "$BACKUP_DIR/systemd" ]; then
+            if [ "${BACKUP_APPLICATION_COMMITTED:-false}" = "true" ]; then
+                if [ -f "$BACKUP_DIR/systemd/caddy.service" ]; then
+                    cp "$BACKUP_DIR/systemd/caddy.service" /etc/systemd/system/ || rollback_failed=true
+                fi
+            else
+                cp "$BACKUP_DIR/systemd/"*.service /etc/systemd/system/ 2>/dev/null || rollback_failed=true
+            fi
+        fi
+        if [ "${BACKUP_APPLICATION_COMMITTED:-false}" != "true" ] && [ -f "$BACKUP_DIR/deployed-version" ]; then
+            install -m 644 -o "$ARKFILE_USER" -g "$ARKFILE_GROUP" \
+                "$BACKUP_DIR/deployed-version" "$ARKFILE_DIR/etc/deployed-version" || rollback_failed=true
+        fi
+        if [ "${BACKUP_APPLICATION_COMMITTED:-false}" != "true" ] && [ -d "$BACKUP_DIR/rqlite" ]; then
+            systemctl stop rqlite 2>/dev/null || rollback_failed=true
+            rm -rf "$ARKFILE_DIR/var/lib/rqlite" 2>/dev/null || rollback_failed=true
+            cp -a "$BACKUP_DIR/rqlite" "$ARKFILE_DIR/var/lib/rqlite" || rollback_failed=true
+            chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/var/lib/rqlite" || rollback_failed=true
+        fi
+        if [ -f "$BACKUP_DIR/absent-artifacts" ]; then
+            while IFS= read -r absent_artifact; do
+                case "$absent_artifact" in
+                    caddy-binary) rm -f /usr/local/bin/caddy || rollback_failed=true ;;
+                    Caddyfile) rm -f /etc/caddy/Caddyfile || rollback_failed=true ;;
+                    client-static)
+                        [ "${BACKUP_APPLICATION_COMMITTED:-false}" = "true" ] ||
+                            rm -rf "$ARKFILE_DIR/client/static" || rollback_failed=true
+                        ;;
+                    database)
+                        [ "${BACKUP_APPLICATION_COMMITTED:-false}" = "true" ] ||
+                            rm -rf "$ARKFILE_DIR/database" || rollback_failed=true
+                        ;;
+                    deployed-version)
+                        [ "${BACKUP_APPLICATION_COMMITTED:-false}" = "true" ] ||
+                            rm -f "$ARKFILE_DIR/etc/deployed-version" || rollback_failed=true
+                        ;;
+                    systemd-caddy)
+                        rm -f /etc/systemd/system/caddy.service || rollback_failed=true
+                        ;;
+                    systemd-*)
+                        [ "${BACKUP_APPLICATION_COMMITTED:-false}" = "true" ] ||
+                            rm -f "/etc/systemd/system/${absent_artifact#systemd-}.service" || rollback_failed=true
+                        ;;
+                esac
+            done < "$BACKUP_DIR/absent-artifacts"
+        fi
+        systemctl daemon-reload 2>/dev/null || rollback_failed=true
+    fi
+    if [ "${BACKUP_RQLITE_WAS_ACTIVE:-false}" = "true" ]; then
+        systemctl start rqlite 2>/dev/null || rollback_failed=true
+        systemctl is-active --quiet rqlite 2>/dev/null || rollback_failed=true
+    fi
+    for service_name in $BACKUP_ROLLBACK_SERVICES; do
+        systemctl start "$service_name" 2>/dev/null || rollback_failed=true
+        systemctl is-active --quiet "$service_name" 2>/dev/null || rollback_failed=true
+    done
+    if [ "$rollback_failed" = "true" ]; then
+        print_status "ERROR" "Rollback was incomplete; inspect service status and restore from $BACKUP_DIR manually"
+    else
+        print_status "SUCCESS" "Rollback complete"
+    fi
+    exit "$exit_code"
+}
+
+# Arm rollback before stopping any service. If a failure occurs before the
+# backup is complete, the trap still restarts the services without restoring
+# partial artifacts.
+prepare_update_rollback() {
+    BACKUP_ROLLBACK_SERVICES="${1:-arkfile}"
+    BACKUP_DIR="$ARKFILE_DIR/backups/bin-$(date +%Y%m%d-%H%M%S)"
+    BACKUP_RQLITE_WAS_ACTIVE=false
+    BACKUP_COMPLETE=false
+    BACKUP_APPLICATION_COMMITTED=false
+    trap 'rollback_on_failure' EXIT
+}
+
+# Commit the application and database while retaining Caddy-only rollback.
+commit_application_update() {
+    BACKUP_APPLICATION_COMMITTED=true
+    print_status "SUCCESS" "Updated application reached database commit point"
+}
+
+# End the automatic rollback window once the public endpoint is healthy.
+commit_update_rollback() {
+    trap - EXIT
+    print_status "SUCCESS" "Updated application reached rollback commit point"
+}
+
+# Backup every live artifact an update overwrites and install the rollback trap.
 # Arg 1: space-separated systemd units to stop/start on rollback (e.g. "arkfile" or "caddy arkfile").
 backup_binaries_before_overwrite() {
     local rollback_services="${1:-arkfile}"
+    local service_file
 
     if [ ! -x "$ARKFILE_DIR/bin/arkfile" ]; then
-        return 0
+        print_status "ERROR" "Cannot back up existing deployment: $ARKFILE_DIR/bin/arkfile is missing"
+        return 1
     fi
 
-    BACKUP_DIR="$ARKFILE_DIR/backups/bin-$(date +%Y%m%d-%H%M%S)"
+    if [ -z "${BACKUP_DIR:-}" ]; then
+        prepare_update_rollback "$rollback_services"
+    fi
+
     mkdir -p "$BACKUP_DIR"
-    cp "$ARKFILE_DIR/bin/arkfile" "$ARKFILE_DIR/bin/arkfile-client" "$ARKFILE_DIR/bin/arkfile-admin" "$BACKUP_DIR/" 2>/dev/null || true
+    : > "$BACKUP_DIR/absent-artifacts"
+    cp "$ARKFILE_DIR/bin/arkfile" "$ARKFILE_DIR/bin/arkfile-client" "$ARKFILE_DIR/bin/arkfile-admin" "$BACKUP_DIR/"
     if [ -x /usr/local/bin/caddy ]; then
         cp /usr/local/bin/caddy "$BACKUP_DIR/caddy"
+    else
+        echo "caddy-binary" >> "$BACKUP_DIR/absent-artifacts"
     fi
     if [ -f /etc/caddy/Caddyfile ]; then
         cp /etc/caddy/Caddyfile "$BACKUP_DIR/Caddyfile"
+    else
+        echo "Caddyfile" >> "$BACKUP_DIR/absent-artifacts"
+    fi
+    if [ -d "$ARKFILE_DIR/client/static" ]; then
+        cp -a "$ARKFILE_DIR/client/static" "$BACKUP_DIR/client-static"
+    else
+        echo "client-static" >> "$BACKUP_DIR/absent-artifacts"
+    fi
+    if [ -d "$ARKFILE_DIR/database" ]; then
+        cp -a "$ARKFILE_DIR/database" "$BACKUP_DIR/database"
+    else
+        echo "database" >> "$BACKUP_DIR/absent-artifacts"
+    fi
+    mkdir -p "$BACKUP_DIR/systemd"
+    for service_file in arkfile caddy rqlite seaweedfs; do
+        if [ -f "/etc/systemd/system/${service_file}.service" ]; then
+            cp "/etc/systemd/system/${service_file}.service" "$BACKUP_DIR/systemd/"
+        else
+            echo "systemd-${service_file}" >> "$BACKUP_DIR/absent-artifacts"
+        fi
+    done
+    if [ -f "$ARKFILE_DIR/etc/deployed-version" ]; then
+        cp "$ARKFILE_DIR/etc/deployed-version" "$BACKUP_DIR/deployed-version"
+    else
+        echo "deployed-version" >> "$BACKUP_DIR/absent-artifacts"
     fi
 
     if systemctl is-active --quiet rqlite 2>/dev/null; then
+        BACKUP_RQLITE_WAS_ACTIVE=true
         print_status "INFO" "Backing up rqlite physical database..."
-        systemctl stop rqlite || { print_status "WARNING" "Failed to stop rqlite for backup; continuing anyway"; }
+        systemctl stop rqlite
         if [ -d "$ARKFILE_DIR/var/lib/rqlite" ]; then
-            cp -r "$ARKFILE_DIR/var/lib/rqlite" "$BACKUP_DIR/"
+            cp -a "$ARKFILE_DIR/var/lib/rqlite" "$BACKUP_DIR/rqlite"
         fi
-        systemctl start rqlite || { print_status "ERROR" "Failed to restart rqlite after backup"; exit 1; }
+        systemctl start rqlite
         print_status "SUCCESS" "rqlite physical database backed up"
     fi
 
     chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/backups"
+    BACKUP_COMPLETE=true
     print_status "SUCCESS" "Current version backed up to $BACKUP_DIR"
-
-    # Globals so the EXIT trap can see them after this function returns.
-    BACKUP_ROLLBACK_SERVICES="$rollback_services"
-
-    rollback_on_failure() {
-        local exit_code=$?
-        if [ $exit_code -ne 0 ]; then
-            print_status "ERROR" "Update failed with exit code $exit_code! Triggering automatic rollback to previous version..."
-            # shellcheck disable=SC2086
-            systemctl stop $BACKUP_ROLLBACK_SERVICES 2>/dev/null || true
-            if [ -d "$BACKUP_DIR" ]; then
-                cp "$BACKUP_DIR"/arkfile* "$ARKFILE_DIR/bin/" 2>/dev/null || true
-                chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/bin"
-                if [ -f "$BACKUP_DIR/caddy" ]; then
-                    install -m 755 -o root -g root "$BACKUP_DIR/caddy" /usr/local/bin/caddy
-                    if command -v setcap >/dev/null 2>&1; then
-                        setcap cap_net_bind_service=+ep /usr/local/bin/caddy 2>/dev/null || true
-                    fi
-                fi
-                if [ -f "$BACKUP_DIR/Caddyfile" ]; then
-                    install -m 644 -o root -g root "$BACKUP_DIR/Caddyfile" /etc/caddy/Caddyfile
-                fi
-                if [ -d "$BACKUP_DIR/rqlite" ]; then
-                    systemctl stop rqlite 2>/dev/null || true
-                    rm -rf "$ARKFILE_DIR/var/lib/rqlite" 2>/dev/null || true
-                    cp -r "$BACKUP_DIR/rqlite" "$ARKFILE_DIR/var/lib/rqlite"
-                    chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/var/lib/rqlite"
-                    systemctl start rqlite 2>/dev/null || true
-                fi
-            fi
-            # shellcheck disable=SC2086
-            systemctl start $BACKUP_ROLLBACK_SERVICES 2>/dev/null || true
-            print_status "SUCCESS" "Rollback complete"
-            exit "$exit_code"
-        fi
-    }
-    trap 'rollback_on_failure' EXIT
 
     local backup_count
     backup_count=$(ls -1d "$ARKFILE_DIR/backups/bin-"* 2>/dev/null | wc -l)
