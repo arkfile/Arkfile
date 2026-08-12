@@ -95,6 +95,26 @@ require_emsdk_python() {
     return 1
 }
 
+# emsdk_env.sh clears EMSDK_PYTHON. Preserve the validated interpreter and
+# explicitly set _EM_PY, which Emscripten's emcc/em++ launchers honor instead
+# of resolving the host's potentially older `python3`.
+load_emsdk_environment() {
+    local selected_python="${EMSDK_PYTHON:-}"
+
+    if ! python_meets_emsdk_min "$selected_python"; then
+        print_status "ERROR" "Selected emsdk Python is missing or too old: $selected_python"
+        return 1
+    fi
+    if ! source ./emsdk_env.sh; then
+        print_status "ERROR" "Failed to load emsdk environment"
+        return 1
+    fi
+
+    export EMSDK_PYTHON="$selected_python"
+    export _EM_PY="$selected_python"
+    [ -d "$HOME/.bun/bin" ] && export PATH="$HOME/.bun/bin:$PATH"
+}
+
 # Install Emscripten via emsdk (local installation - no sudo needed)
 install_emscripten_emsdk() {
     print_status "INFO" "Installing Emscripten $EMSCRIPTEN_VERSION via emsdk..."
@@ -126,7 +146,10 @@ install_emscripten_emsdk() {
         CURRENT_VERSION=$(./emsdk list 2>/dev/null | grep -E "^\s*\*" | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1 || echo "")
         if [ "$CURRENT_VERSION" = "$EMSCRIPTEN_VERSION" ]; then
             print_status "INFO" "Emscripten $EMSCRIPTEN_VERSION already installed and active"
-            source ./emsdk_env.sh 2>/dev/null || true
+            if ! load_emsdk_environment; then
+                cd ../..
+                return 1
+            fi
             cd ../..
             return 0
         else
@@ -152,9 +175,10 @@ install_emscripten_emsdk() {
     # Source the environment
     print_status "INFO" "Loading Emscripten environment..."
     if [ -f "./emsdk_env.sh" ]; then
-        source ./emsdk_env.sh
-        # Restore bun to PATH (emsdk clobbers user paths)
-        [ -d "$HOME/.bun/bin" ] && export PATH="$HOME/.bun/bin:$PATH"
+        if ! load_emsdk_environment; then
+            cd ../..
+            return 1
+        fi
     else
         print_status "ERROR" "emsdk_env.sh not found"
         cd ../..
@@ -185,9 +209,10 @@ ensure_emscripten() {
     if [ -f "vendor/emsdk/emsdk_env.sh" ]; then
         print_status "INFO" "Found local emsdk installation, loading environment..."
         cd vendor/emsdk
-        source ./emsdk_env.sh
-        # Restore bun to PATH (emsdk clobbers user paths)
-        [ -d "$HOME/.bun/bin" ] && export PATH="$HOME/.bun/bin:$PATH"
+        if ! load_emsdk_environment; then
+            cd ../..
+            return 1
+        fi
         cd ../..
         
         if command -v emcc >/dev/null 2>&1; then
