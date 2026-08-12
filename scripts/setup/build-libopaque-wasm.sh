@@ -382,6 +382,28 @@ prepare_libsodium_js_for_build() {
     fi
 }
 
+validate_wasm_runtime() {
+    local artifact="$LIBOPAQUE_JS_DIR/dist/libopaque.debug.js"
+    local harness="$REPO_ROOT/scripts/testing/opaque-wasm-interop-harness.js"
+
+    if ! command -v bun >/dev/null 2>&1; then
+        print_status "ERROR" "Bun is required to validate the libopaque WASM runtime"
+        return 1
+    fi
+    if [ ! -f "$harness" ]; then
+        print_status "ERROR" "OPAQUE WASM runtime harness is missing: $harness"
+        return 1
+    fi
+
+    print_status "INFO" "Validating libopaque WASM memory access..."
+    if ! printf '%s' '{"operation":"registration_request","password":"wasm runtime validation password"}' |
+        bun "$harness" "$artifact" >/dev/null; then
+        print_status "ERROR" "libopaque WASM runtime validation failed"
+        return 1
+    fi
+    print_status "SUCCESS" "libopaque WASM runtime validation passed"
+}
+
 # Build the WASM library
 build_wasm_library() {
     # Change to the libopaque.js directory
@@ -416,6 +438,7 @@ build_wasm_library() {
     # WASM-compatible CFLAGS - same as upstream but without -march=native
     # The $(SODIUMDIR), $(LIBOPRFHOME), and $(DEFINES) are expanded by make
     WASM_LIBOPAQUE_CFLAGS='-I$(SODIUMDIR)/include -I$(LIBOPRFHOME) -Wall -O2 -g -fno-stack-protector -D_FORTIFY_SOURCE=2 -DHAVE_SODIUM_HKDF=1 -fasynchronous-unwind-tables -fpic -Werror=format-security -Werror=implicit-function-declaration -ftrapv $(DEFINES)'
+    WASM_LIBOPAQUE_LDFLAGS='-g -L$(SODIUMDIR)/.libs -lsodium'
     
     # Step 1: Build libopaque.so with emcc (WASM shared library)
     # This is CRITICAL - we must build libopaque with emcc, not use the native libopaque.a from ../src/
@@ -424,7 +447,8 @@ build_wasm_library() {
     print_status "INFO" "  DEFINES=$BUILD_DEFINES"
     
     if ! make LIBOPRFHOME="$LIBOPRFHOME_PATH" DEFINES="$BUILD_DEFINES" \
-        LIBOPAQUE_CFLAGS="$WASM_LIBOPAQUE_CFLAGS" SODIUM_NEWER_THAN_1_0_18=0 libopaque; then
+        LIBOPAQUE_CFLAGS="$WASM_LIBOPAQUE_CFLAGS" LIBOPAQUE_LDFLAGS="$WASM_LIBOPAQUE_LDFLAGS" \
+        SODIUM_NEWER_THAN_1_0_18=0 libopaque; then
         print_status "ERROR" "Failed to build libopaque.so (WASM shared library)"
         exit 1
     fi
@@ -443,11 +467,15 @@ build_wasm_library() {
     
     # LDFLAGS must use -L. to link against the local libopaque.so we just built with emcc
     # The upstream Makefile has -L../src which would link against native x86 libopaque.a
-    WASM_LDFLAGS='-L. -lopaque -Wl,-z,defs -Wl,-z,relro -Wl,-z,noexecstack'
+    WASM_LDFLAGS='-L. -lopaque'
+    # Emscripten 4.0.7+ no longer exposes memory views on Module by default.
+    # libopaque's wrapper reads and writes WASM memory through Module.HEAPU8.
+    WASM_EXPORTED_RUNTIME_METHODS='"cwrap", "getValue", "setValue", "stringToUTF8", "UTF8ToString", "HEAPU8"'
     
     if ! make LIBOPRFHOME="$LIBOPRFHOME_PATH" DEFINES="$BUILD_DEFINES" \
         LIBOPAQUE_CFLAGS="$WASM_LIBOPAQUE_CFLAGS" SODIUM_NEWER_THAN_1_0_18=0 \
-        LDFLAGS="$WASM_LDFLAGS" libopaquejs; then
+        LDFLAGS="$WASM_LDFLAGS" EXPORTED_RUNTIME_METHODS="$WASM_EXPORTED_RUNTIME_METHODS" \
+        libopaquejs; then
         print_status "ERROR" "Failed to build libopaque.js"
         exit 1
     fi
@@ -460,6 +488,10 @@ build_wasm_library() {
     
     if [ ! -f "dist/libopaque.debug.js" ]; then
         print_status "ERROR" "Build succeeded but dist/libopaque.debug.js not found"
+        exit 1
+    fi
+
+    if ! validate_wasm_runtime; then
         exit 1
     fi
     
