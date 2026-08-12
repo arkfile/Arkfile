@@ -651,6 +651,69 @@ emsdk_python_package_name() {
     esac
 }
 
+# Linux package providing libatomic.so.1 for emsdk's prebuilt Binaryen tools.
+emsdk_libatomic_package_name() {
+    case "$(detect_package_os_family)" in
+        debian) echo "libatomic1" ;;
+        rhel)   echo "libatomic" ;;
+        suse)   echo "libatomic1" ;;
+        alpine) echo "libatomic" ;;
+        arch)   echo "gcc-libs" ;;
+        *)      echo "libatomic runtime" ;;
+    esac
+}
+
+# Return 0 when the dynamic loader can find libatomic.so.1. Non-Linux emsdk
+# distributions have different runtime dependencies and are checked by running
+# the pinned wasm-opt binary in build-libopaque-wasm.sh.
+emsdk_libatomic_available() {
+    local compiler libatomic_path
+
+    [ "$(uname -s)" = "Linux" ] || return 0
+
+    for compiler in cc gcc; do
+        if ! command -v "$compiler" >/dev/null 2>&1; then
+            continue
+        fi
+        libatomic_path=$("$compiler" -print-file-name=libatomic.so.1 2>/dev/null || true)
+        if [ -n "$libatomic_path" ] &&
+           [ "$libatomic_path" != "libatomic.so.1" ] &&
+           [ -r "$libatomic_path" ]; then
+            return 0
+        fi
+    done
+
+    if command -v ldconfig >/dev/null 2>&1 &&
+       ldconfig -p 2>/dev/null | grep -q 'libatomic\.so\.1'; then
+        return 0
+    fi
+    return 1
+}
+
+print_emsdk_libatomic_install_hint() {
+    echo "    Emscripten's Binaryen tools require the libatomic.so.1 runtime on Linux."
+    case "$(detect_package_os_family)" in
+        debian)
+            echo "      Debian/Ubuntu/Devuan: apt install -y libatomic1"
+            ;;
+        rhel)
+            echo "      RHEL/Alma/Rocky/Fedora: dnf install -y libatomic"
+            ;;
+        suse)
+            echo "      openSUSE/SLES: zypper install -y libatomic1"
+            ;;
+        alpine)
+            echo "      Alpine: apk add --no-cache libatomic"
+            ;;
+        arch)
+            echo "      Arch: pacman -S --needed gcc-libs"
+            ;;
+        *)
+            echo "      Install the package that provides libatomic.so.1."
+            ;;
+    esac
+}
+
 print_emsdk_python_install_hint() {
     echo "    Python ${EMSDK_MIN_PYTHON_MAJOR}.${EMSDK_MIN_PYTHON_MINOR}+ is required for emsdk (libopaque WASM)."
     case "$(detect_package_os_family)" in
@@ -678,17 +741,18 @@ print_emsdk_python_install_hint() {
 
 print_native_build_deps_hint() {
     echo "    FIDO/CLI build host packages (vendored libfido2 stack):"
-    echo "      Debian/Ubuntu: apt install -y build-essential cmake pkg-config perl git libudev-dev autoconf automake libtool python3"
-    echo "      Devuan 6:      apt install -y build-essential cmake pkg-config perl git autoconf automake libtool python3"
+    echo "      Debian/Ubuntu: apt install -y build-essential cmake pkg-config perl git libudev-dev autoconf automake libtool python3 libatomic1"
+    echo "      Devuan 6:      apt install -y build-essential cmake pkg-config perl git autoconf automake libtool python3 libatomic1"
     echo "                    plus libudev-dev or libeudev-dev / eudev (udev package set varies by release)"
-    echo "      Alpine:        apk add --no-cache build-base cmake pkgconf-dev perl git linux-headers eudev-dev python3"
-    echo "      RHEL/Alma/Rocky/Fedora: dnf install -y gcc gcc-c++ make cmake pkgconf perl git systemd-devel autoconf automake libtool python3.11"
-    echo "      openSUSE/SLES: zypper install -y gcc gcc-c++ make cmake pkg-config perl git libudev-devel autoconf automake libtool python3"
-    echo "      Arch:          pacman -S --needed base-devel cmake pkgconf perl git systemd python"
+    echo "      Alpine:        apk add --no-cache build-base cmake pkgconf-dev perl git linux-headers eudev-dev python3 libatomic"
+    echo "      RHEL/Alma/Rocky/Fedora: dnf install -y gcc gcc-c++ make cmake pkgconf perl git systemd-devel autoconf automake libtool python3.11 libatomic"
+    echo "      openSUSE/SLES: zypper install -y gcc gcc-c++ make cmake pkg-config perl git libudev-devel autoconf automake libtool python3 libatomic1"
+    echo "      Arch:          pacman -S --needed base-devel cmake pkgconf perl git systemd python gcc-libs"
     echo "      FreeBSD:       pkg install cmake gmake perl5 git pkgconf python3"
     echo "      OpenBSD:       pkg_add cmake gmake perl git python3"
     echo "    Linux CLI runtime (USB security keys): libudev/eudev userland (usually already installed)."
     print_emsdk_python_install_hint
+    print_emsdk_libatomic_install_hint
 }
 
 # Group A standalone arkfile-client build deps (no TypeScript / WASM / emsdk).
@@ -705,22 +769,22 @@ print_client_build_deps_hint() {
 print_native_build_package_install_hint() {
     case "$(detect_package_os_family)" in
         debian)
-            echo "  Install with: sudo apt install -y build-essential cmake pkg-config perl git libudev-dev autoconf automake libtool python3"
+            echo "  Install with: sudo apt install -y build-essential cmake pkg-config perl git libudev-dev autoconf automake libtool python3 libatomic1"
             if is_devuan_host; then
                 echo "  Devuan note: if libudev-dev is unavailable, install libeudev-dev (or the eudev development package for your release)."
             fi
             ;;
         rhel)
-            echo "  Install with: sudo dnf install -y gcc gcc-c++ make cmake pkgconf perl git systemd-devel autoconf automake libtool python3.11"
+            echo "  Install with: sudo dnf install -y gcc gcc-c++ make cmake pkgconf perl git systemd-devel autoconf automake libtool python3.11 libatomic"
             ;;
         suse)
-            echo "  Install with: sudo zypper install -y gcc gcc-c++ make cmake pkg-config perl git libudev-devel autoconf automake libtool python3"
+            echo "  Install with: sudo zypper install -y gcc gcc-c++ make cmake pkg-config perl git libudev-devel autoconf automake libtool python3 libatomic1"
             ;;
         alpine)
-            echo "  Install with: sudo apk add --no-cache build-base cmake pkgconf-dev perl git linux-headers eudev-dev python3"
+            echo "  Install with: sudo apk add --no-cache build-base cmake pkgconf-dev perl git linux-headers eudev-dev python3 libatomic"
             ;;
         arch)
-            echo "  Install with: sudo pacman -S --needed base-devel cmake pkgconf perl git systemd python"
+            echo "  Install with: sudo pacman -S --needed base-devel cmake pkgconf perl git systemd python gcc-libs"
             ;;
         *)
             print_native_build_deps_hint
@@ -728,6 +792,7 @@ print_native_build_package_install_hint() {
             ;;
     esac
     print_emsdk_python_install_hint
+    print_emsdk_libatomic_install_hint
 }
 
 fido_platform_stamp() {

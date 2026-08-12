@@ -350,6 +350,11 @@ if [ "$(uname -s)" = "Linux" ] && ! pkg-config --exists libudev 2>/dev/null; the
     MISSING_DEPS="$MISSING_DEPS $(fido_udev_dev_package_name)"
 fi
 
+# The prebuilt Binaryen tools installed by emsdk require libatomic.so.1.
+if ! emsdk_libatomic_available; then
+    MISSING_DEPS="$MISSING_DEPS $(emsdk_libatomic_package_name)"
+fi
+
 # Check bun
 if ! command -v bun >/dev/null 2>&1; then
     MISSING_DEPS="$MISSING_DEPS bun"

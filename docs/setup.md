@@ -286,7 +286,7 @@ sudo apt update && sudo apt install -y \
   curl wget git build-essential pkg-config cmake perl python3 \
   autoconf automake libtool \
   sqlite3 openssl ca-certificates \
-  libudev-dev tar gzip
+  libudev-dev libatomic1 tar gzip
 
 # RHEL 9 / AlmaLinux 9 / Rocky Linux 9
 # Note: system python3 is 3.9; emsdk needs Python 3.10+ so install python3.11
@@ -294,21 +294,21 @@ sudo dnf install -y \
   curl wget git gcc gcc-c++ make cmake pkgconf perl python3.11 \
   autoconf automake libtool \
   sqlite openssl ca-certificates \
-  systemd-devel tar gzip
+  systemd-devel libatomic tar gzip
 
 # Fedora (python3 is already 3.10+)
 sudo dnf install -y \
   curl wget git gcc gcc-c++ make cmake pkgconf perl python3 \
   autoconf automake libtool \
   sqlite openssl ca-certificates \
-  systemd-devel tar gzip
+  systemd-devel libatomic tar gzip
 
 # Alpine Linux
 sudo apk add --no-cache \
   curl wget git gcc musl-dev make cmake pkgconf-dev perl python3 \
   autoconf automake libtool \
   sqlite openssl ca-certificates \
-  eudev-dev linux-headers tar gzip
+  eudev-dev libatomic linux-headers tar gzip
 ```
 
 libsodium is **vendored** under `vendor_c/jedisct1/libsodium` and built statically by `scripts/setup/build-libopaque.sh`. Do not install host `libsodium-dev` / `libsodium-devel` for Arkfile builds; a system shared libsodium can incorrectly end up as a dynamic CLI dependency when pkg-config is involved. Autotools (`autoconf`, `automake`, `libtool`) are required to build the vendored libsodium archive.
@@ -340,6 +340,7 @@ sudo bash scripts/setup/build-client.sh
 - Building the browser OPAQUE WASM module installs Emscripten via `vendor/emsdk`, which requires **Python 3.10 or newer**.
 - Deploy and build scripts call `ensure_emsdk_python` (in `scripts/setup/build-config.sh`), which prefers `python3.13` .. `python3.10`, then a new-enough `python3`, and exports `EMSDK_PYTHON` for emsdk.
 - On RHEL/Alma/Rocky 9, install `python3.11` (or newer). The default `/usr/bin/python3` (3.9) is not sufficient.
+- On Linux, emsdk's prebuilt Binaryen tools require `libatomic.so.1` (`libatomic1` on Debian/Ubuntu/Devuan and openSUSE/SLES, `libatomic` on RHEL/Alma/Rocky/Fedora and Alpine, or `gcc-libs` on Arch). Build scripts also execute the pinned `wasm-opt` before compiling libsodium so loader incompatibilities fail early.
 
 **Development Dependencies (Optional):**
 For development and TypeScript compilation, install additional dependencies:

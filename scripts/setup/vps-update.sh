@@ -176,6 +176,12 @@ if ! ensure_emsdk_python; then
 fi
 print_status "INFO" "emsdk Python: $EMSDK_PYTHON ($("$EMSDK_PYTHON" --version 2>&1))"
 
+if ! emsdk_libatomic_available; then
+    print_status "ERROR" "libatomic.so.1 is required by emsdk's Binaryen tools"
+    print_emsdk_libatomic_install_hint
+    exit 1
+fi
+
 echo
 echo -e "${BLUE}${BANNER_TITLE}${NC}"
 echo

@@ -264,6 +264,27 @@ ensure_emscripten() {
     return 1
 }
 
+# Run the actual Binaryen optimizer before starting the long libsodium build.
+# Package checks alone cannot detect loader or emsdk archive incompatibilities.
+verify_binaryen_runtime() {
+    local wasm_opt output
+
+    if ! wasm_opt="$(command -v wasm-opt 2>/dev/null)" || [ ! -x "$wasm_opt" ]; then
+        print_status "ERROR" "wasm-opt was not found in the active Emscripten environment"
+        return 1
+    fi
+    if ! output="$("$wasm_opt" --version 2>&1)"; then
+        print_status "ERROR" "Emscripten Binaryen runtime check failed: $wasm_opt"
+        echo "$output" >&2
+        if echo "$output" | grep -q 'libatomic\.so\.1'; then
+            print_emsdk_libatomic_install_hint
+        fi
+        return 1
+    fi
+
+    print_status "SUCCESS" "Binaryen runtime verified: $output"
+}
+
 # Prepare exact, clean WASM sources without changing vendor_c.
 prepare_wasm_source() {
     local opaque_commit
@@ -567,6 +588,10 @@ main() {
     
     # Ensure Emscripten is available (install if needed - no sudo)
     if ! ensure_emscripten; then
+        exit 1
+    fi
+
+    if ! verify_binaryen_runtime; then
         exit 1
     fi
     

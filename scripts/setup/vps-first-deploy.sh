@@ -811,6 +811,11 @@ if [ "$(uname -s)" = "Linux" ] && ! pkg-config --exists libudev 2>/dev/null; the
     MISSING_DEPS="$MISSING_DEPS $(fido_udev_dev_package_name)"
 fi
 
+# The prebuilt Binaryen tools installed by emsdk require libatomic.so.1.
+if ! emsdk_libatomic_available; then
+    MISSING_DEPS="$MISSING_DEPS $(emsdk_libatomic_package_name)"
+fi
+
 # emsdk (libopaque WASM) needs Python 3.10+; Alma/RHEL 9 python3 is 3.9.
 if ! ensure_emsdk_python; then
     MISSING_DEPS="$MISSING_DEPS $(emsdk_python_package_name)"
