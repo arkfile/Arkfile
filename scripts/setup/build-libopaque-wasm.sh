@@ -269,7 +269,13 @@ ensure_emscripten() {
 verify_binaryen_runtime() {
     local wasm_opt output
 
-    if ! wasm_opt="$(command -v wasm-opt 2>/dev/null)" || [ ! -x "$wasm_opt" ]; then
+    wasm_opt=""
+    if [ -n "${EMSDK:-}" ] && [ -x "$EMSDK/upstream/bin/wasm-opt" ]; then
+        wasm_opt="$EMSDK/upstream/bin/wasm-opt"
+    else
+        wasm_opt="$(command -v wasm-opt 2>/dev/null || true)"
+    fi
+    if [ -z "$wasm_opt" ] || [ ! -x "$wasm_opt" ]; then
         print_status "ERROR" "wasm-opt was not found in the active Emscripten environment"
         return 1
     fi
