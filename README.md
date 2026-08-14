@@ -6,19 +6,19 @@
 
 Arkfile is an open-source service that lets you store and share files while keeping them private.
 
-Before any file leaves your computer it is **encrypted**, so the Arkfile server never sees your data.
+Before a file leaves your computer it is **encrypted**. The Arkfile server stores ciphertext, not file contents, filenames, or your password. It does see operational fields it needs to run the service, such as username, encrypted size, and chunk layout. Details are in `docs/security.md` and `docs/privacy.md`.
 
-Because of this privacy-first design, only you – and anyone with whom you choose to share – can access and open your files.
+Because of this privacy-first design, only you and anyone with whom you choose to share can decrypt and open your files.
 
 ## Why People Use It
 
-1. **Privacy-first** – files are encrypted on your device.  
-2. **Share safely** – you can create sharing links with share passwords for friends or co-workers without giving them your main password.
-3. **Multi-factor security** – Time-based One-Time Passwords (TOTP authentication) or Hardware Security Keys (Yubikey, Nitrokey) are used to provide two-factor protection for all accounts.
-4. **Pick your storage** – use the built-in SeaweedFS server for single-node or self-hosted cluster deployments, or point Arkfile at Amazon S3, Backblaze B2, Wasabi, Vultr Object Storage, and other S3-compatible storage back-ends.
-5. **Runs anywhere** – one binary, no external database. (Arkfile uses the lightweight rqlite engine under the hood.)  
-6. **Offline backup & recovery** – export encrypted `.arkbackup` bundles and decrypt them offline with `arkfile-client`, no server needed.
-7. **Open source** – anyone can inspect or improve the code.
+1. **Privacy-first** -- files are encrypted on your device.
+2. **Share safely** -- you can create sharing links with share passwords for friends or co-workers without giving them your main password.
+3. **Multi-factor security** -- Time-based One-Time Passwords (TOTP) or hardware security keys (YubiKey, Nitrokey) provide two-factor protection for all accounts.
+4. **Pick your storage** -- use the built-in SeaweedFS server for single-node or self-hosted cluster deployments, or point Arkfile at Amazon S3, Backblaze B2, Wasabi, Vultr Object Storage, and other S3-compatible storage back-ends.
+5. **Small footprint** -- the Arkfile app is one binary. It talks to rqlite as a separate lightweight database process, and to SeaweedFS or another S3-compatible store for objects. You do not need Postgres or MySQL.
+6. **Offline backup and recovery** -- export encrypted `.arkbackup` bundles and decrypt them offline with `arkfile-client`, no server needed.
+7. **Open source** -- anyone can inspect or improve the code.
 
 ## Who Uses Arkfile
 
@@ -53,21 +53,21 @@ The script will:
 
 ## Key Concepts (Glossary)
 
-- **Privacy-First:** The server never learns your files or passwords because everything is encrypted before upload.
+- **Privacy-First:** The server cannot decrypt your files or learn your passwords. File contents, filenames, and passwords are encrypted or proven on the client before they would otherwise reach the server. Operational metadata such as username and encrypted size is visible to the server by design.
 - **Encryption (AES-256-GCM):** A modern algorithm that scrambles data and checks its integrity at the same time.
-- **OPAQUE:** A password authentication protocol where the server never sees your password in any form, with built-in validation to ensure strong password security.
-- **TOTP:** Time-based One-Time Password - generates temporary codes on your phone for extra security.
-- **rqlite:** A small database that keeps data in sync across nodes without extra setup.
+- **OPAQUE:** A password-authenticated key exchange. An authentic client proves it knows the password without putting that password in the protocol messages. Password length and character-class rules are separate. They live in `crypto/password-requirements.json` and are enforced on the client and server.
+- **TOTP:** Time-based One-Time Password. Generates temporary codes on your phone as one of the required second-factor options.
+- **rqlite:** A small database process that keeps data in sync across nodes. Arkfile talks to it over the local network. It is not embedded inside the Arkfile binary.
 - **SeaweedFS:** An open-source S3-compatible storage server that works as a single node or in a cluster.
-- **S3-type Storage Backends:** Any number of redundant data backup solutions that use erasure coding to ensure extremely high availability of your data.
+- **S3-type Storage Backends:** Object stores Arkfile can use for encrypted blobs (SeaweedFS, Amazon S3, Backblaze B2, Wasabi, and others). Durability features such as erasure coding belong to the storage provider, not to Arkfile.
 
 ## Need More Details?
 
-* **User FAQ** - see `docs/user-faq.md`
-* **Deployment & Ops Guide** – see `docs/setup.md`  
-* **API Reference** – see `docs/api.md`  
-* **Security Architecture** – see `docs/security.md`
-* **Privacy** - see `docs/privacy.md`
+* **User FAQ** -- see `docs/user-faq.md`
+* **Deployment and Ops Guide** -- see `docs/setup.md`
+* **API Reference** -- see `docs/api.md`
+* **Security Architecture** -- see `docs/security.md`
+* **Privacy** -- see `docs/privacy.md`
 
 ---
 

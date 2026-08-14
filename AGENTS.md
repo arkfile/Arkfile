@@ -142,7 +142,7 @@ When designing features, weigh these personas from low to high adversary pressur
 
 **Professional archive (medium).** Needs encrypted metadata, MFA, revocable shares with expiry/download limits; threats include storage subpoena and curious admins.
 
-**Cross-border records (medium).** Minimize identity (username-only, optional email); may use Tor with TOTP; threats include device loss and jurisdiction mismatch; large files on constrained mobile RAM must work.
+**Cross-border records (medium).** Minimize identity (username-only, optional encrypted contact info); MFA is required, and Tor Browser users should enroll TOTP because stock Tor disables WebAuthn; threats include device loss and jurisdiction mismatch; large files on constrained mobile RAM must work.
 
 **Insider preservation and disclosure (high).** Compartmentalization via custom file passwords; selective share without recipient accounts; threats include employer monitoring and coerced account access. Custom passwords limit blast radius.
 

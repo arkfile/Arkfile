@@ -16,7 +16,7 @@ This document provides a comprehensive overview of Arkfile's security architectu
 6. [Security Operations](#security-operations)
 7. [Monitoring and Alerting](#monitoring-and-alerting)
 8. [Incident Response](#incident-response)
-10. [Threat Detection](#threat-detection)
+9. [Threat Detection](#threat-detection)
 
 ## Architecture Overview
 
@@ -72,12 +72,12 @@ Cryptographic domain separation prevents authentication outputs from serving as 
 Arkfile implements multiple layers of security:
 
 1. **Transport Layer**: TLS 1.3 encryption for all communications
-2. **Authentication**: OPAQUE password-authenticated key exchange (PAKE) with optional TOTP multi-factor authentication
+2. **Authentication**: OPAQUE password-authenticated key exchange (PAKE) with required multi-factor authentication (TOTP and/or a hardware security key)
 3. **File Encryption**: AES-256-GCM with independent key derivation and multi-key support
 4. **Key Management**: Secure key generation, storage, and rotation
 5. **Access Control**: Role-based access with JWT token validation
 6. **Client-Side Security**: TypeScript-based architecture with WebAssembly cryptographic operations
-7. **Audit Logging**: Comprehensive security event tracking
+7. **Security Events**: Structured event records in the `security_events` table (not a complete alerting system)
 
 ### Cryptographic Domain Separation
 
@@ -153,10 +153,11 @@ The file encryption system uses secure key generation combined with AES-256-GCM 
 - Sharing does not reveal the account or custom file password and does not duplicate the encrypted file payload
 
 **Sharing Mechanism:**
-- Independent passwords for each share
+- Independent passwords for each share (required, not optional)
 - Expiration date controls
-- Password hints for recipients
+- Optional download-count limits
 - Revocable share links
+- Custom-password hints are owner-only Account Key ciphertext. They are never placed in share envelopes. Recipients see filename, size, and hash only after they decrypt the envelope with the share password.
 
 ## Authentication System
 
@@ -197,9 +198,9 @@ Arkfile implements OPAQUE (Oblivious Pseudorandom Functions for Key Exchange), a
 
 **Resistance Properties:** OPAQUE is designed to prevent a stolen server authentication record from becoming an ordinary password hash that can be tested offline. Its guarantees depend on the authentic protocol implementation and its assumptions; they do not protect passwords entered into a replaced browser client or make a fully compromised running host harmless.
 
-### Multi-Factor Authentication (TOTP)
+### Multi-Factor Authentication
 
-Arkfile provides TOTP-based multi-factor authentication as an additional security layer beyond OPAQUE. When enabled, users must complete both OPAQUE authentication and provide a valid TOTP code to access their accounts.
+Arkfile requires a second factor for every account. After OPAQUE authentication, the user must complete one enrolled factor before receiving a full access token. Each user may enroll up to two methods: one authenticator app (TOTP) and one hardware security key (WebAuthn). At login the client presents the enrolled methods and the user completes one of them.
 
 **TOTP Security Features:**
 - RFC 6238 compliant implementation using HMAC-SHA1
@@ -209,7 +210,7 @@ Arkfile provides TOTP-based multi-factor authentication as an additional securit
 - Shared per-user failure lockout across TOTP and backup-code verification
 
 **Authentication Flow Enhancement:**
-When MFA is enabled, the OPAQUE login process returns a temporary token instead of full access credentials. This temporary token permits only MFA verification operations and expires after 10 minutes if unused. Upon successful MFA verification, the system issues full access and refresh tokens for normal operation.
+The OPAQUE login process returns a temporary token instead of full access credentials. This temporary token permits only MFA verification operations and expires after 10 minutes if unused. Upon successful MFA verification, the system issues full access and refresh tokens for normal operation. New accounts remain in `requires_mfa_setup` until enrollment completes.
 
 **Backup Code Recovery (two paths):**
 The system generates cryptographically secure backup codes during MFA setup. Each backup code is a 10-character alphanumeric string (~59.5 bits of entropy) hashed with Argon2id and stored single-use. Used backup codes are immediately invalidated and logged.
@@ -273,30 +274,27 @@ Parallelism is set to 1 because the client-side key derivation runs in a browser
 
 ### JWT Token System
 
-ArkFile implements a **Netflix/Spotify-style authentication model** with enhanced security and performance characteristics:
+Arkfile issues short-lived JWT access tokens after OPAQUE plus MFA. Tokens should be sent as `Authorization: Bearer` or via the session cookies the browser clients use.
 
 **Token Architecture:**
-- **30-minute access tokens**: Short-lived tokens for enhanced security
-- **Automatic refresh at 25 minutes**: Proactive token renewal before expiration
-- **Lazy revocation checking**: Revocation only checked during token refresh for optimal performance
-- **Security-critical revocation**: Immediate revocation for critical security scenarios
-- **Go/WASM client implementation**: High-performance client-side token management
+- **30-minute access tokens**: Short-lived tokens for API access
+- **Automatic refresh at 25 minutes**: Clients renew before expiration
+- **Revocation on authenticated requests**: `TokenRevocationMiddleware` checks every authenticated request against the per-token (`revoked_tokens`) list and the per-user `user_jwt_revocations` row
+- **User-wide cache**: The per-user revocation timestamp may be cached in-process for up to 30 seconds to avoid a database read on every request. `InvalidateUserRevocationCache` clears that entry when a revocation is written on the same process. A second process could see a stale "not revoked" result for up to that cache TTL
 - Secure storage with HttpOnly, Secure, SameSite=Strict cookies
 
 **Session Security:**
-- **Performance optimized**: Normal requests don't check revocation for maximum speed
-- **Enhanced refresh cycle**: 30-minute token lifecycle with 25-minute refresh intervals
-- Stateless and scalable token validation
+- Logout, `revoke-all`, admin force-logout, and refresh-token reuse write `user_jwt_revocations` so existing access tokens fail on the next checked request
+- Per-JTI revocation is stored in `revoked_tokens` and consulted on each authenticated request
+- A stolen access token that is never revoked remains valid until it expires (up to 30 minutes)
 - Cryptographically independent from file encryption
 - Session keys derived from OPAQUE authentication
-- Distributed deployment support
 
 **Token Lifecycle Management:**
-1. **Initial Authentication**: 30-minute token issued after OPAQUE authentication
-2. **Automatic Refresh**: Client automatically refreshes token at 25-minute mark
-3. **Lazy Revocation**: Revocation checking only performed during refresh operations
-4. **Performance Optimization**: Normal API requests skip revocation checks for speed
-5. **Security Edge Cases**: Critical revocations processed immediately when required
+1. **Initial Authentication**: A 30-minute access token is issued after OPAQUE and MFA
+2. **Automatic Refresh**: The client refreshes at about 25 minutes if the refresh token is still valid
+3. **Revocation**: Authenticated routes reject revoked JTIs and JWTs issued before a user-wide revocation timestamp
+4. **Unaffected theft**: If the owner does not revoke, a stolen cookie or Bearer token works until expiry, then fails if the refresh token was also revoked
 
 ### Access Control and Rate Limiting
 
@@ -307,10 +305,10 @@ ArkFile implements a **Netflix/Spotify-style authentication model** with enhance
 - Comprehensive rate limiting across all endpoints
 
 **Rate Limiting Features:**
-- Progressive penalty system with exponential backoff (30s → 60s → 2min → 4min → 8min → 15min → 30min cap)
+- Progressive penalty system with exponential backoff (30s, 60s, 2min, 4min, 8min, 15min, 30min cap)
 - Brute force attack prevention with EntityID-based privacy protection
 - Anonymous request tracking without storing IP addresses
-- Advanced pattern detection for abuse mitigation
+- Share-enumeration guards on public share endpoints
 
 ## Infrastructure Security
 
@@ -326,7 +324,7 @@ ArkFile implements a **Netflix/Spotify-style authentication model** with enhance
 - TLS encryption for all communications
 - Strong cipher suites and security headers
 - Distributed rqlite database with TLS
-- Authentication required for all operations
+- Owner and admin APIs require authentication. Public share envelope, ticket, and chunk routes are unauthenticated by design
 
 ### Key Management Infrastructure
 
@@ -339,16 +337,15 @@ Root Security
 ```
 
 **Storage Security:**
-- Hardware security module (HSM) ready architecture
-- Secure key generation and storage
-- Automated key rotation capabilities
-- Encrypted filesystem storage with proper permissions
+- Server keys live in `/opt/arkfile/etc/keys/` and in the `system_keys` table wrapped by `ARKFILE_MASTER_KEY`
+- The user-secret master is a filesystem file (`user-secret-master.bin`) with 0400 permissions, `mlock`, and `MADV_DONTDUMP`
+- Key rotation is implemented for JWT signing keys, the envelope master, the user-secret master, and OPAQUE server keys (the last via guided user re-registration)
+- Arkfile does not integrate with a hardware security module (HSM) or cloud KMS. An external HSM would move trust from the operator filesystem to a vendor, which fights the self-hosted model. A later feature that would still fit is optional TPM sealing of `user-secret-master.bin` so a stolen disk image does not yield that key in the clear
 
 **Backup and Recovery:**
-- Secure backup procedures for critical keys
-- Disaster recovery mechanisms
-- Key integrity verification
-- Strict access controls for backup materials
+- Operators are responsible for backing up key files, `secrets.env`, and rqlite data using their own procedures
+- Arkfile ships rotation runbooks (`scripts/maintenance/`) but not a complete disaster-recovery product
+- Key files use 600/700 permissions owned by the `arkfile` user
 
 ## Security Operations
 
@@ -590,7 +587,8 @@ The features below describe on-disk logging and in-app event tracking only.
 - Data access patterns
 
 **Audit Log Retention:**
-- Security Events: 90 days minimum
+Retention is an operator policy, not an automated Arkfile job. Suggested starting points if you keep `security_events` and journald yourself:
+- Security Events: 90 days
 - Authentication Logs: 1 year
 - Key Management: 7 years
 - Emergency Procedures: Permanent
@@ -610,6 +608,8 @@ rqlite -H localhost:4001 \
 ```
 
 ## Threat Detection
+
+The queries below are examples an operator can run by hand. Arkfile does not ship a detector that runs them on a schedule.
 
 ### Attack Pattern Recognition
 
@@ -649,106 +649,13 @@ rqlite -H localhost:4001 \
    HAVING file_accesses > 100;"
 ```
 
-### Automated Threat Response
+The SQL examples above are queries an operator can run by hand against `security_events`. Arkfile does not ship a threat-detection daemon, a dashboard, or automatic blocking beyond the in-app rate limiter.
 
-**Dynamic Rate Limiting:**
-```bash
-# Adaptive rate limiting based on threat level
-THREAT_LEVEL=$(rqlite -H localhost:4001 \
-  "SELECT CASE 
-     WHEN count(*) > 100 THEN 'HIGH'
-     WHEN count(*) > 50 THEN 'MEDIUM'
-     ELSE 'LOW'
-   END
-   FROM security_events 
-   WHERE event_type='rate_limit_violation'
-   AND timestamp > datetime('now', '-1 hour')")
+### What Ships Versus Operator Work
 
-# Adjust rate limits based on threat level
-case "$THREAT_LEVEL" in
-    "HIGH")   # Aggressive rate limiting
-        curl -X POST http://localhost:8080/admin/rate-limit \
-          -d '{"requests_per_hour": 10, "burst": 5}' ;;
-    "MEDIUM") # Enhanced rate limiting  
-        curl -X POST http://localhost:8080/admin/rate-limit \
-          -d '{"requests_per_hour": 50, "burst": 10}' ;;
-    "LOW")    # Normal rate limiting
-        curl -X POST http://localhost:8080/admin/rate-limit \
-          -d '{"requests_per_hour": 100, "burst": 20}' ;;
-esac
-```
+Rate limiting with EntityID keys and progressive backoff is implemented in the application. Structured security events are written to rqlite. There is no automated alerting pipeline, no adaptive `/admin/rate-limit` API, and no automatic entity-blocking loop. Deployers who want paging or dashboards should wire `security_events` and journald into their own tooling.
 
-**Entity Blocking Automation:**
-```bash
-# Automatic blocking for severe violations
-MALICIOUS_ENTITIES=$(rqlite -H localhost:4001 \
-  "SELECT entity_id FROM security_events 
-   WHERE event_type='opaque_login_failure'
-   AND timestamp > datetime('now', '-1 hour')
-   GROUP BY entity_id
-   HAVING count(*) > 50")
-
-for entity in $MALICIOUS_ENTITIES; do
-    logger "Blocking entity: $entity for excessive failures"
-    # Implement entity blocking logic
-done
-```
-
-### Security Metrics and KPIs
-
-**Key Performance Indicators:**
-- **Authentication Success Rate**: >95%
-- **Average Response Time**: <500ms
-- **False Positive Rate**: <1%
-- **Mean Time to Detection**: <15 minutes
-- **Mean Time to Response**: <2 hours
-
-**Security Dashboard Generation:**
-```bash
-# Generate security metrics report
-DATE=$(date +"%Y-%m-%d")
-echo "Arkfile Security Metrics Report - $DATE"
-
-# Authentication metrics (Last 24 hours)
-echo "Authentication Metrics:"
-rqlite -H localhost:4001 \
-  "SELECT 
-    'Total Attempts: ' || count(*),
-    'Successful: ' || sum(case when event_type='opaque_login_success' then 1 else 0 end),
-    'Success Rate: ' || printf('%.2f%%', 
-      100.0 * sum(case when event_type='opaque_login_success' then 1 else 0 end) / count(*)
-    )
-   FROM security_events 
-   WHERE event_type IN ('opaque_login_success', 'opaque_login_failure')
-   AND timestamp > datetime('now', '-24 hours');"
-
-# Rate limiting metrics
-echo "Rate Limiting Violations:"
-rqlite -H localhost:4001 \
-  "SELECT count(*) FROM security_events 
-   WHERE event_type='rate_limit_violation'
-   AND timestamp > datetime('now', '-24 hours');"
-
-# Top security events (Last 7 days)
-echo "Top Security Events:"
-rqlite -H localhost:4001 \
-  "SELECT event_type, count(*) as occurrences
-   FROM security_events 
-   WHERE timestamp > datetime('now', '-7 days')
-   GROUP BY event_type
-   ORDER BY count(*) DESC
-   LIMIT 10;"
-```
-
-## Example Emergency Contacts and Escalation
-
-### Security Team Contacts
-
-### Escalation Matrix
-1. **Level 1**: System Administrator (Response: 30 minutes)
-2. **Level 2**: Security Team Lead (Response: 2 hours)
-3. **Level 3**: Security Director (Response: 4 hours)
-4. **Level 4**: Executive Team (Response: 24 hours)
+Operators should keep their own emergency contact list. Arkfile does not define a security team or escalation matrix.
 
 ---
 

@@ -4,20 +4,19 @@ This document provides a reference for the Arkfile API. It is intended for devel
 
 ## Authentication
 
-Arkfile implements a **Netflix/Spotify-style authentication model** using JSON Web Tokens (JWT) with enhanced security and performance characteristics. Tokens should be included in the `Authorization` header of your HTTP request with the `Bearer` scheme.
+Arkfile uses JSON Web Tokens (JWT) after OPAQUE authentication and MFA. Tokens should be included in the `Authorization` header of your HTTP request with the `Bearer` scheme.
 
 `Authorization: Bearer <your-jwt-token>`
 
 **Token Lifecycle:**
-- **30-minute access tokens**: Short-lived tokens for enhanced security
-- **Automatic refresh**: Client-side tokens automatically refresh at 25-minute intervals
-- **Lazy revocation checking**: Revocation only checked during token refresh for optimal performance
-- **Security-critical revocation**: Immediate revocation for critical security scenarios
+- **30-minute access tokens**
+- **Automatic refresh**: Clients renew at about 25 minutes
+- **Revocation on authenticated requests**: `TokenRevocationMiddleware` checks the per-token revocation list and the per-user `user_jwt_revocations` row on each authenticated request
+- **User-wide cache**: The per-user revocation timestamp may be cached in-process for up to 30 seconds
 
-Tokens can be obtained by completing the OPAQUE authentication flow via the `/api/opaque/login/*` endpoints. Arkfile uses a username-based authentication system where users create accounts with usernames rather than email addresses, enhancing privacy by reducing personal information stored on servers.
+Tokens can be obtained by completing the OPAQUE authentication flow via the `/api/opaque/login/*` endpoints, then completing MFA. Arkfile uses a username-based authentication system. Accounts are not keyed by email.
 
-**Performance Optimization:**
-Normal API requests do not check token revocation status for maximum speed. Revocation checking is performed only during token refresh operations, providing the optimal balance between security and performance similar to Netflix and Spotify's authentication models.
+A stolen access token that is never revoked remains valid until it expires. Logout, `POST /api/auth/revoke-all`, admin force-logout, and refresh-token reuse write a user-wide revocation so existing access tokens fail on the next checked request.
 
 ## Endpoints
 
@@ -157,7 +156,7 @@ Clients must route from `mfa_methods` (and `pending_mfa_method` for setup). They
 
 #### MFA Authentication Flow
 
-When MFA is enabled for a user account, the authentication process involves two steps:
+Login always involves two steps:
 
 1. **OPAQUE Authentication**: User performs OPAQUE login via `/api/opaque/login/*` (admins use `/api/admin/login/*`). If a second factor is still required, this returns a temporary MFA token plus the MFA-challenge fields above.
 

@@ -4,7 +4,7 @@ This document answers common questions about Arkfile accounts, security, and rec
 
 ## What is Arkfile?
 
-Arkfile is a privacy-first file vault. Your files and file metadata are encrypted in your browser or via the arkfile-client command-line tool before anything is uploaded. The server stores only encrypted data and cannot read your files or learn your password. You log in with a username and password using the OPAQUE protocol, which means your password is never sent to the server during registration or login.
+Arkfile is a privacy-first file vault. Your files and file metadata are encrypted on your computer, in the browser or with the arkfile-client tool, before they are uploaded. The server cannot read your files or learn your password. It does see your username and how large the encrypted file is, which it needs for storage limits. When you register or log in, your password stays on your device. The server never receives it.
 
 ## What is two-factor authentication and why is it required?
 
@@ -24,7 +24,7 @@ Yes. After you enter your username and password, on the second-factor screen cho
 
 ## I lost my backup codes too. Can I still recover my account?
 
-If you have lost both your second factor and all backup codes, you cannot recover access on your own. Arkfile does not offer email-based password or two-factor reset because it does not require or store your email address. Contact the instance administrator using the admin contact details shown on the Arkfile site (Contact Admin in the footer). The admin can verify your identity out-of-band and reset your two-factor authentication so you can log in with your password and enroll a new second factor. This is a last resort and is only appropriate when the admin is confident they are speaking with the real account holder.
+If you have lost both your second factor and all backup codes, you cannot recover access on your own. Arkfile does not offer email-based password or two-factor reset. Accounts are username-based. Email is not required, and any contact methods you optionally save are for the administrator to reach you, not for automated reset. Contact the instance administrator using the admin contact details shown on the Arkfile site (Contact Admin in the footer). The admin can verify your identity out-of-band and reset your two-factor authentication so you can log in with your password and enroll a new second factor. This is a last resort and is only appropriate when the admin is confident they are speaking with the real account holder.
 
 ## Should I save contact information in my account?
 
@@ -40,7 +40,7 @@ Yes. Tor Browser is a supported browser for Arkfile. TOTP-based two-factor authe
 
 ## What is the difference between the web app and arkfile-client?
 
-The web app runs in your browser and handles encryption, upload, download, and account management through the Arkfile website. The arkfile-client tool is a command-line program for the same operations: encrypting and uploading files, downloading and decrypting files, and logging into your account. Both use the same OPAQUE authentication and the same two-factor requirements. Both support TOTP and hardware security keys (e.g. YubiKey or Nitrokey), signing in once with a backup code, and re-enrolling a new second factor with a backup code. The browser uses WebAuthn for hardware keys; arkfile-client uses a direct USB connection. Choose whichever client fits your workflow; the security model is the same.
+The website encrypts, uploads, downloads, and manages your account in your browser. You do not have to install anything. arkfile-client is a program you can install on your computer to do the same jobs from the command line, which is handy for large files and for working without the website. Login and two-factor codes work with both. Your files stay encrypted on your device either way.
 
 ## What are file tags?
 
