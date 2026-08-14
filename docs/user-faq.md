@@ -8,7 +8,7 @@ Arkfile is a privacy-first file vault. Your files and file metadata are encrypte
 
 ## What is two-factor authentication and why is it required?
 
-Every Arkfile account must complete two-factor authentication before gaining full access. After you enter your password, you must also prove possession of a second factor. You may enroll up to two methods: an authenticator app (TOTP) such as Ente Auth, Aegis, or Bitwarden Authenticator, and/or a hardware security key such as a YubiKey or Nitrokey. At sign-in you use one enrolled method; if both are enrolled, you choose which to use. You may optionally label your security key for your own reference; that label is encrypted and visible only to you, not to instance administrators.
+Every Arkfile account must complete two-factor authentication before gaining full access. After you enter your password, you must also prove possession of a second factor. You may enroll up to two methods: an authenticator app (TOTP) such as Ente Auth, Aegis, or Bitwarden Authenticator, and/or a hardware security key such as a YubiKey or Nitrokey. At sign-in you use one enrolled method; if both are enrolled, you choose which to use. You may optionally label your security key for your own reference; that label is encrypted and visible only to you, not to the administrator.
 
 ## What are backup codes and why do they matter?
 
@@ -24,11 +24,11 @@ Yes. After you enter your username and password, on the second-factor screen cho
 
 ## I lost my backup codes too. Can I still recover my account?
 
-If you have lost both your second factor and all backup codes, you cannot recover access on your own. Arkfile does not offer email-based password or two-factor reset. Accounts are username-based. Email is not required, and any contact methods you optionally save are for the administrator to reach you, not for automated reset. Contact the instance administrator using the admin contact details shown on the Arkfile site (Contact Admin in the footer). The admin can verify your identity out-of-band and reset your two-factor authentication so you can log in with your password and enroll a new second factor. This is a last resort and is only appropriate when the admin is confident they are speaking with the real account holder.
+If you have lost both your second factor and all backup codes, you cannot recover access on your own. Arkfile does not offer email-based password or two-factor reset. Accounts are username-based. Email is not required, and any contact methods you optionally save are for the administrator to reach you, not for automated reset. Contact the administrator using the admin contact details shown on the Arkfile site (Contact Admin in the footer). The admin can verify your identity out-of-band and reset your two-factor authentication so you can log in with your password and enroll a new second factor. This is a last resort and is only appropriate when the admin is confident they are speaking with the real account holder.
 
 ## Should I save contact information in my account?
 
-Saving contact information is optional but strongly recommended if you might ever need admin-assisted account recovery. Under Contact Info in the app, you can provide a display name, one or more contact methods such as email or Signal, and optional notes for the administrator. This information is encrypted on the server and readable only by the instance admin. It is used solely for account-related communication. If you request a two-factor reset, the admin will try to verify your identity by matching your request against contact methods you previously saved. Arkfile does not block normal usage if you choose not to provide contact information.
+Saving contact information is optional but strongly recommended if you might ever need admin-assisted account recovery. Under Contact Info in the app, you can provide a display name, one or more contact methods such as email or Signal, and optional notes for the administrator. This information is encrypted on the server and readable only by the administrator. It is used solely for account-related communication. If you request a two-factor reset, the admin will try to verify your identity by matching your request against contact methods you previously saved. Arkfile does not block normal usage if you choose not to provide contact information.
 
 ## I forgot my password. Can the admin reset it?
 
@@ -48,7 +48,7 @@ File tags are optional labels you attach to your own files so you can organize a
 
 ## How do I contact the administrator?
 
-The administrator contact details for your Arkfile instance are shown on the site. Look for Contact Admin in the footer on the homepage or when you are logged in. The exact address or channel depends on how your instance operator configured the deployment. If your account is awaiting approval, admin contact information is also shown on the pending-approval screen.
+The administrator contact details are shown on the site. Look for Contact Admin in the footer on the homepage or when you are logged in. If your account is awaiting approval, admin contact information is also shown on the pending-approval screen.
 
 ## What happens when an admin resets my two-factor authentication?
 
@@ -64,4 +64,4 @@ That depends on your key and how it is configured. Arkfile requests user verific
 
 ## Can I top up my balance with a PayNym or Monero?
 
-Some Arkfile instances publish optional out-of-band payment destinations in the Billing panel and in arkfile-client billing show. If a PayNym or BIP47 payment code is listed, you can open a payment channel in a compatible wallet such as Sparrow or Ashigaru, send Bitcoin, wait for 2 confirmations, then contact the instance administrator with your Arkfile username and the payment transaction ID. If a Monero address is listed, send XMR to that address, wait for 2 confirmations, and likewise message the admin with your username and transaction ID. Credit is applied manually by the operator and is not instant. These options are a convenience alongside any automated top-up methods the instance may also offer.
+Arkfile may list optional out-of-band payment destinations in the Billing panel and in arkfile-client billing show. If a PayNym or BIP47 payment code is listed, you can open a payment channel in a compatible wallet such as Sparrow or Ashigaru, send Bitcoin, wait for 2 confirmations, then contact the administrator with your Arkfile username and the payment transaction ID. If a Monero address is listed, send XMR to that address, wait for 2 confirmations, and likewise message the admin with your username and transaction ID. Credit is applied manually and is not instant. These options are a convenience alongside any automated top-up methods that may also be offered.
