@@ -114,6 +114,7 @@ body {
 .feature-title {
     font-size: 1.3rem;
     font-weight: 600;
+    margin-top: 0;
     margin-bottom: 15px;
     color: var(--salt);
     position: relative;
@@ -123,7 +124,7 @@ body {
     content: '';
     position: absolute;
     left: -15px;
-    top: 50%;
+    top: 0.6em;
     transform: translateY(-50%);
     width: 4px;
     height: 20px;
