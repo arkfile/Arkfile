@@ -50,19 +50,24 @@ async function populateInstanceInfo(): Promise<void> {
   }
 
   const hasCommit = commit !== '';
-  let text = '';
-  if (host && hasCommit) {
-    text = `Arkfile Server: ${host} -- Commit: ${commit}`;
-  } else if (host) {
-    text = `Arkfile Server: ${host}`;
-  } else if (hasCommit) {
-    text = `Commit: ${commit}`;
-  } else {
+  if (!host && !hasCommit) {
     return;
   }
 
   for (const el of elements) {
-    el.textContent = text;
+    el.replaceChildren();
+    if (host) {
+      el.append('Arkfile Server: ');
+      const hostSpan = document.createElement('span');
+      hostSpan.className = 'footer-instance-host';
+      hostSpan.textContent = host;
+      el.append(hostSpan);
+      if (hasCommit) {
+        el.append(` -- Commit: ${commit}`);
+      }
+    } else {
+      el.textContent = `Commit: ${commit}`;
+    }
   }
 }
 

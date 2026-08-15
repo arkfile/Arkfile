@@ -52,10 +52,18 @@ body {
     min-width: 120px;
 }
 
-.hero-btn.primary {
-    background: var(--depth-3);
-    color: var(--current-1);
-    border: 2px solid var(--current-1);
+.hero-btn.primary,
+#get-started-btn {
+    background: var(--biolum);
+    color: var(--depth-1);
+    border: none;
+}
+
+.hero-btn.primary:hover,
+#get-started-btn:hover {
+    background: color-mix(in srgb, var(--biolum) 80%, var(--depth-1));
+    color: var(--depth-1);
+    box-shadow: 0 8px 25px color-mix(in srgb, var(--biolum) 30%, transparent);
 }
 
 .hero-btn.secondary {
@@ -130,17 +138,30 @@ body {
     margin: 0;
 }
 
-.security-highlight {
-    background-color: color-mix(in srgb, var(--coral) 15%, var(--depth-3));
-    border: 2px solid var(--coral);
+.feature-card.card-phosphor {
+    background-color: color-mix(in srgb, var(--phosphor) 15%, var(--depth-3));
+    border: 2px solid var(--phosphor);
 }
 
-.security-highlight:hover {
-    border-color: color-mix(in srgb, var(--coral) 75%, var(--salt));
+.feature-card.card-phosphor:hover {
+    border-color: color-mix(in srgb, var(--phosphor) 75%, var(--salt));
 }
 
-.security-highlight .feature-title::before {
-    background: var(--coral);
+.feature-card.card-phosphor .feature-title::before {
+    background: var(--phosphor);
+}
+
+.feature-card.card-blue {
+    background-color: color-mix(in srgb, var(--current-2) 15%, var(--depth-3));
+    border: 2px solid var(--current-2);
+}
+
+.feature-card.card-blue:hover {
+    border-color: color-mix(in srgb, var(--current-2) 75%, var(--salt));
+}
+
+.feature-card.card-blue .feature-title::before {
+    background: var(--current-2);
 }
 
 .section-title {
@@ -228,6 +249,11 @@ body {
 .footer-instance-info {
     font-size: 0.8em;
     color: var(--foam-2);
+}
+
+.footer-instance-host {
+    color: var(--biolum);
+    font-weight: 600;
 }
 
 .app-footer {
