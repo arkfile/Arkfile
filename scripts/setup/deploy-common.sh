@@ -34,6 +34,34 @@ print_status() {
     esac
 }
 
+print_deploy_phase() {
+    echo
+    echo -e "${CYAN}${1}${NC}"
+}
+
+# Fail closed with an install hint when the host cannot complete a full app build.
+# Call after find_go_binary. Must run before any interactive secret collection.
+check_native_build_host_tools() {
+    local missing
+    missing="$(missing_native_build_host_deps)"
+    if [ -n "$missing" ]; then
+        print_status "ERROR" "Missing required dependencies: ${missing}"
+        print_native_build_package_install_hint
+        case " ${missing} " in
+            *" bun "*)
+                echo "  For bun: curl -fsSL https://bun.sh/install | bash"
+                echo "  sudo does not inherit a per-user ~/.bun/bin; pass PATH or install bun system-wide."
+                ;;
+        esac
+        return 1
+    fi
+    print_status "SUCCESS" "All required build dependencies found"
+    if [ -n "${EMSDK_PYTHON:-}" ]; then
+        print_status "INFO" "emsdk Python: $EMSDK_PYTHON ($("$EMSDK_PYTHON" --version 2>&1))"
+    fi
+    return 0
+}
+
 # Run a command as the original (pre-sudo) user so Go build artifacts are not
 # root-owned. Falls back to running directly when not root.
 # Preserve EMSDK_PYTHON so emsdk keeps the Python 3.10+ interpreter selected

@@ -314,9 +314,9 @@ if ! validate_storage_backend "$STORAGE_BACKEND"; then
     exit 1
 fi
 
-# Step 0: Pre-flight checks
-echo -e "${CYAN}Step 0: Pre-flight checks${NC}"
-echo "=========================="
+# Pre-flight checks
+echo -e "${CYAN}Pre-flight checks${NC}"
+echo "=================="
 
 # Detect Go binary
 echo -e "${YELLOW}Detecting Go installation...${NC}"
@@ -329,52 +329,27 @@ fi
 echo -e "${GREEN}[OK] Found Go at: $GO_BINARY${NC}"
 export GO_BINARY="$GO_BINARY"
 
+if ! host_go_meets_gomod_requirement; then
+    required_go="$(grep '^go [0-9]' go.mod | awk '{print $2}')"
+    print_status "ERROR" "Go at $GO_BINARY is too old (go.mod requires ${required_go})"
+    echo "   Install Go ${required_go} from https://go.dev/dl/ (distro golang packages are usually too old)"
+    exit 1
+fi
+
+print_status "INFO" "Verifying go.mod / vendor consistency (fail-fast)..."
+if ! verify_go_mod_vendor_consistency; then
+    print_status "ERROR" "Go module/vendor mismatch -- fix before starting a long deploy build"
+    exit 1
+fi
+
 # Detect OS family for package-manager hints
 OS_FAMILY=$(detect_package_os_family)
 print_status "INFO" "Detected OS family: $OS_FAMILY"
 
-# Verify system dependencies
 print_status "INFO" "Checking system dependencies..."
-MISSING_DEPS=""
-for cmd in gcc make cmake pkg-config git openssl curl perl; do
-    if ! command -v "$cmd" >/dev/null 2>&1; then
-        MISSING_DEPS="$MISSING_DEPS $cmd"
-    fi
-done
-
-# libsodium is vendored and built statically (vendor_c/jedisct1/libsodium);
-# do not require or link a host libsodium package.
-
-# Linux: libfido2 / CLI MFA build needs libudev development headers
-if [ "$(uname -s)" = "Linux" ] && ! pkg-config --exists libudev 2>/dev/null; then
-    MISSING_DEPS="$MISSING_DEPS $(fido_udev_dev_package_name)"
-fi
-
-# The prebuilt Binaryen tools installed by emsdk require libatomic.so.1.
-if ! emsdk_libatomic_available; then
-    MISSING_DEPS="$MISSING_DEPS $(emsdk_libatomic_package_name)"
-fi
-
-# Check bun
-if ! command -v bun >/dev/null 2>&1; then
-    MISSING_DEPS="$MISSING_DEPS bun"
-fi
-
-# emsdk (libopaque WASM) needs Python 3.10+; Alma/RHEL 9 python3 is 3.9.
-if ! ensure_emsdk_python; then
-    MISSING_DEPS="$MISSING_DEPS $(emsdk_python_package_name)"
-else
-    print_status "INFO" "emsdk Python: $EMSDK_PYTHON ($("$EMSDK_PYTHON" --version 2>&1))"
-fi
-
-if [ -n "$MISSING_DEPS" ]; then
-    print_status "ERROR" "Missing required dependencies:$MISSING_DEPS"
-    echo ""
-    print_native_build_package_install_hint
-    echo "  For bun: curl -fsSL https://bun.sh/install | bash"
+if ! check_native_build_host_tools; then
     exit 1
 fi
-print_status "SUCCESS" "All system dependencies found"
 
 # Guard against re-running on existing deployment
 EXISTING_DEPLOYMENT=false
@@ -437,7 +412,7 @@ fi
 LAN_IP=$(detect_lan_ip)
 print_status "INFO" "Detected LAN IP: $LAN_IP"
 
-# Prompt for storage backend credentials (interactive)
+print_deploy_phase "Storage backend configuration"
 prompt_storage_backend_config
 
 # Display deployment summary
@@ -473,9 +448,7 @@ if [[ $REPLY != "DEPLOY" ]]; then
 fi
 echo ""
 
-# Step 1: System user and directory structure
-echo -e "${CYAN}Step 1: System user and directory structure${NC}"
-echo "============================================="
+print_deploy_phase "System users and directories"
 
 print_status "INFO" "Creating system user and directories..."
 if ! ./scripts/setup/01-setup-users.sh; then
@@ -489,9 +462,7 @@ fi
 print_status "SUCCESS" "System user and directory structure ready"
 echo ""
 
-# Step 2: Build application
-echo -e "${CYAN}Step 2: Building application${NC}"
-echo "============================="
+print_deploy_phase "Build application"
 
 fix_go_ownership
 
@@ -518,9 +489,7 @@ run_application_build "local-$(date +%Y%m%d-%H%M%S)"
 print_status "SUCCESS" "Application build complete"
 echo ""
 
-# Step 3: Deploy build artifacts
-echo -e "${CYAN}Step 3: Deploying build artifacts${NC}"
-echo "=================================="
+print_deploy_phase "Deploy build artifacts"
 
 if ! ./scripts/setup/deploy.sh; then
     print_status "ERROR" "Deployment failed"
@@ -535,9 +504,7 @@ print_status "SUCCESS" "Critical deploy artifacts verified"
 print_status "SUCCESS" "All critical files in place"
 echo ""
 
-# Step 4: Ensure correct ownership
-echo -e "${CYAN}Step 4: Ensuring correct ownership${NC}"
-echo "===================================="
+print_deploy_phase "Set ownership"
 
 chown -R arkfile:arkfile "$ARKFILE_DIR"
 apply_arkfile_key_permissions "$ARKFILE_DIR"
@@ -550,12 +517,10 @@ chmod 775 "$ARKFILE_DIR/var/log"
 print_status "SUCCESS" "Ownership and permissions set"
 echo ""
 
-# Step 5: Generate secrets and configuration
-# NOTE: secrets.env MUST be written before Step 6 (master key generation),
-# because 03-setup-master-key.sh appends ARKFILE_MASTER_KEY to secrets.env.
+# secrets.env MUST be written before master key generation, because
+# 03-setup-master-key.sh appends ARKFILE_MASTER_KEY to secrets.env.
 # Writing secrets.env after would overwrite the master key.
-echo -e "${CYAN}Step 5: Generating local deployment configuration${NC}"
-echo "==================================================="
+print_deploy_phase "Generate local deployment configuration"
 
 RQLITE_PASSWORD="$(openssl rand -hex 16)"
 S3_PASSWORD="$(openssl rand -hex 16)"
@@ -742,10 +707,8 @@ print_status "SUCCESS" "rqlite auth file created"
 print_status "SUCCESS" "All configuration files generated"
 echo ""
 
-# Step 6: Generate cryptographic material
-# Master key appends to secrets.env (written in Step 5). TLS certs are idempotent.
-echo -e "${CYAN}Step 6: Generating cryptographic material${NC}"
-echo "==========================================="
+# Master key appends to secrets.env written above. TLS certs are idempotent.
+print_deploy_phase "Generate cryptographic material"
 
 print_status "INFO" "Generating Master Key..."
 if ! ./scripts/setup/03-setup-master-key.sh; then
@@ -793,9 +756,7 @@ fi
 print_status "SUCCESS" "Cryptographic material ready"
 echo ""
 
-# Step 7: Setup storage services and rqlite
-echo -e "${CYAN}Step 7: Setting up storage services and rqlite${NC}"
-echo "================================================="
+print_deploy_phase "Setup storage services and rqlite"
 
 if [ "$STORAGE_BACKEND" = "local-seaweedfs" ]; then
     print_status "INFO" "Setting up SeaweedFS..."
@@ -822,9 +783,7 @@ fi
 print_status "SUCCESS" "rqlite setup complete"
 echo ""
 
-# Step 8: Start services
-echo -e "${CYAN}Step 8: Starting services${NC}"
-echo "=========================="
+print_deploy_phase "Start services"
 
 systemctl daemon-reload
 
@@ -904,9 +863,7 @@ print_status "SUCCESS" "Arkfile started"
 
 echo ""
 
-# Step 9: Health verification
-echo -e "${CYAN}Step 9: Health verification${NC}"
-echo "============================="
+print_deploy_phase "Health verification"
 
 # Wait for Arkfile readiness
 print_status "INFO" "Waiting for Arkfile to be ready..."
@@ -979,7 +936,7 @@ else
 fi
 echo ""
 
-# Step 10: Output admin bootstrap instructions
+# Admin bootstrap instructions
 echo -e "${GREEN}LOCAL DEPLOYMENT COMPLETE${NC}"
 echo ""
 echo -e "${BLUE}Your Arkfile instance is running at:${NC}"

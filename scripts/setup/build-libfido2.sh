@@ -52,8 +52,15 @@ require_cmake() {
 }
 
 require_perl() {
+    local perl_pkgs
     if ! command -v perl >/dev/null 2>&1; then
         echo "[X] perl is required to configure vendored OpenSSL"
+        print_native_build_deps_hint
+        exit 1
+    fi
+    perl_pkgs="$(missing_openssl_configure_perl_packages)"
+    if [ -n "$perl_pkgs" ]; then
+        echo "[X] OpenSSL Configure needs Perl modules not present on this host (install: ${perl_pkgs})"
         print_native_build_deps_hint
         exit 1
     fi

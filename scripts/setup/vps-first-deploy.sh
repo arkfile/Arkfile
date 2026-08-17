@@ -51,14 +51,14 @@ show_help() {
 Arkfile ${DEPLOY_KIND_LABEL} Deployment Script
 
 Usage:
-  sudo bash scripts/${DEPLOY_SCRIPT_NAME} --domain <domain> --desec-token <token> --admin-username <name> [OPTIONS]
+  sudo bash scripts/${DEPLOY_SCRIPT_NAME} --domain <domain> --admin-username <name> [OPTIONS]
 
 Required:
   --domain <domain>             Real domain name, e.g. ${DOMAIN_EXAMPLE}
-  --desec-token <token>         deSEC API token for DNS-01 challenge
   --admin-username <name>       Admin username for bootstrap
 
 Optional:
+  --desec-token <token>         deSEC API token (discouraged on the CLI; prompted after host checks)
   --admin-contact <email>       Admin contact email shown to pending users (recommended)
   --storage-backend <type>      Storage backend (default: local-seaweedfs)
   --acme-email <email>          ACME email for Let's Encrypt notices
@@ -753,15 +753,6 @@ if [ -z "$DOMAIN" ] || [ -z "$ADMIN_USERNAME" ]; then
     exit 1
 fi
 
-# If deSEC token was not provided via CLI, prompt interactively (avoids process-list exposure)
-if [ -z "$DESEC_TOKEN" ]; then
-    print_status "INFO" "No --desec-token provided on command line (good: CLI args are visible in process listings)"
-    DESEC_TOKEN=$(prompt_secret_nonempty "Enter deSEC API token: ")
-else
-    print_status "WARNING" "deSEC token was passed via CLI argument, which is visible in process listings"
-    print_status "WARNING" "For better security, omit --desec-token and enter it interactively instead"
-fi
-
 if ! validate_username "$ADMIN_USERNAME"; then
     echo
     echo "Username requirements: 10-50 characters, lowercase letters/numbers/underscore/hyphen/period/comma"
@@ -775,8 +766,7 @@ if ! validate_storage_backend "$STORAGE_BACKEND"; then
     exit 1
 fi
 
-echo -e "${CYAN}Step 0: Pre-flight checks${NC}"
-echo "=========================="
+print_deploy_phase "Pre-flight checks"
 
 echo -e "${YELLOW}Detecting Go installation...${NC}"
 if ! GO_BINARY=$(find_go_binary); then
@@ -786,6 +776,13 @@ if ! GO_BINARY=$(find_go_binary); then
 fi
 print_status "SUCCESS" "Found Go at: $GO_BINARY"
 export GO_BINARY="$GO_BINARY"
+
+if ! host_go_meets_gomod_requirement; then
+    required_go="$(grep '^go [0-9]' go.mod | awk '{print $2}')"
+    print_status "ERROR" "Go at $GO_BINARY is too old (go.mod requires ${required_go})"
+    echo "   Install Go ${required_go} from https://go.dev/dl/ (distro golang packages are usually too old)"
+    exit 1
+fi
 
 print_status "INFO" "Verifying go.mod / vendor consistency (fail-fast)..."
 if ! verify_go_mod_vendor_consistency; then
@@ -797,38 +794,11 @@ OS_FAMILY=$(detect_package_os_family)
 print_status "INFO" "Detected OS family: $OS_FAMILY"
 
 print_status "INFO" "Checking system dependencies..."
-MISSING_DEPS=""
-for cmd in gcc make cmake pkg-config git openssl curl bun perl; do
-    if ! command -v "$cmd" >/dev/null 2>&1; then
-        MISSING_DEPS="$MISSING_DEPS $cmd"
-    fi
-done
-
-# libsodium is vendored and built statically (vendor_c/jedisct1/libsodium);
-# do not require or link a host libsodium package.
-
-if [ "$(uname -s)" = "Linux" ] && ! pkg-config --exists libudev 2>/dev/null; then
-    MISSING_DEPS="$MISSING_DEPS $(fido_udev_dev_package_name)"
-fi
-
-# The prebuilt Binaryen tools installed by emsdk require libatomic.so.1.
-if ! emsdk_libatomic_available; then
-    MISSING_DEPS="$MISSING_DEPS $(emsdk_libatomic_package_name)"
-fi
-
-# emsdk (libopaque WASM) needs Python 3.10+; Alma/RHEL 9 python3 is 3.9.
-if ! ensure_emsdk_python; then
-    MISSING_DEPS="$MISSING_DEPS $(emsdk_python_package_name)"
-else
-    print_status "INFO" "emsdk Python: $EMSDK_PYTHON ($("$EMSDK_PYTHON" --version 2>&1))"
-fi
-
-if [ -n "$MISSING_DEPS" ]; then
-    print_status "ERROR" "Missing required dependencies:$MISSING_DEPS"
-    print_native_build_package_install_hint
+if ! check_native_build_host_tools; then
     exit 1
 fi
-print_status "SUCCESS" "All required dependencies found"
+
+print_deploy_phase "DNS and network"
 
 PUBLIC_IP=$(detect_public_ip)
 if [ -z "$PUBLIC_IP" ]; then
@@ -915,9 +885,16 @@ if [ "$EXISTING_DEPLOYMENT" = "true" ]; then
     print_status "SUCCESS" "Existing deployment wiped"
 fi
 
-echo
-echo -e "${CYAN}Step 0a: Storage backend configuration${NC}"
-echo "====================================="
+print_deploy_phase "TLS credentials"
+if [ -z "$DESEC_TOKEN" ]; then
+    print_status "INFO" "No --desec-token on the command line (CLI args are visible in process listings)"
+    DESEC_TOKEN=$(prompt_secret_nonempty "Enter deSEC API token: ")
+else
+    print_status "WARNING" "deSEC token was passed via CLI argument, which is visible in process listings"
+    print_status "WARNING" "For better security, omit --desec-token and enter it interactively instead"
+fi
+
+print_deploy_phase "Storage backend configuration"
 prompt_storage_backend_config
 
 echo
@@ -945,26 +922,18 @@ if [[ $REPLY != "DEPLOY" ]]; then
     exit 0
 fi
 
-echo
-echo -e "${CYAN}Step 1: Firewall configuration${NC}"
-echo "=============================="
+print_deploy_phase "Firewall configuration"
 configure_firewall "$OS_FAMILY"
 
-echo
-echo -e "${CYAN}Step 2: System users and directories${NC}"
-echo "===================================="
+print_deploy_phase "System users and directories"
 ./scripts/setup/01-setup-users.sh
 ./scripts/setup/02-setup-directories.sh
 ensure_caddy_user_and_dirs
 
-echo
-echo -e "${CYAN}Step 3: Build application${NC}"
-echo "========================="
+print_deploy_phase "Build application"
 build_application
 
-echo
-echo -e "${CYAN}Step 4: Deploy build artifacts and set ownership${NC}"
-echo "================================================="
+print_deploy_phase "Deploy build artifacts"
 deploy_build_artifacts
 
 chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR"
@@ -975,9 +944,7 @@ chown "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/var/log"
 chmod 775 "$ARKFILE_DIR/var/log"
 print_status "SUCCESS" "Ownership and permissions set"
 
-echo
-echo -e "${CYAN}Step 5: Write configuration and secrets${NC}"
-echo "======================================="
+print_deploy_phase "Write configuration and secrets"
 RQLITE_PASSWORD="$(openssl rand -hex 16)"
 if [ "$STORAGE_BACKEND" = "local-seaweedfs" ]; then
     S3_PASSWORD="$(openssl rand -hex 16)"
@@ -986,30 +953,20 @@ else
 fi
 write_configuration "$RQLITE_PASSWORD" "$S3_PASSWORD"
 
-echo
-echo -e "${CYAN}Step 6: Generate cryptographic material${NC}"
-echo "========================================"
+print_deploy_phase "Generate cryptographic material"
 generate_crypto_material
 
-echo
-echo -e "${CYAN}Step 7: Setup storage services${NC}"
-echo "=============================="
+print_deploy_phase "Setup storage services"
 setup_storage_services
 
-echo
-echo -e "${CYAN}Step 8: Build and configure Caddy${NC}"
-echo "================================="
+print_deploy_phase "Build and configure Caddy"
 build_and_install_caddy
 configure_caddy
 
-echo
-echo -e "${CYAN}Step 9: Start and verify services${NC}"
-echo "=================================="
+print_deploy_phase "Start and verify services"
 start_and_verify_services
 
-echo
-echo -e "${CYAN}Step 10: Health verification${NC}"
-echo "============================="
+print_deploy_phase "Health verification"
 
 print_status "INFO" "Testing configuration API endpoints..."
 if curl -sk https://localhost:8443/api/config/argon2 2>/dev/null | grep -q '"memoryCostKiB"'; then

@@ -651,6 +651,113 @@ emsdk_python_package_name() {
     esac
 }
 
+# OpenSSL Configure (vendored libcrypto for the CLI FIDO stack) needs these
+# Perl modules. RHEL-family "perl" is a stub and splits them into subpackages.
+openssl_configure_perl_modules() {
+    echo "FindBin File::Compare File::Copy IPC::Cmd Text::Template"
+}
+
+openssl_perl_module_package_name() {
+    local mod="$1"
+    case "$(detect_package_os_family)" in
+        rhel|suse)
+            case "$mod" in
+                FindBin) echo "perl-FindBin" ;;
+                File::Compare) echo "perl-File-Compare" ;;
+                File::Copy) echo "perl-File-Copy" ;;
+                IPC::Cmd) echo "perl-IPC-Cmd" ;;
+                Text::Template) echo "perl-Text-Template" ;;
+                *) echo "perl-core" ;;
+            esac
+            ;;
+        debian)
+            case "$mod" in
+                Text::Template) echo "libtext-template-perl" ;;
+                *) echo "perl" ;;
+            esac
+            ;;
+        alpine)
+            case "$mod" in
+                Text::Template) echo "perl-text-template" ;;
+                *) echo "perl" ;;
+            esac
+            ;;
+        *)
+            echo "perl"
+            ;;
+    esac
+}
+
+# Unique package names for OpenSSL Configure modules that `perl -e 'use ...'` cannot load.
+# Empty when perl is missing (the perl binary check covers that) or all modules are present.
+missing_openssl_configure_perl_packages() {
+    local mod pkg out=""
+    if ! command -v perl >/dev/null 2>&1; then
+        return 0
+    fi
+    for mod in $(openssl_configure_perl_modules); do
+        if perl -e "use ${mod};" >/dev/null 2>&1; then
+            continue
+        fi
+        pkg="$(openssl_perl_module_package_name "$mod")"
+        case " ${out} " in
+            *" ${pkg} "*) ;;
+            *) out="${out} ${pkg}" ;;
+        esac
+    done
+    if [ -n "$out" ]; then
+        echo "${out# }"
+    fi
+}
+
+# Space-separated host tools/packages missing for a full native + WASM + TypeScript build.
+# Does not check Go (callers run find_go_binary first). Side effects: prepends bun to PATH
+# when found, and exports EMSDK_PYTHON when a suitable interpreter exists.
+missing_native_build_host_deps() {
+    local missing="" cmd bun_bin perl_pkgs
+
+    if bun_bin="$(find_bun_binary)"; then
+        export PATH="$(dirname "$bun_bin"):${PATH}"
+    else
+        missing="${missing} bun"
+    fi
+
+    for cmd in gcc make cmake pkg-config git openssl curl perl autoconf automake; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            missing="${missing} ${cmd}"
+        fi
+    done
+
+    if ! command -v g++ >/dev/null 2>&1 && ! command -v c++ >/dev/null 2>&1; then
+        missing="${missing} g++"
+    fi
+
+    if ! command -v libtoolize >/dev/null 2>&1 && ! command -v glibtoolize >/dev/null 2>&1; then
+        missing="${missing} libtoolize"
+    fi
+
+    perl_pkgs="$(missing_openssl_configure_perl_packages)"
+    if [ -n "$perl_pkgs" ]; then
+        missing="${missing} ${perl_pkgs}"
+    fi
+
+    # libsodium is vendored and built statically; do not require a host libsodium package.
+
+    if [ "$(uname -s)" = "Linux" ] && ! pkg-config --exists libudev 2>/dev/null; then
+        missing="${missing} $(fido_udev_dev_package_name)"
+    fi
+
+    if ! emsdk_libatomic_available; then
+        missing="${missing} $(emsdk_libatomic_package_name)"
+    fi
+
+    if ! ensure_emsdk_python; then
+        missing="${missing} $(emsdk_python_package_name)"
+    fi
+
+    echo "${missing# }"
+}
+
 # Linux package providing libatomic.so.1 for emsdk's prebuilt Binaryen tools.
 emsdk_libatomic_package_name() {
     case "$(detect_package_os_family)" in
@@ -741,12 +848,12 @@ print_emsdk_python_install_hint() {
 
 print_native_build_deps_hint() {
     echo "    FIDO/CLI build host packages (vendored libfido2 stack):"
-    echo "      Debian/Ubuntu: apt install -y build-essential cmake pkg-config perl git libudev-dev autoconf automake libtool python3 libatomic1"
-    echo "      Devuan 6:      apt install -y build-essential cmake pkg-config perl git autoconf automake libtool python3 libatomic1"
+    echo "      Debian/Ubuntu: apt install -y build-essential cmake pkg-config perl libtext-template-perl git libudev-dev autoconf automake libtool python3 libatomic1"
+    echo "      Devuan 6:      apt install -y build-essential cmake pkg-config perl libtext-template-perl git autoconf automake libtool python3 libatomic1"
     echo "                    plus libudev-dev or libeudev-dev / eudev (udev package set varies by release)"
-    echo "      Alpine:        apk add --no-cache build-base cmake pkgconf-dev perl git linux-headers eudev-dev python3 libatomic"
-    echo "      RHEL/Alma/Rocky/Fedora: dnf install -y gcc gcc-c++ make cmake pkgconf perl git systemd-devel autoconf automake libtool python3.11 libatomic"
-    echo "      openSUSE/SLES: zypper install -y gcc gcc-c++ make cmake pkg-config perl git libudev-devel autoconf automake libtool python3 libatomic1"
+    echo "      Alpine:        apk add --no-cache build-base cmake pkgconf-dev perl perl-text-template git linux-headers eudev-dev python3 libatomic"
+    echo "      RHEL/Alma/Rocky/Fedora: dnf install -y gcc gcc-c++ make cmake pkgconf perl perl-core perl-FindBin perl-IPC-Cmd perl-File-Compare perl-File-Copy perl-Text-Template git systemd-devel autoconf automake libtool python3.11 libatomic"
+    echo "      openSUSE/SLES: zypper install -y gcc gcc-c++ make cmake pkg-config perl perl-Text-Template git libudev-devel autoconf automake libtool python3 libatomic1"
     echo "      Arch:          pacman -S --needed base-devel cmake pkgconf perl git systemd python gcc-libs"
     echo "      FreeBSD:       pkg install cmake gmake perl5 git pkgconf python3"
     echo "      OpenBSD:       pkg_add cmake gmake perl git python3"
@@ -758,10 +865,10 @@ print_native_build_deps_hint() {
 # Group A standalone arkfile-client build deps (no TypeScript / WASM / emsdk).
 print_client_build_deps_hint() {
     echo "    Standalone arkfile-client build packages (Group A glibc Linux amd64):"
-    echo "      Debian/Ubuntu: sudo apt install -y build-essential cmake pkg-config perl git autoconf automake libtool libudev-dev"
+    echo "      Debian/Ubuntu: sudo apt install -y build-essential cmake pkg-config perl libtext-template-perl git autoconf automake libtool libudev-dev"
     echo "      Devuan 6 Excalibur: same as Debian-family; use libudev-dev or libeudev-dev depending on the udev stack"
-    echo "      RHEL/Alma/Rocky/Fedora: sudo dnf install -y gcc gcc-c++ make cmake pkgconf perl git autoconf automake libtool systemd-devel"
-    echo "      openSUSE/SLES: sudo zypper install -y gcc gcc-c++ make cmake pkg-config perl git autoconf automake libtool libudev-devel"
+    echo "      RHEL/Alma/Rocky/Fedora: sudo dnf install -y gcc gcc-c++ make cmake pkgconf perl perl-core perl-FindBin perl-IPC-Cmd perl-File-Compare perl-File-Copy perl-Text-Template git autoconf automake libtool systemd-devel"
+    echo "      openSUSE/SLES: sudo zypper install -y gcc gcc-c++ make cmake pkg-config perl perl-Text-Template git autoconf automake libtool libudev-devel"
     echo "      Arch: sudo pacman -S --needed base-devel cmake pkgconf perl git systemd"
     echo "    Also required: Go matching go.mod. Runtime USB keys need libudev.so.1 (libudev1 / systemd-libs / eudev / Arch systemd)."
 }
@@ -769,16 +876,16 @@ print_client_build_deps_hint() {
 print_native_build_package_install_hint() {
     case "$(detect_package_os_family)" in
         debian)
-            echo "  Install with: sudo apt install -y build-essential cmake pkg-config perl git libudev-dev autoconf automake libtool python3 libatomic1"
+            echo "  Install with: sudo apt install -y build-essential cmake pkg-config perl libtext-template-perl git libudev-dev autoconf automake libtool python3 libatomic1"
             if is_devuan_host; then
                 echo "  Devuan note: if libudev-dev is unavailable, install libeudev-dev (or the eudev development package for your release)."
             fi
             ;;
         rhel)
-            echo "  Install with: sudo dnf install -y gcc gcc-c++ make cmake pkgconf perl git systemd-devel autoconf automake libtool python3.11 libatomic"
+            echo "  Install with: sudo dnf install -y gcc gcc-c++ make cmake pkgconf perl perl-core perl-FindBin perl-IPC-Cmd perl-File-Compare perl-File-Copy perl-Text-Template git systemd-devel autoconf automake libtool python3.11 libatomic"
             ;;
         suse)
-            echo "  Install with: sudo zypper install -y gcc gcc-c++ make cmake pkg-config perl git libudev-devel autoconf automake libtool python3 libatomic1"
+            echo "  Install with: sudo zypper install -y gcc gcc-c++ make cmake pkg-config perl perl-Text-Template git libudev-devel autoconf automake libtool python3 libatomic1"
             ;;
         alpine)
             echo "  Install with: sudo apk add --no-cache build-base cmake pkgconf-dev perl git linux-headers eudev-dev python3 libatomic"
@@ -875,6 +982,55 @@ find_go_binary() {
     done
     
     return 1
+}
+
+# bun is often installed per-user under ~/.bun/bin and missing from sudo PATH.
+find_bun_binary() {
+    local bun_path home_dir
+    if command -v bun >/dev/null 2>&1; then
+        command -v bun
+        return 0
+    fi
+    if [ -n "${HOME:-}" ] && [ -x "${HOME}/.bun/bin/bun" ]; then
+        echo "${HOME}/.bun/bin/bun"
+        return 0
+    fi
+    if [ -n "${SUDO_USER:-}" ]; then
+        home_dir="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)"
+        if [ -n "$home_dir" ] && [ -x "${home_dir}/.bun/bin/bun" ]; then
+            echo "${home_dir}/.bun/bin/bun"
+            return 0
+        fi
+    fi
+    for bun_path in /usr/local/bin/bun /usr/bin/bun; do
+        if [ -x "$bun_path" ]; then
+            echo "$bun_path"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Return 0 when GO_BINARY (or find_go_binary) meets the go.mod toolchain line.
+host_go_meets_gomod_requirement() {
+    local required_version current_version current_num required_num go_bin
+    go_bin="${GO_BINARY:-}"
+    if [ -z "$go_bin" ]; then
+        if ! go_bin="$(find_go_binary)"; then
+            return 1
+        fi
+    fi
+    required_version="$(grep '^go [0-9]' go.mod | awk '{print $2}')"
+    if [ -z "$required_version" ]; then
+        return 0
+    fi
+    current_version="$("$go_bin" version 2>/dev/null | grep -o 'go[0-9]\+\.[0-9]\+\(\.[0-9]\+\)\?' | head -1 | sed 's/^go//')"
+    if [ -z "$current_version" ]; then
+        return 1
+    fi
+    current_num="$(echo "$current_version" | awk -F. '{printf "%d%02d%02d", $1, $2, ($3 == "" ? 0 : $3)}')"
+    required_num="$(echo "$required_version" | awk -F. '{printf "%d%02d%02d", $1, $2, ($3 == "" ? 0 : $3)}')"
+    [ "$current_num" -ge "$required_num" ]
 }
 
 # Fix ownership of Go-related files when running as root via sudo

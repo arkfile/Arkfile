@@ -168,16 +168,15 @@ fi
 print_status "SUCCESS" "Found Go at: $GO_BINARY"
 export GO_BINARY="$GO_BINARY"
 
-if ! ensure_emsdk_python; then
-    print_status "ERROR" "Python ${EMSDK_MIN_PYTHON_MAJOR}.${EMSDK_MIN_PYTHON_MINOR}+ is required for emsdk (libopaque WASM)"
-    print_emsdk_python_install_hint
+if ! host_go_meets_gomod_requirement; then
+    required_go="$(grep '^go [0-9]' go.mod | awk '{print $2}')"
+    print_status "ERROR" "Go at $GO_BINARY is too old (go.mod requires ${required_go})"
+    echo "   Install Go ${required_go} from https://go.dev/dl/ (distro golang packages are usually too old)"
     exit 1
 fi
-print_status "INFO" "emsdk Python: $EMSDK_PYTHON ($("$EMSDK_PYTHON" --version 2>&1))"
 
-if ! emsdk_libatomic_available; then
-    print_status "ERROR" "libatomic.so.1 is required by emsdk's Binaryen tools"
-    print_emsdk_libatomic_install_hint
+print_status "INFO" "Checking system dependencies..."
+if ! check_native_build_host_tools; then
     exit 1
 fi
 
@@ -207,8 +206,7 @@ if [[ $REPLY != "UPDATE" ]]; then
     exit 0
 fi
 
-echo
-echo -e "${CYAN}Step 1: Build${NC}"
+print_deploy_phase "Build"
 
 fix_go_ownership
 
@@ -229,16 +227,14 @@ print_status "SUCCESS" "Build complete"
 
 prepare_update_rollback "arkfile"
 
-echo
-echo -e "${CYAN}Step 2: Stop arkfile service${NC}"
+print_deploy_phase "Stop arkfile"
 
 stop_service_gracefully "arkfile"
 
 # Brief pause to ensure the binary is not in use
 sleep 2
 
-echo
-echo -e "${CYAN}Step 3: Deploy binaries and static assets${NC}"
+print_deploy_phase "Deploy binaries and static assets"
 
 backup_binaries_before_overwrite "arkfile"
 install_binaries_from_build
@@ -260,8 +256,7 @@ fi
 
 sync_database_schema_from_build
 
-echo
-echo -e "${CYAN}Step 4: Restart arkfile${NC}"
+print_deploy_phase "Restart arkfile"
 
 print_status "INFO" "Starting Arkfile..."
 systemctl start arkfile
@@ -282,8 +277,7 @@ print_status "SUCCESS" "Arkfile is ready on localhost:${TLS_PORT}"
 
 commit_update_rollback
 
-echo
-echo -e "${CYAN}Step 5: Health verification${NC}"
+print_deploy_phase "Health verification"
 
 if curl -sk https://localhost:${TLS_PORT}/api/config/argon2 2>/dev/null | grep -q '"memoryCostKiB"'; then
     print_status "SUCCESS" "Argon2 config endpoint responding"
