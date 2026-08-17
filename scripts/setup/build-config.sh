@@ -249,9 +249,10 @@ fido_cgo_extra_libs() {
     fido_cgo_os_dynamic_libs
 }
 
-# Documented Linux CLI runtime dynamic dependencies (for verify + future release notes).
+# Documented Linux CLI runtime dynamic libraries (whitelist for verify + release notes).
+# libcap is a transitive dependency of systemd libudev on RHEL/Alma/Fedora.
 cli_linux_dynamic_runtime_libs() {
-    echo "libudev libc libpthread libdl libresolv"
+    echo "libudev libcap libc libpthread libdl libresolv libm libgcc_s"
 }
 
 # CGO CFLAGS for OPAQUE-only binaries (server).
@@ -428,7 +429,7 @@ verify_cli_binary_linking() {
         [ -z "$libname" ] && continue
         libname="${libname##*/}"
         case "$libname" in
-            linux-vdso.so.*|ld-linux*.so.*|ld-musl*.so.*|libc.so.*|libc.musl*.so.*|libudev.so.*|libpthread.so.*|libdl.so.*|libresolv.so.*|libm.so.*|libgcc_s.so.*)
+            linux-vdso.so.*|ld-linux*.so.*|ld-musl*.so.*|libc.so.*|libc.musl*.so.*|libudev.so.*|libcap.so.*|libpthread.so.*|libdl.so.*|libresolv.so.*|libm.so.*|libgcc_s.so.*)
                 ;;
             libfido2.so*|libcbor.so*|libcrypto.so*|libssl.so*|libsodium.so*|libz.so.*|libopaque.so*)
                 echo "[X] ${base}: unexpected dynamic dependency: ${libname}" >&2
@@ -437,7 +438,7 @@ verify_cli_binary_linking() {
                 ;;
             *)
                 echo "[X] ${base}: unexpected dynamic dependency: ${libname}" >&2
-                echo "    If this OS library is required at runtime, add it to cli_linux_dynamic_runtime_libs()." >&2
+                echo "    If this OS library is required at runtime, add it to the CLI dynamic-library whitelist (cli_linux_dynamic_runtime_libs)." >&2
                 return 1
                 ;;
         esac
@@ -870,7 +871,7 @@ print_client_build_deps_hint() {
     echo "      RHEL/Alma/Rocky/Fedora: sudo dnf install -y gcc gcc-c++ make cmake pkgconf perl perl-core perl-FindBin perl-IPC-Cmd perl-File-Compare perl-File-Copy perl-Text-Template git autoconf automake libtool systemd-devel"
     echo "      openSUSE/SLES: sudo zypper install -y gcc gcc-c++ make cmake pkg-config perl perl-Text-Template git autoconf automake libtool libudev-devel"
     echo "      Arch: sudo pacman -S --needed base-devel cmake pkgconf perl git systemd"
-    echo "    Also required: Go matching go.mod. Runtime USB keys need libudev.so.1 (libudev1 / systemd-libs / eudev / Arch systemd)."
+    echo "    Also required: Go matching go.mod. Runtime USB keys need libudev.so.1 (libudev1 / systemd-libs / eudev / Arch systemd); systemd libudev also needs libcap.so.2."
 }
 
 print_native_build_package_install_hint() {

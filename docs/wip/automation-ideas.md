@@ -37,7 +37,7 @@ Things I'd propose, grouped. I've tried to flag honestly where each idea has a c
 **Proposal:** Allow an authenticated user to mint a **scoped API token** tied to their account:
 - Scopes: `upload-only`, `download-only`, `share-create`, `read-metadata`, etc.
 - Per-token rate/size limits.
-- Per-token optional allow-list of file patterns or a dedicated subtree once folders land (see `docs/wip/folders-multi-upload-v2.md`).
+- Per-token optional whitelist of file patterns or a dedicated subtree once folders land (see `docs/wip/folders-multi-upload-v2.md`).
 - Server stores only a hash of the token.
 - Expiry + rotation + server-side revocation listed in the user's account UI.
 

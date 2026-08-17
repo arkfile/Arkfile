@@ -315,9 +315,9 @@ libsodium is **vendored** under `vendor_c/jedisct1/libsodium` and built statical
 
 **CLI MFA / FIDO build notes:**
 - `arkfile-client` and `arkfile-admin` statically link vendored `libfido2`, `libcbor`, `zlib`, OpenSSL `libcrypto`, and the OPAQUE C stack (`libopaque`, `liboprf`, libsodium). The server binary does not link the FIDO stack and remains fully static.
-- **CLI link model (Linux):** vendored C libraries are linked with `-Wl,-Bstatic`; OS libraries (`libudev`, `libc`, `libpthread`, etc.) are linked dynamically via `-Wl,-Bdynamic`. There is no `libudev.a` on glibc distros, so CLIs cannot be fully static when FIDO is enabled.
+- **CLI link model (Linux):** vendored C libraries are linked with `-Wl,-Bstatic`; OS libraries (`libudev`, `libcap` on systemd, `libc`, `libpthread`, etc.) are linked dynamically via `-Wl,-Bdynamic`. There is no `libudev.a` on glibc distros, so CLIs cannot be fully static when FIDO is enabled.
 - **Build host:** `perl` (OpenSSL configure), `pkg-config`, autotools (vendored libsodium), and Linux **libudev development headers** (`libudev-dev` on Debian/Ubuntu, `libudev-dev` or `libeudev-dev` on Devuan 6 Excalibur, `systemd-devel` on RHEL/Fedora, `libudev-devel` on openSUSE/SLES, `systemd` on Arch, `eudev-dev` on Alpine) are required when compiling the CLIs.
-- **CLI runtime (Linux):** USB security keys need `libudev.so.1` at runtime. Install the runtime package if missing (`libudev1` / `systemd-libs` / `eudev` / Arch `systemd`).
+- **CLI runtime (Linux):** USB security keys need `libudev.so.1` at runtime (and `libcap.so.2` on systemd/RHEL-family, pulled in by libudev). Install the runtime package if missing (`libudev1` / `systemd-libs` / `eudev` / Arch `systemd`).
 - Vendored FIDO libraries for the full-stack deploy path install under `/var/tmp/arkfile-build/c-libs/fido/<platform>/lib/` (e.g. `linux-amd64/lib/`). CMake is forced to `CMAKE_INSTALL_LIBDIR=lib` (and OpenSSL `--libdir=lib`) so RHEL/Alma/Fedora hosts do not land archives in `lib64/`. Stale caches are rebuilt automatically when the platform stamp changes.
 
 **Standalone `arkfile-client` build (Group A glibc Linux amd64):**
