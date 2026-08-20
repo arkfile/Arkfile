@@ -4,11 +4,16 @@
  * Renders one inline panel (matching the security-settings + contact-info
  * pattern) with three sections:
  *
- *   1. Balance              -- signed four-decimal USD; below-baseline note.
- *   2. Current Storage and  -- storage used / free baseline / billable bytes;
+ *   1. Subscription Plans   -- public catalog + Subscribe, only when
+ *                              subscriptions are enabled and the user is
+ *                              not already subscribed.
+ *   2. Your Subscription    -- current plan + Update Subscription (processor
+ *                              portal) when billing_mode is subscribed.
+ *   3. Balance              -- signed four-decimal USD; below-baseline note.
+ *   4. Current Storage and  -- storage used / free baseline / billable bytes;
  *      Cost                    when there is billable usage, also projected
  *                              monthly cost and estimated runway.
- *   3. Transaction History  -- only rendered when there is at least one
+ *   5. Transaction History  -- only rendered when there is at least one
  *                              transaction (no empty-state heading).
  *
  * Privacy posture: this module makes a single GET to /api/credits and
@@ -148,11 +153,15 @@ function renderBilling(
 ): void {
   host.innerHTML = '';
 
+  const isSubscribed = d.billing_mode === 'subscribed';
   if (d.subscription?.enabled) {
-    host.appendChild(renderSubscriptionSection(d));
+    if (isSubscribed) {
+      host.appendChild(renderCurrentSubscriptionSection(d));
+    } else {
+      host.appendChild(renderAvailablePlansSection());
+    }
   }
 
-  const isSubscribed = d.billing_mode === 'subscribed';
   if (!isSubscribed) {
     host.appendChild(renderBalanceSection(d));
     host.appendChild(renderUsageSection(d));
@@ -168,35 +177,45 @@ function renderBilling(
   }
 }
 
-function renderSubscriptionSection(d: CreditsResponse): HTMLElement {
+function renderAvailablePlansSection(): HTMLElement {
   const wrap = document.createElement('section');
   wrap.className = 'billing-panel-section';
   const h = document.createElement('h4');
-  h.textContent = 'Your Plan';
+  h.textContent = 'Subscription Plans';
+  wrap.appendChild(h);
+  void loadAvailablePlans(wrap);
+  return wrap;
+}
+
+function renderCurrentSubscriptionSection(d: CreditsResponse): HTMLElement {
+  const wrap = document.createElement('section');
+  wrap.className = 'billing-panel-section';
+  const h = document.createElement('h4');
+  h.textContent = 'Your Subscription';
   wrap.appendChild(h);
 
   const sub = d.subscription;
-  if (sub?.status) {
-    const p = document.createElement('p');
-    p.textContent = `${sub.plan_name || sub.plan_id} (${sub.price_usd ? '$' + sub.price_usd + '/mo' : ''}) -- ${sub.status}`;
-    wrap.appendChild(p);
-    if (sub.current_period_end) {
-      const renew = document.createElement('p');
-      renew.textContent = sub.cancel_at_period_end
-        ? `Active until ${formatDate(sub.current_period_end)} (canceling)`
-        : `Renews ${formatDate(sub.current_period_end)}`;
-      wrap.appendChild(renew);
-    }
-    if (sub.source === 'bridge') {
-      const manageBtn = document.createElement('button');
-      manageBtn.type = 'button';
-      manageBtn.className = 'btn';
-      manageBtn.textContent = 'Manage Plan';
-      manageBtn.onclick = () => void openSubscriptionPortal();
-      wrap.appendChild(manageBtn);
-    }
-  } else {
-    void loadAvailablePlans(wrap);
+  if (!sub?.status) {
+    return wrap;
+  }
+
+  const p = document.createElement('p');
+  p.textContent = `${sub.plan_name || sub.plan_id} (${sub.price_usd ? '$' + sub.price_usd + '/mo' : ''}) -- ${sub.status}`;
+  wrap.appendChild(p);
+  if (sub.current_period_end) {
+    const renew = document.createElement('p');
+    renew.textContent = sub.cancel_at_period_end
+      ? `Active until ${formatDate(sub.current_period_end)} (canceling)`
+      : `Renews ${formatDate(sub.current_period_end)}`;
+    wrap.appendChild(renew);
+  }
+  if (sub.source === 'bridge') {
+    const updateBtn = document.createElement('button');
+    updateBtn.type = 'button';
+    updateBtn.className = 'btn';
+    updateBtn.textContent = 'Update Subscription';
+    updateBtn.onclick = () => void openSubscriptionPortal();
+    wrap.appendChild(updateBtn);
   }
   return wrap;
 }

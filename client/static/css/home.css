@@ -40,11 +40,11 @@ body {
 }
 
 .hero-btn {
-    padding: var(--control-pad-y) var(--control-pad-x);
-    font-size: var(--control-font);
+    padding: calc(var(--control-pad-y) * 1.1) calc(var(--control-pad-x) * 1.1);
+    font-size: calc(var(--control-font) * 1.1);
     font-weight: 600;
     line-height: var(--control-line);
-    min-height: var(--control-height);
+    min-height: calc(var(--control-height) * 1.1);
     box-sizing: border-box;
     border: none;
     border-radius: 6px;
