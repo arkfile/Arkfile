@@ -20,6 +20,56 @@ func boolYesNo(v bool) string {
 	return "No"
 }
 
+func parseStringSlice(v interface{}) []string {
+	switch items := v.(type) {
+	case []string:
+		out := make([]string, 0, len(items))
+		for _, item := range items {
+			if s := strings.TrimSpace(item); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []interface{}:
+		out := make([]string, 0, len(items))
+		for _, item := range items {
+			s, ok := item.(string)
+			if !ok {
+				continue
+			}
+			s = strings.TrimSpace(s)
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func formatMFAStatus(enabled bool, methods []string) string {
+	if !enabled && len(methods) == 0 {
+		return "No"
+	}
+	labels := make([]string, 0, len(methods))
+	for _, method := range methods {
+		switch strings.ToLower(strings.TrimSpace(method)) {
+		case "totp":
+			labels = append(labels, "TOTP")
+		case "webauthn":
+			labels = append(labels, "HW")
+		}
+	}
+	if len(labels) == 0 {
+		if enabled {
+			return "Yes"
+		}
+		return "No"
+	}
+	return "Yes (" + strings.Join(labels, "+") + ")"
+}
+
 func parseStorageLimit(limit string) (int64, error) {
 	limit = strings.ToUpper(strings.TrimSpace(limit))
 

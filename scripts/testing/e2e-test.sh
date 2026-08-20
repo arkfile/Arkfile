@@ -989,8 +989,14 @@ run_user_onboarding_admin_approval() {
         $ADMIN --server-url "$SERVER_URL" --tls-insecure list-users
 
     if [ $list_users_exit_code -eq 0 ] && echo "$list_users_output" | grep -q "$TEST_USERNAME"; then
-        record_test "Admin list-users" "PASS"
-        info "Test user '$TEST_USERNAME' found in user list"
+        if echo "$list_users_output" | grep -A4 "USERNAME: $TEST_USERNAME" | grep -q "Yes (TOTP)"; then
+            record_test "Admin list-users" "PASS"
+            info "Test user '$TEST_USERNAME' found in user list with MFA Yes (TOTP)"
+        else
+            error "list-users found '$TEST_USERNAME' but MFA status was not Yes (TOTP):"
+            echo "$list_users_output"
+            record_test "Admin list-users" "FAIL"
+        fi
     else
         error "list-users failed or test user not found:"
         echo "$list_users_output"
@@ -1005,11 +1011,15 @@ run_user_onboarding_admin_approval() {
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
             user-status --username "$TEST_USERNAME"
 
-    if [ $user_status_exit_code -eq 0 ]; then
+    if [ $user_status_exit_code -eq 0 ] &&
+        echo "$user_status_output" | grep -Eq 'Enrolled:[[:space:]]+Yes \(TOTP\)' &&
+        echo "$user_status_output" | grep -Eq 'Files:[[:space:]]+0$' &&
+        echo "$user_status_output" | grep -Eq 'Limit:[[:space:]]+' &&
+        echo "$user_status_output" | grep -Eq 'Utilization:[[:space:]]+'; then
         record_test "Admin user-status" "PASS"
         echo "$user_status_output"
     else
-        error "user-status command failed:"
+        error "user-status command failed or missing MFA/storage details:"
         echo "$user_status_output"
         record_test "Admin user-status" "FAIL"
     fi

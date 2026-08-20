@@ -1002,17 +1002,17 @@ func TestListUsers_Success_Admin(t *testing.T) {
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
 
-	// The ListUsers handler now uses a JOIN query with user_mfa_credentials and file_metadata.
+	// The ListUsers handler uses an aggregated JOIN with user_mfa_credentials and file_metadata.
 	// Columns: username, is_approved, is_admin, storage_limit_bytes, total_storage_bytes,
-	//          registration_date, last_login, totp_enabled, file_count
+	//          registration_date, last_login, mfa_enabled, has_totp, has_webauthn, file_count
 	regDateUser2 := "2026-04-17 12:00:00"
 	regDateAdmin := "2026-04-16 12:00:00"
 	regDateUser1 := "2026-04-15 12:00:00"
 
-	userRows := sqlmock.NewRows([]string{"username", "is_approved", "is_admin", "storage_limit_bytes", "total_storage_bytes", "registration_date", "last_login", "totp_enabled", "file_count"}).
-		AddRow(user2Username, false, false, models.DefaultStorageLimit, int64(0), regDateUser2, nil, int64(0), int64(0)).
-		AddRow(adminUsername, true, true, int64(10*1024*1024*1024), int64(1*1024*1024*1024), regDateAdmin, "2026-04-17 10:00:00", int64(1), int64(5)).
-		AddRow(user1Username, true, false, int64(5*1024*1024*1024), int64(500*1024*1024), regDateUser1, nil, int64(0), int64(2))
+	userRows := sqlmock.NewRows([]string{"username", "is_approved", "is_admin", "storage_limit_bytes", "total_storage_bytes", "registration_date", "last_login", "mfa_enabled", "has_totp", "has_webauthn", "file_count"}).
+		AddRow(user2Username, false, false, models.DefaultStorageLimit, int64(0), regDateUser2, nil, int64(0), int64(0), int64(0), int64(0)).
+		AddRow(adminUsername, true, true, int64(10*1024*1024*1024), int64(1*1024*1024*1024), regDateAdmin, "2026-04-17 10:00:00", int64(1), int64(1), int64(0), int64(5)).
+		AddRow(user1Username, true, false, int64(5*1024*1024*1024), int64(500*1024*1024), regDateUser1, nil, int64(1), int64(1), int64(1), int64(2))
 
 	mockDB.ExpectQuery(`SELECT u.username, u.is_approved, u.is_admin`).WillReturnRows(userRows)
 	mockDB.ExpectExec("INSERT INTO admin_logs \\(admin_username, action, target_username, details\\) VALUES \\(\\?, \\?, \\?, \\?\\)").
@@ -1038,9 +1038,17 @@ func TestListUsers_Success_Admin(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, user2Username, user2["username"])
 	assert.Equal(t, false, user2["is_approved"])
+	assert.Equal(t, false, user2["mfa_enabled"])
+	assert.Equal(t, []interface{}{}, user2["mfa_methods"])
 	assert.Equal(t, "0 B", user2["total_storage_readable"])
 	assert.InDelta(t, 0.0, user2["usage_percent"], 0.01)
 	assert.Empty(t, user2["last_login"])
+
+	adminUser, ok := usersList[1].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, adminUsername, adminUser["username"])
+	assert.Equal(t, true, adminUser["mfa_enabled"])
+	assert.Equal(t, []interface{}{"totp"}, adminUser["mfa_methods"])
 
 	// Assert third user (user1)
 	user1, ok := usersList[2].(map[string]interface{})
@@ -1048,6 +1056,8 @@ func TestListUsers_Success_Admin(t *testing.T) {
 	assert.Equal(t, user1Username, user1["username"])
 	assert.Equal(t, true, user1["is_approved"])
 	assert.Equal(t, false, user1["is_admin"])
+	assert.Equal(t, true, user1["mfa_enabled"])
+	assert.Equal(t, []interface{}{"totp", "webauthn"}, user1["mfa_methods"])
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
 
@@ -1132,7 +1142,7 @@ func TestListUsers_ScanError(t *testing.T) {
 	c.Set("user", adminToken)
 
 
-	// Return only 7 columns when 9 are expected to trigger a scan error
+	// Return fewer columns than the aggregated list query expects to trigger a scan error
 	userRows := sqlmock.NewRows([]string{"username", "is_approved", "is_admin", "storage_limit_bytes", "total_storage_bytes", "registration_date", "last_login"}).
 		AddRow("scan-error-user", false, false, int64(1024), int64(0), "2026-04-17", nil)
 

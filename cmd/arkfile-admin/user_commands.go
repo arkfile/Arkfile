@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/arkfile/Arkfile/models"
 )
 
 // handleListUsersCommand lists all users with detailed information
@@ -90,7 +92,7 @@ EXAMPLES:
 			fmt.Printf("%d. %s\n", i+1, userMap["username"])
 			fmt.Printf("   Status: %s\n", statusStr(userMap))
 			fmt.Printf("   Admin: %v\n", safeBool(userMap, "is_admin"))
-			fmt.Printf("   TOTP: %v\n", safeBool(userMap, "totp_enabled"))
+			fmt.Printf("   MFA: %s\n", formatMFAStatus(safeBool(userMap, "mfa_enabled"), parseStringSlice(userMap["mfa_methods"])))
 			fmt.Printf("   Files: %d\n", safeInt64(userMap, "file_count"))
 			fmt.Printf("   Storage: %s / %s (%.1f%%)\n",
 				formatFileSize(safeInt64(userMap, "total_storage_bytes")),
@@ -109,12 +111,12 @@ EXAMPLES:
 				fmt.Println()
 			}
 			fmt.Printf("USERNAME: %s\n", userMap["username"])
-			fmt.Printf("  %-10s %-6s %-5s %-6s %-12s %-7s %s\n",
-				"STATUS", "ADMIN", "TOTP", "FILES", "STORAGE", "USAGE", "REGISTERED")
+			fmt.Printf("  %-10s %-6s %-14s %-6s %-12s %-7s %s\n",
+				"STATUS", "ADMIN", "MFA", "FILES", "STORAGE", "USAGE", "REGISTERED")
 
 			status := statusStr(userMap)
 			adminStr := boolYesNo(safeBool(userMap, "is_admin"))
-			totpStr := boolYesNo(safeBool(userMap, "totp_enabled"))
+			mfaStr := formatMFAStatus(safeBool(userMap, "mfa_enabled"), parseStringSlice(userMap["mfa_methods"]))
 			fileCount := safeInt64(userMap, "file_count")
 			storageReadable := safeString(userMap, "total_storage_readable")
 			if storageReadable == "" {
@@ -123,8 +125,8 @@ EXAMPLES:
 			usagePercent := safeFloat64(userMap, "usage_percent")
 			regDate := safeString(userMap, "registration_date")
 
-			fmt.Printf("  %-10s %-6s %-5s %-6d %-12s %-7s %s\n",
-				status, adminStr, totpStr,
+			fmt.Printf("  %-10s %-6s %-14s %-6d %-12s %-7s %s\n",
+				status, adminStr, mfaStr,
 				fileCount, storageReadable, fmt.Sprintf("%.1f%%", usagePercent), regDate)
 		}
 	}
@@ -196,7 +198,7 @@ EXAMPLES:
 		limitBytes, _ := parseStorageLimit(*storageLimit)
 		fmt.Printf("Storage limit set to: %s\n", formatFileSize(limitBytes))
 	} else {
-		fmt.Printf("Storage limit: default (1.1 GB)\n")
+		fmt.Printf("Storage limit: default (%s)\n", formatFileSize(models.DefaultStorageLimit))
 	}
 
 	return nil
@@ -424,19 +426,47 @@ EXAMPLES:
 		fmt.Printf("Created:         %s\n", createdFormatted)
 	}
 
-	// Parse nested "totp" object
-	if totpObj, ok := data["totp"].(map[string]interface{}); ok {
-		fmt.Printf("\nTOTP Status\n")
-		fmt.Println("--------------------------")
-		present, _ := totpObj["present"].(bool)
-		decryptable, _ := totpObj["decryptable"].(bool)
-		enabled, _ := totpObj["enabled"].(bool)
-		setupCompleted, _ := totpObj["setup_completed"].(bool)
+	fileCount := int64(0)
+	storageLimit := int64(0)
+	storageUsed := int64(0)
+	storageReadable := ""
+	usagePercent := 0.0
+	if userObj, ok := data["user"].(map[string]interface{}); ok {
+		fileCount = safeInt64(userObj, "file_count")
+		storageLimit = safeInt64(userObj, "storage_limit_bytes")
+		storageUsed = safeInt64(userObj, "total_storage_bytes")
+		storageReadable = safeString(userObj, "total_storage_readable")
+		usagePercent = safeFloat64(userObj, "usage_percent")
+	}
+	if storageReadable == "" {
+		storageReadable = formatFileSize(storageUsed)
+	}
+
+	mfaObj, _ := data["mfa"].(map[string]interface{})
+	fmt.Printf("\nMFA\n")
+	fmt.Println("--------------------------")
+	if mfaObj != nil {
+		present, _ := mfaObj["present"].(bool)
+		decryptable, _ := mfaObj["decryptable"].(bool)
+		enabled, _ := mfaObj["enabled"].(bool)
+		setupCompleted, _ := mfaObj["setup_completed"].(bool)
+		methods := parseStringSlice(mfaObj["methods"])
+		enrolled := len(methods) > 0 || enabled || setupCompleted
+		fmt.Printf("Enrolled:        %s\n", formatMFAStatus(enrolled, methods))
 		fmt.Printf("Present:         %s\n", boolYesNo(present))
 		fmt.Printf("Decryptable:     %s\n", boolYesNo(decryptable))
 		fmt.Printf("Enabled:         %s\n", boolYesNo(enabled))
 		fmt.Printf("Setup Completed: %s\n", boolYesNo(setupCompleted))
+	} else {
+		fmt.Printf("Enrolled:        No\n")
 	}
+
+	fmt.Printf("\nStorage\n")
+	fmt.Println("--------------------------")
+	fmt.Printf("Files:           %d\n", fileCount)
+	fmt.Printf("Used:            %s\n", storageReadable)
+	fmt.Printf("Limit:           %s\n", formatFileSize(storageLimit))
+	fmt.Printf("Utilization:     %.1f%%\n", usagePercent)
 
 	// Parse nested "opaque" object
 	if opaqueObj, ok := data["opaque"].(map[string]interface{}); ok {

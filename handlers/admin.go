@@ -61,19 +61,25 @@ type AdminUserStatusResponse struct {
 
 // AdminUserInfo represents basic user information
 type AdminUserInfo struct {
-	ID         int64     `json:"id"`
-	Username   string    `json:"username"`
-	IsApproved bool      `json:"is_approved"`
-	IsAdmin    bool      `json:"is_admin"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID                   int64     `json:"id"`
+	Username             string    `json:"username"`
+	IsApproved           bool      `json:"is_approved"`
+	IsAdmin              bool      `json:"is_admin"`
+	CreatedAt            time.Time `json:"created_at"`
+	FileCount            int64     `json:"file_count"`
+	StorageLimitBytes    int64     `json:"storage_limit_bytes"`
+	TotalStorageBytes    int64     `json:"total_storage_bytes"`
+	TotalStorageReadable string    `json:"total_storage_readable"`
+	UsagePercent         float64   `json:"usage_percent"`
 }
 
-// AdminMFAStatus represents TOTP status information
+// AdminMFAStatus represents MFA enrollment and diagnostic status.
 type AdminMFAStatus struct {
-	Present        bool `json:"present"`
-	Decryptable    bool `json:"decryptable"`
-	Enabled        bool `json:"enabled"`
-	SetupCompleted bool `json:"setup_completed"`
+	Present        bool     `json:"present"`
+	Decryptable    bool     `json:"decryptable"`
+	Enabled        bool     `json:"enabled"`
+	SetupCompleted bool     `json:"setup_completed"`
+	Methods        []string `json:"methods"`
 }
 
 // AdminOPAQUEStatus represents OPAQUE status information
@@ -293,13 +299,26 @@ func AdminGetUserStatus(c echo.Context) error {
 		return JSONError(c, http.StatusInternalServerError, "Failed to retrieve user")
 	}
 
-	// Build comprehensive status response with proper AdminUserInfo mapping
+	var fileCount int64
+	if err := database.DB.QueryRow(
+		`SELECT COUNT(*) FROM file_metadata WHERE owner_username = ?`,
+		targetUsername,
+	).Scan(&fileCount); err != nil {
+		logging.ErrorLogger.Printf("Failed to get file count for %s: %v", targetUsername, err)
+		fileCount = 0
+	}
+
 	adminUserInfo := &AdminUserInfo{
-		ID:         user.ID,
-		Username:   user.Username,
-		IsApproved: user.IsApproved,
-		IsAdmin:    user.IsAdmin,
-		CreatedAt:  user.CreatedAt,
+		ID:                   user.ID,
+		Username:             user.Username,
+		IsApproved:           user.IsApproved,
+		IsAdmin:              user.IsAdmin,
+		CreatedAt:            user.CreatedAt,
+		FileCount:            fileCount,
+		StorageLimitBytes:    user.StorageLimitBytes,
+		TotalStorageBytes:    user.TotalStorageBytes,
+		TotalStorageReadable: formatBytes(user.TotalStorageBytes),
+		UsagePercent:         storageUsagePercent(user.TotalStorageBytes, user.StorageLimitBytes),
 	}
 
 	response := AdminUserStatusResponse{
@@ -308,12 +327,28 @@ func AdminGetUserStatus(c echo.Context) error {
 		User:     adminUserInfo,
 	}
 
-	// Get comprehensive TOTP status using diagnostic helper
+	methods, methodsErr := completedMFAMethodTypes(database.DB, targetUsername)
+	if methodsErr != nil {
+		logging.ErrorLogger.Printf("Failed to list MFA methods for %s: %v", targetUsername, methodsErr)
+		methods = []string{}
+		if response.Details == nil {
+			response.Details = make(map[string]interface{})
+		}
+		response.Details["mfa_methods_error"] = "Failed to retrieve MFA methods"
+	}
+
 	present, decryptable, enabled, setupCompleted, err := auth.CanDecryptMFASecret(database.DB, targetUsername)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to get TOTP diagnostic status for %s: %v", targetUsername, err)
-		response.Details = map[string]interface{}{
-			"totp_status_error": "Failed to retrieve TOTP diagnostic status",
+		logging.ErrorLogger.Printf("Failed to get MFA diagnostic status for %s: %v", targetUsername, err)
+		if response.Details == nil {
+			response.Details = make(map[string]interface{})
+		}
+		response.Details["mfa_status_error"] = "Failed to retrieve MFA diagnostic status"
+		response.MFA = &AdminMFAStatus{
+			Present:        len(methods) > 0,
+			Enabled:        len(methods) > 0,
+			SetupCompleted: len(methods) > 0,
+			Methods:        methods,
 		}
 	} else {
 		response.MFA = &AdminMFAStatus{
@@ -321,6 +356,7 @@ func AdminGetUserStatus(c echo.Context) error {
 			Decryptable:    decryptable,
 			Enabled:        enabled,
 			SetupCompleted: setupCompleted,
+			Methods:        methods,
 		}
 	}
 
@@ -623,14 +659,22 @@ func UpdateUser(c echo.Context) error {
 func ListUsers(c echo.Context) error {
 	adminUsername := auth.GetUsernameFromToken(c)
 
-	// Get all users with TOTP status and file count
 	rows, err := database.DB.Query(`
 		SELECT u.username, u.is_approved, u.is_admin, u.storage_limit_bytes, u.total_storage_bytes,
 		       u.registration_date, u.last_login,
-		       CASE WHEN mc.setup_completed = 1 THEN 1 ELSE 0 END AS mfa_enabled,
+		       COALESCE(mc.mfa_enabled, 0) AS mfa_enabled,
+		       COALESCE(mc.has_totp, 0) AS has_totp,
+		       COALESCE(mc.has_webauthn, 0) AS has_webauthn,
 		       COALESCE(fm.file_count, 0) AS file_count
 		FROM users u
-		LEFT JOIN user_mfa_credentials mc ON u.username = mc.username
+		LEFT JOIN (
+			SELECT username,
+			       MAX(CASE WHEN enabled = 1 AND setup_completed = 1 THEN 1 ELSE 0 END) AS mfa_enabled,
+			       MAX(CASE WHEN method_type = 'totp' AND enabled = 1 AND setup_completed = 1 THEN 1 ELSE 0 END) AS has_totp,
+			       MAX(CASE WHEN method_type = 'webauthn' AND enabled = 1 AND setup_completed = 1 THEN 1 ELSE 0 END) AS has_webauthn
+			FROM user_mfa_credentials
+			GROUP BY username
+		) mc ON u.username = mc.username
 		LEFT JOIN (SELECT owner_username, COUNT(*) AS file_count FROM file_metadata GROUP BY owner_username) fm ON u.username = fm.owner_username
 		WHERE u.deleted_at IS NULL
 		ORDER BY u.registration_date DESC`)
@@ -647,13 +691,13 @@ func ListUsers(c echo.Context) error {
 	users := make([]map[string]interface{}, 0)
 	for rows.Next() {
 		var username sql.NullString
-		var isApprovedRaw, isAdminRaw, mfaEnabledRaw, fileCountRaw interface{}
+		var isApprovedRaw, isAdminRaw, mfaEnabledRaw, hasTOTPRaw, hasWebAuthnRaw, fileCountRaw interface{}
 		var storageLimitBytes, totalStorageBytes sql.NullFloat64
 		var registrationDate sql.NullString
 		var lastLogin sql.NullString
 
 		err := rows.Scan(&username, &isApprovedRaw, &isAdminRaw, &storageLimitBytes, &totalStorageBytes,
-			&registrationDate, &lastLogin, &mfaEnabledRaw, &fileCountRaw)
+			&registrationDate, &lastLogin, &mfaEnabledRaw, &hasTOTPRaw, &hasWebAuthnRaw, &fileCountRaw)
 		if err != nil {
 			logging.ErrorLogger.Printf("ListUsers scan error: %v", err)
 			return JSONError(c, http.StatusInternalServerError, "Error processing user data")
@@ -663,6 +707,8 @@ func ListUsers(c echo.Context) error {
 		isApproved := models.ScanBool(isApprovedRaw)
 		isAdmin := models.ScanBool(isAdminRaw)
 		mfaEnabled := models.ScanBool(mfaEnabledRaw)
+		hasTOTP := models.ScanBool(hasTOTPRaw)
+		hasWebAuthn := models.ScanBool(hasWebAuthnRaw)
 
 		// Extract values with safe defaults for NULL columns
 		storageLimit := int64(0)
@@ -674,19 +720,12 @@ func ListUsers(c echo.Context) error {
 			totalStorage = int64(totalStorageBytes.Float64)
 		}
 
-		// Calculate storage usage percentage
-		var usagePercent float64
-		if storageLimit > 0 {
-			usagePercent = (float64(totalStorage) / float64(storageLimit)) * 100
-		}
-
-		// Format total storage for display
+		usagePercent := storageUsagePercent(totalStorage, storageLimit)
 		totalStorageReadable := formatBytes(totalStorage)
 
 		// Format registration date (rqlite returns timestamps as strings)
 		var registrationDateFormatted string
 		if registrationDate.Valid && registrationDate.String != "" {
-			// Try to parse and reformat, otherwise use raw string
 			if t, err := time.Parse("2006-01-02 15:04:05", registrationDate.String); err == nil {
 				registrationDateFormatted = t.Format("2006-01-02")
 			} else if t, err := time.Parse(time.RFC3339, registrationDate.String); err == nil {
@@ -696,7 +735,6 @@ func ListUsers(c echo.Context) error {
 			}
 		}
 
-		// Format last login (rqlite returns timestamps as strings)
 		var lastLoginFormatted string
 		if lastLogin.Valid && lastLogin.String != "" {
 			if t, err := time.Parse("2006-01-02 15:04:05", lastLogin.String); err == nil {
@@ -715,6 +753,7 @@ func ListUsers(c echo.Context) error {
 			"is_approved":            isApproved,
 			"is_admin":               isAdmin,
 			"mfa_enabled":            mfaEnabled,
+			"mfa_methods":            mfaMethodsFromFlags(hasTOTP, hasWebAuthn),
 			"file_count":             fileCount,
 			"storage_limit_bytes":    storageLimit,
 			"total_storage_bytes":    totalStorage,
@@ -991,6 +1030,50 @@ func AdminSecurityEvents(c echo.Context) error {
 	}
 
 	return JSONResponse(c, http.StatusOK, "Security events retrieved", response)
+}
+
+func storageUsagePercent(used, limit int64) float64 {
+	if limit <= 0 {
+		return 0
+	}
+	return (float64(used) / float64(limit)) * 100
+}
+
+func mfaMethodsFromFlags(hasTOTP, hasWebAuthn bool) []string {
+	methods := make([]string, 0, 2)
+	if hasTOTP {
+		methods = append(methods, auth.MFAMethodTOTP)
+	}
+	if hasWebAuthn {
+		methods = append(methods, auth.MFAMethodWebAuthn)
+	}
+	return methods
+}
+
+func completedMFAMethodTypes(db *sql.DB, username string) ([]string, error) {
+	rows, err := db.Query(`
+		SELECT method_type FROM user_mfa_credentials
+		WHERE username = ? AND enabled = 1 AND setup_completed = 1
+		ORDER BY CASE method_type WHEN 'totp' THEN 0 ELSE 1 END, created_at ASC`,
+		username,
+	)
+	if err != nil {
+		return []string{}, err
+	}
+	defer rows.Close()
+
+	methods := make([]string, 0, 2)
+	for rows.Next() {
+		var methodType string
+		if err := rows.Scan(&methodType); err != nil {
+			return []string{}, err
+		}
+		methods = append(methods, methodType)
+	}
+	if err := rows.Err(); err != nil {
+		return []string{}, err
+	}
+	return methods, nil
 }
 
 // toInt64 converts an interface{} value to int64, handling the various types

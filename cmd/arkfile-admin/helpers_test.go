@@ -21,6 +21,39 @@ func TestLooksLikeDollarsAndCents(t *testing.T) {
 	}
 }
 
+func TestFormatMFAStatus(t *testing.T) {
+	cases := []struct {
+		enabled bool
+		methods []string
+		want    string
+	}{
+		{false, nil, "No"},
+		{false, []string{}, "No"},
+		{true, nil, "Yes"},
+		{true, []string{"totp"}, "Yes (TOTP)"},
+		{true, []string{"webauthn"}, "Yes (HW)"},
+		{true, []string{"totp", "webauthn"}, "Yes (TOTP+HW)"},
+		{false, []string{"totp"}, "Yes (TOTP)"},
+	}
+	for _, tc := range cases {
+		got := formatMFAStatus(tc.enabled, tc.methods)
+		if got != tc.want {
+			t.Fatalf("formatMFAStatus(%v, %v) = %q, want %q", tc.enabled, tc.methods, got, tc.want)
+		}
+	}
+}
+
+func TestParseStringSlice(t *testing.T) {
+	got := parseStringSlice([]interface{}{"totp", "webauthn", " ", 1})
+	if len(got) != 2 || got[0] != "totp" || got[1] != "webauthn" {
+		t.Fatalf("unexpected parseStringSlice result: %#v", got)
+	}
+	got = parseStringSlice([]string{" totp "})
+	if len(got) != 1 || got[0] != "totp" {
+		t.Fatalf("unexpected parseStringSlice string slice: %#v", got)
+	}
+}
+
 func TestEmptyOrValue(t *testing.T) {
 	if got := emptyOrValue("", "fallback"); got != "fallback" {
 		t.Fatalf("got %q", got)
