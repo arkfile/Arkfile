@@ -26,6 +26,7 @@
 import { authenticatedFetch, refreshToken, isAuthenticated, validateToken } from '../utils/auth';
 import { formatBytes } from '../utils/format.js';
 import { closeNavInlinePanelsExcept } from './sections.js';
+import { ensurePasswordModalStyles } from './password-modal.js';
 
 /** Toggle the billing panel visibility, loading data on open. */
 export async function toggleBillingPanel(): Promise<void> {
@@ -116,7 +117,7 @@ interface SubscriptionPlan {
 export async function loadBilling(): Promise<void> {
   const content = document.getElementById('billing-panel-content');
   if (!content) return;
-  content.innerHTML = '<p>Loading…</p>';
+  content.innerHTML = '<p>Loading...</p>';
 
   try {
     const response = await authenticatedFetch('/api/credits', { method: 'GET' });
@@ -311,8 +312,6 @@ function renderBalanceSection(d: CreditsResponse): HTMLElement {
     topUpBtn.style.backgroundColor = 'var(--biolum)';
     topUpBtn.style.color = 'var(--depth-1)';
     topUpBtn.style.border = 'none';
-    topUpBtn.style.padding = '0.5rem 1rem';
-    topUpBtn.style.borderRadius = '4px';
     topUpBtn.style.cursor = 'pointer';
     topUpBtn.style.fontFamily = 'monospace';
     topUpBtn.style.fontWeight = 'bold';
@@ -555,7 +554,7 @@ export async function resumePendingBillingCheckout(): Promise<boolean> {
 
   const content = document.getElementById('billing-panel-content');
   if (content) {
-    content.innerHTML = '<p>Confirming payment…</p>';
+    content.innerHTML = '<p>Confirming payment...</p>';
   }
 
   const outcome = await pollInvoiceStatus(invoiceID, CHECKOUT_RETURN_POLL_ATTEMPTS, CHECKOUT_RETURN_POLL_INTERVAL_MS);
@@ -597,7 +596,7 @@ export async function resumePendingSubscriptionCheckout(): Promise<boolean> {
   }
   const content = document.getElementById('billing-panel-content');
   if (content) {
-    content.innerHTML = '<p>Confirming subscription…</p>';
+    content.innerHTML = '<p>Confirming subscription...</p>';
   }
   for (let i = 0; i < 30; i++) {
     const resp = await authenticatedFetch('/api/subscriptions/me', { method: 'GET' });
@@ -672,18 +671,11 @@ function showTopUpModal(cfg: PaymentsConfig): void {
     existing.remove();
   }
 
+  ensurePasswordModalStyles();
+
   const overlay = document.createElement('div');
   overlay.id = overlayId;
   overlay.className = 'password-modal-overlay';
-  overlay.style.position = 'fixed';
-  overlay.style.top = '0';
-  overlay.style.left = '0';
-  overlay.style.width = '100%';
-  overlay.style.height = '100%';
-  overlay.style.backgroundColor = 'color-mix(in srgb, var(--depth-1) 80%, transparent)';
-  overlay.style.display = 'flex';
-  overlay.style.justifyContent = 'center';
-  overlay.style.alignItems = 'center';
   overlay.style.zIndex = '2000';
 
   const modal = document.createElement('div');
@@ -694,6 +686,8 @@ function showTopUpModal(cfg: PaymentsConfig): void {
   modal.style.padding = '24px';
   modal.style.maxWidth = '550px';
   modal.style.width = '92%';
+  modal.style.maxHeight = '90vh';
+  modal.style.overflowY = 'auto';
   modal.style.boxShadow = '0 4px 20px color-mix(in srgb, var(--depth-1) 80%, transparent)';
 
   const header = document.createElement('div');
@@ -713,16 +707,26 @@ function showTopUpModal(cfg: PaymentsConfig): void {
   const closeBtn = document.createElement('button');
   closeBtn.type = 'button';
   closeBtn.className = 'password-modal-close';
-  closeBtn.innerHTML = '&times;';
-  closeBtn.style.background = 'none';
-  closeBtn.style.border = 'none';
-  closeBtn.style.color = 'var(--foam-2)';
-  closeBtn.style.fontSize = '1.5rem';
-  closeBtn.style.cursor = 'pointer';
-  closeBtn.onclick = () => {
-    overlay.remove();
+  closeBtn.setAttribute('aria-label', 'Close');
+  closeBtn.textContent = 'x';
+
+  const closeTopUp = () => {
+    document.removeEventListener('keydown', onTopUpKey);
+    if (document.body.contains(overlay)) {
+      overlay.remove();
+    }
     loadBilling().catch(err => console.error(err));
   };
+  const onTopUpKey = (e: KeyboardEvent) => {
+    if (e.key !== 'Escape') return;
+    if (!document.body.contains(overlay)) {
+      document.removeEventListener('keydown', onTopUpKey);
+      return;
+    }
+    closeTopUp();
+  };
+  document.addEventListener('keydown', onTopUpKey);
+  closeBtn.onclick = closeTopUp;
 
   header.appendChild(title);
   header.appendChild(closeBtn);
@@ -790,9 +794,9 @@ function showTopUpModal(cfg: PaymentsConfig): void {
   cancelBtn.type = 'button';
   cancelBtn.className = 'password-modal-btn password-modal-btn-cancel';
   cancelBtn.textContent = 'Cancel';
-  cancelBtn.style.padding = '0.5rem 1rem';
   cancelBtn.style.cursor = 'pointer';
   cancelBtn.onclick = () => {
+    document.removeEventListener('keydown', onTopUpKey);
     overlay.remove();
   };
 
@@ -800,7 +804,7 @@ function showTopUpModal(cfg: PaymentsConfig): void {
   submitBtn.type = 'submit';
   submitBtn.className = 'password-modal-btn password-modal-btn-submit';
   submitBtn.textContent = 'Generate Invoice';
-  submitBtn.style.padding = '0.5rem 1rem';
+  submitBtn.style.cursor = 'pointer';
   submitBtn.style.cursor = 'pointer';
 
   footer.appendChild(cancelBtn);
@@ -845,7 +849,7 @@ function showTopUpModal(cfg: PaymentsConfig): void {
       
       const iframeContainer = document.createElement('div');
       iframeContainer.style.width = '100%';
-      iframeContainer.style.height = '460px';
+      iframeContainer.style.height = 'min(460px, 70vh)';
       iframeContainer.style.position = 'relative';
 
       const iframe = document.createElement('iframe');

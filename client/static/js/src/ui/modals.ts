@@ -120,13 +120,19 @@ export class ModalManager {
     modalContent.appendChild(buttonsContainer);
     modal.appendChild(modalContent);
 
-    // Close modal when clicking outside (if allowed)
+    // Close modal when clicking outside or pressing Escape (if allowed)
     if (options.allowClose !== false) {
       modal.onclick = (e) => {
         if (e.target === modal) {
           this.closeModal(modal);
         }
       };
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key !== 'Escape') return;
+        this.closeModal(modal);
+      };
+      document.addEventListener('keydown', onKey);
+      (modal as HTMLElement & { _escapeHandler?: (e: KeyboardEvent) => void })._escapeHandler = onKey;
     }
 
     document.body.appendChild(modal);
@@ -169,55 +175,26 @@ export class ModalManager {
 
   private static createModalButton(options: ModalButton, modal: HTMLElement): HTMLElement {
     const button = document.createElement('button');
+    button.type = 'button';
     button.textContent = options.text;
     button.disabled = options.disabled || false;
-    
-    // Button styling based on variant
-    const baseStyle = `
-      width: 100%;
-      padding: 10px;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 16px;
-      transition: background-color 0.2s;
-    `;
-    
-    let variantStyle = '';
-    switch (options.variant) {
-      case 'danger':
-        variantStyle = `
-          background-color: var(--coral);
-          color: var(--salt);
-        `;
-        break;
-      case 'secondary':
-        variantStyle = `
-          background-color: var(--depth-4);
-          color: var(--salt);
-        `;
-        break;
-      case 'success':
-        variantStyle = `
-          background-color: var(--biolum);
-          color: var(--depth-1);
-        `;
-        break;
-      default:
-        variantStyle = `
-          background-color: var(--current-2);
-          color: var(--salt);
-        `;
+    if (options.variant === 'danger') {
+      button.className = 'danger-button';
+    } else if (options.variant === 'secondary') {
+      button.className = 'secondary-button';
+    } else {
+      button.className = 'btn-primary';
     }
-
+    button.style.width = '100%';
+    
+    if (options.variant === 'success') {
+      button.style.backgroundColor = 'var(--biolum)';
+      button.style.color = 'var(--depth-1)';
+    }
     if (options.disabled) {
-      variantStyle += `
-        opacity: 0.6;
-        cursor: not-allowed;
-      `;
+      button.style.opacity = '0.6';
+      button.style.cursor = 'not-allowed';
     }
-
-    button.style.cssText = baseStyle + variantStyle;
 
     button.onclick = async (e) => {
       e.preventDefault();
@@ -257,12 +234,20 @@ export class ModalManager {
   public static closeModal(modal: HTMLElement): void {
     if (this.activeModals.has(modal)) {
       this.activeModals.delete(modal);
+      const handler = (modal as HTMLElement & { _escapeHandler?: (e: KeyboardEvent) => void })._escapeHandler;
+      if (handler) {
+        document.removeEventListener('keydown', handler);
+      }
       modal.remove();
     }
   }
 
   public static closeAllModals(): void {
     this.activeModals.forEach(modal => {
+      const handler = (modal as HTMLElement & { _escapeHandler?: (e: KeyboardEvent) => void })._escapeHandler;
+      if (handler) {
+        document.removeEventListener('keydown', handler);
+      }
       modal.remove();
     });
     this.activeModals.clear();
@@ -368,24 +353,27 @@ export function showTOTPAppsModal(): HTMLElement {
         <strong>Tip:</strong> All listed apps are fully open source and respect your privacy.
       </div>
     </div>
-    <button onclick="this.closest('.modal-overlay').remove();" style="
-      width: 100%;
-      padding: 10px;
-      background-color: var(--current-2);
-      color: var(--salt);
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 16px;
-    ">Close</button>
+    <button type="button" id="totp-apps-close-btn" class="btn-primary" style="width: 100%;">Close</button>
   `;
 
   modal.appendChild(modalContent);
 
+  const closeAppsModal = () => {
+    document.removeEventListener('keydown', onKey);
+    modal.remove();
+  };
+
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') closeAppsModal();
+  };
+  document.addEventListener('keydown', onKey);
+
+  document.getElementById('totp-apps-close-btn')?.addEventListener('click', closeAppsModal);
+
   // Close modal when clicking outside
   modal.onclick = (e) => {
     if (e.target === modal) {
-      modal.remove();
+      closeAppsModal();
     }
   };
 

@@ -12,15 +12,12 @@ export class MessageManager {
     if (!this.messageContainer) {
       this.messageContainer = document.createElement('div');
       this.messageContainer.id = 'message-container';
+      this.messageContainer.className = 'message-container';
       this.messageContainer.style.cssText = `
-        position: fixed;
-        top: 20px;
-        right: 20px;
         z-index: 2000;
         display: flex;
         flex-direction: column;
         gap: 10px;
-        max-width: 400px;
         pointer-events: none;
       `;
       document.body.appendChild(this.messageContainer);
@@ -100,17 +97,9 @@ export class MessageManager {
 
       options.actions.forEach(actionOption => {
         const actionButton = document.createElement('button');
+        actionButton.type = 'button';
+        actionButton.className = 'toast-action';
         actionButton.textContent = actionOption.text;
-        actionButton.style.cssText = `
-          background: color-mix(in srgb, currentColor 16%, transparent);
-          border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
-          color: inherit;
-          padding: 4px 8px;
-          border-radius: 4px;
-          font-size: 12px;
-          cursor: pointer;
-          transition: background-color 0.2s;
-        `;
         
         actionButton.onclick = (e) => {
           e.stopPropagation();
@@ -128,28 +117,12 @@ export class MessageManager {
       messageContent.appendChild(actionsContainer);
     }
 
-    // Add close button
     const closeButton = document.createElement('button');
-    closeButton.innerHTML = '×';
-    closeButton.style.cssText = `
-      background: none;
-      border: none;
-      color: inherit;
-      font-size: 20px;
-      cursor: pointer;
-      padding: 0;
-      width: 24px;
-      height: 24px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-      opacity: 0.7;
-      transition: opacity 0.2s;
-    `;
+    closeButton.type = 'button';
+    closeButton.className = 'toast-dismiss';
+    closeButton.setAttribute('aria-label', 'Dismiss');
+    closeButton.textContent = 'x';
     closeButton.onclick = () => this.removeToast(toast);
-    closeButton.onmouseenter = () => { closeButton.style.opacity = '1'; };
-    closeButton.onmouseleave = () => { closeButton.style.opacity = '0.7'; };
 
     messageContent.appendChild(closeButton);
     toast.appendChild(messageContent);

@@ -12,7 +12,7 @@ import type {
 } from '@simplewebauthn/browser';
 import { showError, showSuccess } from '../ui/messages.js';
 import { showProgressMessage, hideProgress } from '../ui/progress.js';
-import { showModal } from '../ui/modals.js';
+import { showModal, ModalManager } from '../ui/modals.js';
 import { clearAllSessionData, csrfHeader, mfaHandoffHeaders } from '../utils/auth.js';
 import { getAdminContactForDisplay } from '../ui/footer.js';
 import { showFileSection, showPendingApprovalSection, showAuthSection } from '../ui/sections.js';
@@ -186,17 +186,7 @@ function showWebAuthnSetupUI(
         </button>
       ` : ''}
     </div>
-    <button id="webauthn-enroll-btn" type="button" style="
-      width: 100%;
-      padding: 0.85rem;
-      background-color: var(--biolum);
-      color: var(--salt);
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 1rem;
-      margin-bottom: 0.5rem;
-    ">Register Security Key</button>
+    <button id="webauthn-enroll-btn" type="button" class="btn-primary" style="width: 100%; margin-bottom: 0.5rem; background-color: var(--biolum); color: var(--salt);">Register Security Key</button>
     <label for="webauthn-label-input" style="display:block; margin: 0.75rem 0 0.35rem; color: var(--foam-2); font-size: 0.9rem;">
       Private key label (optional, ASCII, max 64)
     </label>
@@ -209,15 +199,7 @@ function showWebAuthnSetupUI(
       background: var(--depth-2);
       color: var(--salt);
     ">
-    <button id="webauthn-enroll-cancel" type="button" style="
-      width: 100%;
-      padding: 0.75rem;
-      background: transparent;
-      color: var(--foam-2);
-      border: none;
-      cursor: pointer;
-      font-size: 0.95rem;
-    ">Cancel</button>
+    <button id="webauthn-enroll-cancel" type="button" class="secondary-button" style="width: 100%;">Cancel</button>
   `;
 
   document.getElementById('webauthn-download-backup')?.addEventListener('click', () => {
@@ -395,17 +377,7 @@ export function handleWebAuthnLoginFlow(data: WebAuthnLoginFlowData): void {
     <p style="margin: 0 0 1.25rem 0; color: var(--foam-2); font-size: 0.95rem; text-align: center;">
       Insert or tap your security key when prompted.
     </p>
-    <button id="webauthn-login-btn" type="button" style="
-      width: 100%;
-      padding: 0.85rem;
-      background-color: var(--current-2);
-      color: var(--salt);
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 1rem;
-      margin-bottom: 0.75rem;
-    ">Use Security Key</button>
+    <button id="webauthn-login-btn" type="button" class="btn-primary" style="width: 100%; margin-bottom: 0.75rem;">Use Security Key</button>
     <div style="margin-top: 0.5rem; padding-top: 0.75rem; border-top: 1px solid var(--depth-4);">
       <p style="font-size: 0.85rem; color: var(--foam-2); text-align: center; margin: 0 0 0.5rem 0;">Lost your security key?</p>
       <input type="text" id="webauthn-backup-code" maxlength="10" placeholder="10-character backup code" style="
@@ -418,19 +390,10 @@ export function handleWebAuthnLoginFlow(data: WebAuthnLoginFlowData): void {
         margin-bottom: 0.5rem;
         letter-spacing: 0.08em;
       ">
-      <button id="webauthn-backup-signin" type="button" style="
-        width: 100%;
-        padding: 0.65rem;
-        margin-bottom: 0.4rem;
-        background-color: var(--depth-3);
-        color: var(--salt);
-        border: 1px solid var(--depth-4);
-        border-radius: 4px;
-        cursor: pointer;
-        font-size: 0.9rem;
-      ">Sign in once with backup code</button>
+      <button id="webauthn-backup-signin" type="button" class="secondary-button" style="width: 100%; margin-bottom: 0.4rem;">Sign in once with backup code</button>
       <p id="webauthn-admin-recovery-hint" style="font-size: 0.8rem; color: var(--foam-2); text-align: center; margin: 0.5rem 0 0; line-height: 1.4;"></p>
     </div>
+    <button type="button" id="webauthn-login-cancel" class="secondary-button" style="width: 100%; margin-top: 0.75rem;">Cancel</button>
   `;
 
   document.getElementById('webauthn-login-btn')?.addEventListener('click', () => {
@@ -439,6 +402,11 @@ export function handleWebAuthnLoginFlow(data: WebAuthnLoginFlowData): void {
 
   document.getElementById('webauthn-backup-signin')?.addEventListener('click', () => {
     void runBackupSignIn(modal);
+  });
+
+  document.getElementById('webauthn-login-cancel')?.addEventListener('click', () => {
+    _pendingWebAuthnLogin = null;
+    ModalManager.closeModal(modal);
   });
 
   void populateWebAuthnAdminRecoveryHint();

@@ -25,6 +25,52 @@ export function closeNavInlinePanelsExcept(keep?: string): void {
   }
 }
 
+/** True when a higher-priority dialog should receive Escape instead of a nav panel. */
+function hasForegroundDialog(): boolean {
+  if (document.getElementById('progress-indicator')) return true;
+  if (document.querySelector('.password-modal-overlay')) return true;
+  if (document.querySelector('.modal-overlay')) return true;
+  if (document.querySelector('.metadata-modal-overlay')) return true;
+  const htmlModal = document.querySelector('.modal:not(.hidden)');
+  return htmlModal !== null;
+}
+
+function anyNavInlinePanelOpen(): boolean {
+  for (const id of NAV_INLINE_PANEL_IDS) {
+    const el = document.getElementById(id);
+    if (el && !el.classList.contains('hidden')) return true;
+  }
+  return false;
+}
+
+let navPanelDismissWired = false;
+
+/**
+ * Close buttons ([data-nav-panel-close]) and Escape for nav overlays.
+ * On mobile these panels are full-viewport and cover the nav toggles.
+ */
+export function wireNavInlinePanelDismiss(): void {
+  if (navPanelDismissWired) return;
+  navPanelDismissWired = true;
+
+  document.addEventListener('click', (e) => {
+    const target = e.target;
+    if (!(target instanceof Element)) return;
+    if (!target.closest('[data-nav-panel-close]')) return;
+    e.preventDefault();
+    closeNavInlinePanelsExcept();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (e.defaultPrevented) return;
+    if (hasForegroundDialog()) return;
+    if (!anyNavInlinePanelOpen()) return;
+    e.preventDefault();
+    closeNavInlinePanelsExcept();
+  });
+}
+
 export function showFileSection(): void {
   const authSection = document.getElementById('auth-section');
   const fileSection = document.getElementById('file-section');

@@ -253,13 +253,19 @@
                      Content is rendered into #billing-panel-content by ui/billing.ts
                      when the user opens the panel. -->
                 <div id="billing-panel" class="security-panel hidden">
-                    <h3>Billing</h3>
+                    <div class="security-panel-header">
+                        <h3>Billing</h3>
+                        <button type="button" class="security-panel-close" data-nav-panel-close aria-label="Close">Close</button>
+                    </div>
                     <div id="billing-panel-content"></div>
                 </div>
 
                 <!-- Security settings panel (hidden by default) -->
                 <div id="security-settings" class="security-panel hidden">
-                    <h3>Security Settings</h3>
+                    <div class="security-panel-header">
+                        <h3>Security Settings</h3>
+                        <button type="button" class="security-panel-close" data-nav-panel-close aria-label="Close">Close</button>
+                    </div>
                     <div class="setting-item">
                         <p><strong>Lock Encryption Key:</strong> Clear your cached encryption key. You'll need to re-enter your password for the next file operation.</p>
                         <button type="button" id="lock-key-btn" class="secondary-button">Lock Key</button>
@@ -280,7 +286,10 @@
 
                 <!-- Verify File panel (hidden by default) -->
                 <div id="verify-file-panel" class="security-panel hidden">
-                    <h3>Verify File</h3>
+                    <div class="security-panel-header">
+                        <h3>Verify File</h3>
+                        <button type="button" class="security-panel-close" data-nav-panel-close aria-label="Close">Close</button>
+                    </div>
                     <p>Hash a local file with streaming SHA-256 and compare it to an expected digest. Works offline once you have the digest.</p>
                     <div class="setting-item">
                         <p><strong>Local file</strong></p>
@@ -305,7 +314,10 @@
 
                 <!-- Contact info panel (hidden by default) -->
                 <div id="contact-info-panel" class="security-panel hidden">
-                    <h3>Contact Information</h3>
+                    <div class="security-panel-header">
+                        <h3>Contact Information</h3>
+                        <button type="button" class="security-panel-close" data-nav-panel-close aria-label="Close">Close</button>
+                    </div>
                     <p class="contact-info-notice">Contact details you provide here are encrypted at rest and readable only by the instance admin. Used solely for account-related communications.</p>
 
                     <div class="setting-item">

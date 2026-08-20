@@ -218,17 +218,7 @@ function showTOTPSetupUI(modalContent: Element, setupData: TOTPSetupData, flowDa
     
     <div id="totp-session-timer" style="display: none; text-align: center; margin-bottom: 0.75rem; font-size: 0.85rem; color: var(--phosphor);"></div>
     
-    <button id="complete-totp-setup" disabled style="
-      width: 100%;
-      padding: 0.8rem 1.5rem;
-      background-color: var(--biolum);
-      color: var(--salt);
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 1rem;
-      transition: background-color 0.3s ease;
-    ">${flowData.addSecondFactor ? 'Complete Setup' : 'Complete Registration'}</button>
+    <button id="complete-totp-setup" class="btn-primary" disabled style="width: 100%; background-color: var(--biolum); color: var(--salt);">${flowData.addSecondFactor ? 'Complete Setup' : 'Complete Registration'}</button>
   `;
 
   // Add event listeners

@@ -159,29 +159,17 @@ export function renderDownloadIntegrityPanel(
   panel.innerHTML = '';
 
   const header = document.createElement('div');
-  header.style.display = 'flex';
-  header.style.alignItems = 'center';
-  header.style.justifyContent = 'space-between';
-  header.style.gap = '0.5rem';
-  header.style.marginBottom = '0.5rem';
+  header.className = 'security-panel-header';
 
   const heading = document.createElement('h3');
   heading.textContent = 'Download integrity';
-  heading.style.margin = '0';
   header.appendChild(heading);
 
   const closeBtn = document.createElement('button');
   closeBtn.type = 'button';
-  closeBtn.className = 'password-modal-close';
+  closeBtn.className = 'security-panel-close';
   closeBtn.setAttribute('aria-label', 'Close');
-  closeBtn.innerHTML = '&times;';
-  closeBtn.style.background = 'none';
-  closeBtn.style.border = 'none';
-  closeBtn.style.color = 'var(--foam-2)';
-  closeBtn.style.fontSize = '1.5rem';
-  closeBtn.style.lineHeight = '1';
-  closeBtn.style.cursor = 'pointer';
-  closeBtn.style.padding = '0 0.25rem';
+  closeBtn.textContent = 'Close';
   closeBtn.addEventListener('click', () => {
     hideDownloadIntegrityPanel(panelId);
   });

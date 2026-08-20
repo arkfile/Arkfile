@@ -1,10 +1,12 @@
 import { lockAccountKey } from '../crypto/account-key-cache';
 import { clearAllSessionData } from '../utils/auth';
 import { showError, showSuccess } from '../ui/messages';
+import { wireNavInlinePanelDismiss } from '../ui/sections';
 import type { AppShell } from './shell';
 
 /** Billing, security, contact, verify-file, lock key, and revoke-all toggles. */
 export function setupShellListeners(shell: AppShell): void {
+  wireNavInlinePanelDismiss();
   const billingToggle = document.getElementById('billing-toggle');
   if (billingToggle) {
     billingToggle.addEventListener('click', async (e) => {

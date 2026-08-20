@@ -1124,6 +1124,7 @@ function showMetadataModal(file: DecryptedFileEntry): void {
   closeSection.className = 'metadata-modal-close';
 
   const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
   closeBtn.textContent = 'Close';
   closeBtn.addEventListener('click', () => {
     document.body.removeChild(overlay);

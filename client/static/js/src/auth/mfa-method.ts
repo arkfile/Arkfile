@@ -2,7 +2,7 @@
  * MFA method selection and environment checks for browser enrollment/login.
  */
 
-import { showModal } from '../ui/modals.js';
+import { showModal, ModalManager } from '../ui/modals.js';
 
 export type MFAMethod = 'totp' | 'webauthn';
 
@@ -96,18 +96,7 @@ export function showMFALoginMethodPicker(
   if (!modalContent) return;
 
   const buttonsHtml = methods.map((method, index) => `
-    <button id="mfa-login-pick-${index}" type="button" data-index="${index}" style="
-      width: 100%;
-      padding: 0.85rem 1rem;
-      margin-bottom: 0.75rem;
-      background-color: var(--depth-3);
-      color: var(--salt);
-      border: 1px solid var(--depth-4);
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 1rem;
-      text-align: left;
-    ">${methodButtonLabel(method)}</button>
+    <button id="mfa-login-pick-${index}" type="button" class="secondary-button" data-index="${index}" style="width: 100%; margin-bottom: 0.75rem; text-align: left; white-space: normal;">${methodButtonLabel(method)}</button>
   `).join('');
 
   modalContent.innerHTML = `
@@ -116,13 +105,18 @@ export function showMFALoginMethodPicker(
       Your account has more than one second factor. Pick one to finish signing in.
     </p>
     ${buttonsHtml}
+    <button type="button" id="mfa-login-pick-cancel" class="secondary-button" style="width: 100%; margin-top: 0.25rem;">Cancel</button>
   `;
 
   methods.forEach((method, index) => {
     document.getElementById(`mfa-login-pick-${index}`)?.addEventListener('click', () => {
-      modal.remove();
+      ModalManager.closeModal(modal);
       onSelect(method);
     });
+  });
+
+  document.getElementById('mfa-login-pick-cancel')?.addEventListener('click', () => {
+    ModalManager.closeModal(modal);
   });
 }
 
@@ -156,34 +150,11 @@ export function showMFAMethodPicker(
         ? 'You may enroll one authenticator app and one security key. Your existing backup codes stay valid.'
         : 'Two-factor authentication is required. Pick your first method now; you can add the other type later from MFA settings.'}
     </p>
-    <button id="mfa-pick-totp" type="button" style="
-      width: 100%;
-      padding: 0.85rem 1rem;
-      margin-bottom: 0.75rem;
-      background-color: var(--depth-3);
-      color: var(--salt);
-      border: 1px solid var(--depth-4);
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 1rem;
-      text-align: left;
-    ">
+    <button id="mfa-pick-totp" type="button" class="secondary-button" style="width: 100%; margin-bottom: 0.75rem; text-align: left; white-space: normal; height: auto;">
       <strong>Authenticator app (TOTP)</strong><br>
       <span style="font-size: 0.85rem; color: var(--foam-2);">Works in any browser, including Tor Browser.</span>
     </button>
-    <button id="mfa-pick-webauthn" type="button" ${webauthnOk ? '' : 'disabled'} style="
-      width: 100%;
-      padding: 0.85rem 1rem;
-      margin-bottom: 0.75rem;
-      background-color: var(--depth-3);
-      color: var(--salt);
-      border: 1px solid var(--depth-4);
-      border-radius: 4px;
-      cursor: ${webauthnOk ? 'pointer' : 'not-allowed'};
-      opacity: ${webauthnOk ? '1' : '0.55'};
-      font-size: 1rem;
-      text-align: left;
-    ">
+    <button id="mfa-pick-webauthn" type="button" class="secondary-button" ${webauthnOk ? '' : 'disabled'} style="width: 100%; margin-bottom: 0.75rem; text-align: left; white-space: normal; height: auto; cursor: ${webauthnOk ? 'pointer' : 'not-allowed'}; opacity: ${webauthnOk ? '1' : '0.55'};">
       <strong>Security key (WebAuthn)</strong><br>
       <span style="font-size: 0.85rem; color: var(--foam-2);">USB or NFC hardware key (YubiKey, Nitrokey, etc.).</span>
     </button>

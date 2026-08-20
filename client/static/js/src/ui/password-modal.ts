@@ -91,9 +91,7 @@ function createModalHTML(options: PasswordPromptOptions): string {
       <div id="${MODAL_ID}" class="password-modal" role="dialog" aria-modal="true" aria-labelledby="password-modal-title">
         <div class="password-modal-header">
           <h2 id="password-modal-title">${escapeHtml(options.title)}</h2>
-          <button type="button" class="password-modal-close" aria-label="Close" id="password-modal-close-btn">
-            <span aria-hidden="true">&times;</span>
-          </button>
+          <button type="button" class="password-modal-close" aria-label="Close" id="password-modal-close-btn">x</button>
         </div>
         <div class="password-modal-body">
           <p class="password-modal-message">${escapeHtml(options.message)}</p>
@@ -273,10 +271,13 @@ const MODAL_STYLES = `
   }
 
   .password-modal-btn {
-    padding: 10px 20px;
-    border-radius: 4px;
-    font-size: 0.875rem;
-    font-weight: 500;
+    padding: var(--control-pad-y) var(--control-pad-x);
+    border-radius: 6px;
+    font-size: var(--control-font);
+    font-weight: 600;
+    line-height: var(--control-line);
+    min-height: var(--control-height);
+    box-sizing: border-box;
     cursor: pointer;
     transition: all 0.2s;
   }
@@ -331,6 +332,20 @@ const MODAL_STYLES = `
     opacity: 0.5;
     cursor: not-allowed;
   }
+
+  @media (max-width: 768px) {
+    .password-modal-overlay {
+      align-items: flex-start;
+      padding: max(1rem, env(safe-area-inset-top, 0px)) 0.5rem max(1rem, env(safe-area-inset-bottom, 0px));
+      overflow-y: auto;
+    }
+    .password-modal-footer {
+      flex-wrap: wrap;
+    }
+    .password-modal-btn {
+      min-height: var(--control-height);
+    }
+  }
 `;
 
 let stylesInjected = false;
@@ -344,6 +359,11 @@ function injectStyles(): void {
   document.head.appendChild(styleElement);
   
   stylesInjected = true;
+}
+
+/** Ensure password-modal overlay CSS is present (share, top-up, and related dialogs). */
+export function ensurePasswordModalStyles(): void {
+  injectStyles();
 }
 
 // Utility Functions
@@ -592,9 +612,7 @@ export function promptForCacheOptIn(): Promise<CacheOptInResult | null> {
         <div class="password-modal" role="dialog" aria-modal="true" aria-labelledby="cache-optin-title">
           <div class="password-modal-header">
             <h2 id="cache-optin-title">Cache Account Key?</h2>
-            <button type="button" class="password-modal-close" aria-label="Close" id="cache-optin-close-btn">
-              <span aria-hidden="true">&times;</span>
-            </button>
+            <button type="button" class="password-modal-close" aria-label="Close" id="cache-optin-close-btn">x</button>
           </div>
           <div class="password-modal-body">
             <p class="password-modal-message">

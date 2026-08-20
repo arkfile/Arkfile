@@ -4,7 +4,7 @@
 
 import { showError, showSuccess } from '../ui/messages';
 import { showProgressMessage, hideProgress } from '../ui/progress';
-import { showModal, showTOTPAppsModal } from '../ui/modals';
+import { showModal, showTOTPAppsModal, ModalManager } from '../ui/modals';
 import { clearAllSessionData, AuthManager, csrfHeader, mfaHandoffHeaders } from '../utils/auth';
 import { getAdminContactForDisplay } from '../ui/footer';
 import { showFileSection, showAuthSection, showTOTPSetupSection } from '../ui/sections';
@@ -90,17 +90,7 @@ export function handleTOTPFlow(data: TOTPFlowData): void {
         margin-bottom: 15px;
         letter-spacing: 0.2em;
       ">
-      <button id="verify-totp-login" disabled style="
-        width: 100%;
-        padding: 10px;
-        background-color: var(--current-2);
-        color: var(--salt);
-        border: none;
-        border-radius: 4px;
-        cursor: pointer;
-        font-size: 16px;
-        margin-bottom: 10px;
-      ">Verify</button>
+      <button id="verify-totp-login" class="btn-primary" disabled style="width: 100%; margin-bottom: 10px;">Verify</button>
     </div>
     <div id="backup-code-section" class="hidden">
       <p id="backup-mode-hint" style="font-size: 13px; color: var(--foam-2); margin: 0 0 10px 0; text-align: center;"></p>
@@ -114,66 +104,23 @@ export function handleTOTPFlow(data: TOTPFlowData): void {
         margin-bottom: 15px;
         letter-spacing: 0.1em;
       ">
-      <button id="verify-backup-login" disabled style="
-        width: 100%;
-        padding: 10px;
-        background-color: var(--current-2);
-        color: var(--salt);
-        border: none;
-        border-radius: 4px;
-        cursor: pointer;
-        font-size: 16px;
-        margin-bottom: 10px;
-      ">Continue</button>
-      <button id="backup-back-to-totp" type="button" style="
-        width: 100%;
-        padding: 8px;
-        background: transparent;
-        color: var(--foam-2);
-        border: none;
-        cursor: pointer;
-        font-size: 14px;
-        margin-bottom: 10px;
-      ">Back to authenticator code</button>
+      <button id="verify-backup-login" class="btn-primary" disabled style="width: 100%; margin-bottom: 10px;">Continue</button>
+      <button id="backup-back-to-totp" type="button" class="secondary-button" style="width: 100%; margin-bottom: 10px;">Back to authenticator code</button>
     </div>
     <div id="backup-trouble-section" style="margin-bottom: 10px; padding-top: 8px; border-top: 1px solid var(--depth-4);">
       <p style="font-size: 13px; color: var(--foam-2); margin: 0 0 8px 0; text-align: center;">Having trouble?</p>
-      <button id="backup-signin-once" type="button" style="
-        width: 100%;
-        padding: 8px;
-        margin-bottom: 6px;
-        background-color: var(--depth-3);
-        color: var(--salt);
-        border: 1px solid var(--depth-4);
-        border-radius: 4px;
-        cursor: pointer;
-        font-size: 14px;
-      ">Sign in once with a backup code</button>
-      <button id="backup-reenroll" type="button" style="
-        width: 100%;
-        padding: 8px;
-        background-color: var(--depth-3);
-        color: var(--salt);
-        border: 1px solid var(--depth-4);
-        border-radius: 4px;
-        cursor: pointer;
-        font-size: 14px;
-      ">Set up a new second factor with a backup code</button>
+      <button id="backup-signin-once" type="button" class="secondary-button" style="width: 100%; margin-bottom: 6px;">Sign in once with a backup code</button>
+      <button id="backup-reenroll" type="button" class="secondary-button" style="width: 100%;">Set up a new second factor with a backup code</button>
       <p id="mfa-admin-recovery-hint" style="font-size: 12px; color: var(--foam-2); margin: 10px 0 0; text-align: center; line-height: 1.4;"></p>
     </div>
-    <button onclick="this.closest('.modal-overlay').remove();" style="
-      width: 100%;
-      padding: 10px;
-      background-color: var(--depth-4);
-      color: var(--salt);
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 16px;
-    ">Cancel</button>
+    <button type="button" id="totp-login-cancel" class="secondary-button" style="width: 100%;">Cancel</button>
   `;
   
   modalContent.appendChild(totpForm);
+
+  document.getElementById('totp-login-cancel')?.addEventListener('click', () => {
+    ModalManager.closeModal(totpModal);
+  });
   
   let backupMode: 'signin' | 'reenroll' | null = null;
 
@@ -339,7 +286,7 @@ async function submitMFAAuth(code: string, isBackup: boolean): Promise<void> {
         is_approved: data.user?.is_approved
       }, pendingData.username, carriedPassword);
 
-      document.querySelector('.modal-overlay')?.remove();
+      ModalManager.closeAllModals();
       
       showSuccess('Authentication successful!');
       
@@ -348,7 +295,7 @@ async function submitMFAAuth(code: string, isBackup: boolean): Promise<void> {
       // Session expired: clear state and redirect to login
       if (response.status === 401) {
         _pendingTOTPFlowData = null;
-        document.querySelector('.modal-overlay')?.remove();
+        ModalManager.closeAllModals();
         clearAllSessionData();
         showAuthSection();
         showError('Session expired. Please log in again.');
@@ -382,7 +329,7 @@ async function submitBackupReenroll(code: string): Promise<void> {
       return;
     }
 
-    document.querySelector('.modal-overlay')?.remove();
+    ModalManager.closeAllModals();
     showProgressMessage('Setting up new second factor...');
 
     const resetResponse = await fetch('/api/mfa/reset', {
@@ -575,7 +522,7 @@ export async function completeTOTPSetup(code: string): Promise<Record<string, an
         if (typeof window !== 'undefined') {
           delete window.totpSetupData;
         }
-        document.querySelector('.modal-overlay')?.remove();
+        ModalManager.closeAllModals();
         clearAllSessionData();
         showAuthSection();
         showError('Setup session expired. Please log in to continue TOTP setup.');

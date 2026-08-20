@@ -16,7 +16,7 @@
 import { authenticatedFetch, isAuthenticated, getUsernameFromToken, getCurrentUser } from '../utils/auth';
 import { showError, showSuccess } from '../ui/messages';
 import { showProgress, hideProgress } from '../ui/progress';
-import { showPasswordPrompt } from '../ui/password-modal';
+import { showPasswordPrompt, ensurePasswordModalStyles } from '../ui/password-modal';
 import { deriveFileEncryptionKey } from '../crypto/file-encryption';
 import {
   getAccountKey,
@@ -62,6 +62,7 @@ function promptForSharePassword(): Promise<{ password: string; expiresMinutes: n
 
     // Remove any existing modal
     document.getElementById(OVERLAY_ID)?.remove();
+    ensurePasswordModalStyles();
 
     const overlay = document.createElement('div');
     overlay.id = OVERLAY_ID;
@@ -70,7 +71,7 @@ function promptForSharePassword(): Promise<{ password: string; expiresMinutes: n
       <div class="password-modal" role="dialog" aria-modal="true" aria-labelledby="share-modal-title">
         <div class="password-modal-header">
           <h2 id="share-modal-title">Create Share</h2>
-          <button type="button" class="password-modal-close" id="share-modal-close">&times;</button>
+          <button type="button" class="password-modal-close" id="share-modal-close" aria-label="Close">x</button>
         </div>
         <div class="password-modal-body">
           <p class="password-modal-message">
@@ -236,6 +237,7 @@ function promptForSharePassword(): Promise<{ password: string; expiresMinutes: n
 function showShareUrlModal(shareUrl: string): void {
   const OVERLAY_ID = 'arkfile-share-result-overlay';
   document.getElementById(OVERLAY_ID)?.remove();
+  ensurePasswordModalStyles();
 
   const overlay = document.createElement('div');
   overlay.id = OVERLAY_ID;
@@ -244,7 +246,7 @@ function showShareUrlModal(shareUrl: string): void {
     <div class="password-modal" role="dialog" aria-modal="true">
       <div class="password-modal-header">
         <h2>Share Created</h2>
-        <button type="button" class="password-modal-close" id="share-result-close">&times;</button>
+        <button type="button" class="password-modal-close" id="share-result-close" aria-label="Close">x</button>
       </div>
       <div class="password-modal-body">
         <p class="password-modal-message">
@@ -269,7 +271,12 @@ function showShareUrlModal(shareUrl: string): void {
 
   document.body.appendChild(overlay);
 
-  const close = () => overlay.remove();
+  const close = () => {
+    document.removeEventListener('keydown', onKey);
+    overlay.remove();
+  };
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
 
   document.getElementById('share-result-close')!.addEventListener('click', close);
   document.getElementById('share-result-done')!.addEventListener('click', close);

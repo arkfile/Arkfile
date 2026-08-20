@@ -14,6 +14,16 @@
     --phosphor: #f0a500;
     --coral: #e05c5c;
     --salt: #ffffff;
+
+    /* Shared in-app control size. Width follows label; height stays fixed.
+       Excluded: .security-panel-close, .btn-copy-hash, .tag-chip,
+       .tag-chip-remove, .password-toggle-btn, .password-modal-close,
+       .toast-dismiss, .toast-action, .icon-button. */
+    --control-font: 0.875rem;
+    --control-line: 1.25;
+    --control-pad-y: 0.4rem;
+    --control-pad-x: 0.9rem;
+    --control-height: 2.25rem;
 }
 
 /* Hash value display (SHA-256) in shares list */
@@ -76,6 +86,8 @@
     padding: 2rem;
     max-width: 580px;
     width: 90%;
+    max-height: 90vh;
+    overflow-y: auto;
     box-shadow: 0 4px 20px color-mix(in srgb, var(--depth-1) 80%, transparent);
     animation: modalSlideIn 0.2s ease-out;
 }
@@ -136,6 +148,69 @@
     margin-top: 1.5rem;
     display: flex;
     justify-content: flex-end;
+}
+
+.metadata-modal-close button {
+    min-height: var(--control-height);
+    padding: var(--control-pad-y) var(--control-pad-x);
+}
+
+.message-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    max-width: 400px;
+}
+
+.toast-dismiss {
+    background: none;
+    border: none;
+    color: inherit;
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+    width: 1.5rem;
+    height: 1.5rem;
+    min-height: 0;
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    opacity: 0.7;
+    box-shadow: none;
+    transform: none;
+}
+
+.toast-dismiss:hover {
+    opacity: 1;
+    background: none;
+    box-shadow: none;
+    transform: none;
+}
+
+.toast-action {
+    background: color-mix(in srgb, currentColor 16%, transparent);
+    border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+    color: inherit;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1.2;
+    cursor: pointer;
+    min-height: 0;
+    min-width: 0;
+    box-shadow: none;
+    transform: none;
+}
+
+.toast-action:hover {
+    background: color-mix(in srgb, currentColor 28%, transparent);
+    box-shadow: none;
+    transform: none;
 }
 
 a {
@@ -223,13 +298,17 @@ input[type="file"] {
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
-    padding: 0.75rem 1.5rem;
-    background-color: var(--depth-3);
+    padding: var(--control-pad-y) var(--control-pad-x);
+    background-color: var(--depth-2);
     color: var(--salt);
-    border: 2px solid var(--depth-4);
+    border: 2px solid var(--current-2);
     border-radius: 6px;
-    font-size: 1rem;
+    font-size: var(--control-font);
     font-weight: 600;
+    line-height: var(--control-line);
+    min-height: var(--control-height);
+    box-sizing: border-box;
+    width: auto;
     cursor: pointer;
     transition: all 0.2s ease;
     margin-bottom: 1rem;
@@ -290,7 +369,7 @@ input[type="file"] {
 
 .file-input-label:hover {
     background-color: var(--depth-4);
-    border-color: var(--current-2);
+    border-color: var(--salt);
 }
 
 .file-input-label.has-file {
@@ -352,19 +431,27 @@ input[type="checkbox"] {
     cursor: pointer;
 }
 
-.btn, button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove), .hero-btn, .share-action-btn, .share-list-refresh, .secondary-button, .danger-button, .btn-primary, .btn-secondary, .logout-btn, .nav-link, .remove-contact-btn, .cancel-button, .progress-modal .cancel-button {
-    padding: 0.75rem 1.5rem;
+.btn, button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):not(.security-panel-close):not(.btn-copy-hash):not(.hero-btn):not(.password-modal-close):not(.icon-button):not(.toast-dismiss):not(.toast-action), .share-action-btn, .share-list-refresh, .secondary-button, .danger-button, .btn-primary, .btn-secondary, .logout-btn, .nav-link, .remove-contact-btn, .cancel-button, .progress-modal .cancel-button, .password-modal-btn {
+    padding: var(--control-pad-y) var(--control-pad-x);
     border-radius: 6px;
     cursor: pointer;
-    font-size: 1rem;
+    font-size: var(--control-font);
     font-weight: 600;
+    line-height: var(--control-line);
+    min-height: var(--control-height);
+    box-sizing: border-box;
+    width: auto;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     transition: all 0.2s ease;
     border: none;
     background-color: var(--current-1);
     color: var(--foam-1);
 }
 
-button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .share-list-refresh:hover, .secondary-button:hover, .nav-link:hover {
+button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):not(.security-panel-close):not(.btn-copy-hash):not(.hero-btn):not(.password-modal-close):not(.icon-button):not(.toast-dismiss):not(.toast-action):hover, .btn-primary:hover, .share-action-btn:hover, .share-list-refresh:hover, .secondary-button:hover {
     background-color: color-mix(in srgb, var(--current-1) 70%, var(--depth-1));
     transform: translateY(-1px);
     box-shadow: 0 4px 12px color-mix(in srgb, var(--current-1) 30%, transparent);
@@ -375,25 +462,25 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .bt
     color: var(--foam-1);
 }
 
-.btn-secondary, .secondary-button, .nav-link, .remove-contact-btn, .progress-modal .cancel-button {
-    background-color: var(--depth-3);
+.btn-secondary, .secondary-button, .remove-contact-btn, .progress-modal .cancel-button {
+    background-color: var(--depth-2);
     color: var(--salt);
     border: 2px solid var(--depth-4);
 }
 
-.btn-secondary:hover, .secondary-button:hover, .nav-link:hover, .remove-contact-btn:hover, .progress-modal .cancel-button:hover {
+.btn-secondary:hover, .secondary-button:hover, .remove-contact-btn:hover, .progress-modal .cancel-button:hover {
     background-color: var(--depth-1);
     border-color: var(--current-2);
 }
 
 .logout-link {
     background-color: color-mix(in srgb, var(--coral) 15%, var(--depth-3));
-    color: var(--current-1);
-    border-color: var(--current-1);
+    color: var(--coral);
+    border: 2px solid var(--coral);
 }
 
 .logout-link:hover {
-    background-color: color-mix(in srgb, var(--coral) 15%, var(--depth-3));
+    background-color: color-mix(in srgb, var(--coral) 25%, var(--depth-3));
     color: var(--salt);
 }
 
@@ -563,13 +650,11 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .bt
 
 .decrypt-banner button {
     white-space: nowrap;
-    padding: 0.5rem 1rem;
     background: var(--current-1);
     color: var(--salt);
     border: none;
     border-radius: 4px;
     cursor: pointer;
-    font-size: 0.875rem;
 }
 
 .decrypt-banner button:hover {
@@ -1061,8 +1146,7 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .bt
 }
 
 .file-actions button {
-    padding: 0.5rem 1rem;
-    font-size: 0.9rem;
+    width: auto;
 }
 
 .file-actions .danger-button {
@@ -1144,12 +1228,13 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .bt
 .logout-btn {
     background-color: var(--coral) !important;
     color: var(--salt) !important;
-    font-size: 0.9rem !important;
+    font-size: var(--control-font) !important;
     width: auto !important;
-    padding: 8px 12px !important;
-    border-radius: 4px !important;
+    padding: var(--control-pad-y) var(--control-pad-x) !important;
+    line-height: var(--control-line) !important;
+    min-height: var(--control-height) !important;
+    border-radius: 6px !important;
     height: auto !important;
-    min-width: 80px;
 }
 
 .logout-btn:hover {
@@ -1160,31 +1245,36 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .bt
 
 /* Navigation link styling */
 .nav-link {
-    display: inline-block;
-    padding: 8px 12px;
+    display: inline-flex;
+    align-items: center;
+    padding: var(--control-pad-y) var(--control-pad-x);
     margin: 0 4px;
     text-decoration: none;
     color: var(--salt);
-    background-color: var(--depth-3);
-    border: 1px solid var(--depth-4);
-    border-radius: 4px;
-    font-size: 0.9rem;
-    transition: all 0.3s ease;
+    background-color: var(--depth-2);
+    border: 2px solid var(--current-2);
+    border-radius: 6px;
+    font-size: var(--control-font);
+    font-weight: 600;
+    line-height: var(--control-line);
+    min-height: var(--control-height);
+    box-sizing: border-box;
+    transition: all 0.2s ease;
     cursor: pointer;
 }
 
 .nav-link:hover {
     background-color: var(--depth-4);
-    border-color: var(--depth-4);
+    border-color: var(--salt);
     text-decoration: none;
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px color-mix(in srgb, var(--depth-1) 80%, transparent);
+    transform: none;
+    box-shadow: none;
 }
 
 .logout-link {
     background-color: color-mix(in srgb, var(--coral) 15%, var(--depth-3)) !important;
     color: var(--coral) !important;
-    border-color: var(--coral) !important;
+    border: 2px solid var(--coral) !important;
 }
 
 .logout-link:hover {
@@ -1207,12 +1297,114 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .bt
     z-index: 10;
 }
 
-.security-panel h3 {
-    margin-top: 0;
+.security-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
     margin-bottom: 1rem;
-    font-size: 1.2rem;
     border-bottom: 1px solid var(--depth-4);
     padding-bottom: 0.5rem;
+}
+
+.security-panel-header h3,
+.security-panel h3 {
+    margin-top: 0;
+    margin-bottom: 0;
+    font-size: 1.2rem;
+}
+
+.security-panel > h3 {
+    margin-bottom: 1rem;
+    border-bottom: 1px solid var(--depth-4);
+    padding-bottom: 0.5rem;
+}
+
+.security-panel-header h3 {
+    border-bottom: none;
+    padding-bottom: 0;
+}
+
+.security-panel-close {
+    background: transparent;
+    color: var(--foam-2);
+    border: 1px solid var(--depth-4);
+    border-radius: 4px;
+    padding: 0.2rem 0.55rem;
+    font-size: 0.78rem;
+    font-weight: 500;
+    line-height: 1.2;
+    cursor: pointer;
+    flex-shrink: 0;
+    min-height: 0;
+    min-width: 0;
+    box-shadow: none;
+}
+
+.security-panel-close:hover {
+    background-color: var(--depth-2);
+    color: var(--salt);
+    border-color: var(--foam-2);
+    transform: none;
+    box-shadow: none;
+}
+
+.security-panel button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):not(.security-panel-close),
+.security-panel .btn,
+.security-panel .btn-primary,
+.security-panel .secondary-button,
+.security-panel .danger-button {
+    margin: 0;
+}
+
+.security-panel .file-input-label {
+    margin-bottom: 0.5rem;
+    background-color: var(--depth-2);
+    border: 2px solid var(--current-2);
+    color: var(--salt);
+}
+
+.security-panel .mfa-credential-row > div {
+    flex-wrap: wrap;
+}
+
+.billing-plans-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+}
+
+.billing-plan-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.45rem;
+    padding: 0.65rem 0.75rem;
+    background: var(--depth-2);
+    border: 1px solid var(--depth-4);
+    border-radius: 6px;
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+.billing-plan-card button {
+    align-self: flex-start;
+}
+
+/* Result text inside nav panels must stay inline; .success-message/.error-message
+   are otherwise position:fixed toasts. */
+.security-panel .success-message,
+.security-panel .error-message,
+#share-verify-result.success-message,
+#share-verify-result.error-message {
+    position: static;
+    top: auto;
+    right: auto;
+    max-width: none;
+    box-shadow: none;
+    animation: none;
+    padding: 0.75rem;
+    margin: 0.5rem 0;
 }
 
 .setting-item {
@@ -1487,6 +1679,8 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .bt
     border-radius: 8px;
     max-width: 500px;
     width: 90%;
+    max-height: 90vh;
+    overflow-y: auto;
     box-shadow: 0 4px 20px color-mix(in srgb, var(--depth-1) 80%, transparent);
     animation: modalSlideIn 0.3s ease-out;
 }
@@ -1533,11 +1727,8 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .bt
 
 .consent-options button {
     width: 100%;
-    padding: 0.8rem 1rem;
     text-align: left;
-    border-radius: 6px;
-    font-size: 0.95rem;
-    transition: all 0.3s ease;
+    white-space: normal;
 }
 
 .btn-primary {
@@ -1755,11 +1946,6 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .bt
         gap: 0.6rem;
     }
     
-    .consent-options button {
-        padding: 0.7rem;
-        font-size: 0.9rem;
-    }
-    
     .progress-message {
         margin: 1rem;
         padding: 1rem 1.5rem;
@@ -1792,11 +1978,6 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .bt
         flex-wrap: wrap;
         width: 100%;
         gap: 0.4rem;
-    }
-
-    .file-actions button {
-        padding: 0.4rem 0.7rem;
-        font-size: 0.82rem;
     }
 
     /* Mobile share list */
@@ -1855,12 +2036,7 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .bt
         gap: 0.4rem;
     }
 
-    .share-actions button {
-        padding: 0.4rem 0.7rem;
-        font-size: 0.82rem;
-    }
-
-    /* Mobile: Contact info panel - full width overlay instead of absolute dropdown */
+    /* Mobile: full-viewport overlay; Close stays on screen via sticky header */
     .security-panel {
         position: fixed;
         top: 0;
@@ -1872,8 +2048,26 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .bt
         z-index: 100;
         border-radius: 0;
         overflow-y: auto;
+        overscroll-behavior: contain;
         padding: 1.25rem;
+        padding-top: max(1.25rem, env(safe-area-inset-top, 0px));
+        padding-bottom: max(1.25rem, env(safe-area-inset-bottom, 0px));
         box-sizing: border-box;
+    }
+
+    .security-panel-header {
+        position: sticky;
+        top: calc(-1 * max(1.25rem, env(safe-area-inset-top, 0px)));
+        z-index: 2;
+        background-color: var(--depth-3);
+        margin: calc(-1 * max(1.25rem, env(safe-area-inset-top, 0px))) -1.25rem 1rem -1.25rem;
+        padding: max(1.25rem, env(safe-area-inset-top, 0px)) 1.25rem 0.75rem 1.25rem;
+    }
+
+    .security-panel-close {
+        padding: 0.35rem 0.7rem;
+        font-size: 0.82rem;
+        min-height: 2.2rem;
     }
 
     /* Mobile: Stack contact method rows vertically */
@@ -1942,8 +2136,6 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .bt
     }
 
     .user-controls .nav-link {
-        font-size: 0.82rem;
-        padding: 6px 10px;
         margin: 2px;
     }
 
@@ -1966,6 +2158,8 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .bt
     .modal-content {
         max-width: 95%;
         width: 95%;
+        max-height: 85vh;
+        padding: 1.25rem;
     }
 
     /* Mobile: Password modal - ensure it fits */
@@ -1974,10 +2168,25 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .bt
         max-width: 95%;
     }
 
+    .password-modal-overlay {
+        align-items: flex-start;
+        padding: max(1rem, env(safe-area-inset-top, 0px)) 0.5rem max(1rem, env(safe-area-inset-bottom, 0px));
+        overflow-y: auto;
+    }
+
+    .password-modal-footer {
+        flex-wrap: wrap;
+    }
+
+    .password-modal-btn {
+        min-height: var(--control-height);
+    }
+
     /* Mobile: Metadata modal */
     .metadata-modal {
         width: 95%;
         padding: 1rem;
+        max-height: 85vh;
     }
 
     .metadata-row {
@@ -2006,6 +2215,18 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .bt
         width: calc(100vw - 2rem);
         max-width: 400px;
         padding: 20px;
+    }
+
+    .message-container {
+        left: 1rem;
+        right: 1rem;
+        max-width: none;
+        top: max(12px, env(safe-area-inset-top, 0px));
+    }
+
+    .metadata-modal-close button {
+        width: 100%;
+        justify-content: center;
     }
 }
 
@@ -2175,12 +2396,10 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .bt
 .secondary-button {
     background-color: var(--depth-4);
     color: var(--salt);
-    padding: 0.8rem 1.5rem;
     border: none;
     border-radius: 4px;
     cursor: pointer;
-    font-size: 1rem;
-    margin: 0.5rem;
+    margin: 0;
     transition: background-color 0.3s ease;
 }
 
@@ -2291,11 +2510,9 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .bt
 }
 
 .share-form-container .btn {
-    padding: 0.6rem 1rem;
     border: none;
     border-radius: 4px;
     cursor: pointer;
-    font-size: 0.9rem;
     transition: all 0.3s ease;
 }
 
@@ -2395,10 +2612,8 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .bt
     background-color: var(--biolum);
     color: var(--depth-1);
     border: none;
-    padding: 0.6rem 1rem;
     border-radius: 4px;
     cursor: pointer;
-    font-size: 0.9rem;
     transition: background-color 0.3s ease;
 }
 
@@ -2504,10 +2719,8 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .bt
     background-color: var(--depth-4);
     color: var(--salt);
     border: none;
-    padding: 8px 16px;
     border-radius: 4px;
     cursor: pointer;
-    font-size: 14px;
 }
 
 .progress-modal .cancel-button:hover {
@@ -2763,8 +2976,6 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .bt
     min-width: 130px;
     max-width: none;
     margin: 0;
-    padding: 0.75rem 1.5rem;
-    font-size: 1rem;
     white-space: nowrap;
 }
 
