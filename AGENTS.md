@@ -18,11 +18,13 @@ The server must never learn user passwords, plaintext file contents, plaintext f
 
 When users (file owners) choose to share files with others (anonymous recipients), they encrypt information about the file along with a file download token and a file encryption key all wrapped up into a share envelope that is uploaded to the server in encrypted form, so that again the server learns nothing of the files or their contents. Anonymous recipients of shared files need only the Share URL and Share Password in order access the share envelope, decrypt metadata about the file, and download and decrypt it client-side. The file sharing aspect of Arkfile does not require or collect any identifying information about the recipients (no account required to access shared files).
 
-## Greenfield App
+## Existing Data
 
-There are no production deployments of this app anywhere at present. For the most part, "backwards compatibility" is not needed at this stage when refactoring. The focus for now is on fixing and proving the correct implementation of the system as it is designed and intended. Be wary and flag it to the developers anytime you come across deprecated/disabled/stub/bad/backwards-compatibility functions or comments, or any technical debt that could make it harder to work with this codebase in the future. There is a test/demo server currently at `test.arkfile.net` with early beta testers using it.
+Arkfile is deployed in production at `arkfile.net`, and may be self-hosted by other admins elsewhere via local or production deployments. New work must be non-destructive to existing deployments. Do not design, recommend, or land changes that wipe or invalidate admin user access and control, user registration records, MFA configurations, uploaded files, file share records, or payment and billing data.
 
-We are aiming to solidy the app now for our first production deployment.
+`dev-reset.sh` remains the destructive local development path only. Updates to populated VPS deployments use `prod-update.sh` or `test-update.sh`, never `prod-deploy.sh` or `test-deploy.sh`. Schema, crypto, and API changes that would drop or break existing records need an in-place migration path. Do not assume a wipe or a fresh redeploy.
+
+Continue to flag deprecated, disabled, stub, or unused code and other technical debt. Removing dead code is fine when it does not affect live data or working clients.
 
 ## Function Review Sanity Checks
 
@@ -48,7 +50,7 @@ Do not replace a working, e2e-proven path with unfinished complexity. Cut over o
 
 ## Key Tools for Development
 
-In order to slowly build up the core functionality of the system and prove its correct and secure implementation, the following tools are critical to use, improve upon and maintain:
+The following tools are critical to use, improve upon and maintain:
 
 - `sudo bash scripts/dev-reset.sh` - Destructive development iteration tool. Performs a full recompilation of the app (including static-linking of OPAQUE Auth libraries), nukes all data/keys/database, redeploys the app and starts all services. Enables debug mode, WASM trace logging, dev-admin auto-seeding, and the dev/test API. Use this when doing code changes and running e2e tests. Do not attempt to rebuild the app using any other build scripts or manual compilation commands, including for the CLI utils written in Go. If attempting to recompile typescript assets, use `bun` or `bunx` instead of `npm`/`pnpm`/`npx`/etc.
 
@@ -112,7 +114,7 @@ No emojis in any code, documentation, or responses please. If needed, instead of
 
 ## Comment/Log/Print Formatting
 
-No "===" or "---" characters for formatting in log statements or comments please (exceptions: section headers in long code files; console printed output separators). Keep comments short and concise and focused on the intended or established functionality of the app in its ideal form. (NOTE: If you find yourself beginning to write something to the effect of "keeping this for backwards compatibility" or "keep this as a fallback" stop and immediately flag this to the developers. Refer to 'Greenfield App' and 'Function Review Sanity Checks' sections for more information.)
+No "===" or "---" characters for formatting in log statements or comments please (exceptions: section headers in long code files; console printed output separators). Keep comments short and concise and focused on the intended or established functionality of the app. If you find yourself beginning to write a fake fallback or an unused compatibility shim, stop and flag it to the developers. Compatibility for existing stored records and working clients is required. See 'Existing Data' and 'Function Review Sanity Checks'.
 
 ## Responses in Chat and Discussions about the Codebase
 

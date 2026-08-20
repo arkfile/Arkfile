@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -659,7 +660,16 @@ func UpdateUser(c echo.Context) error {
 func ListUsers(c echo.Context) error {
 	adminUsername := auth.GetUsernameFromToken(c)
 
-	rows, err := database.DB.Query(`
+	mfaSet, mfaEnabled, err := parseOptionalBoolQuery(c.QueryParam("mfa"))
+	if err != nil {
+		return JSONError(c, http.StatusBadRequest, "Invalid mfa filter (use true or false)")
+	}
+	minFiles, err := parseMinFilesQuery(c.QueryParam("min_files"))
+	if err != nil {
+		return JSONError(c, http.StatusBadRequest, "Invalid min_files filter (non-negative integer)")
+	}
+
+	query := `
 		SELECT u.username, u.is_approved, u.is_admin, u.storage_limit_bytes, u.total_storage_bytes,
 		       u.registration_date, u.last_login,
 		       COALESCE(mc.mfa_enabled, 0) AS mfa_enabled,
@@ -676,8 +686,23 @@ func ListUsers(c echo.Context) error {
 			GROUP BY username
 		) mc ON u.username = mc.username
 		LEFT JOIN (SELECT owner_username, COUNT(*) AS file_count FROM file_metadata GROUP BY owner_username) fm ON u.username = fm.owner_username
-		WHERE u.deleted_at IS NULL
-		ORDER BY u.registration_date DESC`)
+		WHERE u.deleted_at IS NULL`
+	var args []interface{}
+	if mfaSet {
+		if mfaEnabled {
+			query += ` AND COALESCE(mc.mfa_enabled, 0) = 1`
+		} else {
+			query += ` AND COALESCE(mc.mfa_enabled, 0) = 0`
+		}
+	}
+	if minFiles > 0 {
+		query += ` AND COALESCE(fm.file_count, 0) >= ?`
+		args = append(args, minFiles)
+	}
+	query += `
+		ORDER BY u.registration_date DESC`
+
+	rows, err := database.DB.Query(query, args...)
 
 	if err == sql.ErrNoRows {
 		return JSONResponse(c, http.StatusOK, "Users retrieved", map[string]interface{}{
@@ -1030,6 +1055,31 @@ func AdminSecurityEvents(c echo.Context) error {
 	}
 
 	return JSONResponse(c, http.StatusOK, "Security events retrieved", response)
+}
+
+func parseOptionalBoolQuery(raw string) (set bool, value bool, err error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return false, false, nil
+	case "1", "true", "yes":
+		return true, true, nil
+	case "0", "false", "no":
+		return true, false, nil
+	default:
+		return false, false, fmt.Errorf("invalid boolean filter")
+	}
+}
+
+func parseMinFilesQuery(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("invalid min_files")
+	}
+	return n, nil
 }
 
 func storageUsagePercent(used, limit int64) float64 {

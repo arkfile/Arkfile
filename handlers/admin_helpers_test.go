@@ -6,6 +6,56 @@ import (
 	"github.com/arkfile/Arkfile/auth"
 )
 
+func TestParseOptionalBoolQuery(t *testing.T) {
+	cases := []struct {
+		raw     string
+		set     bool
+		value   bool
+		wantErr bool
+	}{
+		{"", false, false, false},
+		{"true", true, true, false},
+		{"YES", true, true, false},
+		{"1", true, true, false},
+		{"false", true, false, false},
+		{"no", true, false, false},
+		{"0", true, false, false},
+		{"maybe", false, false, true},
+	}
+	for _, tc := range cases {
+		set, value, err := parseOptionalBoolQuery(tc.raw)
+		if tc.wantErr {
+			if err == nil {
+				t.Fatalf("parseOptionalBoolQuery(%q): expected error", tc.raw)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("parseOptionalBoolQuery(%q): %v", tc.raw, err)
+		}
+		if set != tc.set || value != tc.value {
+			t.Fatalf("parseOptionalBoolQuery(%q) = (%v, %v), want (%v, %v)", tc.raw, set, value, tc.set, tc.value)
+		}
+	}
+}
+
+func TestParseMinFilesQuery(t *testing.T) {
+	n, err := parseMinFilesQuery("")
+	if err != nil || n != 0 {
+		t.Fatalf("empty: n=%d err=%v", n, err)
+	}
+	n, err = parseMinFilesQuery("1")
+	if err != nil || n != 1 {
+		t.Fatalf("1: n=%d err=%v", n, err)
+	}
+	if _, err := parseMinFilesQuery("-1"); err == nil {
+		t.Fatal("expected error for negative min_files")
+	}
+	if _, err := parseMinFilesQuery("abc"); err == nil {
+		t.Fatal("expected error for non-integer min_files")
+	}
+}
+
 func TestMFAMethodsFromFlags(t *testing.T) {
 	none := mfaMethodsFromFlags(false, false)
 	if len(none) != 0 {

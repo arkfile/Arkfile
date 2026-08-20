@@ -13,6 +13,40 @@ func formatFileSize(bytes int64) string {
 	return format.FileSize(bytes)
 }
 
+type optionalBoolFlag struct {
+	set   bool
+	value bool
+}
+
+func (f *optionalBoolFlag) String() string {
+	if f == nil || !f.set {
+		return ""
+	}
+	if f.value {
+		return "true"
+	}
+	return "false"
+}
+
+func (f *optionalBoolFlag) Set(s string) error {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "1", "true", "yes":
+		f.set = true
+		f.value = true
+		return nil
+	case "0", "false", "no":
+		f.set = true
+		f.value = false
+		return nil
+	default:
+		return fmt.Errorf("invalid MFA filter %q (use --mfa or --mfa=no)", s)
+	}
+}
+
+func (f *optionalBoolFlag) IsBoolFlag() bool {
+	return true
+}
+
 func boolYesNo(v bool) string {
 	if v {
 		return "Yes"

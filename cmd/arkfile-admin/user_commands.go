@@ -21,7 +21,10 @@ func handleListUsersCommand(client *HTTPClient, config *AdminConfig, args []stri
 		pendingOnly  = fs.Bool("pending", false, "Show only pending approval users")
 		limit        = fs.Int("limit", 50, "Maximum number of users to list")
 		offset       = fs.Int("offset", 0, "Offset for pagination")
+		minFiles     = fs.Int("min-files", 0, "Only users with at least N files")
+		mfaFilter    optionalBoolFlag
 	)
+	fs.Var(&mfaFilter, "mfa", "Only users with completed MFA (use --mfa=no for users without MFA)")
 
 	fs.Usage = func() {
 		fmt.Printf(`Usage: arkfile-admin list-users [FLAGS]
@@ -32,6 +35,9 @@ FLAGS:
     --detailed          Show detailed user information
     --include-admin     Include admin users in listing
     --pending           Show only users pending approval
+    --mfa               Only users with completed MFA
+    --mfa=no            Only users without completed MFA
+    --min-files N       Only users with at least N files
     --limit INT         Maximum number of users to list (default: 50)
     --offset INT        Offset for pagination (default: 0)
     --help             Show this help message
@@ -40,12 +46,18 @@ EXAMPLES:
     arkfile-admin list-users
     arkfile-admin list-users --detailed
     arkfile-admin list-users --pending
+    arkfile-admin list-users --mfa --min-files 1
+    arkfile-admin list-users --mfa=no
     arkfile-admin list-users --limit 10 --offset 20
 `)
 	}
 
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	if *minFiles < 0 {
+		return fmt.Errorf("--min-files must be >= 0")
 	}
 
 	// Load admin session
@@ -61,6 +73,16 @@ EXAMPLES:
 	}
 	if *pendingOnly {
 		params += "&pending_only=true"
+	}
+	if mfaFilter.set {
+		if mfaFilter.value {
+			params += "&mfa=true"
+		} else {
+			params += "&mfa=false"
+		}
+	}
+	if *minFiles > 0 {
+		params += fmt.Sprintf("&min_files=%d", *minFiles)
 	}
 
 	// Request user list

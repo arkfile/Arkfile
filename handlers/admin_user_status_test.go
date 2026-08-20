@@ -150,8 +150,8 @@ func seedCompletedWebAuthnRow(t *testing.T, db *sql.DB, username, credID string)
 	require.NoError(t, err)
 }
 
-func TestListUsers_MFAAggregationNoDuplicateRows(t *testing.T) {
-	db := setupAdminUserStatusDB(t)
+func seedListUsersMFAFixture(t *testing.T, db *sql.DB) string {
+	t.Helper()
 	const adminUsername = "list-admin"
 	insertAdminStatusUser(t, db, adminUsername, true, true, 0, models.DefaultStorageLimit, "2026-04-16 12:00:00")
 	insertAdminStatusUser(t, db, "totp-user", false, true, 0, models.DefaultStorageLimit, "2026-04-17 12:00:00")
@@ -170,6 +170,42 @@ func TestListUsers_MFAAggregationNoDuplicateRows(t *testing.T) {
 	require.NoError(t, err)
 	_, err = db.Exec(`INSERT INTO file_metadata (file_id, storage_id, owner_username) VALUES ('file-1', 'store-1', 'both-user')`)
 	require.NoError(t, err)
+	return adminUsername
+}
+
+func listUsersNames(t *testing.T, db *sql.DB, adminUsername, rawQuery string) []string {
+	t.Helper()
+	path := "/admin/users"
+	if rawQuery != "" {
+		path += "?" + rawQuery
+	}
+	c, rec, _, _ := setupTestEnv(t, http.MethodGet, path, nil)
+	database.DB = db
+	adminClaims := &auth.Claims{Username: adminUsername}
+	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
+	c.Set("user", adminToken)
+	require.NoError(t, ListUsers(c))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	data, ok := resp["data"].(map[string]interface{})
+	require.True(t, ok)
+	usersList, ok := data["users"].([]interface{})
+	require.True(t, ok)
+	names := make([]string, 0, len(usersList))
+	for _, item := range usersList {
+		row, ok := item.(map[string]interface{})
+		require.True(t, ok)
+		name, _ := row["username"].(string)
+		names = append(names, name)
+	}
+	return names
+}
+
+func TestListUsers_MFAAggregationNoDuplicateRows(t *testing.T) {
+	db := setupAdminUserStatusDB(t)
+	adminUsername := seedListUsersMFAFixture(t, db)
 
 	c, rec, _, _ := setupTestEnv(t, http.MethodGet, "/admin/users", nil)
 	database.DB = db
@@ -209,6 +245,41 @@ func TestListUsers_MFAAggregationNoDuplicateRows(t *testing.T) {
 	assert.Equal(t, []interface{}{}, byName["pending-user"]["mfa_methods"])
 	assert.Equal(t, false, byName["incomplete-user"]["mfa_enabled"])
 	assert.Equal(t, []interface{}{}, byName["incomplete-user"]["mfa_methods"])
+}
+
+func TestListUsers_MFAAndMinFilesFilters(t *testing.T) {
+	db := setupAdminUserStatusDB(t)
+	adminUsername := seedListUsersMFAFixture(t, db)
+
+	mfaYes := listUsersNames(t, db, adminUsername, "mfa=true")
+	assert.ElementsMatch(t, []string{"totp-user", "hw-user", "both-user"}, mfaYes)
+
+	mfaNo := listUsersNames(t, db, adminUsername, "mfa=false")
+	assert.ElementsMatch(t, []string{"list-admin", "pending-user", "incomplete-user"}, mfaNo)
+
+	minFiles := listUsersNames(t, db, adminUsername, "min_files=1")
+	assert.Equal(t, []string{"both-user"}, minFiles)
+
+	combined := listUsersNames(t, db, adminUsername, "mfa=true&min_files=1")
+	assert.Equal(t, []string{"both-user"}, combined)
+
+	empty := listUsersNames(t, db, adminUsername, "min_files=2")
+	assert.Empty(t, empty)
+}
+
+func TestListUsers_InvalidFilters(t *testing.T) {
+	adminUsername := "admin-user"
+	c, rec, _, _ := setupTestEnv(t, http.MethodGet, "/admin/users?mfa=maybe", nil)
+	adminClaims := &auth.Claims{Username: adminUsername}
+	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
+	c.Set("user", adminToken)
+	require.NoError(t, ListUsers(c))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	c, rec, _, _ = setupTestEnv(t, http.MethodGet, "/admin/users?min_files=-1", nil)
+	c.Set("user", adminToken)
+	require.NoError(t, ListUsers(c))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
 func TestAdminGetUserStatus_MFAMethodsAndStorage(t *testing.T) {

@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"flag"
+	"testing"
+)
 
 func TestParseStorageLimit(t *testing.T) {
 	bytes, err := parseStorageLimit("10GB")
@@ -40,6 +43,48 @@ func TestFormatMFAStatus(t *testing.T) {
 		if got != tc.want {
 			t.Fatalf("formatMFAStatus(%v, %v) = %q, want %q", tc.enabled, tc.methods, got, tc.want)
 		}
+	}
+}
+
+func TestOptionalBoolFlag(t *testing.T) {
+	var f optionalBoolFlag
+	if f.set {
+		t.Fatal("expected unset by default")
+	}
+	if err := f.Set("true"); err != nil || !f.set || !f.value {
+		t.Fatalf("Set(true): set=%v value=%v err=%v", f.set, f.value, err)
+	}
+	if err := f.Set("no"); err != nil || !f.set || f.value {
+		t.Fatalf("Set(no): set=%v value=%v err=%v", f.set, f.value, err)
+	}
+	if err := f.Set("bogus"); err == nil {
+		t.Fatal("expected error for bogus MFA filter")
+	}
+}
+
+func TestListUsersFilterFlagParse(t *testing.T) {
+	fs := flag.NewFlagSet("list-users", flag.ContinueOnError)
+	var mfaFilter optionalBoolFlag
+	minFiles := fs.Int("min-files", 0, "")
+	fs.Var(&mfaFilter, "mfa", "")
+	if err := fs.Parse([]string{"--mfa", "--min-files", "1"}); err != nil {
+		t.Fatalf("parse --mfa --min-files 1: %v", err)
+	}
+	if !mfaFilter.set || !mfaFilter.value {
+		t.Fatalf("expected MFA filter enabled, set=%v value=%v", mfaFilter.set, mfaFilter.value)
+	}
+	if *minFiles != 1 {
+		t.Fatalf("min-files=%d", *minFiles)
+	}
+
+	fsNo := flag.NewFlagSet("list-users", flag.ContinueOnError)
+	var mfaNo optionalBoolFlag
+	fsNo.Var(&mfaNo, "mfa", "")
+	if err := fsNo.Parse([]string{"--mfa=no"}); err != nil {
+		t.Fatalf("parse --mfa=no: %v", err)
+	}
+	if !mfaNo.set || mfaNo.value {
+		t.Fatalf("expected MFA filter disabled, set=%v value=%v", mfaNo.set, mfaNo.value)
 	}
 }
 
