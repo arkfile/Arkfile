@@ -186,6 +186,11 @@ h1, h2, h3 {
     border: 1px solid var(--depth-4);
 }
 
+.login-form p,
+.register-form p {
+    margin-top: 0.75rem;
+}
+
 input, textarea, .totp-input, .password-modal-input, .contact-value, .contact-label, .contact-type {
     width: 100%;
     padding: 0.75rem;
@@ -2546,6 +2551,7 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):hover, .bt
     display: flex;
     align-items: center;
     width: 100%;
+    margin-bottom: 1rem;
 }
 
 .password-input-wrapper input[type="password"],
