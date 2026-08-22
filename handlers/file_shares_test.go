@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/arkfile/Arkfile/auth"
 	"github.com/arkfile/Arkfile/config"
 	"github.com/arkfile/Arkfile/crypto"
-	"github.com/DATA-DOG/go-sqlmock"
 	jwt "github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
@@ -405,6 +405,7 @@ func TestGetSharedFile_Success(t *testing.T) {
 	// Handler tries to render a template which fails in test (no renderer)
 	err := GetSharedFile(c)
 	require.Error(t, err)
+	assert.Equal(t, "noindex, nofollow", c.Response().Header().Get("X-Robots-Tag"))
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

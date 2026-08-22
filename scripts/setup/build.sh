@@ -772,6 +772,7 @@ cp -r client/static/css "${BUILD_CLIENT}/static/" 2>/dev/null || true
 cp -r client/static/errors "${BUILD_CLIENT}/static/" 2>/dev/null || true
 cp client/static/*.html "${BUILD_CLIENT}/static/" 2>/dev/null || true
 cp client/static/*.ico "${BUILD_CLIENT}/static/" 2>/dev/null || true
+cp client/static/*.jpeg "${BUILD_CLIENT}/static/" 2>/dev/null || true
 
 # Copy JS files (libopaque.js, etc.) but handle dist separately
 mkdir -p "${BUILD_CLIENT_JS}"

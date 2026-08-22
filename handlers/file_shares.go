@@ -539,6 +539,7 @@ func RevokeShare(c echo.Context) error {
 
 // GetSharedFile renders the share access page
 func GetSharedFile(c echo.Context) error {
+	c.Response().Header().Set("X-Robots-Tag", "noindex, nofollow")
 	shareID := c.Param("id")
 
 	// Validate share exists and get basic info (no password required for page display)

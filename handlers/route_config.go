@@ -21,12 +21,12 @@ func RegisterRoutes() {
 	// Requests without an Arkfile session cookie are not affected.
 	Echo.Use(CSRFMiddleware)
 
-	// Explicitly serve index.html at root with HEAD support
+	// Render public pages with instance-specific canonical and social URLs.
 	Echo.GET("/", func(c echo.Context) error {
-		return c.File("client/static/index.html")
+		return servePublicPage(c, "client/static/index.html")
 	})
 	Echo.HEAD("/", func(c echo.Context) error {
-		return c.File("client/static/index.html")
+		return servePublicPage(c, "client/static/index.html")
 	})
 
 	// Static assets with HEAD support
@@ -59,10 +59,22 @@ func RegisterRoutes() {
 		return c.File("client/static/favicon.ico")
 	})
 
-	Echo.File("/faq.html", "client/static/faq.html")
-	Echo.HEAD("/faq.html", func(c echo.Context) error {
-		return c.File("client/static/faq.html")
+	Echo.File("/og-image.jpg", "client/static/noahsark-painting.jpeg")
+	Echo.HEAD("/og-image.jpg", func(c echo.Context) error {
+		return c.File("client/static/noahsark-painting.jpeg")
 	})
+
+	Echo.GET("/faq.html", func(c echo.Context) error {
+		return servePublicPage(c, "client/static/faq.html")
+	})
+	Echo.HEAD("/faq.html", func(c echo.Context) error {
+		return servePublicPage(c, "client/static/faq.html")
+	})
+
+	Echo.GET("/robots.txt", ServeRobots)
+	Echo.HEAD("/robots.txt", ServeRobots)
+	Echo.GET("/sitemap.xml", ServeSitemap)
+	Echo.HEAD("/sitemap.xml", ServeSitemap)
 
 	// Configuration endpoints (public - needed for client-side crypto)
 	Echo.GET("/api/config/argon2", GetArgon2Config)
