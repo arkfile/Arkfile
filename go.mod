@@ -4,7 +4,7 @@ go 1.26.6
 
 require (
 	github.com/joho/godotenv v1.5.1
-	github.com/labstack/echo/v4 v4.15.1
+	github.com/labstack/echo/v4 v4.15.4
 	golang.org/x/crypto v0.54.0
 )
 
@@ -52,9 +52,9 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/go-webauthn/x v0.2.6 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
-	github.com/labstack/gommon v0.4.2 // indirect
-	github.com/mattn/go-colorable v0.1.14 // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/labstack/gommon v0.5.0 // indirect
+	github.com/mattn/go-colorable v0.1.15 // indirect
+	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
