@@ -209,6 +209,15 @@ func TestServerDomainConfig(t *testing.T) {
 	}
 }
 
+func TestLegalEntityNameConfig(t *testing.T) {
+	t.Setenv("LEGAL_ENTITY_NAME", "Example Legal Entity LLC")
+
+	cfg := &Config{}
+	assert.NoError(t, loadDefaultConfig(cfg))
+	assert.NoError(t, loadEnvConfig(cfg))
+	assert.Equal(t, "Example Legal Entity LLC", cfg.Deployment.LegalEntityName)
+}
+
 // TestStorageProviderSupport tests that aws-s3 is recognized as a supported provider
 func TestStorageProviderSupport(t *testing.T) {
 	ResetConfigForTest()

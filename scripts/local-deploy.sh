@@ -20,6 +20,7 @@ fi
 # Defaults
 ADMIN_USERNAME=""
 ADMIN_CONTACT=""
+LEGAL_ENTITY_NAME=""
 FORCE_REBUILD_ALL=false
 FORCE_REBUILD_RQLITE=false
 BIND_ADDRESS="0.0.0.0"
@@ -38,6 +39,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --admin-contact)
             ADMIN_CONTACT="$2"
+            shift 2
+            ;;
+        --legal-entity-name)
+            LEGAL_ENTITY_NAME="$2"
             shift 2
             ;;
         --force-rebuild-all)
@@ -79,6 +84,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Optional:"
             echo "  --admin-contact <email>       Admin contact email shown to pending users (recommended)"
+            echo "  --legal-entity-name <name>    Legal operator name shown in Terms and Privacy pages"
             echo "  --force-rebuild-all           Force rebuild of ALL C libraries"
             echo "  --force-rebuild-rqlite        Force rebuild of rqlite"
             echo "  --bind-address <ip>           IP address to bind to (default: 0.0.0.0)"
@@ -426,6 +432,11 @@ if [ -n "$ADMIN_CONTACT" ]; then
 else
     echo "  Admin contact:   (not set - pending users won't have contact info)"
 fi
+if [ -n "$LEGAL_ENTITY_NAME" ]; then
+    echo "  Legal entity:    $LEGAL_ENTITY_NAME"
+else
+    echo "  Legal entity:    (not set - using the operator of localhost)"
+fi
 echo "  Storage backend: $STORAGE_BACKEND"
 echo "  Bind address:    $BIND_ADDRESS"
 echo "  TLS port:        $TLS_PORT"
@@ -652,6 +663,7 @@ cat >> "$ARKFILE_DIR/etc/secrets.env" << EOF
 # Admin Configuration
 ADMIN_USERNAMES=${ADMIN_USERNAME}
 ARKFILE_ADMIN_CONTACT=${ADMIN_CONTACT}
+LEGAL_ENTITY_NAME=${LEGAL_ENTITY_NAME}
 
 # Admin Bootstrap Mode (true for first-time setup)
 ARKFILE_FORCE_ADMIN_BOOTSTRAP=true

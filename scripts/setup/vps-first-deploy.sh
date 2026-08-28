@@ -25,6 +25,7 @@ DOMAIN="${DOMAIN:-}"
 DESEC_TOKEN="${DESEC_TOKEN:-}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-}"
 ADMIN_CONTACT="${ADMIN_CONTACT:-}"
+LEGAL_ENTITY_NAME="${LEGAL_ENTITY_NAME:-}"
 STORAGE_BACKEND="${STORAGE_BACKEND:-local-seaweedfs}"
 ACME_EMAIL="${ACME_EMAIL:-}"
 FORCE_REBUILD_ALL="${FORCE_REBUILD_ALL:-false}"
@@ -60,6 +61,7 @@ Required:
 Optional:
   --desec-token <token>         deSEC API token (discouraged on the CLI; prompted after host checks)
   --admin-contact <email>       Admin contact email shown to pending users (recommended)
+  --legal-entity-name <name>    Legal operator name shown in Terms and Privacy pages
   --storage-backend <type>      Storage backend (default: local-seaweedfs)
   --acme-email <email>          ACME email for Let's Encrypt notices
   --force-rebuild-all           Force rebuild of all C libraries and rqlite
@@ -312,6 +314,7 @@ EOF2
 # Admin Configuration
 ADMIN_USERNAMES=${ADMIN_USERNAME}
 ARKFILE_ADMIN_CONTACT=${ADMIN_CONTACT}
+LEGAL_ENTITY_NAME=${LEGAL_ENTITY_NAME}
 
 # Bootstrap mode
 ARKFILE_FORCE_ADMIN_BOOTSTRAP=true
@@ -708,6 +711,10 @@ while [[ $# -gt 0 ]]; do
             ADMIN_CONTACT="$2"
             shift 2
             ;;
+        --legal-entity-name)
+            LEGAL_ENTITY_NAME="$2"
+            shift 2
+            ;;
         --storage-backend)
             STORAGE_BACKEND="$2"
             shift 2
@@ -907,6 +914,11 @@ if [ -n "$ADMIN_CONTACT" ]; then
     echo "  Admin contact:    $ADMIN_CONTACT"
 else
     echo "  Admin contact:    (not set - pending users won't have contact info)"
+fi
+if [ -n "$LEGAL_ENTITY_NAME" ]; then
+    echo "  Legal entity:     $LEGAL_ENTITY_NAME"
+else
+    echo "  Legal entity:     (not set - using the operator of $DOMAIN)"
 fi
 echo "  Storage backend:  $STORAGE_BACKEND"
 if [ -n "$ACME_EMAIL" ]; then

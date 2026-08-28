@@ -110,6 +110,7 @@ type Config struct {
 		DataDirectory     string   `json:"data_directory"`
 		LogDirectory      string   `json:"log_directory"`
 		AdminContact      string   `json:"admin_contact"`
+		LegalEntityName   string   `json:"legal_entity_name"`
 		AdminUsernames    []string `json:"admin_usernames"`
 		RequireApproval   bool     `json:"require_approval"`
 		MaintenanceWindow string   `json:"maintenance_window"`
@@ -486,6 +487,9 @@ func loadEnvConfig(cfg *Config) error {
 	}
 	if adminContact := os.Getenv("ARKFILE_ADMIN_CONTACT"); adminContact != "" {
 		cfg.Deployment.AdminContact = adminContact
+	}
+	if legalEntityName := strings.TrimSpace(os.Getenv("LEGAL_ENTITY_NAME")); legalEntityName != "" {
+		cfg.Deployment.LegalEntityName = legalEntityName
 	}
 
 	// Admin usernames configuration

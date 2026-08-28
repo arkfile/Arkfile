@@ -19,12 +19,23 @@ func TestServePublicPageInjectsConfiguredBaseURL(t *testing.T) {
 	cfg, err := config.LoadConfig()
 	require.NoError(t, err)
 	originalBaseURL := cfg.Server.BaseURL
+	originalDomain := cfg.Server.Domain
+	originalLegalEntityName := cfg.Deployment.LegalEntityName
+	originalAdminContact := cfg.Deployment.AdminContact
 	cfg.Server.BaseURL = "https://arkfile.example/"
-	t.Cleanup(func() { cfg.Server.BaseURL = originalBaseURL })
+	cfg.Server.Domain = "arkfile.example"
+	cfg.Deployment.LegalEntityName = "Arkfile Example LLC"
+	cfg.Deployment.AdminContact = "legal@example.com"
+	t.Cleanup(func() {
+		cfg.Server.BaseURL = originalBaseURL
+		cfg.Server.Domain = originalDomain
+		cfg.Deployment.LegalEntityName = originalLegalEntityName
+		cfg.Deployment.AdminContact = originalAdminContact
+	})
 
 	filename := filepath.Join(t.TempDir(), "page.html")
 	require.NoError(t, os.WriteFile(filename, []byte(
-		`<link rel="canonical" href="{{ARKFILE_BASE_URL}}/"><meta property="og:image" content="{{ARKFILE_BASE_URL}}/og-image.jpg">`,
+		`<link rel="canonical" href="{{ARKFILE_BASE_URL}}/"><meta property="og:image" content="{{ARKFILE_BASE_URL}}/og-image.jpg"><p>{{ARKFILE_DOMAIN}}</p><p>{{ARKFILE_LEGAL_OPERATOR}}</p>{{ARKFILE_ADMIN_CONTACT_BLOCK}}`,
 	), 0o600))
 
 	e := echo.New()
@@ -36,8 +47,45 @@ func TestServePublicPageInjectsConfiguredBaseURL(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), `href="https://arkfile.example/"`)
 	assert.Contains(t, rec.Body.String(), `content="https://arkfile.example/og-image.jpg"`)
+	assert.Contains(t, rec.Body.String(), `<p>arkfile.example</p>`)
+	assert.Contains(t, rec.Body.String(), `<p>Arkfile Example LLC</p>`)
+	assert.Contains(t, rec.Body.String(), `<p>Administrator contact: legal@example.com</p>`)
 	assert.NotContains(t, rec.Body.String(), publicBaseURLPlaceholder)
+	assert.NotContains(t, rec.Body.String(), legalOperatorPlaceholder)
+	assert.NotContains(t, rec.Body.String(), legalAdminContactPlaceholder)
 	assert.NotContains(t, rec.Body.String(), "evil.example")
+}
+
+func TestServePublicPageUsesDomainOperatorFallback(t *testing.T) {
+	cfg, err := config.LoadConfig()
+	require.NoError(t, err)
+	originalBaseURL := cfg.Server.BaseURL
+	originalDomain := cfg.Server.Domain
+	originalLegalEntityName := cfg.Deployment.LegalEntityName
+	originalAdminContact := cfg.Deployment.AdminContact
+	cfg.Server.BaseURL = "https://test.arkfile.net"
+	cfg.Server.Domain = "test.arkfile.net"
+	cfg.Deployment.LegalEntityName = ""
+	cfg.Deployment.AdminContact = ""
+	t.Cleanup(func() {
+		cfg.Server.BaseURL = originalBaseURL
+		cfg.Server.Domain = originalDomain
+		cfg.Deployment.LegalEntityName = originalLegalEntityName
+		cfg.Deployment.AdminContact = originalAdminContact
+	})
+
+	filename := filepath.Join(t.TempDir(), "page.html")
+	require.NoError(t, os.WriteFile(filename, []byte(
+		`<p>{{ARKFILE_LEGAL_OPERATOR}}</p>{{ARKFILE_ADMIN_CONTACT_BLOCK}}`,
+	), 0o600))
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	require.NoError(t, servePublicPage(c, filename))
+	assert.Equal(t, `<p>the operator of test.arkfile.net</p>`, rec.Body.String())
 }
 
 func TestSEOIndexFilesContainExpectedMetadata(t *testing.T) {
@@ -54,6 +102,15 @@ func TestSEOIndexFilesContainExpectedMetadata(t *testing.T) {
 	shared, err := os.ReadFile("../client/static/shared.html")
 	require.NoError(t, err)
 	assert.Contains(t, string(shared), `<meta name="robots" content="noindex, nofollow">`)
+
+	for _, legalPage := range []string{"terms.html", "privacy.html"} {
+		page, readErr := os.ReadFile(filepath.Join("../client/static", legalPage))
+		require.NoError(t, readErr)
+		pageHTML := string(page)
+		assert.Contains(t, pageHTML, "{{ARKFILE_LEGAL_OPERATOR}}")
+		assert.Contains(t, pageHTML, "{{ARKFILE_ADMIN_CONTACT_BLOCK}}")
+		assert.Contains(t, pageHTML, "{{ARKFILE_DOMAIN}}")
+	}
 
 	imageFile, err := os.Open("../client/static/noahsark-painting.jpeg")
 	require.NoError(t, err)
@@ -93,6 +150,8 @@ func TestServeRobotsAndSitemapUseConfiguredBaseURL(t *testing.T) {
 		assert.Equal(t, "application/xml; charset=utf-8", rec.Header().Get(echo.HeaderContentType))
 		assert.Contains(t, rec.Body.String(), "<loc>https://arkfile.example/</loc>")
 		assert.Contains(t, rec.Body.String(), "<loc>https://arkfile.example/faq.html</loc>")
+		assert.Contains(t, rec.Body.String(), "<loc>https://arkfile.example/terms.html</loc>")
+		assert.Contains(t, rec.Body.String(), "<loc>https://arkfile.example/privacy.html</loc>")
 		assert.NotContains(t, rec.Body.String(), "/shared/")
 	})
 }

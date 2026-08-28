@@ -70,6 +70,18 @@ func RegisterRoutes() {
 	Echo.HEAD("/faq.html", func(c echo.Context) error {
 		return servePublicPage(c, "client/static/faq.html")
 	})
+	Echo.GET("/terms.html", func(c echo.Context) error {
+		return servePublicPage(c, "client/static/terms.html")
+	})
+	Echo.HEAD("/terms.html", func(c echo.Context) error {
+		return servePublicPage(c, "client/static/terms.html")
+	})
+	Echo.GET("/privacy.html", func(c echo.Context) error {
+		return servePublicPage(c, "client/static/privacy.html")
+	})
+	Echo.HEAD("/privacy.html", func(c echo.Context) error {
+		return servePublicPage(c, "client/static/privacy.html")
+	})
 
 	Echo.GET("/robots.txt", ServeRobots)
 	Echo.HEAD("/robots.txt", ServeRobots)

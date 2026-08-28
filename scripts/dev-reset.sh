@@ -445,6 +445,7 @@ STORAGE_2_FORCE_PATH_STYLE=true
 
 # Admin Configuration - DEV ONLY
 ADMIN_USERNAMES=arkfile-dev-admin
+LEGAL_ENTITY_NAME=
 
 # Force Admin Bootstrap Mode (False for dev-reset as we use dev admin)
 ARKFILE_FORCE_ADMIN_BOOTSTRAP=false

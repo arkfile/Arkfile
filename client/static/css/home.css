@@ -309,11 +309,19 @@ body {
     margin: 0;
 }
 
+.faq-section p + p {
+    margin-top: 0.8rem;
+}
+
 .faq-back-link {
     display: block;
     text-align: center;
     margin-top: 2rem;
     font-size: 0.9rem;
+}
+
+.faq-back-link + .faq-back-link {
+    margin-top: 0.6rem;
 }
 
 .faq-back-link a {

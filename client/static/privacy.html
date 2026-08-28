@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Privacy Policy for this Arkfile service.">
+    <link rel="canonical" href="{{ARKFILE_BASE_URL}}/privacy.html">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Arkfile">
+    <meta property="og:title" content="Arkfile Privacy Policy">
+    <meta property="og:description" content="Privacy Policy for this Arkfile service.">
+    <meta property="og:url" content="{{ARKFILE_BASE_URL}}/privacy.html">
+    <meta name="robots" content="index, follow">
+    <title>Arkfile Privacy Policy</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="stylesheet" href="/css/styles.css">
+    <link rel="stylesheet" href="/css/home.css">
+</head>
+<body>
+    <main class="faq-container">
+        <h1 class="faq-title">Privacy Policy</h1>
+        <p class="faq-intro">Effective August 28, 2026. This Policy applies to the Arkfile service at {{ARKFILE_DOMAIN}}.</p>
+
+        <section class="faq-section">
+            <h2>1. Who is responsible for your information</h2>
+            <p>{{ARKFILE_LEGAL_OPERATOR}} (the "Operator") operates the Arkfile service at {{ARKFILE_DOMAIN}} (the "Service") and is responsible for the personal information described in this Policy. This Policy applies only to this deployment. Another Arkfile deployment may have a different operator and privacy policy.</p>
+        </section>
+
+        <section class="faq-section">
+            <h2>2. Arkfile's privacy model</h2>
+            <p>Arkfile is designed to minimize information available to the server. File contents and owner file metadata, including original filenames, plaintext file digests, custom-password hints, and tags, are encrypted on your device before upload. Account passwords, custom file passwords, share passwords, Account Keys, and unwrapped File Encryption Keys are not sent to or stored by the server. The Operator cannot decrypt these items from stored server data alone. The server does receive operational information needed to provide the Service, as described below.</p>
+        </section>
+
+        <section class="faq-section">
+            <h2>3. Information the Service processes</h2>
+            <p>Account and service records can include your username, account status, approval status, public key-derivation salt and profile, multi-factor enrollment records, session and revocation records, storage usage and limits, credit and billing records, upload and share timestamps, and administrative actions. If you voluntarily save contact information, it can include a display name, email address, messaging address, telephone number, labels, or notes. Contact information is encrypted at rest with server-held keys but can be decrypted and read by authorized administrators for account-related contact and recovery.</p>
+            <p>Encrypted storage records can include encrypted file contents, encrypted filenames and other owner metadata, wrapped File Encryption Keys, encrypted share envelopes, ciphertext nonces, ciphertext digests, encrypted-stream and stored-object digests, file and share identifiers, password type, chunk layout, pre-padding encrypted size, padded object size, storage routing information, expiration dates, download limits, and share access counts. The Operator can read the operational fields but cannot read the client-encrypted contents without your client-side secrets.</p>
+            <p>For security and rate limiting, the Service processes request information. Raw IP addresses are not persisted in Arkfile application logs or security-event records. For unauthenticated requests, the Service temporarily combines IP address, User-Agent, and Accept-Language information and applies a keyed one-way function to create a daily-rotating Entity ID. For authenticated requests, an Entity ID can be derived from the username. Security events may contain an Entity ID, event type, time, and, for authenticated activity, a username. Ordinary server logs can contain operational event details but are designed not to contain raw client IP addresses, passwords, decryption keys, or plaintext file contents.</p>
+        </section>
+
+        <section class="faq-section">
+            <h2>4. Why information is used</h2>
+            <p>The Operator uses account, encrypted storage, session, and billing information to create and administer accounts, authenticate users, store and transfer encrypted files, operate shares, apply storage limits and charges, process credits, respond to support and recovery requests, maintain backups and replication, and provide requested features. Where UK or EU data-protection law applies, this processing is generally necessary to perform the agreement with you or take requested steps before entering that agreement.</p>
+            <p>The Operator uses security events, derived Entity IDs, and administrative records to prevent abuse, enforce rate limits, investigate failures, protect users and infrastructure, comply with law, and establish or defend legal claims. Where UK or EU law applies, this processing is based on the Operator's legitimate interests in operating and securing the Service, compliance with legal obligations, or the establishment and defense of legal claims. Optional contact information is used for account-related communication and recovery at your request. The Operator does not use it for advertising.</p>
+        </section>
+
+        <section class="faq-section">
+            <h2>5. Cookies</h2>
+            <p>The web application uses first-party cookies required for login sessions, token renewal, multi-factor handoff, and cross-site request forgery protection. Authentication cookies are Secure, SameSite=Strict, and inaccessible to browser JavaScript where their function permits. The CSRF cookie must be readable by the web application so it can send the matching request header. The Service does not currently use advertising cookies or third-party analytics cookies. If optional analytics or advertising technologies are introduced, this Policy and any consent mechanism will be updated as required by law.</p>
+        </section>
+
+        <section class="faq-section">
+            <h2>6. Sharing and public links</h2>
+            <p>A recipient does not need an account to use a share. Anyone who possesses a share identifier can request the encrypted share envelope and related operational fields, including share and file identifiers, the public key-derivation salt, encrypted envelope, and encrypted file size, before entering the share password. The filename, plaintext digest, File Encryption Key, download token, and file contents remain protected inside client-encrypted data until a recipient supplies the correct password to a trusted client. Share access can create security and access-count records. Share owners are responsible for controlling the URL and password and for revoking shares when appropriate.</p>
+        </section>
+
+        <section class="faq-section">
+            <h2>7. Service providers and disclosures</h2>
+            <p>The Operator may use infrastructure providers to host the application, database, encrypted object storage, backups, domain-name service, TLS certificates, network delivery, support email, and payment processing. Those providers receive only the information needed for their role. An object-storage provider receives encrypted blobs, object identifiers, and padded sizes, but not Arkfile decryption keys. Provider identity and location depend on how this deployment is configured.</p>
+            <p>The Operator may disclose available account or operational information when reasonably necessary to comply with applicable law, a valid court order, or another binding legal process; protect the rights, safety, and security of users, the Operator, or the public; investigate abuse; or establish or defend legal claims. Because the Operator does not possess your passwords or client-side keys, the Operator generally cannot disclose plaintext file contents or client-encrypted metadata. The Operator does not sell personal information and does not share it for cross-context behavioral advertising.</p>
+        </section>
+
+        <section class="faq-section">
+            <h2>8. International transfers</h2>
+            <p>The Operator and its infrastructure providers may process information in countries other than the country where you live. Where UK or EU law applies and information is transferred internationally, the Operator will rely on an applicable adequacy decision, approved contractual protections such as standard contractual clauses, or another lawful transfer mechanism where required.</p>
+        </section>
+
+        <section class="faq-section">
+            <h2>9. Retention and deletion</h2>
+            <p>The Operator keeps account and encrypted storage records while your account is active and as needed to provide the Service. Deleting a file is intended to remove its active metadata and stored encrypted object, subject to temporary copies in backups, replication, provider deletion processes, and legal holds. Session cookies and tokens expire according to their configured lifetimes. Security, administrator, and billing records may be retained after content or account deletion for security, accounting, fraud prevention, dispute resolution, compliance, and legal obligations. Optional contact information is retained until you delete it, your account is closed and it is no longer required, or law requires longer retention. The Operator will not keep personal information longer than reasonably necessary for these purposes.</p>
+        </section>
+
+        <section class="faq-section">
+            <h2>10. Security and important limits</h2>
+            <p>Arkfile uses client-side encryption, OPAQUE authentication, required multi-factor authentication, encrypted server-held user secrets, access controls, transport encryption, and privacy-preserving rate limiting. No system is completely secure. A compromised device, weak or disclosed password, malicious browser extension, or attacker controlling the live web origin could expose information during future use. Client-side encryption cannot protect information after a malicious client captures it. You should use strong unique passwords, protect your second factor and backup codes, verify the service origin, and keep independent backups where appropriate.</p>
+        </section>
+
+        <section class="faq-section">
+            <h2>11. Your privacy rights</h2>
+            <p>Depending on where you live, you may have rights to request access to, correction of, deletion of, restriction of, or portability of personal information, to object to certain processing, and to complain to a data-protection authority. You may delete optional contact information and individual files through the Service and may contact the Operator about other requests. The Operator may need to verify that a request concerns your account. These rights can be subject to legal exceptions, including security, accounting, freedom of expression, legal claims, and records the Operator must retain.</p>
+            <p>The Operator can provide only information actually available to the server. The Operator cannot recover or provide a forgotten password, an Account Key, an unwrapped File Encryption Key, or plaintext from client-encrypted files or metadata. UK residents may complain to the Information Commissioner's Office, EU residents may complain to their local supervisory authority, and residents of California and other US states may exercise applicable access, correction, deletion, and portability rights. The Operator will not discriminate against you for exercising a privacy right protected by law.</p>
+        </section>
+
+        <section class="faq-section">
+            <h2>12. Children</h2>
+            <p>The Service is not directed to children, and account holders must be at least 18 years old or the age of legal majority where they live. The Operator does not knowingly collect personal information from children under 13. If you believe a child has provided personal information contrary to this Policy, contact the Operator so the account can be reviewed and appropriate action taken.</p>
+        </section>
+
+        <section class="faq-section">
+            <h2>13. Changes to this Policy</h2>
+            <p>The Operator may update this Policy by publishing a revised version on this page and changing the effective date. If a change materially affects existing users, the Operator will provide reasonable notice through the Service when practical.</p>
+        </section>
+
+        <section class="faq-section">
+            <h2>14. Contact</h2>
+            <p>Privacy questions, rights requests, account-closure requests, and complaints should be sent to the administrator of {{ARKFILE_DOMAIN}}.</p>
+            {{ARKFILE_ADMIN_CONTACT_BLOCK}}
+        </section>
+
+        <p class="faq-back-link"><a href="/">Back to Arkfile</a></p>
+        <p class="faq-back-link"><a href="/terms.html">Terms and Conditions</a> <span class="footer-separator" aria-hidden="true">·</span> <a href="/faq.html">FAQ</a></p>
+    </main>
+</body>
+</html>
