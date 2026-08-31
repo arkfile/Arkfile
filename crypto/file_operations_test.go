@@ -216,6 +216,52 @@ func TestFEKEncryptDecrypt(t *testing.T) {
 	}
 }
 
+func TestFEKEncryptDecrypt_WrongPasswordFails(t *testing.T) {
+	fileID := "11111111-2222-4333-8444-555555555555"
+	salt := bytes.Repeat([]byte{7}, OwnerEnvelopeSaltSize())
+	fek, err := GenerateFEK()
+	if err != nil {
+		t.Fatal(err)
+	}
+	encrypted, err := EncryptFEK(fek, []byte("correct-password-123"), salt, fileID, "account")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := DecryptFEK(encrypted, []byte("wrong-password-45678"), fileID); err == nil {
+		t.Fatal("DecryptFEK with the wrong password must fail")
+	}
+}
+
+func TestFEKEncryptDecrypt_KeyTypeByteFlipFails(t *testing.T) {
+	fileID := "11111111-2222-4333-8444-555555555555"
+	salt := bytes.Repeat([]byte{7}, OwnerEnvelopeSaltSize())
+	fek, err := GenerateFEK()
+	if err != nil {
+		t.Fatal(err)
+	}
+	encrypted, err := EncryptFEK(fek, []byte("test-password-123"), salt, fileID, "account")
+	if err != nil {
+		t.Fatal(err)
+	}
+	flipped := make([]byte, len(encrypted))
+	copy(flipped, encrypted)
+	accountType, err := KeyTypeForContext("account")
+	if err != nil {
+		t.Fatal(err)
+	}
+	customType, err := KeyTypeForContext("custom")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flipped[1] != accountType {
+		t.Fatalf("expected account key-type byte 0x%02x, got 0x%02x", accountType, flipped[1])
+	}
+	flipped[1] = customType
+	if _, _, err := DecryptFEK(flipped, []byte("test-password-123"), fileID); err == nil {
+		t.Fatal("DecryptFEK must fail when the envelope key-type byte is flipped")
+	}
+}
+
 // TestPasswordKeyDerivationConsistency tests that password key derivation is consistent
 func TestPasswordKeyDerivationConsistency(t *testing.T) {
 	password := []byte("test-password-consistency")
@@ -642,6 +688,48 @@ func FuzzParseFEKEnvelopeHeader(f *testing.F) {
 				header.KDFProfile != OwnerEnvelopeKDFProfile() ||
 				len(header.Salt) != OwnerEnvelopeSaltSize() {
 				t.Fatal("parser accepted header outside canonical invariants")
+			}
+		}
+	})
+}
+
+func FuzzDecryptFEK(f *testing.F) {
+	raw, err := os.ReadFile("testdata/crypto-conformance-v2.json")
+	if err != nil {
+		f.Fatal(err)
+	}
+	var fixture struct {
+		FileID      string `json:"file_id"`
+		PasswordKDF struct {
+			Password string `json:"password"`
+		} `json:"password_kdf"`
+		OwnerEnvelope struct {
+			Envelope string `json:"account_envelope_hex"`
+		} `json:"owner_envelope"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		f.Fatal(err)
+	}
+	valid, err := hex.DecodeString(fixture.OwnerEnvelope.Envelope)
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(valid)
+	f.Add(valid[:len(valid)-1])
+	f.Add([]byte{})
+	password := []byte(fixture.PasswordKDF.Password)
+	fileID := fixture.FileID
+	f.Fuzz(func(t *testing.T, input []byte) {
+		if len(input) > 1<<20 {
+			t.Skip()
+		}
+		fek, keyType, err := DecryptFEK(input, password, fileID)
+		if err == nil {
+			if len(fek) != 32 {
+				t.Fatal("DecryptFEK succeeded with a FEK that is not 32 bytes")
+			}
+			if keyType != AccountKDFContext && keyType != CustomKDFContext {
+				t.Fatalf("DecryptFEK succeeded with unknown key type %q", keyType)
 			}
 		}
 	})

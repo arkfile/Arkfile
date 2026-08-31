@@ -1995,7 +1995,7 @@ run_files_standard() {
             safe_exec post_del_list post_del_list_code \
                 $CLIENT --server-url "$SERVER_URL" --tls-insecure list-files --json
 
-            if [ $post_del_list_code -eq 0 ] && ! echo "$post_del_list" | grep -q "$delete_file_id"; then
+            if [ $post_del_list_code -eq 0 ] && echo "$post_del_list" | jq -e --arg id "$delete_file_id" 'all(.[]; .file_id != $id)' >/dev/null 2>&1; then
                 record_test "File deletion verified (not in list)" "PASS"
             else
                 record_test "File deletion verified (not in list)" "FAIL"
@@ -2191,19 +2191,30 @@ run_files_standard() {
             $CLIENT --server-url "$SERVER_URL" --tls-insecure list-files --json
 
         local all_found=true
-        while IFS= read -r batch_id; do
-            [ -z "$batch_id" ] && continue
-            if echo "$batch_list_output" | grep -q "$batch_id"; then
-                info "Batch file $batch_id verified in list"
-            else
-                warning "Batch file $batch_id NOT found in list"
-                all_found=false
-            fi
-        done <<< "$batch_ids"
+        if [ $batch_list_code -ne 0 ]; then
+            error "list-files --json failed after batch upload:"
+            echo "$batch_list_output"
+            all_found=false
+        else
+            while IFS= read -r batch_id; do
+                batch_id="${batch_id//[[:space:]]/}"
+                [ -z "$batch_id" ] && continue
+                if echo "$batch_list_output" | jq -e --arg id "$batch_id" 'any(.[]; .file_id == $id)' >/dev/null 2>&1; then
+                    info "Batch file $batch_id verified in list"
+                else
+                    warning "Batch file $batch_id NOT found in list"
+                    all_found=false
+                fi
+            done <<< "$batch_ids"
+        fi
 
         if [ "$all_found" = true ]; then
             record_test "Multi-file batch: all 3 files in list" "PASS"
         else
+            if [ $batch_list_code -eq 0 ]; then
+                error "Batch list-files --json missing one or more uploaded file IDs:"
+                echo "$batch_list_output"
+            fi
             record_test "Multi-file batch: all 3 files in list" "FAIL"
         fi
 

@@ -28,6 +28,24 @@ func TestValidateOpaqueTagsPair(t *testing.T) {
 	require.NoError(t, validateOpaqueTagsPair("", "", true))
 }
 
+func TestValidateOpaqueGCMPair_RejectsPlaintext(t *testing.T) {
+	nonce := base64.StdEncoding.EncodeToString(make([]byte, crypto.TagsNonceRawBytes))
+	cipher := base64.StdEncoding.EncodeToString(make([]byte, 16))
+
+	require.NoError(t, validateOpaqueGCMPair(cipher, nonce, "encrypted_filename", "filename_nonce", false))
+	require.Error(t, validateOpaqueGCMPair("vacation-photos.pdf", nonce, "encrypted_filename", "filename_nonce", false))
+	require.Error(t, validateOpaqueGCMPair(
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		nonce,
+		"encrypted_sha256sum",
+		"sha256sum_nonce",
+		false,
+	))
+	require.Error(t, validateOpaqueGCMPair(cipher, base64.StdEncoding.EncodeToString(make([]byte, 8)), "encrypted_filename", "filename_nonce", false))
+	require.Error(t, validateOpaqueGCMPair(cipher, "", "encrypted_password_hint", "password_hint_nonce", false))
+	require.NoError(t, validateOpaqueGCMPair("", "", "encrypted_password_hint", "password_hint_nonce", false))
+}
+
 func TestUpdateFileTags_RequiresAuthUsername(t *testing.T) {
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodPut, "/api/files/x/tags", strings.NewReader(`{"encrypted_tags":"","tags_nonce":"","expected_revision":0}`))

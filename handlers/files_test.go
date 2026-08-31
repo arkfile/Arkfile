@@ -247,6 +247,10 @@ func TestGetFileMetadataBatch(t *testing.T) {
 	assert.Len(t, missing, 1)
 	assert.Equal(t, "file-999", missing[0])
 
+	assertOwnerMetadataJSONPrivacy(t, filesMap["file-1"].(map[string]interface{}))
+	assertOwnerMetadataJSONPrivacy(t, filesMap["file-2"].(map[string]interface{}))
+	assert.NotContains(t, rec.Body.String(), `"encrypted_stream_sha256sum"`)
+
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
 
@@ -336,10 +340,13 @@ func TestListFiles_WithFiles(t *testing.T) {
 	file0 := files[0].(map[string]interface{})
 	assert.Equal(t, "file-2", file0["file_id"])
 	assert.Equal(t, "custom", file0["password_type"])
+	assertOwnerMetadataJSONPrivacy(t, file0)
 
 	file1 := files[1].(map[string]interface{})
 	assert.Equal(t, "file-1", file1["file_id"])
 	assert.Equal(t, "account", file1["password_type"])
+	assertOwnerMetadataJSONPrivacy(t, file1)
+	assert.NotContains(t, rec.Body.String(), `"encrypted_stream_sha256sum"`)
 
 	storage := resp["storage"].(map[string]interface{})
 	assert.Equal(t, float64(3072), storage["total_bytes"])
@@ -470,6 +477,8 @@ func TestGetFileMeta_Success(t *testing.T) {
 	assert.Equal(t, float64(5000000), resp["size_bytes"])
 	assert.NotNil(t, resp["chunk_size"])
 	assert.NotNil(t, resp["total_chunks"])
+	assertOwnerMetadataJSONPrivacy(t, resp)
+	assert.NotContains(t, rec.Body.String(), `"encrypted_stream_sha256sum"`)
 
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
@@ -793,4 +802,29 @@ func TestDeleteFile_PartialDeleteFailure(t *testing.T) {
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 	mockPrimary.AssertExpectations(t)
 	mockSecondary.AssertExpectations(t)
+}
+
+var ownerMetadataPlaintextJSONKeys = []string{
+	"filename",
+	"sha256",
+	"sha256sum",
+	"tags",
+	"password_hint",
+	"encrypted_stream_sha256sum",
+	"stored_blob_sha256sum",
+}
+
+func assertOwnerMetadataJSONPrivacy(t *testing.T, obj map[string]interface{}) {
+	t.Helper()
+	for _, key := range ownerMetadataPlaintextJSONKeys {
+		if _, exists := obj[key]; exists {
+			t.Errorf("owner metadata JSON must not include key %q", key)
+		}
+	}
+	if _, ok := obj["encrypted_filename"]; !ok {
+		t.Error("owner metadata JSON must include encrypted_filename")
+	}
+	if _, ok := obj["encrypted_sha256sum"]; !ok {
+		t.Error("owner metadata JSON must include encrypted_sha256sum")
+	}
 }

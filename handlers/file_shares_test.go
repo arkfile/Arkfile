@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -286,6 +287,119 @@ func TestGetShareEnvelope_Revoked(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, http.StatusForbidden, httpErr.Code)
 	assert.Contains(t, httpErr.Message, "revoked")
+	assert.NotContains(t, fmt.Sprint(httpErr.Message), "manual")
+}
+
+func TestGetShareEnvelope_RevokedFreeformReasonRedacted(t *testing.T) {
+	c, _, mock, _ := setupTestEnv(t, http.MethodGet, "/api/share/revoked-share", nil)
+	c.SetParamNames("id")
+	c.SetParamValues("revoked-share")
+
+	rateLimitIgnoreInsertSQL := `INSERT OR IGNORE INTO share_access_attempts`
+	mock.ExpectExec(rateLimitIgnoreInsertSQL).WithArgs("revoked-share", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	rateLimitSQL := `SELECT share_id, entity_id, failed_count, last_failed_attempt, next_allowed_attempt FROM share_access_attempts WHERE share_id = \? AND entity_id = \?`
+	mock.ExpectQuery(rateLimitSQL).WithArgs("revoked-share", sqlmock.AnyArg()).WillReturnError(sql.ErrNoRows)
+
+	revokedTime := time.Now().Add(-1 * time.Hour)
+	ownerComment := "vacation-photos-for-jane-doe.pdf"
+	shareSQL := `SELECT file_id, owner_username, salt, encrypted_fek, expires_at, revoked_at, revoked_reason, access_count, max_accesses FROM file_share_keys WHERE share_id = \?`
+	shareRows := sqlmock.NewRows([]string{"file_id", "owner_username", "salt", "encrypted_fek", "expires_at", "revoked_at", "revoked_reason", "access_count", "max_accesses"}).
+		AddRow("test-file-123", "owneruser", "test-salt", "ZW5jcnlwdGVkLWZlaw==", nil, revokedTime, ownerComment, 0, nil)
+	mock.ExpectQuery(shareSQL).WithArgs("revoked-share").WillReturnRows(shareRows)
+
+	err := GetShareEnvelope(c)
+	require.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusForbidden, httpErr.Code)
+	assert.Equal(t, "Share has been revoked", httpErr.Message)
+	assert.NotContains(t, fmt.Sprint(httpErr.Message), ownerComment)
+}
+
+func TestGetShareEnvelope_RevokedTimeReasonIncludesCategory(t *testing.T) {
+	c, _, mock, _ := setupTestEnv(t, http.MethodGet, "/api/share/revoked-share", nil)
+	c.SetParamNames("id")
+	c.SetParamValues("revoked-share")
+
+	rateLimitIgnoreInsertSQL := `INSERT OR IGNORE INTO share_access_attempts`
+	mock.ExpectExec(rateLimitIgnoreInsertSQL).WithArgs("revoked-share", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	rateLimitSQL := `SELECT share_id, entity_id, failed_count, last_failed_attempt, next_allowed_attempt FROM share_access_attempts WHERE share_id = \? AND entity_id = \?`
+	mock.ExpectQuery(rateLimitSQL).WithArgs("revoked-share", sqlmock.AnyArg()).WillReturnError(sql.ErrNoRows)
+
+	revokedTime := time.Now().Add(-1 * time.Hour)
+	shareSQL := `SELECT file_id, owner_username, salt, encrypted_fek, expires_at, revoked_at, revoked_reason, access_count, max_accesses FROM file_share_keys WHERE share_id = \?`
+	shareRows := sqlmock.NewRows([]string{"file_id", "owner_username", "salt", "encrypted_fek", "expires_at", "revoked_at", "revoked_reason", "access_count", "max_accesses"}).
+		AddRow("test-file-123", "owneruser", "test-salt", "ZW5jcnlwdGVkLWZlaw==", nil, revokedTime, "time", 0, nil)
+	mock.ExpectQuery(shareSQL).WithArgs("revoked-share").WillReturnRows(shareRows)
+
+	err := GetShareEnvelope(c)
+	require.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusForbidden, httpErr.Code)
+	assert.Equal(t, "Share has been revoked: time", httpErr.Message)
+}
+
+func TestGetShareEnvelope_SuccessOmitsOwnerAndPlaintextMetadata(t *testing.T) {
+	shareID := testShareID
+	fileID := "11111111-2222-4333-8444-555555555555"
+	ownerUsername := "share-owner-canary-user"
+	salt := "MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI="
+	envelope := "ZW5jcnlwdGVkLWVudmVsb3BlLWRhdGE="
+
+	c, rec, mock, _ := setupTestEnv(t, http.MethodGet, "/api/share/"+shareID, nil)
+	c.SetParamNames("id")
+	c.SetParamValues(shareID)
+
+	rateLimitIgnoreInsertSQL := `INSERT OR IGNORE INTO share_access_attempts`
+	mock.ExpectExec(rateLimitIgnoreInsertSQL).WithArgs(shareID, sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	rateLimitSQL := `SELECT share_id, entity_id, failed_count, last_failed_attempt, next_allowed_attempt FROM share_access_attempts WHERE share_id = \? AND entity_id = \?`
+	mock.ExpectQuery(rateLimitSQL).WithArgs(shareID, sqlmock.AnyArg()).WillReturnError(sql.ErrNoRows)
+
+	shareSQL := `SELECT file_id, owner_username, salt, encrypted_fek, expires_at, revoked_at, revoked_reason, access_count, max_accesses FROM file_share_keys WHERE share_id = \?`
+	shareRows := sqlmock.NewRows([]string{"file_id", "owner_username", "salt", "encrypted_fek", "expires_at", "revoked_at", "revoked_reason", "access_count", "max_accesses"}).
+		AddRow(fileID, ownerUsername, salt, envelope, nil, nil, nil, 0, nil)
+	mock.ExpectQuery(shareSQL).WithArgs(shareID).WillReturnRows(shareRows)
+
+	sizeSQL := `SELECT size_bytes FROM file_metadata WHERE file_id = \?`
+	mock.ExpectQuery(sizeSQL).WithArgs(fileID).WillReturnRows(
+		sqlmock.NewRows([]string{"size_bytes"}).AddRow(float64(1048576)),
+	)
+
+	err := GetShareEnvelope(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+
+	allowed := map[string]struct{}{
+		"share_id":           {},
+		"file_id":            {},
+		"salt":               {},
+		"encrypted_envelope": {},
+		"size_bytes":         {},
+	}
+	for key := range resp {
+		if _, ok := allowed[key]; !ok {
+			t.Errorf("anonymous share envelope JSON included unexpected key %q", key)
+		}
+	}
+	for key := range allowed {
+		if _, ok := resp[key]; !ok {
+			t.Errorf("anonymous share envelope JSON missing required key %q", key)
+		}
+	}
+	assert.Equal(t, shareID, resp["share_id"])
+	assert.Equal(t, fileID, resp["file_id"])
+	assert.Equal(t, salt, resp["salt"])
+	assert.Equal(t, envelope, resp["encrypted_envelope"])
+	assert.Equal(t, float64(1048576), resp["size_bytes"])
+	assert.NotContains(t, rec.Body.String(), ownerUsername)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestGetShareEnvelope_MaxAccessesExceeded(t *testing.T) {

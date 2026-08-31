@@ -29,6 +29,20 @@
     "aad_hex": "000102030405",
     "ciphertext_and_tag_hex": "a76a174b2ca7679f2320d4fe40398dfe06c93a64fdc58dedcda7fee00d229825c1d05e495492"
   },
+  "owner_metadata": {
+    "filename_plaintext": "vector-filename.bin",
+    "filename_nonce_hex": "a0a1a2a3a4a5a6a7a8a9aaab",
+    "filename_ciphertext_and_tag_hex": "7733ee42b34c70c6cf3637631dabcfcf517194ad0d02a7cb25dbbf2556fa3afc91df51",
+    "sha256_plaintext": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "sha256_nonce_hex": "b0b1b2b3b4b5b6b7b8b9babb",
+    "sha256_ciphertext_and_tag_hex": "497692974fc860c726e2c56c0125d69def6ede57bc430148161aa8444819c7f3ac370f39b0f91ea8de606569915aa26b3a9aedffe8b68cacfc732c39348010b1db85e81970fa62598f9e979b31161df9",
+    "password_hint_plaintext": "vector-hint",
+    "password_hint_nonce_hex": "c0c1c2c3c4c5c6c7c8c9cacb",
+    "password_hint_ciphertext_and_tag_hex": "c65717fb22afe8521b383fc720cf139e6c9726a44b4921531d4f97",
+    "tags_plaintext": "PC-1,folder-A",
+    "tags_nonce_hex": "d0d1d2d3d4d5d6d7d8d9dadb",
+    "tags_ciphertext_and_tag_hex": "bfdea1c2ea1f00a5f1f14cea199d2617ae09cd61528670d89ea2b1c02a"
+  },
   "owner_envelope": {
     "fek_hex": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
     "nonce_hex": "b0b1b2b3b4b5b6b7b8b9babb",

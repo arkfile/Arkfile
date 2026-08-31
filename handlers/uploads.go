@@ -168,6 +168,18 @@ func CreateUploadSession(c echo.Context) error {
 			"password hint fields are only valid for custom password files")
 	}
 
+	if err := validateOpaqueGCMPair(request.EncryptedFilename, request.FilenameNonce, "encrypted_filename", "filename_nonce", false); err != nil {
+		return JSONErrorCode(c, http.StatusBadRequest, "invalid_encrypted_filename", err.Error())
+	}
+	if err := validateOpaqueGCMPair(request.EncryptedSha256sum, request.Sha256sumNonce, "encrypted_sha256sum", "sha256sum_nonce", false); err != nil {
+		return JSONErrorCode(c, http.StatusBadRequest, "invalid_encrypted_sha256sum", err.Error())
+	}
+	if hasHintCipher || hasHintNonce {
+		if err := validateOpaqueGCMPair(request.EncryptedPasswordHint, request.PasswordHintNonce, "encrypted_password_hint", "password_hint_nonce", false); err != nil {
+			return JSONErrorCode(c, http.StatusBadRequest, "invalid_password_hint", err.Error())
+		}
+	}
+
 	if err := validateOpaqueTagsPair(request.EncryptedTags, request.TagsNonce, false); err != nil {
 		return JSONErrorCode(c, http.StatusBadRequest, "invalid_tags", err.Error())
 	}

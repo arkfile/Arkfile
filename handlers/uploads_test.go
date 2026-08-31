@@ -99,6 +99,114 @@ func TestCreateUploadSession_RejectsNonUUIDv4FileID(t *testing.T) {
 	}
 }
 
+func TestCreateUploadSession_RejectsNonOpaqueMetadata(t *testing.T) {
+	username := "opaque-metadata-user"
+	validNonce := base64.StdEncoding.EncodeToString(make([]byte, 12))
+	validCipher := base64.StdEncoding.EncodeToString(make([]byte, 16))
+
+	cases := []struct {
+		name      string
+		mutate    func(map[string]interface{})
+		errorCode string
+	}{
+		{
+			name: "plaintext filename",
+			mutate: func(p map[string]interface{}) {
+				p["encrypted_filename"] = "vacation-photos.pdf"
+			},
+			errorCode: "invalid_encrypted_filename",
+		},
+		{
+			name: "hex sha256 in ciphertext field",
+			mutate: func(p map[string]interface{}) {
+				p["encrypted_sha256sum"] = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+			},
+			errorCode: "invalid_encrypted_sha256sum",
+		},
+		{
+			name: "truncated filename nonce",
+			mutate: func(p map[string]interface{}) {
+				p["filename_nonce"] = base64.StdEncoding.EncodeToString(make([]byte, 8))
+			},
+			errorCode: "invalid_encrypted_filename",
+		},
+		{
+			name: "one sided custom hint",
+			mutate: func(p map[string]interface{}) {
+				p["password_type"] = "custom"
+				p["encrypted_password_hint"] = validCipher
+			},
+			errorCode: "invalid_password_hint",
+		},
+		{
+			name: "plaintext custom hint",
+			mutate: func(p map[string]interface{}) {
+				p["password_type"] = "custom"
+				p["encrypted_password_hint"] = "my dog's name"
+				p["password_hint_nonce"] = validNonce
+			},
+			errorCode: "invalid_password_hint",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := buildValidInitPayload(validTestFileID)
+			payload["encrypted_filename"] = validCipher
+			payload["filename_nonce"] = validNonce
+			payload["encrypted_sha256sum"] = validCipher
+			payload["sha256sum_nonce"] = validNonce
+			tc.mutate(payload)
+			body, err := json.Marshal(payload)
+			require.NoError(t, err)
+
+			c, rec, _, _ := setupTestEnv(t, http.MethodPost, "/api/uploads/init", bytes.NewReader(body))
+			claims := &auth.Claims{Username: username}
+			token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+			c.Set("user", token)
+
+			err = CreateUploadSession(c)
+			require.NoError(t, err, "handler should write the 400 response itself")
+			require.Equal(t, http.StatusBadRequest, rec.Code)
+
+			var resp APIResponse
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+			assert.False(t, resp.Success)
+			assert.Equal(t, tc.errorCode, resp.Error)
+		})
+	}
+}
+
+func TestCreateUploadSession_RejectsHintOnAccountPassword(t *testing.T) {
+	username := "account-hint-user"
+	validNonce := base64.StdEncoding.EncodeToString(make([]byte, 12))
+	validCipher := base64.StdEncoding.EncodeToString(make([]byte, 16))
+	payload := buildValidInitPayload(validTestFileID)
+	payload["encrypted_filename"] = validCipher
+	payload["filename_nonce"] = validNonce
+	payload["encrypted_sha256sum"] = validCipher
+	payload["sha256sum_nonce"] = validNonce
+	payload["password_type"] = "account"
+	payload["encrypted_password_hint"] = validCipher
+	payload["password_hint_nonce"] = validNonce
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	c, rec, _, _ := setupTestEnv(t, http.MethodPost, "/api/uploads/init", bytes.NewReader(body))
+	claims := &auth.Claims{Username: username}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	err = CreateUploadSession(c)
+	require.NoError(t, err, "handler should write the 400 response itself")
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+
+	var resp APIResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.False(t, resp.Success)
+	assert.Equal(t, "invalid_password_hint", resp.Error)
+}
+
 // TestCreateUploadSession_FileIDConflictStableError verifies that the server
 // returns HTTP 409 with stable error code "file_id_conflict" when the
 // client-supplied file_id already exists in either file_metadata or

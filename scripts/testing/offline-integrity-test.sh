@@ -121,7 +121,7 @@ run_group() {
 }
 
 run_conformance() {
-    go test ./crypto -run '^(TestBuildChunkAAD_CrossLanguageVector|TestAADSharedFixture|TestPasswordKDFConformance|TestAESGCMSharedFixture|TestOwnerEnvelopeSharedFixtureDecrypt|TestShareEnvelopeSharedFixture(Decrypt|RejectsTampering)|TestArgon2ConformanceFixture)$' -count=1 || return 1
+    go test ./crypto -run '^(TestBuildChunkAAD_CrossLanguageVector|TestAADSharedFixture|TestPasswordKDFConformance|TestAESGCMSharedFixture|TestOwnerEnvelopeSharedFixtureDecrypt|TestShareEnvelopeSharedFixture(Decrypt|RejectsTampering)|TestArgon2ConformanceFixture|TestMetadataFieldSharedFixture)$' -count=1 || return 1
     (
         cd client/static/js || exit 1
         bun test \
@@ -132,7 +132,8 @@ run_conformance() {
             src/__tests__/file-encryption.test.ts \
             src/__tests__/metadata-helpers.test.ts \
             src/__tests__/owner-envelope.test.ts \
-            src/__tests__/share-envelope-conformance.test.ts
+            src/__tests__/share-envelope-conformance.test.ts \
+            src/__tests__/metadata-conformance.test.ts
     )
 }
 
@@ -148,9 +149,12 @@ run_parser_regressions() {
 
 run_short_fuzzing() {
     timeout "$FUZZ_COMMAND_TIMEOUT" go test ./crypto -run '^$' -fuzz '^FuzzParseFEKEnvelopeHeader$' -fuzztime="$FUZZ_TIME" || return 1
+    timeout "$FUZZ_COMMAND_TIMEOUT" go test ./crypto -run '^$' -fuzz '^FuzzDecryptFEK$' -fuzztime="$FUZZ_TIME" || return 1
     timeout "$FUZZ_COMMAND_TIMEOUT" go test ./crypto -run '^$' -fuzz '^FuzzParseShareEnvelope$' -fuzztime="$FUZZ_TIME" || return 1
     timeout "$FUZZ_COMMAND_TIMEOUT" go test ./crypto -run '^$' -fuzz '^FuzzVerifyShareTicket$' -fuzztime="$FUZZ_TIME" || return 1
-    timeout "$FUZZ_COMMAND_TIMEOUT" go test ./cmd/arkfile-client -run '^$' -fuzz '^FuzzParseBundle$' -fuzztime="$FUZZ_TIME"
+    timeout "$FUZZ_COMMAND_TIMEOUT" go test ./cmd/arkfile-client -run '^$' -fuzz '^FuzzParseBundle$' -fuzztime="$FUZZ_TIME" || return 1
+    timeout "$FUZZ_COMMAND_TIMEOUT" go test ./auth -run '^$' -fuzz '^FuzzCreateRegistrationResponse$' -fuzztime="$FUZZ_TIME" || return 1
+    timeout "$FUZZ_COMMAND_TIMEOUT" go test ./auth -run '^$' -fuzz '^FuzzCreateCredentialResponse$' -fuzztime="$FUZZ_TIME"
 }
 
 run_state_invariants() {
