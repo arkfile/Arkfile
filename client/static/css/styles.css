@@ -431,7 +431,7 @@ input[type="checkbox"] {
     cursor: pointer;
 }
 
-.btn, button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):not(.security-panel-close):not(.btn-copy-hash):not(.hero-btn):not(.password-modal-close):not(.icon-button):not(.toast-dismiss):not(.toast-action), .share-action-btn, .share-list-refresh, .secondary-button, .danger-button, .btn-primary, .btn-secondary, .logout-btn, .nav-link, .remove-contact-btn, .cancel-button, .progress-modal .cancel-button, .password-modal-btn {
+.btn, button:not(.hidden):not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):not(.security-panel-close):not(.btn-copy-hash):not(.hero-btn):not(.password-modal-close):not(.icon-button):not(.toast-dismiss):not(.toast-action), .share-action-btn, .share-list-refresh, .secondary-button, .danger-button, .btn-primary, .btn-secondary, .logout-btn, .nav-link, .remove-contact-btn, .cancel-button, .progress-modal .cancel-button, .password-modal-btn {
     padding: var(--control-pad-y) var(--control-pad-x);
     border-radius: 6px;
     cursor: pointer;
@@ -451,7 +451,7 @@ input[type="checkbox"] {
     color: var(--foam-1);
 }
 
-button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):not(.security-panel-close):not(.btn-copy-hash):not(.hero-btn):not(.password-modal-close):not(.icon-button):not(.toast-dismiss):not(.toast-action):hover, .btn-primary:hover, .share-action-btn:hover, .share-list-refresh:hover, .secondary-button:hover {
+button:not(.hidden):not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):not(.security-panel-close):not(.btn-copy-hash):not(.hero-btn):not(.password-modal-close):not(.icon-button):not(.toast-dismiss):not(.toast-action):hover, .btn-primary:hover, .share-action-btn:hover, .share-list-refresh:hover, .secondary-button:hover {
     background-color: color-mix(in srgb, var(--current-1) 70%, var(--depth-1));
     transform: translateY(-1px);
     box-shadow: 0 4px 12px color-mix(in srgb, var(--current-1) 30%, transparent);
@@ -1669,6 +1669,16 @@ button:not(.password-toggle-btn):not(.tag-chip):not(.tag-chip-remove):not(.secur
 /* .modal sets display:flex after .hidden; without this, class="modal hidden"
    stays visible and intercepts clicks (breaks Playwright and real UI). */
 .modal.hidden {
+    display: none;
+    pointer-events: none;
+}
+
+/* The shared button rule uses display:inline-flex at higher specificity than
+   .hidden. Keep class="hidden" as the hide switch for filter/chrome buttons. */
+button.hidden,
+.btn.hidden,
+.btn-secondary.hidden,
+.tag-filter-clear.hidden {
     display: none;
     pointer-events: none;
 }
