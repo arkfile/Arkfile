@@ -438,8 +438,16 @@ validate_wasm_runtime() {
     local artifact="$LIBOPAQUE_JS_DIR/dist/libopaque.debug.js"
     local harness="$REPO_ROOT/scripts/testing/opaque-wasm-interop-harness.js"
 
-    if ! command -v bun >/dev/null 2>&1; then
+    local bun_cmd
+    bun_cmd="$(find_bun_binary || true)"
+    if [ -z "$bun_cmd" ]; then
         print_status "ERROR" "Bun is required to validate the libopaque WASM runtime"
+        print_bun_install_hint
+        return 1
+    fi
+    export PATH="$(dirname "$bun_cmd"):${PATH}"
+    if ! require_bun_zig_build "$bun_cmd"; then
+        print_status "ERROR" "Bun 1.3.x (Zig) is required to validate the libopaque WASM runtime"
         return 1
     fi
     if [ ! -f "$harness" ]; then

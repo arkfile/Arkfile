@@ -8,7 +8,7 @@
 # Prerequisites:
 #   - Server deployed via scripts/dev-reset.sh
 #   - scripts/testing/e2e-test.sh has run (test user exists, approved, MFA configured)
-#   - bun available as runtime
+#   - Bun 1.3.x (last Zig-built line, currently 1.3.14) available as runtime
 #   - MFA secret at /tmp/arkfile-e2e-test-data/mfa-secret (written by e2e-test.sh)
 
 set -eo pipefail
@@ -35,6 +35,8 @@ TEST_DATA_DIR="/tmp/arkfile-e2e-test-data"
 MFA_SECRET_FILE="$TEST_DATA_DIR/mfa-secret"
 PLAYWRIGHT_TEMP_DIR="$TEST_DATA_DIR/playwright"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=../setup/build-config.sh
+source "$PROJECT_DIR/scripts/setup/build-config.sh"
 
 # Test credentials (must match e2e-test.sh)
 TEST_USERNAME="arkfile-dev-test-user"
@@ -152,11 +154,17 @@ if ! command -v bun >/dev/null 2>&1; then
             exit 1
         fi
     else
-        error "bun not found. Install bun first: curl -fsSL https://bun.sh/install | bash"
+        error "bun not found. Install Bun ${BUN_ZIG_VERSION} (Zig) first."
+        print_bun_install_hint
         exit 1
     fi
 else
     success "bun available: $(bun --version)"
+fi
+
+if ! require_bun_zig_build "$(command -v bun)"; then
+    error "Bun 1.3.x (last Zig-built line) is required"
+    exit 1
 fi
 
 # INSTALL PLAYWRIGHT (if needed)

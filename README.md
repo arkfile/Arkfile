@@ -38,13 +38,17 @@ Arkfile is for people who want cloud backup and secure sharing without giving th
 
 ## Local Dev Test Quick Start
 
+Install Bun 1.3.14 (the last Zig-built release) before the first reset. Do not use the unversioned installer, which currently ships Bun 1.4 (Rust rewrite). See `docs/setup.md` for Go and other host packages.
+
 ```bash
+curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14"
+source ~/.bashrc
 sudo ./scripts/dev-reset.sh
 ```
 
 The script will:
 
-* Install all dependencies
+* Compile the app and TypeScript frontend (Bun 1.3.x required on the host)
 * Set up arkfile system user
 * Start a local SeaweedFS bucket  
 * Start a single-node rqlite database  

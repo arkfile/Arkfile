@@ -74,6 +74,10 @@ export EMSCRIPTEN_VERSION="${EMSCRIPTEN_VERSION:-4.0.23}"
 export LIBSODIUM_JS_VERSION="${LIBSODIUM_JS_VERSION:-0.8.4}"
 export LIBSODIUM_JS_COMMIT="${LIBSODIUM_JS_COMMIT:-2830fcf2ce8cefd3fdc7e1efc9fc1cee1d2d95b7}"
 
+# Last Zig-built Bun. 1.4+ is the Rust rewrite and is not used.
+# Install: curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_ZIG_VERSION}"
+export BUN_ZIG_VERSION="${BUN_ZIG_VERSION:-1.3.14}"
+
 # =============================================================================
 # C LIBRARY PATHS
 # =============================================================================
@@ -719,6 +723,9 @@ missing_native_build_host_deps() {
 
     if bun_bin="$(find_bun_binary)"; then
         export PATH="$(dirname "$bun_bin"):${PATH}"
+        if ! bun_version_is_supported "$(bun_reported_version "$bun_bin")"; then
+            missing="${missing} bun"
+        fi
     else
         missing="${missing} bun"
     fi
@@ -1010,6 +1017,61 @@ find_bun_binary() {
         fi
     done
     return 1
+}
+
+# Echo the first whitespace-stripped token from `bun --version`, or empty.
+bun_reported_version() {
+    local bun_cmd="$1"
+    local ver
+    ver="$("$bun_cmd" --version 2>/dev/null | head -n1 | tr -d '[:space:]')"
+    ver="${ver#v}"
+    ver="${ver%%+*}"
+    printf '%s' "$ver"
+}
+
+# Return 0 when the version is Bun 1.3.x (last Zig line). 1.4+ is the Rust rewrite.
+bun_version_is_supported() {
+    local ver="$1" major minor rest
+    ver="${ver#v}"
+    ver="$(printf '%s' "$ver" | grep -oE '^[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n1)"
+    [ -n "$ver" ] || return 1
+    major="${ver%%.*}"
+    rest="${ver#*.}"
+    minor="${rest%%.*}"
+    [ "$major" = "1" ] && [ "$minor" = "3" ]
+}
+
+print_bun_install_hint() {
+    echo "  Arkfile requires Bun ${BUN_ZIG_VERSION} (last Zig-built 1.3.x). Do not install 1.4 or later (Rust rewrite)."
+    echo "  Do not run bun upgrade, bun upgrade --stable, or bun upgrade --canary."
+    echo "  Install: curl -fsSL https://bun.sh/install | bash -s \"bun-v${BUN_ZIG_VERSION}\""
+    echo "  Then: source ~/.bashrc && bun --version"
+    echo "  sudo does not inherit a per-user ~/.bun/bin; pass PATH or install bun for the invoking user."
+}
+
+# Find or accept a bun binary and require 1.3.x. Prints an install hint on failure.
+require_bun_zig_build() {
+    local bun_cmd="${1:-}"
+    local ver
+    if [ -z "$bun_cmd" ]; then
+        if ! bun_cmd="$(find_bun_binary)"; then
+            echo "Bun is required for TypeScript compilation." >&2
+            print_bun_install_hint >&2
+            return 1
+        fi
+    fi
+    if [ ! -x "$bun_cmd" ] && ! command -v "$bun_cmd" >/dev/null 2>&1; then
+        echo "Bun is required for TypeScript compilation." >&2
+        print_bun_install_hint >&2
+        return 1
+    fi
+    ver="$(bun_reported_version "$bun_cmd")"
+    if ! bun_version_is_supported "$ver"; then
+        echo "Unsupported Bun version: ${ver:-unknown}. Need 1.3.x (last Zig-built line, currently ${BUN_ZIG_VERSION})." >&2
+        print_bun_install_hint >&2
+        return 1
+    fi
+    return 0
 }
 
 # Return 0 when GO_BINARY (or find_go_binary) meets the go.mod toolchain line.

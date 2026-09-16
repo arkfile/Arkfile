@@ -42,15 +42,18 @@ print_deploy_phase() {
 # Fail closed with an install hint when the host cannot complete a full app build.
 # Call after find_go_binary. Must run before any interactive secret collection.
 check_native_build_host_tools() {
-    local missing
+    local missing bun_bin
     missing="$(missing_native_build_host_deps)"
     if [ -n "$missing" ]; then
         print_status "ERROR" "Missing required dependencies: ${missing}"
         print_native_build_package_install_hint
         case " ${missing} " in
             *" bun "*)
-                echo "  For bun: curl -fsSL https://bun.sh/install | bash"
-                echo "  sudo does not inherit a per-user ~/.bun/bin; pass PATH or install bun system-wide."
+                bun_bin="$(find_bun_binary)" || true
+                if [ -n "${bun_bin:-}" ]; then
+                    echo "  Found Bun $(bun_reported_version "$bun_bin") at $bun_bin; 1.3.x (Zig) is required."
+                fi
+                print_bun_install_hint
                 ;;
         esac
         return 1

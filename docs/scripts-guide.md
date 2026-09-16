@@ -272,7 +272,7 @@ bun run test          # bun test src/__tests__/
 
 **Browser/server integration** is not part of this script. Use `e2e-test.sh` and `e2e-playwright.sh` instead.
 
-**Prerequisites**: Bun runtime installed for client-side testing
+**Prerequisites**: Bun 1.3.x (last Zig-built line, currently 1.3.14) installed for client-side testing
 
 #### `e2e-playwright.sh`
 **Purpose**: Browser frontend integration tests via Playwright (runs after `e2e-test.sh`)  
@@ -281,7 +281,7 @@ bun run test          # bun test src/__tests__/
 - Server running (`dev-reset.sh`)
 - `e2e-test.sh` completed successfully
 - Test user MFA secret at `/tmp/arkfile-e2e-test-data/mfa-secret` (written by shell e2e)
-- `bun` and Playwright Chromium installed
+- Bun 1.3.x (last Zig-built line, currently 1.3.14) and Playwright Chromium installed
 
 Exports `MFA_SECRET` and test file paths to `scripts/testing/e2e-playwright.ts`.
 
@@ -436,7 +436,7 @@ Many scripts support environment variables for customization:
 
 ### Prerequisites
 - Go 1.26.0+ (for building)
-- Bun (for WebAssembly tests and TypeScript compilation)
+- Bun 1.3.14 (last Zig-built 1.3.x; for TypeScript compilation and WebAssembly tests). Do not use 1.4 or later.
 - Python 3 (for some maintenance scripts)
 - curl (for health checks)
 - sudo access (for system setup)

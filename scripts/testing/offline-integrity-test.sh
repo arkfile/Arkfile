@@ -3,6 +3,8 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+# shellcheck source=../setup/build-config.sh
+source "$SCRIPT_DIR/../setup/build-config.sh"
 TEST_ROOT=""
 FUZZ_TIME="${ARKFILE_INTEGRITY_FUZZ_TIME:-2s}"
 FUZZ_COMMAND_TIMEOUT="${ARKFILE_INTEGRITY_FUZZ_COMMAND_TIMEOUT:-90s}"
@@ -68,7 +70,12 @@ preflight() {
 
     require_command go || return 1
     if [ "$SELECTED_GROUP" = "all" ] || [ "$SELECTED_GROUP" = "conformance" ] || [ "$SELECTED_GROUP" = "parsers" ] || [ "$SELECTED_GROUP" = "production" ]; then
-        require_command bun || return 1
+        bun_cmd="$(find_bun_binary || true)"
+        if [ -z "$bun_cmd" ] || ! require_bun_zig_build "$bun_cmd"; then
+            log_error "Bun 1.3.x (last Zig-built line) is required"
+            return 1
+        fi
+        export PATH="$(dirname "$bun_cmd"):${PATH}"
     fi
     if [ "$SELECTED_GROUP" = "all" ] || [ "$SELECTED_GROUP" = "fuzz" ]; then
         require_command timeout || return 1

@@ -343,25 +343,15 @@ fi
 # Build TypeScript Frontend (Mandatory)
 echo "Building TypeScript frontend..."
 
-# Find bun in various locations
-BUN_CMD=""
-# First check if bun is in PATH
-if command -v bun >/dev/null 2>&1; then
-    BUN_CMD="bun"
-# Check current user's home directory
-elif [ -f "$HOME/.bun/bin/bun" ]; then
-    BUN_CMD="$HOME/.bun/bin/bun"
-# Check root's home directory (when running under sudo)
-elif [ -f "/root/.bun/bin/bun" ]; then
-    BUN_CMD="/root/.bun/bin/bun"
-# Check if SUDO_USER is set and try their home directory
-elif [ -n "$SUDO_USER" ] && [ -f "/home/$SUDO_USER/.bun/bin/bun" ]; then
-    BUN_CMD="/home/$SUDO_USER/.bun/bin/bun"
-fi
-
+# Find bun in PATH, ~/.bun/bin, or the sudo caller's home.
+BUN_CMD="$(find_bun_binary || true)"
 if [ -z "$BUN_CMD" ]; then
     echo -e "${RED}[X] Bun is required for TypeScript compilation${NC}"
-    echo -e "${YELLOW}Install Bun using: curl -fsSL https://bun.sh/install | bash${NC}"
+    print_bun_install_hint
+    exit 1
+fi
+if ! require_bun_zig_build "$BUN_CMD"; then
+    echo -e "${RED}[X] Bun 1.3.x (last Zig-built line) is required for TypeScript compilation${NC}"
     exit 1
 fi
 

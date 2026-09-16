@@ -36,7 +36,7 @@ go test ./crypto -run '^$' \
   -benchmem -count=3
 ```
 
-4. **Rebuild/reset the development deployment**:
+4. **Rebuild/reset the development deployment** (requires Bun 1.3.x already on the host; see `docs/setup.md`):
 
 ```bash
 sudo bash scripts/dev-reset.sh

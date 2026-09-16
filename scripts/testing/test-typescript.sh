@@ -1,6 +1,10 @@
 #!/bin/bash
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../setup/build-config.sh
+source "$SCRIPT_DIR/../setup/build-config.sh"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -11,19 +15,22 @@ NC='\033[0m'
 echo -e "${BLUE}[START] ArkFile TypeScript Test Suite${NC}"
 echo "=============================================="
 
-# Function to check if Bun is installed
+# Function to check if Bun 1.3.x (Zig) is installed
 check_bun() {
-    if ! command -v bun >/dev/null 2>&1; then
+    local bun_cmd
+    bun_cmd="$(find_bun_binary || true)"
+    if [ -z "$bun_cmd" ]; then
         echo -e "${RED}[X] Bun is not installed${NC}"
-        echo -e "${YELLOW}Install Bun from: https://bun.sh${NC}"
-        echo ""
-        echo "Quick install:"
-        echo "  curl -fsSL https://bun.sh/install | bash"
-        echo "  source ~/.bashrc"
+        print_bun_install_hint
         return 1
     fi
-    
-    echo -e "${GREEN}[OK] Bun $(bun --version) detected${NC}"
+    export PATH="$(dirname "$bun_cmd"):${PATH}"
+    if ! require_bun_zig_build "$bun_cmd"; then
+        echo -e "${RED}[X] Bun 1.3.x (last Zig-built line) is required${NC}"
+        return 1
+    fi
+
+    echo -e "${GREEN}[OK] Bun $("$bun_cmd" --version) detected${NC}"
     return 0
 }
 

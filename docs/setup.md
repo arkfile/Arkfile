@@ -15,7 +15,17 @@ This guide provides comprehensive instructions for installing, configuring, and 
 
 ### Local Dev Test Setup
 
-Run the following:
+Before the first `dev-reset.sh` on a new machine, install host tools. Go and the system packages listed under Prerequisites later in this guide are required. Bun is also required: `dev-reset.sh` compiles the TypeScript frontend via `build.sh` and exits if Bun is missing or is 1.4 or later (the Rust rewrite). Install the last Zig-built release:
+
+```bash
+curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14"
+source ~/.bashrc
+bun --version
+```
+
+`bun --version` must print `1.3.14` (any 1.3.x is accepted by the build scripts). Do not run `bun upgrade`. `sudo` does not inherit a per-user `~/.bun/bin`; the build scripts search that path, but Bun itself must already exist.
+
+Then run the following:
 
 - `sudo ./scripts/dev-reset.sh` -- idempotent setup/reset of local dev testing environment (creates `arkfile-dev-admin` user)
 
@@ -142,6 +152,8 @@ Arkfile provides three deployment scripts for different use cases:
 ### dev-reset.sh (Development)
 
 **Best for:** Local development and iterative testing
+
+Requires Bun 1.3.x (last Zig-built line, currently 1.3.14) already installed on the host. See Local Dev Test Setup above.
 
 ```bash
 sudo ./scripts/dev-reset.sh
@@ -342,16 +354,20 @@ sudo bash scripts/setup/build-client.sh
 - On RHEL/Alma/Rocky 9, install `python3.11` (or newer). The default `/usr/bin/python3` (3.9) is not sufficient.
 - On Linux, emsdk's prebuilt Binaryen tools require `libatomic.so.1` (`libatomic1` on Debian/Ubuntu/Devuan and openSUSE/SLES, `libatomic` on RHEL/Alma/Rocky/Fedora and Alpine, or `gcc-libs` on Arch). Build scripts also execute the pinned `wasm-opt` before compiling libsodium so loader incompatibilities fail early.
 
-**Development Dependencies (Optional):**
-For development and TypeScript compilation, install additional dependencies:
+**TypeScript host tool (required for full-stack builds):**
+
+Every full-stack path (`dev-reset.sh`, `local-deploy.sh`, `prod-deploy.sh`, `test-deploy.sh`) compiles the browser frontend with Bun. Scripts do not install it. Install the last Zig-built release (1.3.14). Do not use Bun 1.4 or later (the Rust rewrite), and do not run `bun upgrade`.
+
 ```bash
-# Install Bun (JavaScript runtime and bundler)
-curl -fsSL https://bun.sh/install | bash
+# Install Bun 1.3.14 (last Zig-built release)
+curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14"
 source ~/.bashrc
 
-# Verify Bun installation
+# Verify: must print 1.3.14 (build scripts accept any 1.3.x)
 bun --version
 ```
+
+`sudo` does not inherit a per-user `~/.bun/bin`; the build scripts search that path, but Bun itself must already exist.
 
 ### Configuration
 
