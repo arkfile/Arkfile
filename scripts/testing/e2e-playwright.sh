@@ -5,13 +5,26 @@
 # Runs after e2e-test.sh has completed successfully.
 # Exercises the web frontend via Playwright against the live local server.
 #
+# Run as your regular user (no sudo): bash scripts/testing/e2e-playwright.sh
+#
 # Prerequisites:
 #   - Server deployed via scripts/dev-reset.sh
-#   - scripts/testing/e2e-test.sh has run (test user exists, approved, MFA configured)
-#   - Bun 1.3.x (last Zig-built line, currently 1.3.14) available as runtime
-#   - MFA secret at /tmp/arkfile-e2e-test-data/mfa-secret (written by e2e-test.sh)
+#   - scripts/testing/e2e-test.sh has run as the same user (test user exists,
+#     approved, MFA configured; writes /tmp/arkfile-e2e-test-data)
+#   - Bun 1.3.x (last Zig-built line, currently 1.3.14) installed for this user
+#   - Root workspace dependencies installed (dev-reset.sh does this; otherwise
+#     run `bun install --frozen-lockfile` from the repo root)
+#   - Playwright Chromium installed once for this user: bunx playwright install chromium
+#
+# All Playwright output (traces, screenshots, .last-run.json) is written under
+# /tmp/arkfile-e2e-test-data/playwright, never into the repository.
 
 set -eo pipefail
+
+# Runs as the developer, never root. See scripts/testing/testing-common.sh.
+# shellcheck source=testing-common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/testing-common.sh"
+testing_refuse_root "e2e-playwright.sh"
 
 # COLOR OUTPUT
 
@@ -34,6 +47,9 @@ SERVER_URL="${SERVER_URL:-https://localhost:8443}"
 TEST_DATA_DIR="/tmp/arkfile-e2e-test-data"
 MFA_SECRET_FILE="$TEST_DATA_DIR/mfa-secret"
 PLAYWRIGHT_TEMP_DIR="$TEST_DATA_DIR/playwright"
+# Playwright outputDir (read by playwright.config.ts). Fixed location so traces
+# are always in the same place; Playwright clears it at the start of each run.
+PLAYWRIGHT_OUTPUT_DIR="$PLAYWRIGHT_TEMP_DIR/results"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=../setup/build-config.sh
 source "$PROJECT_DIR/scripts/setup/build-config.sh"
@@ -65,6 +81,7 @@ fi
 
 # Check MFA secret (post–re-enrollment secret when shell e2e completed auth group)
 section "Checking MFA secret"
+testing_require_owned_dir "$TEST_DATA_DIR" "e2e-test.sh"
 if [ -f "$MFA_SECRET_FILE" ]; then
     MFA_SECRET=$(cat "$MFA_SECRET_FILE")
     if [ -z "$MFA_SECRET" ]; then
@@ -104,101 +121,54 @@ else
     exit 1
 fi
 
-# Check bun (handle sudo: bun is often installed per-user at ~/.bun/bin/)
+# Check bun (per-user install at ~/.bun/bin; find_bun_binary is from build-config.sh)
 section "Checking bun runtime"
-if ! command -v bun >/dev/null 2>&1; then
-    # bun not in PATH -- attempt to locate and symlink (common when running under sudo)
-    BUN_FOUND=""
-
-    # Check the invoking user's home directory first (sudo preserves SUDO_USER)
-    if [ -n "$SUDO_USER" ] && [ -x "/home/$SUDO_USER/.bun/bin/bun" ]; then
-        BUN_FOUND="/home/$SUDO_USER/.bun/bin/bun"
-    fi
-
-    # Fallback: scan /home/*/.bun/bin/bun
-    if [ -z "$BUN_FOUND" ]; then
-        for candidate in /home/*/.bun/bin/bun; do
-            if [ -x "$candidate" ]; then
-                BUN_FOUND="$candidate"
-                break
-            fi
-        done
-    fi
-
-    if [ -n "$BUN_FOUND" ]; then
-        info "Found bun at $BUN_FOUND (not in root PATH)"
-        # Create/update symlink idempotently
-        SYMLINK_TARGET="/usr/local/bin/bun"
-        if [ -L "$SYMLINK_TARGET" ] && [ "$(readlink -f "$SYMLINK_TARGET")" = "$(readlink -f "$BUN_FOUND")" ]; then
-            info "Symlink already correct: $SYMLINK_TARGET -> $BUN_FOUND"
-        else
-            ln -sf "$BUN_FOUND" "$SYMLINK_TARGET"
-            success "Created symlink: $SYMLINK_TARGET -> $BUN_FOUND"
-        fi
-
-        # Also symlink bunx if present alongside bun
-        BUN_DIR="$(dirname "$BUN_FOUND")"
-        if [ -x "$BUN_DIR/bunx" ]; then
-            if [ -L "/usr/local/bin/bunx" ] && [ "$(readlink -f /usr/local/bin/bunx)" = "$(readlink -f "$BUN_DIR/bunx")" ]; then
-                : # already correct
-            else
-                ln -sf "$BUN_DIR/bunx" /usr/local/bin/bunx
-            fi
-        fi
-
-        # Verify it works now
-        if command -v bun >/dev/null 2>&1; then
-            success "bun available: $(bun --version)"
-        else
-            error "bun symlinked but still not found in PATH"
-            exit 1
-        fi
-    else
-        error "bun not found. Install Bun ${BUN_ZIG_VERSION} (Zig) first."
-        print_bun_install_hint
-        exit 1
-    fi
-else
-    success "bun available: $(bun --version)"
+BUN_CMD="$(find_bun_binary || true)"
+if [ -z "$BUN_CMD" ]; then
+    error "bun not found. Install Bun ${BUN_ZIG_VERSION} (Zig) for this user first."
+    print_bun_install_hint
+    exit 1
 fi
-
-if ! require_bun_zig_build "$(command -v bun)"; then
+export PATH="$(dirname "$BUN_CMD"):${PATH}"
+if ! require_bun_zig_build "$BUN_CMD"; then
     error "Bun 1.3.x (last Zig-built line) is required"
     exit 1
 fi
+success "bun available: $(bun --version) at $BUN_CMD"
 
-# INSTALL PLAYWRIGHT (if needed)
+# DEPENDENCY PREFLIGHT (no installs at test time)
 
-section "DEPENDENCY SETUP"
+section "DEPENDENCY PREFLIGHT"
 
 cd "$PROJECT_DIR"
 
 section "Checking Playwright installation"
-if [ ! -d "node_modules/@playwright/test" ]; then
-    info "Installing @playwright/test..."
-    bun add -d @playwright/test
-    success "Playwright installed"
+if [ -d "node_modules/@playwright/test" ]; then
+    success "@playwright/test present in node_modules"
 else
-    success "Playwright already installed"
+    error "@playwright/test is not installed in $PROJECT_DIR/node_modules"
+    error "dev-reset.sh installs it; otherwise run from the repo root: bun install --frozen-lockfile"
+    exit 1
 fi
 
-# Install browser if needed
-section "Checking Playwright browsers"
-if ! bunx playwright install --dry-run chromium >/dev/null 2>&1; then
-    info "Installing Chromium browser for Playwright..."
-    bunx playwright install chromium
-    success "Chromium installed"
+section "Checking Playwright Chromium"
+PLAYWRIGHT_BROWSERS_DIR="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-playwright}"
+if compgen -G "$PLAYWRIGHT_BROWSERS_DIR/chromium-*" >/dev/null; then
+    success "Chromium present under $PLAYWRIGHT_BROWSERS_DIR"
 else
-    # Always try to install to ensure it's available
-    bunx playwright install chromium >/dev/null 2>&1 || true
-    success "Chromium browser available"
+    error "Playwright Chromium is not installed for $(id -un) under $PLAYWRIGHT_BROWSERS_DIR"
+    error "Install it once (needs network): bunx playwright install chromium"
+    exit 1
 fi
 
 # GENERATE TEST FILES
 
 section "GENERATING TEST FILES"
 
-mkdir -p "$PLAYWRIGHT_TEMP_DIR"
+# Fresh Playwright workspace under the developer-owned e2e directory.
+rm -rf "$PLAYWRIGHT_TEMP_DIR"
+mkdir -p "$PLAYWRIGHT_TEMP_DIR" "$PLAYWRIGHT_OUTPUT_DIR"
+chmod 700 "$PLAYWRIGHT_TEMP_DIR"
 
 TEST_FILE_PATH="$PLAYWRIGHT_TEMP_DIR/pw_test_upload.bin"
 CUSTOM_FILE_PATH="$PLAYWRIGHT_TEMP_DIR/pw_custom_upload.bin"
@@ -268,6 +238,7 @@ export SHARE_A_PASSWORD
 export SHARE_B_PASSWORD
 export SHARE_C_PASSWORD
 export PLAYWRIGHT_TEMP_DIR
+export PLAYWRIGHT_OUTPUT_DIR
 export REG_FLOW_FILE_PATH
 export REG_FLOW_FILE_SHA256
 export REG_FLOW_FILE_NAME
@@ -287,7 +258,12 @@ section "CLEANUP"
 section "Cleaning up test files"
 rm -f "$TEST_FILE_PATH" "$CUSTOM_FILE_PATH" "$REG_FLOW_FILE_PATH"
 rm -rf "$PLAYWRIGHT_TEMP_DIR/downloads" 2>/dev/null || true
-success "Temp files cleaned up"
+if [ $PLAYWRIGHT_EXIT_CODE -eq 0 ]; then
+    rm -rf "$PLAYWRIGHT_OUTPUT_DIR" 2>/dev/null || true
+    success "Temp files and Playwright output cleaned up"
+else
+    success "Temp files cleaned up; Playwright traces and screenshots kept in $PLAYWRIGHT_OUTPUT_DIR"
+fi
 
 # RESULTS
 
@@ -301,6 +277,7 @@ if [ $PLAYWRIGHT_EXIT_CODE -eq 0 ]; then
 else
     echo ""
     echo -e "${RED}  PLAYWRIGHT E2E TESTS FAILED (exit code: $PLAYWRIGHT_EXIT_CODE)${NC}"
+    echo -e "${YELLOW}  Failure artifacts: $PLAYWRIGHT_OUTPUT_DIR${NC}"
     echo ""
     exit $PLAYWRIGHT_EXIT_CODE
 fi

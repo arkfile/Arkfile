@@ -276,14 +276,25 @@ bun run test          # bun test src/__tests__/
 
 #### `e2e-playwright.sh`
 **Purpose**: Browser frontend integration tests via Playwright (runs after `e2e-test.sh`)  
-**Usage**: `./scripts/testing/e2e-playwright.sh`  
+**Usage**: `bash scripts/testing/e2e-playwright.sh` (as your regular user, no sudo; refuses root)  
 **Prerequisites**:
 - Server running (`dev-reset.sh`)
-- `e2e-test.sh` completed successfully
+- `e2e-test.sh` completed successfully as the same user
 - Test user MFA secret at `/tmp/arkfile-e2e-test-data/mfa-secret` (written by shell e2e)
-- Bun 1.3.x (last Zig-built line, currently 1.3.14) and Playwright Chromium installed
+- Bun 1.3.x (last Zig-built line, currently 1.3.14) installed for this user
+- Root workspace dependencies installed (`dev-reset.sh` does this; otherwise `bun install --frozen-lockfile`)
+- Playwright Chromium installed once for this user: `bunx playwright install chromium`
 
-Exports `MFA_SECRET` and test file paths to `scripts/testing/e2e-playwright.ts`.
+Exports `MFA_SECRET`, test file paths, and `PLAYWRIGHT_OUTPUT_DIR` to `scripts/testing/e2e-playwright.ts` and `playwright.config.ts`. All Playwright output (traces, screenshots, `.last-run.json`) is written under `/tmp/arkfile-e2e-test-data/playwright/results`, never into the repository; it is removed on success and kept on failure. The script performs no installs at test time; missing dependencies fail preflight with the exact command to run.
+
+#### `testing-common.sh`
+**Purpose**: Shared identity and ownership checks sourced by the test scripts  
+**Rule**: scripts that change the deployment or read root-only deployment state (`dev-reset.sh`, `local-deploy.sh`, `*-update.sh`, `online-integrity-test.sh`, `cli-rss-baseline.sh`, `fdre2e.sh`) require `sudo`. Every other test script (`e2e-test.sh`, `e2e-playwright.sh`, `offline-integrity-test.sh`, `test-typescript.sh`) runs as the developer, refuses root, and writes only under `/tmp/arkfile-*` directories owned by that developer. `e2e-test.sh` also points `HOME` at `/tmp/arkfile-e2e-test-data/home` so CLI session files and the agent socket never touch the developer's real home directory.
+
+#### `fdre2e.sh` (repository root)
+**Purpose**: Full local reset and test sequence  
+**Usage**: `sudo bash fdre2e.sh`  
+Runs `dev-reset.sh` as root, then drops to the developer who invoked `sudo` for `e2e-test.sh` and `e2e-playwright.sh`. Forwards `SERVER_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `TEST_USERNAME`, and `TEST_PASSWORD` when set.
 
 
 ### Maintenance Scripts
@@ -398,9 +409,12 @@ sudo systemctl start arkfile
 # TypeScript unit tests (type-check + build + bun)
 ./scripts/testing/test-typescript.sh
 
-# End-to-end integration (CLI + server; run after dev-reset.sh)
-./scripts/testing/e2e-test.sh
-./scripts/testing/e2e-playwright.sh
+# End-to-end integration (CLI + server; run after dev-reset.sh, as your user, no sudo)
+bash scripts/testing/e2e-test.sh
+bash scripts/testing/e2e-playwright.sh
+
+# Full reset + both e2e scripts (root only for dev-reset.sh)
+sudo bash fdre2e.sh
 ```
 
 ### Maintenance

@@ -3,6 +3,9 @@ import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: './scripts/testing',
   testMatch: 'e2e-playwright.ts',
+  // All Playwright output stays under the developer-owned e2e temp directory,
+  // never in the repository. e2e-playwright.sh sets PLAYWRIGHT_OUTPUT_DIR.
+  outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR || '/tmp/arkfile-e2e-test-data/playwright/results',
   timeout: 300_000, // 5 minutes per test (shares expiry tests need time)
   expect: {
     timeout: 30_000, // 30s for individual assertions

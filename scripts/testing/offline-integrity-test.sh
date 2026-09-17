@@ -5,6 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # shellcheck source=../setup/build-config.sh
 source "$SCRIPT_DIR/../setup/build-config.sh"
+# Runs as the developer, never root: the production group builds TypeScript and
+# WASM artifacts inside the repository. See scripts/testing/testing-common.sh.
+# shellcheck source=testing-common.sh
+source "$SCRIPT_DIR/testing-common.sh"
+testing_refuse_root "offline-integrity-test.sh"
 TEST_ROOT=""
 FUZZ_TIME="${ARKFILE_INTEGRITY_FUZZ_TIME:-2s}"
 FUZZ_COMMAND_TIMEOUT="${ARKFILE_INTEGRITY_FUZZ_COMMAND_TIMEOUT:-90s}"

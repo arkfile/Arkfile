@@ -4,6 +4,11 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../setup/build-config.sh
 source "$SCRIPT_DIR/../setup/build-config.sh"
+# Runs as the developer, never root: bun writes build output and caches into
+# the repository. See scripts/testing/testing-common.sh.
+# shellcheck source=testing-common.sh
+source "$SCRIPT_DIR/testing-common.sh"
+testing_refuse_root "test-typescript.sh"
 
 # Colors for output
 RED='\033[0;31m'

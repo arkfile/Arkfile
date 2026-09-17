@@ -213,13 +213,16 @@ else
     print_status "WARNING" "Arkfile directory not found, skipping data destruction"
 fi
 
-# Delete E2E test cached data (stale TOTP secrets, tokens, etc.)
-# This is stored in /tmp and must be cleaned when the database is reset
-if [ -d "/tmp/arkfile-e2e-test-data" ]; then
-    print_status "INFO" "Nuking E2E test cached data..."
-    rm -rf /tmp/arkfile-e2e-test-data 2>/dev/null || true
-    print_status "SUCCESS" "E2E test cache destroyed"
-fi
+# Delete test state left by e2e-test.sh, e2e-playwright.sh, and
+# online-integrity-test.sh (stale MFA secrets, sessions, Playwright output).
+# A fresh reset always means fresh test state.
+for test_state_dir in /tmp/arkfile-e2e-test-data /tmp/arkfile-integrity-test-data; do
+    if [ -d "$test_state_dir" ]; then
+        print_status "INFO" "Nuking test state in $test_state_dir..."
+        rm -rf "$test_state_dir" 2>/dev/null || true
+        print_status "SUCCESS" "Test state destroyed: $test_state_dir"
+    fi
+done
 echo
 
 # Step 3: Build application in user directory

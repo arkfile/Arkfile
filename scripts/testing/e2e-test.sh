@@ -12,6 +12,11 @@
 
 set -eo pipefail
 
+# Runs as the developer, never root. See scripts/testing/testing-common.sh.
+# shellcheck source=testing-common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/testing-common.sh"
+testing_refuse_root "e2e-test.sh"
+
 # CONFIGURATION
 
 # Parse arguments
@@ -113,11 +118,30 @@ if [ ! -x "$ADMIN" ]; then
 fi
 
 # Test Data Directory
-# MUST be in /tmp
+# MUST be in /tmp, owned by the developer, mode 700. Playwright and the online
+# integrity test read from it later; dev-reset.sh wipes it.
 umask 077
 TEST_DATA_DIR="/tmp/arkfile-e2e-test-data"
+testing_require_owned_dir "$TEST_DATA_DIR" "e2e-test.sh"
 mkdir -p "$TEST_DATA_DIR"
 chmod 700 "$TEST_DATA_DIR"
+
+# Preserve Go cache locations before HOME moves, so the mock server builds in
+# the payments and subscriptions groups reuse the developer's existing caches.
+for go_candidate in "$(command -v go 2>/dev/null || true)" /usr/local/go/bin/go /usr/local/bin/go /usr/bin/go; do
+    if [ -n "$go_candidate" ] && [ -x "$go_candidate" ]; then
+        export GOCACHE="${GOCACHE:-$(GOTOOLCHAIN=local "$go_candidate" env GOCACHE)}"
+        export GOMODCACHE="${GOMODCACHE:-$(GOTOOLCHAIN=local "$go_candidate" env GOMODCACHE)}"
+        export GOPATH="${GOPATH:-$(GOTOOLCHAIN=local "$go_candidate" env GOPATH)}"
+        break
+    fi
+done
+
+# Isolated HOME: arkfile-client and arkfile-admin keep their session files and
+# the agent socket under $HOME, so the developer's real CLI state is untouched.
+export HOME="$TEST_DATA_DIR/home"
+mkdir -p "$HOME"
+
 MFA_SECRET_FILE="$TEST_DATA_DIR/mfa-secret"
 BACKUP_CODE_PRIMARY_FILE="$TEST_DATA_DIR/backup-code-primary"
 BACKUP_CODE_REENROLL_FILE="$TEST_DATA_DIR/backup-code-reenroll"
