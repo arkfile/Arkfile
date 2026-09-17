@@ -8,7 +8,7 @@ Run from the repository root and stop immediately if any step fails.
 
 Who runs what: scripts that change the deployment or read root-only deployment state (`dev-reset.sh`, `online-integrity-test.sh`) require `sudo`. Every other step runs as your regular user and refuses root. Developer-mode scripts write only under `/tmp/arkfile-*` directories owned by you (mode 700) and never into the repository. `/tmp/arkfile-e2e-test-data` is the single handoff between `e2e-test.sh`, `online-integrity-test.sh` (which only reads it), and `e2e-playwright.sh`; `dev-reset.sh` wipes it and `/tmp/arkfile-integrity-test-data` so every reset starts from clean test state. Playwright traces and screenshots land in `/tmp/arkfile-e2e-test-data/playwright/results` and are kept only when a run fails.
 
-One-time setup for Playwright as your user: `bunx playwright install chromium` (needs network). If you previously ran `e2e-playwright.sh` with `sudo`, remove the root-owned leftovers once: `sudo rm -rf test-results playwright-report blob-report` in the repository and `sudo rm -f /usr/local/bin/bun /usr/local/bin/bunx`.
+`e2e-playwright.sh` installs Playwright Chromium and Headless Shell into `$HOME/.cache/ms-playwright` when either is missing (`bunx playwright install chromium`, needs network).
 
 1. **All Go unit tests** (no sudo):
 

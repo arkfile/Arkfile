@@ -14,7 +14,9 @@
 #   - Bun 1.3.x (last Zig-built line, currently 1.3.14) installed for this user
 #   - Root workspace dependencies installed (dev-reset.sh does this; otherwise
 #     run `bun install --frozen-lockfile` from the repo root)
-#   - Playwright Chromium installed once for this user: bunx playwright install chromium
+#   - Playwright Chromium and Headless Shell for this user. If either is
+#     missing under $HOME/.cache/ms-playwright, this script runs
+#     `bunx playwright install chromium` (needs network).
 #
 # All Playwright output (traces, screenshots, .last-run.json) is written under
 # /tmp/arkfile-e2e-test-data/playwright, never into the repository.
@@ -136,7 +138,10 @@ if ! require_bun_zig_build "$BUN_CMD"; then
 fi
 success "bun available: $(bun --version) at $BUN_CMD"
 
-# DEPENDENCY PREFLIGHT (no installs at test time)
+# DEPENDENCY PREFLIGHT
+# @playwright/test comes from bun install (dev-reset.sh). Browser binaries
+# are per-user under $HOME/.cache/ms-playwright; this script installs them
+# if missing. Do not run playwright install from sudo deploy scripts.
 
 section "DEPENDENCY PREFLIGHT"
 
@@ -153,12 +158,33 @@ fi
 
 section "Checking Playwright Chromium"
 PLAYWRIGHT_BROWSERS_DIR="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-playwright}"
-if compgen -G "$PLAYWRIGHT_BROWSERS_DIR/chromium-*" >/dev/null; then
-    success "Chromium present under $PLAYWRIGHT_BROWSERS_DIR"
+
+playwright_browser_present() {
+    local prefix="$1"
+    compgen -G "$PLAYWRIGHT_BROWSERS_DIR/${prefix}-*" >/dev/null
+}
+
+playwright_browsers_ready() {
+    playwright_browser_present "chromium" && playwright_browser_present "chromium_headless_shell"
+}
+
+if playwright_browsers_ready; then
+    success "Chromium and Headless Shell present under $PLAYWRIGHT_BROWSERS_DIR"
 else
-    error "Playwright Chromium is not installed for $(id -un) under $PLAYWRIGHT_BROWSERS_DIR"
-    error "Install it once (needs network): bunx playwright install chromium"
-    exit 1
+    warning "Playwright Chromium or Headless Shell missing for $(id -un) under $PLAYWRIGHT_BROWSERS_DIR"
+    info "Installing with: bunx playwright install chromium (needs network)"
+    if ! bunx playwright install chromium; then
+        error "Failed to install Playwright Chromium for $(id -un)"
+        error "Retry as this user (no sudo): bunx playwright install chromium"
+        exit 1
+    fi
+    if playwright_browsers_ready; then
+        success "Chromium and Headless Shell installed under $PLAYWRIGHT_BROWSERS_DIR"
+    else
+        error "Playwright install finished but Chromium or Headless Shell is still missing under $PLAYWRIGHT_BROWSERS_DIR"
+        error "Expected both chromium-* and chromium_headless_shell-* after: bunx playwright install chromium"
+        exit 1
+    fi
 fi
 
 # GENERATE TEST FILES

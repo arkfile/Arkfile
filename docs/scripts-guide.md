@@ -283,9 +283,9 @@ bun run test          # bun test src/__tests__/
 - Test user MFA secret at `/tmp/arkfile-e2e-test-data/mfa-secret` (written by shell e2e)
 - Bun 1.3.x (last Zig-built line, currently 1.3.14) installed for this user
 - Root workspace dependencies installed (`dev-reset.sh` does this; otherwise `bun install --frozen-lockfile`)
-- Playwright Chromium installed once for this user: `bunx playwright install chromium`
+- Playwright Chromium and Headless Shell for this user. If either is missing under `$HOME/.cache/ms-playwright`, the script runs `bunx playwright install chromium` (needs network). `@playwright/test` still comes from `bun install`, not from this step.
 
-Exports `MFA_SECRET`, test file paths, and `PLAYWRIGHT_OUTPUT_DIR` to `scripts/testing/e2e-playwright.ts` and `playwright.config.ts`. All Playwright output (traces, screenshots, `.last-run.json`) is written under `/tmp/arkfile-e2e-test-data/playwright/results`, never into the repository; it is removed on success and kept on failure. The script performs no installs at test time; missing dependencies fail preflight with the exact command to run.
+Exports `MFA_SECRET`, test file paths, and `PLAYWRIGHT_OUTPUT_DIR` to `scripts/testing/e2e-playwright.ts` and `playwright.config.ts`. All Playwright output (traces, screenshots, `.last-run.json`) is written under `/tmp/arkfile-e2e-test-data/playwright/results`, never into the repository; it is removed on success and kept on failure. Missing `@playwright/test` fails preflight with the `bun install` command. Missing Chromium or Headless Shell is installed as this user; a failed install still fails closed.
 
 #### `testing-common.sh`
 **Purpose**: Shared identity and ownership checks sourced by the test scripts  
