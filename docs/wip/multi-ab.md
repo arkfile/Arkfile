@@ -252,3 +252,37 @@ Confirm the existing export and `decrypt-blob` steps still pass unchanged.
 - [ ] Go and TypeScript unit tests green
 - [ ] `docs/api.md`, `docs/security.md`, `docs/user-faq.md`, and `docs/wip/multi-dl.md` updated
 - [ ] Developer runs `dev-reset.sh`, then `e2e-test.sh` and `e2e-playwright.sh`
+
+---
+
+# Additional feedback from review by Opus 5.5 High (Oct. 1, 2026)
+
+The plan is sound overall and most of its claims match the code. I found one real data-loss risk, one design gap in how keys are supplied to the multi-bundle decrypt, and a few inaccuracies worth fixing before implementation. In priority order:
+
+**1. Re-exporting into the same folder could overwrite or delete an older bundle.** The plan reserves `photo.png` first and then adds `.arkbackup`. But both `reserveBasenames` helpers check collisions against the folder's existing names, and a folder from an earlier export holds `photo.png.arkbackup`, not `photo.png`. So no collision is found and the new bundle targets the old bundle's name. In the browser this gets worse if `export-batch.ts` copies `downloadFileToDirectory` "exactly". Its failure path calls `removeDirectoryEntryBestEffort(directoryHandle, reservedFilename)` (around line 179 of `files/download.ts`). That is safe today only because reserved names never match existing files. For export, a failed or cancelled re-export could delete the user's previous bundle, and a successful `move()` may replace it. The fix is to strip `.arkbackup` from existing entries before passing them to the reservation helper. The CLI publish step should also refuse to replace an existing file rather than doing a plain rename. Please add a test for re-exporting into a populated folder.
+
+**2. The batch `decrypt-blob` flow says the key options "apply to the whole run", but two of them only hold one key.** `--use-agent` cannot cover multiple salt groups. The agent caches a single key entry, and `handleGetOfflineAccountKey` rejects any salt that doesn't match it. So the plan's statement that the agent is "keyed by salt" means one group works and every other group fails. `--account-key-file` is also a single key with no salt attached. The "up to 3 re-entries" rule only makes sense for interactive prompts. Under `--password-stdin` it would silently consume lines meant for later groups or custom bundles. The plan should spell out:
+- the exact order in which stdin lines are read: groups in first-appearance order, then custom bundles in sorted path order;
+- that retries are disabled under stdin, as the download batch already does with `prompt_cancelled`;
+- a failure reason such as `account_key_unavailable` for groups the agent or key file cannot serve.
+
+Separately, step 4 reserves output names across the whole run from decrypted filenames. That forces every group's Account Key to be derived up front and held in memory together, which conflicts with the "narrowest scope" secret rule. Processing one group at a time, with reservation growing as you go, keeps one key alive at a time.
+
+**3. Several statements don't match the code.**
+- **The CLI never uses export tokens.** `cmd/arkfile-client/export.go` sends `Authorization: Bearer` (handled by `resolveExportAuthFromHeader`). The CLI batch should keep that and call `ensureFreshSessionToken` or the refresh-on-401 helper between files. The "both clients reuse `POST /export-token`" line and the token-timing rule are browser-only.
+- **The token-timing reason is wrong.** The token is checked once when the request starts, so a long stream cannot outlive it. The real reason not to pre-mint tokens is that later ones expire before their GET begins.
+- **Header-only discovery cannot catch a truncated bundle,** yet the planned tests expect it to. `parseBundle` reads only the header and never checks the blob length. Adding a file-size check (at least `10 + headerLen + size_bytes`) fixes this cheaply. While in there, `parseBundle` and `decryptBundleBlob` use `f.Read` where `io.ReadFull` is correct.
+- **Deduplicating by absolute path misses a likely case.** A folder with both browser-fallback exports (`<file_id>.arkbackup`) and folder-picker exports (`photo.png.arkbackup`) contains the same `file_id` twice, so the file gets decrypted twice as `photo.png` and `photo-1.png`. Deduplicate or warn by `file_id`.
+
+**4. The browser fallback path can't do what the plan promises.** When the browser downloads natively through a hidden anchor or iframe, the page cannot see when a download finishes or whether it failed. If the server returns an error, it disappears silently inside the hidden frame. So "sequential", per-file failure tracking, the retry round, and the succeeded/failed/skipped summary only work on the folder-picker path. The plan should say that the fallback reports files as "started", paces triggers with a short delay, and names the mechanism (hidden anchor or iframe, as `sw-streaming-download.ts` does), since `window.location.href` is ruled out. Expect inconsistent behaviour across Firefox and Safari when many downloads start at once.
+
+**5. Smaller items, plus two questions.**
+- **Hint display.** If the Account Key is wrong, the hint fails to decrypt. The plan's explicit "no hint was saved" line must only appear when the fields are truly absent, otherwise it misleads.
+- **Wrong account password on a custom bundle.** Today `decrypt-blob` still succeeds and quietly downgrades verification to "encrypted SHA-256 unavailable". The reordered single-bundle path is a good place to treat a failed filename or hint decrypt as a likely wrong account password and offer re-entry before the custom prompt.
+- **Sanitizer scope.** The display sanitizer should also cover the hint and filename lines the CLI already prints in the single-file download paths (`commands.go` around lines 1296 and 2195), not just `decrypt-blob`.
+
+My questions:
+- Should CLI `export` get an `--all` selector? The planned FAQ entry talks about exporting "all files", but the command surface only offers `--file-id` and `--tags`.
+- Should the browser offer a "select all" before "Export selected", or is selecting rows by hand enough for this round?
+
+---
