@@ -304,6 +304,21 @@ func computeStreamingSHA256(filePath string) (string, error) {
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
+// isLowerHexSHA256 reports whether s has the form computeStreamingSHA256
+// returns: 64 lowercase hexadecimal characters.
+func isLowerHexSHA256(s string) bool {
+	if len(s) != sha256.Size*2 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // calculateTotalEncryptedSize computes the total encrypted size
 // deterministically from the plaintext file size, using uniform chunk
 // layout (no per-chunk envelope header). Each chunk adds AES-GCM

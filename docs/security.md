@@ -158,6 +158,7 @@ The file encryption system uses secure key generation combined with AES-256-GCM 
 - Optional download-count limits
 - Revocable share links
 - Custom-password hints are owner-only Account Key ciphertext. They are never placed in share envelopes. Recipients see filename, size, and hash only after they decrypt the envelope with the share password.
+- The sharer authors every share envelope field, so recipients treat them as untrusted. Without `--output`, `arkfile-client share download` reduces the envelope filename to one safe name (no directory parts, no leading dots or dashes, no control or bidirectional characters, bounded length) and saves it in the current directory without replacing any existing entry. It prints the name with control characters neutralized and rejects a malformed SHA-256 digest before downloading. The browser shows the name as plain text and leaves download naming to the browser.
 
 ## Authentication System
 

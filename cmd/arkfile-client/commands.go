@@ -2700,7 +2700,7 @@ func (h *shareTicketHolder) refresh() (string, error) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("ticket issuance failed (HTTP %d): %s", resp.StatusCode, string(respBody))
+		return "", fmt.Errorf("ticket issuance failed (HTTP %d): %s", resp.StatusCode, sanitizeDisplayText(strings.TrimSpace(string(respBody))))
 	}
 
 	var parsed struct {
@@ -2790,7 +2790,7 @@ func fetchShareChunkWithTicketRefresh(client *HTTPClient, h *shareTicketHolder, 
 func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string) error {
 	fs := flag.NewFlagSet("share download", flag.ExitOnError)
 	shareID := fs.String("share-id", "", "Share ID to download")
-	outputPath := fs.String("output", "", "Output file path (default: filename from envelope)")
+	outputPath := fs.String("output", "", "Output file path (default: a safe form of the shared filename in the current directory, never replacing an existing entry)")
 	passwordStdin := fs.Bool("password-stdin", false, "Read share password from stdin")
 
 	if err := fs.Parse(args); err != nil {
@@ -2821,7 +2821,7 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 
 	if envelopeResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(envelopeResp.Body)
-		return fmt.Errorf("share not found or expired (HTTP %d): %s", envelopeResp.StatusCode, string(body))
+		return fmt.Errorf("share not found or expired (HTTP %d): %s", envelopeResp.StatusCode, sanitizeDisplayText(strings.TrimSpace(string(body))))
 	}
 
 	var shareEnvelopeData struct {
@@ -2875,6 +2875,19 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 	envelope, err := crypto.ParseShareEnvelope(envelopeJSON)
 	if err != nil {
 		return fmt.Errorf("failed to parse share envelope: %w", err)
+	}
+
+	// The sharer authors every envelope field, so the filename and digest are
+	// untrusted input.
+	if envelope.SHA256 != "" && !isLowerHexSHA256(envelope.SHA256) {
+		return fmt.Errorf("share envelope contains a malformed SHA-256 digest; refusing to download")
+	}
+	if *outputPath == "" {
+		resolved, resolveErr := resolveDefaultDownloadPath(".", envelope.Filename, *shareID+".bin")
+		if resolveErr != nil {
+			return resolveErr
+		}
+		*outputPath = resolved
 	}
 
 	// Decode FEK and download token from envelope
@@ -2933,24 +2946,14 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 		chunkCount = 1
 	}
 
-	// Determine output path from envelope filename
-	filename := envelope.Filename
-	if *outputPath == "" {
-		if filename != "" {
-			*outputPath = filename
-		} else {
-			*outputPath = *shareID + ".bin"
-		}
-	}
-
 	sizeBytes := shareEnvelopeData.SizeBytes
 	if sizeBytes == 0 {
 		sizeBytes = chunkMeta.SizeBytes
 	}
 
 	fmt.Printf("Downloading shared file...\n")
-	if filename != "" {
-		fmt.Printf("  Filename: %s\n", filename)
+	if envelope.Filename != "" {
+		fmt.Printf("  Filename: %s\n", sanitizeDisplayText(envelope.Filename))
 	}
 	fmt.Printf("  Size: %s\n", formatFileSize(sizeBytes))
 	fmt.Printf("  Chunks: %d\n", chunkCount)

@@ -25,6 +25,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/arkfile/Arkfile/crypto"
@@ -696,3 +697,27 @@ type testErrString string
 func (e testErrString) Error() string { return string(e) }
 
 func testErr(s string) error { return testErrString(s) }
+
+// -- isLowerHexSHA256 --
+//
+// Share recipients reject envelope digests that computeStreamingSHA256 could
+// never produce, before any download starts and before the value is printed.
+func TestIsLowerHexSHA256(t *testing.T) {
+	const emptyDigest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	if !isLowerHexSHA256(emptyDigest) {
+		t.Fatalf("valid digest rejected: %s", emptyDigest)
+	}
+	invalid := []string{
+		"",
+		strings.ToUpper(emptyDigest),
+		emptyDigest[:63],
+		emptyDigest + "0",
+		strings.Repeat("g", 64),
+		"\x1b[2J" + emptyDigest[4:],
+	}
+	for _, digest := range invalid {
+		if isLowerHexSHA256(digest) {
+			t.Errorf("isLowerHexSHA256(%q) = true, want false", digest)
+		}
+	}
+}
