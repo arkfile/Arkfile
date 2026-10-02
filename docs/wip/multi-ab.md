@@ -20,6 +20,8 @@ Three coordinated changes, plus a few safety fixes in shared code they depend on
 
 **Chained offline decrypt.** `decrypt-blob` accepts repeatable `--bundle` or a `--bundle-dir`, discovers valid bundles by validating content and length rather than trusting filenames, skips duplicate copies of the same file, and processes one Account Key salt group at a time with one account-password entry per group. Within each group it decrypts account-password bundles first and custom-password bundles last, prompting for custom passwords on the terminal with the hint displayed, and it prints one clear summary of successes, failures, and skips.
 
+**Download parity.** `arkfile-client download` gains `--all`, matching what the web app already does with Select all matching filter and Download selected, so the CLI can restore a whole vault as plaintext in one run just as `export --all` saves it as bundles. Both commands resolve their targets through one shared selection helper.
+
 **Related safety fixes.** Case-insensitive name reservation in both clients, terminal-safe printing of decrypted strings across the CLI, a safe default name for owner single-file downloads, a working single-file guard for `download --password-stdin`, and atomic publishing for single-file `export`. Each is small and sits in code this work touches.
 
 ## Locked Decisions
@@ -47,6 +49,7 @@ Three coordinated changes, plus a few safety fixes in shared code they depend on
 | Export passwords | Export never prompts for any password. Only offline decrypt does |
 | Export parallelism | Sequential only, mirroring the upload and download batches |
 | Export selection model | Reuse the existing `file_id` selection set in `client/static/js/src/files/selection.ts` and its existing Select all shown and Select all matching filter controls (with no filter active, the latter selects the whole vault). No second selection store, no separate export mode, no new select-all control |
+| Whole-vault selection | `export --all` and `download --all` mirror the web app's Select all matching filter with no filter active. Both resolve targets through one shared selection helper, require `--output-dir`, cannot be combined with `--file-id` or `--tags`, and print a clear message and exit zero when the vault is empty. An explicit `--tags` selection that matches nothing keeps today's error |
 | Export destination (Chromium) | One `showDirectoryPicker({ mode: 'readwrite' })` under the click gesture, then one cookie-authenticated `fetch` and one writable stream per bundle |
 | Export destination (fallback) | Sequential native downloads to the browser's default folder through one hidden same-origin iframe per file (never `window.location.href`), paced by a short fixed delay, with the same multiple-download permission warning used by multi-download. The page cannot observe completion or HTTP errors on this path, so files are reported as started, not succeeded |
 | Export bundle names | Readable names. Reserve the original filename with the existing basename helper, then append `.arkbackup`: `photo.png.arkbackup`, `photo-1.png.arkbackup`. Falls back to `<file_id>.arkbackup` when metadata did not decrypt. The fallback path receives the server's `<file_id>.arkbackup` name and the browser resolves its own collisions |
@@ -72,6 +75,7 @@ Three coordinated changes, plus a few safety fixes in shared code they depend on
 | Decrypt output names | Decrypted filename reserved with the basename helper; falls back to the bundle basename minus `.arkbackup`, then to `file_id`. Reservation starts from the entries already in the destination and grows group by group, case-insensitively |
 | Decrypt output safety | Existing `writeAtomicOutput` behavior stands: temporary file in the destination directory, SHA-256 verified, atomic rename, temporary file removed on any failure. Reservation guarantees the rename never targets an existing entry |
 | Decrypt interrupt | Abort the current bundle, clean its temporary output, dispose secrets, mark remaining bundles skipped, print the normal summary |
+| Decrypt exit status | Non-zero when any bundle failed or was skipped for a reason other than `duplicate_file_id`; non-bundle files never affect it; zero otherwise. Mirrors the download batch, which exits non-zero on any unresolved failure or skip |
 | Secret handling | Follows the Secure Secret Handling section of `docs/wip/multi-dl.md` verbatim. Fresh buffers per attempt, `clearBytes` at the narrowest scope, one Account Key alive at a time, no password or derived key in state, logs, error text, or summaries |
 | Name reservation case | Both `reserveBasenames` helpers (Go and TypeScript) and `resolveDefaultDownloadPath` compare names case-insensitively, because backup and restore targets are often case-insensitive (exFAT or FAT drives on Linux, and macOS or Windows folders reached through the browser picker). Returned names keep their original case |
 | Bulk delete, share, retag | Still out of scope |
@@ -158,7 +162,7 @@ arkfile-client export --tags TAGS --output-dir DIR [--dry-run]
 arkfile-client export --all --output-dir DIR [--dry-run]
 ```
 
-Reuse `multiStringFlag`, the cursor-paging owner scan in `fetchAllOwnerFiles`, the client-side tag AND filter after decrypt, and `reserveBasenames`. `--all` selects every owner file and cannot be combined with `--file-id` or `--tags`. Preserve the current single-file default output of `<file-id>.arkbackup` so existing scripts keep working, but publish it through `writeAtomicOutput`: today's `export` opens its output with `O_TRUNC` and deletes it on failure, so a failed re-export to the same path destroys the earlier bundle.
+Resolve targets with the shared selection helper described under Download Parity, which wraps `multiStringFlag`, the cursor-paging owner scan in `fetchAllOwnerFiles`, and the client-side tag AND filter after decrypt, and name outputs with `reserveBasenames`. `--all` selects every owner file and cannot be combined with `--file-id` or `--tags`. Preserve the current single-file default output of `<file-id>.arkbackup` so existing scripts keep working, but publish it through `writeAtomicOutput`: today's `export` opens its output with `O_TRUNC` and deletes it on failure, so a failed re-export to the same path destroys the earlier bundle.
 
 Under `--output-dir`, names come from filenames decrypted with the agent's Account Key through `getOptionalAccountKey`. When no key is available, names fall back to `<file_id>.arkbackup` with a one-line notice, and `--tags` fails clearly because it cannot filter without the key. Build the taken set from existing `.arkbackup` entries as described above, stream each response body to a temporary file in the destination directory, and rename on completion. Keep Bearer auth and refresh the session between files. Retry each failed file once at the end of the run. Summary lines mirror the download batch.
 
@@ -220,13 +224,50 @@ The salt grouping is the subtle correctness requirement here. Deriving one key f
 
 ### Summary and failure reasons
 
-The summary reports counts for decrypted, failed, and skipped with an account versus custom breakdown, plus the aggregate non-bundle count, then one line per non-success carrying the filename when known (through `sanitizeDisplayText`), the bundle path, and a reason from a fixed set: `not_a_bundle`, `unsupported_version`, `unsupported_kdf_profile`, `bundle_length_mismatch`, `duplicate_file_id`, `owner_mismatch`, `account_key_unavailable`, `wrong_account_password`, `wrong_custom_password`, `terminal_required`, `prompt_timeout`, `prompt_cancelled`, `integrity_mismatch`, `write_failed`, `cancelled`, `skipped`. Reason strings never contain password material.
+The summary reports counts for decrypted, failed, and skipped with an account versus custom breakdown, plus the aggregate non-bundle count, then one line per non-success carrying the filename when known (through `sanitizeDisplayText`), the bundle path, and a reason from a fixed set: `not_a_bundle`, `unsupported_version`, `unsupported_kdf_profile`, `bundle_length_mismatch`, `duplicate_file_id`, `owner_mismatch`, `account_key_unavailable`, `wrong_account_password`, `wrong_custom_password`, `terminal_required`, `prompt_timeout`, `prompt_cancelled`, `integrity_mismatch`, `write_failed`, `cancelled`, `skipped`. Reason strings never contain password material. The exit status follows the decrypt exit status rule: non-zero whenever any bundle failed or was skipped for a reason other than `duplicate_file_id`.
 
 ### Files touched
 
 - `cmd/arkfile-client/offline_decrypt.go` (full reads, length check, per-bundle function)
 - `cmd/arkfile-client/offline_decrypt_batch.go` (new)
 - `cmd/arkfile-client/main.go` (usage text)
+
+## Download Parity
+
+### The gap
+
+The web app can already download and decrypt a whole vault in one pass. With no tag filter active, Select all matching filter pages through every file into the selection set, and Download selected runs the multi-download batch over it: account-password files first, then a prompt showing the hint for each custom-password file. The CLI cannot do the same. `download` accepts only repeatable `--file-id` and `--tags`, so restoring a whole vault as plaintext means listing every file ID by hand, and once `export --all` lands, `download` would be the only owner batch command without a whole-vault selector.
+
+### Command surface
+
+```text
+arkfile-client download --all --output-dir DIR [--dry-run]
+```
+
+`--all` selects every owner file from the cursor-paged scan in `fetchAllOwnerFiles`, in list order, which is the same set the web app collects with Select all matching filter and no filter. It requires `--output-dir` and cannot be combined with `--file-id` or `--tags`. Selecting targets needs no Account Key; the batch still obtains it for decryption exactly as it does today. `--dry-run` prints every target and the existing `Dry run: N file(s)` line without downloading anything. An empty vault prints a clear message and exits zero.
+
+### Behavior
+
+After selection, `--all` hands the targets to the existing `downloadOwnerFilesBatch`, so the batch itself does not change: account-password files first, custom-password files last with terminal prompts that now show the hint, 3 attempts per file, retry rounds as defined in `docs/wip/multi-dl.md`, basename reservation in the output directory, atomic publish per file, and the existing final summary line. `--password-stdin` is rejected for `--all`, like any other multi-file download, once the stdin guard fix in Related Safety Fixes lands. Without a terminal, custom-password files fail as `prompt_cancelled` and the batch exits non-zero, which is today's rule.
+
+### Shared selection helper
+
+Move target resolution for `--file-id`, `--tags`, and `--all` out of `handleDownloadCommand` into one helper in `cmd/arkfile-client/owner_file_list.go`, beside `fetchAllOwnerFiles`, and call it from both `download` and `export`. It owns the flag rules (mutual exclusion and the `--output-dir` requirement for multi-file selections), the client-side tag AND filter after decrypt, deduplication, and the empty-selection rules, so the two commands always select the same files the same way. Have it accept the fetched file list, or the listing function, as input so unit tests can exercise it without a server.
+
+### Files touched
+
+- `cmd/arkfile-client/owner_file_list.go`: shared selection helper.
+- `cmd/arkfile-client/commands.go`: `--all` flag, usage text, `handleDownloadCommand` calls the helper.
+- `cmd/arkfile-client/export.go`: calls the same helper.
+- `cmd/arkfile-client/main.go`: usage examples.
+
+### How the tests prove it
+
+Go unit tests cover the helper: `--all` combined with `--file-id` or `--tags` is rejected; `--all` without `--output-dir` is rejected; every file across several listing pages is returned once, in list order; an empty vault is reported as an empty selection rather than an error; and `download --all --password-stdin` is rejected.
+
+In `e2e-test.sh`, steps 1 and 2 of the backup and restore sequence under Tests are the CLI proof. Step 1 shows that `--all` selects the whole vault, because the dry-run count must equal the count from `list-files --json`. Step 2 shows it works end to end: a real `download --all` must decrypt all 14 account-password files with digests matching the corpus manifest, while the 5 custom-password files fail as `prompt_cancelled` with the exact summary line and a non-zero exit, which proves the batch rules carried over unchanged.
+
+In `e2e-playwright.ts`, the existing select-all-matching-filter test gains the no-filter case: with no filter active, the selection count must equal the total from paging `/api/files` with the logged-in context. That is the web app half of the same check, so together the two scripts show both clients select the same whole-vault set.
 
 ## Related Safety Fixes
 
@@ -252,9 +293,9 @@ Bundle metadata assertions belong in `handlers/export_rotation_test.go` beside t
 
 `cmd/arkfile-client/offline_decrypt_test.go`: hint round trip through a bundle; absent hint prints the no-hint line; a present but undecryptable hint prints the could-not-decrypt warning and continues; hint tampering fails AEAD because `file_id` and owner are bound in AAD; the hint prints before the custom-password prompt; control characters are neutralized before display; a wrong Account Key on a custom-password bundle is caught before the custom prompt, with re-entry for interactive input and a clear failure for stdin; the length check rejects truncated and padded-out bundles and accepts an old bundle without `padded_size`. Factor the header parse to accept an `io.Reader` so a test can feed it short reads, and cover the blob reader the same way. Extend `FuzzParseBundle` seeds with a hint-bearing bundle and one carrying an oversized hint field.
 
-New batch coverage: discovery accepts valid bundles and rejects a decoy file, a truncated bundle, and a wrong-magic file; duplicates by `file_id` are skipped as `duplicate_file_id`; salt grouping derives one key per distinct salt, never reuses a key across salts, and holds one key at a time; the agent and key-file sources serve only a group they can unlock and mark others `account_key_unavailable`; multi-bundle stdin consumes exactly one line; custom bundles without a terminal are skipped as `terminal_required` after their hint prints; ordering places account bundles before custom bundles within each group; per-bundle failure continues the run; interrupt marks the remainder skipped; output basename reservation carries across groups and temporary files are cleaned up; secret disposal runs on success, wrong password, timeout, integrity failure, and cancellation.
+New batch coverage: discovery accepts valid bundles and rejects a decoy file, a truncated bundle, and a wrong-magic file; duplicates by `file_id` are skipped as `duplicate_file_id`; salt grouping derives one key per distinct salt, never reuses a key across salts, and holds one key at a time; the agent and key-file sources serve only a group they can unlock and mark others `account_key_unavailable`; multi-bundle stdin consumes exactly one line; custom bundles without a terminal are skipped as `terminal_required` after their hint prints; ordering places account bundles before custom bundles within each group; per-bundle failure continues the run; interrupt marks the remainder skipped; output basename reservation carries across groups and temporary files are cleaned up; secret disposal runs on success, wrong password, timeout, integrity failure, and cancellation; the exit status is non-zero for any failure or non-duplicate skip, and zero when only duplicates and non-bundle files were skipped.
 
-Export and shared helpers: CLI multi-export into a populated directory reserves `photo-1.png.arkbackup` beside an existing `photo.png.arkbackup` and leaves the old bytes unchanged; a failed single-file re-export to an existing path leaves the earlier bundle intact; `--all` rejects `--file-id` and `--tags`; `reserveBasenames` and `resolveDefaultDownloadPath` treat `Photo.png` and `photo.png` as a collision; a multi-file download rejects `--password-stdin`; the owner single-file default name stays inside the current directory, keeps a leading dot, and never replaces an existing file.
+Export and shared helpers: CLI multi-export into a populated directory reserves `photo-1.png.arkbackup` beside an existing `photo.png.arkbackup` and leaves the old bytes unchanged; a failed single-file re-export to an existing path leaves the earlier bundle intact; `--all` rejects `--file-id` and `--tags`; `reserveBasenames` and `resolveDefaultDownloadPath` treat `Photo.png` and `photo.png` as a collision; a multi-file download rejects `--password-stdin`; the owner single-file default name stays inside the current directory, keeps a leading dot, and never replaces an existing file. The `download --all` selection tests are listed under Download Parity.
 
 ### TypeScript unit
 
@@ -262,15 +303,26 @@ Export batch coverage: no export token is requested on any path; the folder-pick
 
 ### e2e-test.sh
 
-Assert a hint line in `decrypt-blob` output for a custom-password file that has a hint, and the explicit no-hint line for a file without one. Assert the hint is printed before the custom password is read. Add a raw API privacy canary confirming no plaintext hint in the export response header and no hint field of any kind in share metadata responses.
+All new backup and download coverage lives in one new function, `verify_backup_export_and_restore`, called from `run_files_custom_password()` right after `seed_and_verify_multi_dl_corpus`. At that point the vault holds exactly 19 files: the custom-password file uploaded with `--hint "$CUSTOM_HINT_SENTINEL"`, plus the 18-file corpus of 14 account-password files and 4 custom-password files without hints. The function reads `CUSTOM_FILE_ID`, `CUSTOM_FILE_SHA256`, and `CUSTOM_HINT_SENTINEL` from its caller, takes every other digest from the corpus manifest, and changes nothing on the server, so the corpus Playwright depends on is untouched. `export --all` runs exactly once, and every later step reuses that export directory.
 
-Add a CLI multi-export into `--output-dir` covering account and custom files with no password entry, plus `--tags --dry-run` and `--all --dry-run`. Export one of those files again into the same directory and assert it lands under a `-1` name while the first bundle stays byte-identical; that second copy also serves as the duplicate case below.
+Terminal handling matters here. `secureinput.ReadPassword` opens `/dev/tty` before anything else, and an e2e run launched from a shell has a controlling terminal, so a custom-password prompt inside a batch command would appear on the developer's terminal and wait 2 minutes per attempt. The existing corpus tests avoid this only by keeping custom files out of batch runs. Every batch command in this function that can reach a custom prompt runs as `: | setsid -w "$CLIENT" ...`, or with the account password piped in place of `:`. `setsid` drops the controlling terminal and the pipe keeps stdin from being a terminal, so the CLI takes its no-terminal path deterministically.
 
-Add a chained `decrypt-blob --bundle-dir` run over that export directory with a decoy non-bundle file and a truncated copy of one bundle present, passing the account password on stdin. Assert that account bundles decrypt and match their original digests, custom bundles are skipped as `terminal_required` with their hints printed, and the summary reports the non-bundle count, `bundle_length_mismatch`, and `duplicate_file_id`. Then decrypt one custom bundle with single-bundle two-line stdin. The existing single-file export and decrypt tests stay as they are.
+1. `download --all --output-dir "$all_dl_dir" --dry-run` prints `Dry run: 19 file(s)`, matching the count from `list-files --json`.
+2. A real `download --all --output-dir "$all_dl_dir"` under `setsid` ends with `Batch download finished. Account succeeded: 14. Custom succeeded: 0. Unresolved failures: 5. Skipped: 0.` and a non-zero exit, because batch custom passwords are interactive only. The 14 account outputs match their manifest digests. The two `photo.png` digests are compared as a set, since which copy becomes `photo-1.png` depends on processing order.
+3. The single `export --all --output-dir "$export_dir"`, run under `setsid` with an empty stdin to prove export never prompts. Expect exit 0, exactly 19 `.arkbackup` files, and readable names including `custom_test_file.bin.arkbackup`, `photo.png.arkbackup`, and `photo-1.png.arkbackup`. The export privacy canary runs on these files: `custom_test_file.bin.arkbackup` contains `encrypted_password_hint` but never the plaintext sentinel, and a corpus custom-password bundle carries no hint field at all.
+4. `export --tags multi-decoy --output-dir "$export_dir" --dry-run` lists 4 files and leaves the directory at 19 bundles. This covers tag selection and the dry-run path without a second `--all` run.
+5. Re-export safety: record the SHA-256 of `e2e-multi-01.bin.arkbackup`, export that file again with `--file-id` into the same directory, and assert that the new copy is `e2e-multi-01-1.bin.arkbackup` and the original's digest is unchanged.
+6. Add a decoy `notes.txt` and a truncated copy of `e2e-multi-02.bin.arkbackup`, then run the chained decrypt: `printf '%s\n' "$TEST_PASSWORD" | setsid -w "$CLIENT" decrypt-blob --bundle-dir "$export_dir" --output-dir "$restore_dir" --password-stdin`. Assert a non-zero exit under the decrypt exit status rule; 14 account-password files decrypted with matching digests, with the photo pair compared as a set; 5 custom-password bundles skipped as `terminal_required`; exactly one `duplicate_file_id` (`-` sorts before `.`, so the `-1` copy is processed first and the original is the one skipped); one `bundle_length_mismatch`; a non-bundle count of 1; the sentinel hint line printed for `custom_test_file.bin` and the no-hint line for the four corpus custom-password bundles; and no output or temporary file left for any skipped bundle.
+7. Decrypt each of the 5 custom-password bundles on its own with two-line stdin (account password, then custom password) and check every digest. For `custom_test_file.bin.arkbackup`, the sentinel hint line must appear before the `Decrypted:` line. After this step every file in the vault has been restored from the one `export --all`.
+8. Decrypt one custom-password bundle with a wrong account password followed by the correct custom password. It must fail with the wrong-account-password error before the custom password is used, and write no output.
+
+Elsewhere in `e2e-test.sh`, the share privacy canary goes in `run_shares()`, next to "Visitor downloads custom-password share". Share D is created from the hinted custom-password file, so fetching its public envelope and metadata responses raw and finding no hint field and no sentinel proves hints never reach the sharing path. The existing single-file export and decrypt scenarios in `run_files_standard()` stay unchanged.
 
 ### e2e-playwright.ts
 
-Reuse the existing multi-select corpus. First assert that the logged-in context can GET `/api/files/:fileId/export` with no token and receives the ARKB magic, which proves the cookie path that browser export relies on. Then select two files, click Export selected, abort the directory picker with the existing stub, wait for two downloads, check the ARKB magic on each, and assert no `/export-token` request was made. Exercise the per-row Export button once the same way. Full offline decrypt stays in `e2e-test.sh`.
+Reuse the existing multi-select corpus, and put the new tests right after "Multi-download: cancel aborts remaining files", using the existing `stubDirectoryPickerAbort` helper. First assert that the logged-in context can GET `/api/files/:fileId/export` with no token and receives the ARKB magic, which proves the cookie path that browser export relies on. Then select two files, click Export selected, abort the directory picker with the stub, wait for two downloads, check the ARKB magic on each, and assert no `/export-token` request was made. Exercise the per-row Export button once the same way. Full offline decrypt stays in `e2e-test.sh`.
+
+Extend "Multi-select: select all matching filter (multi-a)" with the no-filter case for download parity: with no filter active, Select all matching filter must report a selection count equal to the total from paging `/api/files` with the logged-in context. This is the web app half of the whole-vault check; steps 1 and 2 of the `e2e-test.sh` sequence are the CLI half.
 
 ### online-integrity-test.sh
 
@@ -282,9 +334,9 @@ Confirm the existing export and `decrypt-blob` steps still pass unchanged.
 
 `docs/security.md`: extend the `.arkbackup` version 2 paragraph to list the encrypted hint alongside the other owner metadata fields, restate that share envelopes never carry hints, and say plainly that exported bundle filenames show the original names to anyone who can see the backup folder while bundle contents and header metadata stay encrypted.
 
-`docs/user-faq.md`: prose-only entries covering exporting selected, tagged, or all files as individual encrypted backup bundles; that bundle filenames are readable on disk, so an owner who needs names hidden should keep the folder somewhere private or rename the files, since decryption restores the true names; and that a custom-password bundle shows its hint after the account password is entered but still needs the file's own password to decrypt. Paragraphs only, no lists and no code spans, per that file's rules.
+`docs/user-faq.md`: prose-only entries covering exporting selected, tagged, or all files as individual encrypted backup bundles; downloading and decrypting every file in one run from either the web app or the CLI; restoring a whole backup folder later with one decrypt run; that bundle filenames are readable on disk, so an owner who needs names hidden should keep the folder somewhere private or rename the files, since decryption restores the true names; and that a custom-password bundle shows its hint after the account password is entered but still needs the file's own password to decrypt. Paragraphs only, no lists and no code spans, per that file's rules.
 
-`docs/wip/multi-dl.md`: note that bulk export, previously listed as out of scope, is now covered here and reuses the selection model, and that the multi-file `--password-stdin` guard was fixed here.
+`docs/wip/multi-dl.md`: note that bulk export, previously listed as out of scope, is now covered here and reuses the selection model, that `download --all` was added here for parity with the web app, and that the multi-file `--password-stdin` guard was fixed here.
 
 ## Out of Scope
 
@@ -300,6 +352,7 @@ Confirm the existing export and `decrypt-blob` steps still pass unchanged.
 - Incremental re-export that skips files already present in the destination; the CLI could add it later by reading `file_id` from existing bundle headers
 - An opaque-name export mode for owners who want filenames hidden on the backup medium
 - Unattended custom-password input for batch decrypt; custom passwords stay interactive, as in multi-download
+- A `--skip-custom` option for batch download, which `docs/wip/multi-dl.md` lists as optional later
 
 ## Implementation Checklist
 
@@ -317,11 +370,14 @@ Confirm the existing export and `decrypt-blob` steps still pass unchanged.
 - [ ] Per-group processing with one Account Key at a time, validation with interactive re-entry, and `account_key_unavailable` for sources that cannot serve a group
 - [ ] Multi-bundle stdin carries only the account password; custom prompts are terminal-only with `terminal_required`
 - [ ] Account-first then custom ordering within each group, single pass, 3 attempts per bundle
-- [ ] Summary with the fixed failure reason set, including the aggregate non-bundle count
+- [ ] Summary with the fixed failure reason set, including the aggregate non-bundle count, and the decrypt exit status rule
+- [ ] `download --all` with `--dry-run` and the empty-vault rule, resolving targets through the shared selection helper that `export` also uses
 - [ ] Case-insensitive reservation in both `reserveBasenames` helpers and `resolveDefaultDownloadPath`
 - [ ] `downloadFileToDirectory` cleanup limited to entries the attempt created
 - [ ] Owner single-file download default name reduced to a safe single path element and reserved
 - [ ] Multi-file `download --password-stdin` guard moved above the batch branch
+- [ ] `verify_backup_export_and_restore` in `e2e-test.sh`: the eight-step sequence with exactly one `export --all`, batch commands under `setsid`, plus the Share D hint canary in `run_shares()`
+- [ ] Playwright: cookie-path export check, Export selected and per-row Export downloads, and the no-filter whole-vault selection count
 - [ ] Go and TypeScript unit tests green
 - [ ] `docs/api.md`, `docs/security.md`, `docs/user-faq.md`, and `docs/wip/multi-dl.md` updated
 - [ ] Developer runs `dev-reset.sh`, then `e2e-test.sh` and `e2e-playwright.sh`
