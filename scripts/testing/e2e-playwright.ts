@@ -1000,14 +1000,32 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     }
 
     await stubDirectoryPickerAbort(sharedPage);
-    await sharedPage.locator('#downloadSelectedBtn').click();
 
-    const cancelBtn = sharedPage.locator('#progress-indicator .cancel-button');
-    await cancelBtn.waitFor({ state: 'visible', timeout: 30_000 });
-    await cancelBtn.click();
+    // The corpus files are tiny, so without a delay the batch can finish and
+    // remove the progress overlay before Cancel is clicked. Hold each chunk
+    // response so the batch is still running when the click lands.
+    const chunkPattern = '**/api/files/*/chunks/*';
+    await sharedPage.route(chunkPattern, async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
+      try {
+        await route.continue();
+      } catch {
+        // The request was aborted by the cancel; nothing to continue.
+      }
+    });
 
-    await expect(sharedPage.locator('body')).toContainText(/cancel/i, { timeout: 60_000 });
-    await expect(sharedPage.locator('#downloadSelectedBtn')).toBeEnabled({ timeout: 30_000 });
+    try {
+      await sharedPage.locator('#downloadSelectedBtn').click();
+
+      const cancelBtn = sharedPage.locator('#progress-indicator .cancel-button');
+      await cancelBtn.waitFor({ state: 'visible', timeout: 30_000 });
+      await cancelBtn.click();
+
+      await expect(sharedPage.locator('body')).toContainText(/cancel/i, { timeout: 60_000 });
+      await expect(sharedPage.locator('#downloadSelectedBtn')).toBeEnabled({ timeout: 30_000 });
+    } finally {
+      await sharedPage.unroute(chunkPattern);
+    }
     await clearFileSelection(sharedPage);
     console.log('[OK] Batch download cancel verified');
   });
