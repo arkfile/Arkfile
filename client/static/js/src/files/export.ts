@@ -1,42 +1,56 @@
 // export.ts - Export encrypted .arkbackup bundles from the browser.
-// Uses a short-lived download token so the browser handles the download natively
-// (no memory buffering for large files).
+// GET /api/files/:fileId/export is a protected route: the session cookie
+// authenticates it like every other owner API call, so no export token or
+// URL credential is needed. Bundles stream straight to disk either through a
+// native download or through a directory-picker writable; neither path
+// buffers a bundle in memory.
 
-import { authenticatedFetch } from '../utils/auth';
+import { ensureFreshBatchAuth } from './download-batch';
+
+/** Delay between native export downloads so the browser can hand each to its download manager. */
+export const EXPORT_DOWNLOAD_PACING_MS = 250;
+
+export function exportUrl(fileId: string): string {
+  return `/api/files/${encodeURIComponent(fileId)}/export`;
+}
 
 /**
- * Export a file as an encrypted .arkbackup bundle.
- * Requests a short-lived export token, then triggers a native browser download
- * via window.location.href so the file streams directly to disk.
+ * Start a native download of one bundle with a hidden same-origin anchor.
+ * The response's Content-Disposition name (<file_id>.arkbackup) is used and
+ * the browser resolves collisions. The page never navigates and cannot see
+ * completion or HTTP errors on this path.
  */
+export function triggerNativeExportDownload(fileId: string): void {
+  const anchor = document.createElement('a');
+  anchor.href = exportUrl(fileId);
+  anchor.download = `${fileId}.arkbackup`;
+  anchor.rel = 'noopener';
+  anchor.style.display = 'none';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+}
+
+/** Fetch one bundle for streaming into a directory-picker writable. */
+export function fetchExportResponse(fileId: string, signal?: AbortSignal): Promise<Response> {
+  return fetch(exportUrl(fileId), {
+    method: 'GET',
+    credentials: 'same-origin',
+    cache: 'no-store',
+    ...(signal ? { signal } : {}),
+  });
+}
+
+/** Per-row Export Backup: refresh the session, then start a native download. */
 export async function exportBackup(fileId: string): Promise<void> {
   try {
-    // Step 1: Request a short-lived download token
-    const response = await authenticatedFetch(`/api/files/${fileId}/export-token`, {
-      method: 'POST',
-    });
-
-    if (!response.ok) {
-      const err = await response.json();
-      const message = err.message || 'Failed to request export token';
-      console.error('Export token error:', message);
-      alert('Export failed: ' + message);
-      return;
-    }
-
-    const data = await response.json();
-    const token = data.data?.token;
-    if (!token) {
-      console.error('Export token missing from response');
-      alert('Export failed: no token received');
-      return;
-    }
-
-    // Step 2: Open the export URL with the token. The browser handles the
-    // download natively (Content-Disposition: attachment), so there is no
-    // memory buffering regardless of file size.
-    window.location.href = `/api/files/${fileId}/export?token=${encodeURIComponent(token)}`;
-
+    await ensureFreshBatchAuth();
+  } catch {
+    alert('Export failed: your session has expired. Please log in again.');
+    return;
+  }
+  try {
+    triggerNativeExportDownload(fileId);
   } catch (error) {
     console.error('Export error:', error);
     alert('An error occurred during export.');

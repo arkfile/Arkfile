@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"testing"
-	"time"
 
 	"github.com/arkfile/Arkfile/crypto"
 	"github.com/golang-jwt/jwt/v5"
@@ -271,46 +270,6 @@ func TestParseEitherTierToken_AcrossRotation(t *testing.T) {
 	}
 	if _, err := parseEitherTierToken(tempTok); err != nil {
 		t.Fatalf("temp token (old key) must still parse for revocation during overlap: %v", err)
-	}
-}
-
-// TestParseEdDSAClaimsAnyFullKey_AcrossRotation covers the exported helper used
-// by export-token validation: a full-tier-signed token with custom claims must
-// keep validating after a rotation while the old version is in the set.
-func TestParseEdDSAClaimsAnyFullKey_AcrossRotation(t *testing.T) {
-	ResetKeysForTest()
-	if err := LoadJWTKeys(); err != nil {
-		t.Fatal(err)
-	}
-
-	// Mint a custom-claims token signed with the (pre-rotation) active full key.
-	claims := &Claims{
-		Username: "export-rotation-user",
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:    Issuer,
-			Audience:  []string{AudienceExport},
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			ID:        "export-token-id",
-		},
-	}
-	signed, err := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims).SignedString(GetJWTFullPrivateKey())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := RotateJWTSigningKeys(); err != nil {
-		t.Fatal(err)
-	}
-
-	parser := jwt.NewParser(
-		jwt.WithValidMethods([]string{jwt.SigningMethodEdDSA.Alg()}),
-		jwt.WithAudience(AudienceExport),
-		jwt.WithIssuer(Issuer),
-		jwt.WithExpirationRequired(),
-	)
-	if _, err := ParseEdDSAClaimsAnyFullKey(parser, signed, &Claims{}); err != nil {
-		t.Fatalf("export-style token (old key) must validate during overlap: %v", err)
 	}
 }
 

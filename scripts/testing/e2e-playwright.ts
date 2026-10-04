@@ -319,6 +319,45 @@ async function stubDirectoryPickerAbort(page: Page): Promise<void> {
   });
 }
 
+/** Make the File System Access directory picker unavailable (fallback export path). */
+async function removeDirectoryPicker(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as Window & { showDirectoryPicker?: unknown };
+    delete w.showDirectoryPicker;
+    w.showDirectoryPicker = undefined;
+  });
+}
+
+/** Count every owner file by paging GET /api/files with the logged-in context. */
+async function countVaultFiles(page: Page): Promise<number> {
+  let total = 0;
+  let cursor = '';
+  for (let pageNum = 0; pageNum < 1000; pageNum++) {
+    const qs = new URLSearchParams({ limit: '100' });
+    if (cursor) qs.set('cursor', cursor);
+    const resp = await page.request.get(`/api/files?${qs.toString()}`);
+    expect(resp.status()).toBe(200);
+    const body = (await resp.json()) as {
+      files?: unknown[];
+      has_more?: boolean;
+      next_cursor?: string | null;
+      data?: { files?: unknown[]; has_more?: boolean; next_cursor?: string | null };
+    };
+    const payload = body.files ? body : body.data ?? {};
+    total += payload.files?.length ?? 0;
+    if (!payload.has_more || !payload.next_cursor) {
+      return total;
+    }
+    cursor = payload.next_cursor;
+  }
+  throw new Error('File list paging did not terminate');
+}
+
+function expectArkbackupMagic(path: string): void {
+  const head = readFileSync(path).subarray(0, 4).toString('latin1');
+  expect(head).toBe('ARKB');
+}
+
 /**
  * Click a button (Download or Share) within a specific file item.
  */
@@ -882,7 +921,17 @@ test.describe.serial('Arkfile Playwright E2E', () => {
 
     await clearTagFilter(sharedPage);
     await clearFileSelection(sharedPage);
-    console.log('[OK] Select all matching filter verified');
+
+    // With no filter active, Select all matching filter selects the whole
+    // vault: the same set the CLI selects with download --all / export --all.
+    const vaultTotal = await countVaultFiles(sharedPage);
+    logStep('multi-select', `No filter: selecting all matching (expect whole vault, ${vaultTotal})...`);
+    await sharedPage.locator('#selectAllMatchingFilterBtn').click();
+    await expect(sharedPage.locator('#selectionCount')).toHaveText(`${vaultTotal} selected`, {
+      timeout: 60_000,
+    });
+    await clearFileSelection(sharedPage);
+    console.log('[OK] Select all matching filter verified (multi-a and whole vault)');
   });
 
   test('Multi-download: account file before custom password prompt', async () => {
@@ -961,6 +1010,118 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await expect(sharedPage.locator('#downloadSelectedBtn')).toBeEnabled({ timeout: 30_000 });
     await clearFileSelection(sharedPage);
     console.log('[OK] Batch download cancel verified');
+  });
+
+  // --------------------------------------------------------------------------
+  // Backup export (session-cookie protected GET, no export token)
+  // --------------------------------------------------------------------------
+  test('Export: protected GET authenticates with the session cookie', async () => {
+    if (!multiDlCorpus) throw new Error('multi-dl corpus not loaded');
+    const target = corpusAccountFiles().find((f) => f.filename.startsWith('e2e-multi-'));
+    if (!target) throw new Error('Corpus missing an account file for export');
+
+    const resp = await sharedPage.request.get(`/api/files/${target.file_id}/export`);
+    expect(resp.status()).toBe(200);
+    const body = await resp.body();
+    expect(body.subarray(0, 4).toString('latin1')).toBe('ARKB');
+    expect(resp.headers()['content-disposition'] || '').toContain(`${target.file_id}.arkbackup`);
+
+    // Send the CSRF header so a 404/405 proves the route is gone rather than
+    // reflecting a CSRF rejection.
+    const csrf = (await sharedContext.cookies()).find((c) => c.name === '__Host-arkfile-csrf')?.value || '';
+    const tokenEndpoint = await sharedPage.request.post(`/api/files/${target.file_id}/export-token`, {
+      headers: { 'X-CSRF-Token': csrf },
+    });
+    expect([404, 405]).toContain(tokenEndpoint.status());
+    console.log('[OK] Export GET works with the cookie session and the export-token endpoint is gone');
+  });
+
+  test('Export selected: picker cancel exports nothing; unavailable picker falls back', async () => {
+    if (!multiDlCorpus) throw new Error('multi-dl corpus not loaded');
+    const targets = corpusAccountFiles()
+      .filter((f) => f.filename.startsWith('e2e-multi-'))
+      .slice(0, 2);
+    if (targets.length < 2) throw new Error('Need two account corpus files for export test');
+
+    const exportRequests: string[] = [];
+    const tokenRequests: string[] = [];
+    const onRequest = (req: { url: () => string }) => {
+      const url = req.url();
+      if (url.includes('/export-token')) tokenRequests.push(url);
+      if (/\/api\/files\/[^/]+\/export(\?|$)/.test(url)) exportRequests.push(url);
+    };
+    sharedPage.on('request', onRequest);
+    const downloads: Download[] = [];
+    const onDownload = (d: Download) => {
+      downloads.push(d);
+    };
+    sharedPage.on('download', onDownload);
+
+    try {
+      await clearTagFilter(sharedPage);
+      await clearFileSelection(sharedPage);
+      for (const f of targets) {
+        await findFileItemById(sharedPage, f.file_id).locator('.file-select').check();
+      }
+      await expect(sharedPage.locator('#exportSelectedBtn')).toHaveText('Export selected (2)');
+
+      logStep('export', 'Explicitly cancelling the folder picker...');
+      await stubDirectoryPickerAbort(sharedPage);
+      await sharedPage.locator('#exportSelectedBtn').click();
+      await sharedPage.waitForTimeout(3_000);
+      expect(downloads.length).toBe(0);
+      expect(exportRequests.length).toBe(0);
+      expect(tokenRequests.length).toBe(0);
+
+      logStep('export', 'Removing the folder picker to force native downloads...');
+      await removeDirectoryPicker(sharedPage);
+      await sharedPage.locator('#exportSelectedBtn').click();
+      await expect.poll(() => downloads.length, { timeout: 60_000 }).toBe(2);
+
+      const ids = new Set(targets.map((t) => t.file_id));
+      for (const [i, d] of downloads.entries()) {
+        const name = d.suggestedFilename();
+        expect(name.endsWith('.arkbackup')).toBe(true);
+        expect(ids.has(name.replace(/\.arkbackup$/, ''))).toBe(true);
+        const savePath = await saveDownload(d, `export-fallback-${i}-${name}`);
+        expectArkbackupMagic(savePath);
+      }
+      expect(tokenRequests.length).toBe(0);
+      expect(sharedPage.url()).not.toContain('/export');
+    } finally {
+      sharedPage.off('request', onRequest);
+      sharedPage.off('download', onDownload);
+    }
+    await clearFileSelection(sharedPage);
+    console.log('[OK] Export selected cancel and native fallback verified');
+  });
+
+  test('Export: per-row Export Backup starts a native download', async () => {
+    if (!multiDlCorpus) throw new Error('multi-dl corpus not loaded');
+    const target = corpusAccountFiles().find((f) => f.filename.startsWith('e2e-multi-'));
+    if (!target) throw new Error('Corpus missing an account file for export');
+
+    const tokenRequests: string[] = [];
+    const onRequest = (req: { url: () => string }) => {
+      if (req.url().includes('/export-token')) tokenRequests.push(req.url());
+    };
+    sharedPage.on('request', onRequest);
+    try {
+      await clearTagFilter(sharedPage);
+      const downloadPromise = sharedPage.waitForEvent('download', { timeout: 60_000 });
+      await findFileItemById(sharedPage, target.file_id)
+        .locator('.file-actions button', { hasText: 'Export Backup' })
+        .click();
+      const download = await downloadPromise;
+      expect(download.suggestedFilename()).toBe(`${target.file_id}.arkbackup`);
+      const savePath = await saveDownload(download, `export-row-${target.file_id}.arkbackup`);
+      expectArkbackupMagic(savePath);
+      expect(tokenRequests.length).toBe(0);
+      expect(sharedPage.url()).not.toContain('/export');
+    } finally {
+      sharedPage.off('request', onRequest);
+    }
+    console.log('[OK] Per-row Export Backup verified');
   });
 
   // --------------------------------------------------------------------------

@@ -814,23 +814,38 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 	fs := flag.NewFlagSet("download", flag.ExitOnError)
 	var fileIDs multiStringFlag
 	fs.Var(&fileIDs, "file-id", "File ID to download (repeatable)")
-	outputPath := fs.String("output", "", "Output file path for a single-file download (default: decrypted filename)")
-	outputDir := fs.String("output-dir", "", "Destination directory for multi-file download")
+	outputPath := fs.String("output", "", "Exact output path for one listed --file-id (default: decrypted filename in the current directory, never replacing an existing entry)")
+	outputDir := fs.String("output-dir", "", "Destination directory; required for multiple, --tags, and --all selections")
 	tagsFilter := fs.String("tags", "", "Select all owner files matching these tags (client-side AND) then download")
+	allFiles := fs.Bool("all", false, "Select every file in the vault (requires --output-dir)")
 	dryRun := fs.Bool("dry-run", false, "List download targets without downloading")
-	pageLimit := fs.Int("limit", 100, "Server page size while scanning for --tags")
-	passwordStdin := fs.Bool("password-stdin", false, "Read custom file password from stdin (single custom-password file only)")
+	pageLimit := fs.Int("limit", 100, "Server page size while scanning for --tags or --all")
+	passwordStdin := fs.Bool("password-stdin", false, "Read custom file password from stdin (one listed --file-id only)")
 
 	fs.Usage = func() {
-		fmt.Printf("Usage:\n"+
-			"  arkfile-client download --file-id FILE_ID [--output PATH] [--password-stdin]\n"+
-			"  arkfile-client download --file-id ID [--file-id ID ...] --output-dir DIR\n"+
-			"  arkfile-client download --tags TAGS --output-dir DIR [--dry-run]\n\n"+
-			"Download and decrypt using streaming per-chunk AES-GCM.\n"+
-			"Multi-file downloads are sequential. Custom-password files run after account-password files.\n")
+		fmt.Printf("Usage:\n" +
+			"  arkfile-client download --file-id FILE_ID [--output PATH | --output-dir DIR] [--password-stdin]\n" +
+			"  arkfile-client download --file-id ID [--file-id ID ...] --output-dir DIR\n" +
+			"  arkfile-client download --tags TAGS --output-dir DIR [--dry-run]\n" +
+			"  arkfile-client download --all --output-dir DIR [--dry-run]\n\n" +
+			"Download and decrypt using streaming per-chunk AES-GCM.\n" +
+			"Multi-file downloads are sequential. Custom-password files run after account-password files.\n" +
+			"Files are published under reserved names and never replace existing entries in --output-dir.\n")
 	}
 
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	selection := ownerSelectionFlags{
+		FileIDs:       fileIDs,
+		Tags:          *tagsFilter,
+		All:           *allFiles,
+		Output:        *outputPath,
+		OutputDir:     *outputDir,
+		PasswordStdin: *passwordStdin,
+	}
+	if err := validateOwnerSelectionFlags(selection); err != nil {
 		return err
 	}
 	defer withPasswordStdin(*passwordStdin)()
@@ -840,55 +855,18 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 		return err
 	}
 
-	targets := append([]string{}, fileIDs...)
-	if strings.TrimSpace(*tagsFilter) != "" {
-		parsed, perr := crypto.ParseFilterTags(*tagsFilter)
-		if perr != nil {
-			return fmt.Errorf("invalid --tags filter: %w", perr)
-		}
-		listed, lerr := fetchAllOwnerFiles(client, session, *pageLimit)
-		if lerr != nil {
-			return lerr
-		}
-		accountKey := getOptionalAccountKey(client, session)
-		if accountKey == nil {
-			return fmt.Errorf("Account Key required to filter by tags")
-		}
-		defer clearBytes(accountKey)
-		seen := make(map[string]struct{})
-		for _, id := range targets {
-			seen[id] = struct{}{}
-		}
-		for _, f := range listed.Files {
-			if _, ok := seen[f.FileID]; ok {
-				continue
-			}
-			owner := f.OwnerUsername
-			if owner == "" {
-				owner = session.Username
-			}
-			tags := []string{}
-			if f.EncryptedTags != "" && f.TagsNonce != "" {
-				plaintext, derr := decryptMetadataField(
-					f.EncryptedTags, f.TagsNonce, accountKey,
-					f.FileID, crypto.AADFieldTags, owner,
-				)
-				if derr != nil {
-					continue
-				}
-				if plaintext != "" {
-					tags = strings.Split(plaintext, ",")
-				}
-			}
-			if crypto.FileHasAllTags(tags, parsed) {
-				targets = append(targets, f.FileID)
-				seen[f.FileID] = struct{}{}
-			}
-		}
+	var tagKey []byte
+	if strings.TrimSpace(selection.Tags) != "" {
+		tagKey = getOptionalAccountKey(client, session)
 	}
-
-	if len(targets) == 0 {
-		return fmt.Errorf("at least one --file-id or matching --tags selection is required")
+	targets, err := resolveOwnerSelectionForSession(client, session, selection, *pageLimit, tagKey)
+	clearBytes(tagKey)
+	if errors.Is(err, errEmptyVault) {
+		fmt.Println("No files in the vault; nothing to download.")
+		return nil
+	}
+	if err != nil {
+		return err
 	}
 
 	if *dryRun {
@@ -899,18 +877,14 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 		return nil
 	}
 
-	if len(targets) > 1 || strings.TrimSpace(*tagsFilter) != "" {
-		if strings.TrimSpace(*outputDir) == "" {
-			return fmt.Errorf("--output-dir is required for multi-file download")
-		}
+	if *outputDir != "" {
 		if err := os.MkdirAll(*outputDir, 0o700); err != nil {
 			return fmt.Errorf("failed to create output directory: %w", err)
 		}
-		return downloadOwnerFilesBatch(client, config, session, targets, *outputDir)
 	}
 
-	if *passwordStdin && len(targets) != 1 {
-		return fmt.Errorf("--password-stdin is only supported for a single-file download")
+	if !selection.singleExplicit() {
+		return downloadOwnerFilesBatch(client, config, session, targets, *outputDir)
 	}
 
 	ctx, stop := interruptContext()
@@ -922,13 +896,34 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 	}
 	defer clearBytes(accountKey)
 
-	return downloadOneOwnerFile(ctx, client, session, accountKey, targets[0], *outputPath, nil)
+	var target *outputTarget
+	defaultDir := "."
+	if *outputPath != "" {
+		target = exactOutputTarget(*outputPath)
+	} else if *outputDir != "" {
+		defaultDir = *outputDir
+	}
+	return downloadOneOwnerFile(ctx, client, session, accountKey, targets[0], target, defaultDir, nil)
+}
+
+// resolveOwnerSelectionForSession runs resolveOwnerSelection against the
+// server listing. accountKey is only needed for --tags; the caller owns it.
+func resolveOwnerSelectionForSession(client *HTTPClient, session *AuthSession, selection ownerSelectionFlags, pageLimit int, accountKey []byte) ([]string, error) {
+	return resolveOwnerSelection(selection, session.Username, func() ([]ServerFileInfo, error) {
+		listed, err := fetchAllOwnerFiles(client, session, pageLimit)
+		if err != nil {
+			return nil, err
+		}
+		return listed.Files, nil
+	}, accountKey)
 }
 
 type batchPendingFile struct {
 	FileID       string
 	Filename     string
 	PasswordType string
+	Hint         string
+	HintState    hintState
 }
 
 type batchFileOutcome struct {
@@ -968,35 +963,33 @@ func downloadOwnerFilesBatch(client *HTTPClient, config *ClientConfig, session *
 				name = decrypted
 			}
 		}
-		pending = append(pending, batchPendingFile{
+		entry := batchPendingFile{
 			FileID:       id,
 			Filename:     name,
 			PasswordType: meta.PasswordType,
-		})
+		}
+		if meta.PasswordType == "custom" {
+			entry.Hint, entry.HintState = decryptPasswordHint(
+				meta.EncryptedPasswordHint, meta.PasswordHintNonce, accountKey, id, owner,
+			)
+		}
+		pending = append(pending, entry)
 	}
 
 	if len(pending) == 0 {
 		return fmt.Errorf("no downloadable files in selection")
 	}
 
-	reserveItems := make([]struct {
-		Key      string
-		Filename string
-	}, 0, len(pending))
-	existing, _ := os.ReadDir(outputDir)
-	already := make([]string, 0, len(existing))
-	for _, e := range existing {
-		if !e.IsDir() {
-			already = append(already, e.Name())
-		}
+	reserver, err := newOutputNameReserver(outputDir, "")
+	if err != nil {
+		return err
 	}
+	reserved := make(map[string]*outputTarget, len(pending))
+	pendingByID := make(map[string]batchPendingFile, len(pending))
 	for _, p := range pending {
-		reserveItems = append(reserveItems, struct {
-			Key      string
-			Filename string
-		}{Key: p.FileID, Filename: p.Filename})
+		reserved[p.FileID] = reservedOutputTarget(reserver, safeOwnerBasename(p.Filename, p.FileID+".bin"))
+		pendingByID[p.FileID] = p
 	}
-	reserved := reserveBasenames(reserveItems, already)
 
 	work := append([]batchPendingFile(nil), pending...)
 	var totalAccountOK, totalCustomOK, totalSkipped int
@@ -1031,12 +1024,8 @@ func downloadOwnerFilesBatch(client *HTTPClient, config *ClientConfig, session *
 				}
 				break
 			}
-			outName := reserved[p.FileID]
-			if outName == "" {
-				outName = p.Filename
-			}
-			finalPath := filepath.Join(outputDir, outName)
-			if err := downloadOneOwnerFile(ctx, client, session, accountKey, p.FileID, finalPath, nil); err != nil {
+			target := reserved[p.FileID]
+			if err := downloadOneOwnerFile(ctx, client, session, accountKey, p.FileID, target, outputDir, nil); err != nil {
 				reason := err.Error()
 				if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 					reason = "cancelled"
@@ -1045,7 +1034,7 @@ func downloadOwnerFilesBatch(client *HTTPClient, config *ClientConfig, session *
 				accountFail = append(accountFail, batchFileOutcome{
 					FileID: p.FileID, Filename: p.Filename, PasswordType: "account", Reason: reason,
 				})
-				fmt.Fprintf(os.Stderr, "[X] %s (%s): %s\n", p.Filename, p.FileID, reason)
+				fmt.Fprintf(os.Stderr, "[X] %s (%s): %s\n", sanitizeDisplayText(p.Filename), p.FileID, reason)
 				if abortRound {
 					for _, rest := range accountFirst[i+1:] {
 						skipped = append(skipped, batchFileOutcome{
@@ -1064,7 +1053,7 @@ func downloadOwnerFilesBatch(client *HTTPClient, config *ClientConfig, session *
 			accountOK = append(accountOK, batchFileOutcome{
 				FileID: p.FileID, Filename: p.Filename, PasswordType: "account",
 			})
-			fmt.Printf("[OK] %s -> %s\n", p.FileID, finalPath)
+			fmt.Printf("[OK] %s -> %s\n", p.FileID, sanitizeDisplayText(target.path()))
 		}
 
 		if !abortRound {
@@ -1079,11 +1068,8 @@ func downloadOwnerFilesBatch(client *HTTPClient, config *ClientConfig, session *
 					break
 				}
 
-				outName := reserved[p.FileID]
-				if outName == "" {
-					outName = p.Filename
-				}
-				finalPath := filepath.Join(outputDir, outName)
+				target := reserved[p.FileID]
+				displayName := sanitizeDisplayText(p.Filename)
 
 				succeeded := false
 				lastReason := "download_failed"
@@ -1096,26 +1082,26 @@ func downloadOwnerFilesBatch(client *HTTPClient, config *ClientConfig, session *
 					}
 
 					customPass, perr := readPasswordWithTimeout(
-						fmt.Sprintf("Enter custom password for '%s' (attempt %d/%d, wait up to 2 minutes): ",
-							p.Filename, attempt, MaxBatchCustomPasswordAttempts),
+						fmt.Sprintf("Enter custom password for '%s'%s (attempt %d/%d, wait up to 2 minutes): ",
+							displayName, formatPromptHint(p.Hint, p.HintState), attempt, MaxBatchCustomPasswordAttempts),
 						PasswordTimeoutBatchCustom,
 					)
 					if perr != nil {
 						if strings.Contains(perr.Error(), "timed out") {
 							lastReason = "prompt_timeout"
-							fmt.Fprintf(os.Stderr, "[!] %s: password prompt timed out\n", p.Filename)
+							fmt.Fprintf(os.Stderr, "[!] %s: password prompt timed out\n", displayName)
 							continue
 						}
 						if passwordFromStdin || strings.Contains(perr.Error(), "no controlling terminal") {
 							lastReason = "prompt_cancelled"
-							fmt.Fprintf(os.Stderr, "[X] %s: custom password required interactively: %v\n", p.Filename, perr)
+							fmt.Fprintf(os.Stderr, "[X] %s: custom password required interactively: %v\n", displayName, perr)
 							break
 						}
 						lastReason = perr.Error()
 						continue
 					}
 
-					derr := downloadOneOwnerFile(ctx, client, session, accountKey, p.FileID, finalPath, customPass)
+					derr := downloadOneOwnerFile(ctx, client, session, accountKey, p.FileID, target, outputDir, customPass)
 					clearBytes(customPass)
 					if derr == nil {
 						succeeded = true
@@ -1140,7 +1126,7 @@ func downloadOwnerFilesBatch(client *HTTPClient, config *ClientConfig, session *
 					customOK = append(customOK, batchFileOutcome{
 						FileID: p.FileID, Filename: p.Filename, PasswordType: "custom",
 					})
-					fmt.Printf("[OK] %s -> %s\n", p.FileID, finalPath)
+					fmt.Printf("[OK] %s -> %s\n", p.FileID, sanitizeDisplayText(target.path()))
 				} else {
 					customFail = append(customFail, batchFileOutcome{
 						FileID: p.FileID, Filename: p.Filename, PasswordType: "custom", Reason: lastReason,
@@ -1164,14 +1150,14 @@ func downloadOwnerFilesBatch(client *HTTPClient, config *ClientConfig, session *
 			fmt.Printf("  Skipped: %d\n", len(skipped))
 		}
 		for _, f := range append(append(accountFail, customFail...), skipped...) {
-			fmt.Fprintf(os.Stderr, "  [X] %s: %s\n", f.Filename, f.Reason)
+			fmt.Fprintf(os.Stderr, "  [X] %s: %s\n", sanitizeDisplayText(f.Filename), f.Reason)
 		}
 
 		totalAccountOK += len(accountOK)
 		totalCustomOK += len(customOK)
 		totalSkipped += len(skipped)
 
-		failedOnly := append(append([]batchPendingFile(nil), batchOutcomesToPending(accountFail)...), batchOutcomesToPending(customFail)...)
+		failedOnly := append(append([]batchPendingFile(nil), batchOutcomesToPending(accountFail, pendingByID)...), batchOutcomesToPending(customFail, pendingByID)...)
 		work = failedOnly
 
 		if abortRound || len(work) == 0 || round >= MaxBatchDownloadRounds {
@@ -1199,10 +1185,16 @@ func downloadOwnerFilesBatch(client *HTTPClient, config *ClientConfig, session *
 	return nil
 }
 
-func batchOutcomesToPending(outcomes []batchFileOutcome) []batchPendingFile {
+// batchOutcomesToPending returns the retryable failures, keeping each file's
+// original pending entry (including its decrypted hint) when known.
+func batchOutcomesToPending(outcomes []batchFileOutcome, pendingByID map[string]batchPendingFile) []batchPendingFile {
 	out := make([]batchPendingFile, 0, len(outcomes))
 	for _, o := range outcomes {
 		if o.Reason == "cancelled" || o.Reason == "skipped" {
+			continue
+		}
+		if original, ok := pendingByID[o.FileID]; ok {
+			out = append(out, original)
 			continue
 		}
 		out = append(out, batchPendingFile{
@@ -1241,7 +1233,8 @@ func downloadOneOwnerFile(
 	session *AuthSession,
 	accountKey []byte,
 	fileID string,
-	outputPath string,
+	target *outputTarget,
+	defaultDir string,
 	injectedCustomPassword []byte,
 ) error {
 	fileMeta, err := fetchOwnerFileMeta(ctx, client, session, fileID)
@@ -1254,20 +1247,26 @@ func downloadOneOwnerFile(
 		ownerUsername = session.Username
 	}
 
-	if outputPath == "" && fileMeta.EncryptedFilename != "" && fileMeta.FilenameNonce != "" {
+	displayName := fileID + ".bin"
+	if fileMeta.EncryptedFilename != "" && fileMeta.FilenameNonce != "" {
 		decryptedName, derr := decryptMetadataField(
 			fileMeta.EncryptedFilename, fileMeta.FilenameNonce, accountKey,
 			fileID, crypto.AADFieldFilename, ownerUsername,
 		)
 		if derr != nil {
 			logVerbose("Warning: failed to decrypt filename: %v", derr)
-			outputPath = fileID + ".bin"
-		} else {
-			outputPath = decryptedName
+		} else if decryptedName != "" {
+			displayName = decryptedName
 		}
-	} else if outputPath == "" {
-		outputPath = fileID + ".bin"
 	}
+	if target == nil {
+		reserver, rerr := newOutputNameReserver(defaultDir, "")
+		if rerr != nil {
+			return fmt.Errorf("%w; pass --output instead", rerr)
+		}
+		target = reservedOutputTarget(reserver, safeOwnerBasename(displayName, fileID+".bin"))
+	}
+	displayName = sanitizeDisplayText(displayName)
 
 	var kek []byte
 	envelopeHeader, err := parseFEKEnvelopeHeader(fileMeta.EncryptedFEK)
@@ -1288,23 +1287,22 @@ func downloadOneOwnerFile(
 			return fmt.Errorf("owner FEK envelope salt does not match account metadata")
 		}
 	case "custom":
-		if fileMeta.EncryptedPasswordHint != "" && fileMeta.PasswordHintNonce != "" {
-			if hintText, herr := decryptMetadataField(
-				fileMeta.EncryptedPasswordHint, fileMeta.PasswordHintNonce, accountKey,
-				fileID, crypto.AADFieldPasswordHint, ownerUsername,
-			); herr == nil && hintText != "" {
-				fmt.Printf("Password hint: %s\n", hintText)
-			} else if herr != nil {
-				logVerbose("Warning: failed to decrypt password hint: %v", herr)
-			}
-		}
 		ownsCustomPass := false
 		var customPass []byte
 		if len(injectedCustomPassword) > 0 {
 			// Caller retains ownership and must clearBytes the injected buffer.
+			// Batch callers show the hint in their own prompt.
 			customPass = injectedCustomPassword
 		} else {
-			customPass, err = readPassword(fmt.Sprintf("Enter custom password for '%s': ", outputPath))
+			hint, state := decryptPasswordHint(
+				fileMeta.EncryptedPasswordHint, fileMeta.PasswordHintNonce, accountKey, fileID, ownerUsername,
+			)
+			if state == hintPresent {
+				fmt.Printf("Password hint: %s\n", sanitizeDisplayText(hint))
+			} else if state == hintUndecryptable {
+				fmt.Printf("[!] WARNING: Password hint could not be decrypted\n")
+			}
+			customPass, err = readPassword(fmt.Sprintf("Enter custom password for '%s': ", displayName))
 			if err != nil {
 				return fmt.Errorf("failed to read custom password: %w", err)
 			}
@@ -1333,10 +1331,10 @@ func downloadOneOwnerFile(
 	}
 	defer clearBytes(fek)
 
-	logVerbose("Downloading %s (%s)...", outputPath, formatFileSize(fileMeta.SizeBytes))
+	logVerbose("Downloading %s (%s)...", displayName, formatFileSize(fileMeta.SizeBytes))
 
 	var verifiedSHA256 string
-	if err := writeAtomicOutput(outputPath, func(outFile *os.File) error {
+	savedPath, err := target.write(func(outFile *os.File) error {
 		if err := doChunkedDownload(ctx, client, session, fileID, fek, *fileMeta, outFile); err != nil {
 			return fmt.Errorf("download failed: %w", err)
 		}
@@ -1364,12 +1362,13 @@ func downloadOneOwnerFile(
 		}
 		verifiedSHA256 = actualSHA256
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
 		return err
 	}
 
 	fmt.Printf("Download complete!\n")
-	fmt.Printf("  Saved to: %s\n", outputPath)
+	fmt.Printf("  Saved to: %s\n", sanitizeDisplayText(savedPath))
 	fmt.Printf("  Size: %s\n", formatFileSize(fileMeta.SizeBytes))
 	if verifiedSHA256 != "" {
 		fmt.Printf("  [OK] SHA-256 verified: %s\n", verifiedSHA256)
@@ -1651,7 +1650,7 @@ func handleListFilesCommand(client *HTTPClient, config *ClientConfig, args []str
 		fmt.Println(sep)
 		fmt.Printf("File %d of %d\n", i+1, len(visible))
 		fmt.Printf("  File ID:   %s\n", lf.FileID)
-		fmt.Printf("  Filename:  %s\n", lf.Filename)
+		fmt.Printf("  Filename:  %s\n", sanitizeDisplayText(lf.Filename))
 		fmt.Printf("  Size:      %s\n", size)
 		fmt.Printf("  Uploaded:  %s\n", lf.UploadDate)
 		fmt.Printf("  Type:      %s\n", lf.PasswordType)
@@ -1660,7 +1659,7 @@ func handleListFilesCommand(client *HTTPClient, config *ClientConfig, args []str
 		} else if len(lf.Tags) == 0 {
 			fmt.Printf("  Tags:      (none)\n")
 		} else {
-			fmt.Printf("  Tags:      %s\n", strings.Join(lf.Tags, ", "))
+			fmt.Printf("  Tags:      %s\n", sanitizeDisplayText(strings.Join(lf.Tags, ", ")))
 		}
 	}
 
@@ -1903,7 +1902,7 @@ func formatTagsDisplay(tags []string) string {
 	if len(tags) == 0 {
 		return "(none)"
 	}
-	return strings.Join(tags, ", ")
+	return sanitizeDisplayText(strings.Join(tags, ", "))
 }
 
 func applyTagMutation(
@@ -2192,7 +2191,7 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 				fileMeta.EncryptedPasswordHint, fileMeta.PasswordHintNonce, accountKey,
 				*fileID, crypto.AADFieldPasswordHint, ownerUsername,
 			); herr == nil && hintText != "" {
-				fmt.Printf("Password hint: %s\n", hintText)
+				fmt.Printf("Password hint: %s\n", sanitizeDisplayText(hintText))
 			} else if herr != nil {
 				logVerbose("Warning: failed to decrypt password hint: %v", herr)
 			}
@@ -2335,7 +2334,7 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 	}
 
 	fmt.Printf("Share created!\n")
-	fmt.Printf("  File: %s\n", filename)
+	fmt.Printf("  File: %s\n", sanitizeDisplayText(filename))
 	fmt.Printf("  Share ID: %s\n", shareID)
 	if shareURL != "" {
 		fmt.Printf("  Share URL: %s\n", shareURL)
@@ -2457,7 +2456,7 @@ func handleShareList(client *HTTPClient, config *ClientConfig, args []string) er
 			fmt.Printf("  Revoked:   %s (reason: %s)\n", s.RevokedAt, reason)
 		}
 
-		fmt.Printf("  Filename:  %s\n", defaultString(s.FilenameLocal, "[encrypted]"))
+		fmt.Printf("  Filename:  %s\n", sanitizeDisplayText(defaultString(s.FilenameLocal, "[encrypted]")))
 		fmt.Printf("  Size:      %s\n", defaultString(s.SizeReadableLocal, formatFileSize(s.SizeBytes)))
 		fmt.Printf("  SHA-256:   %s\n", defaultString(s.SHA256Local, "[encrypted]"))
 		fmt.Printf("  Type:      %s\n", defaultString(s.PasswordType, "unknown"))
@@ -2882,12 +2881,13 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 	if envelope.SHA256 != "" && !isLowerHexSHA256(envelope.SHA256) {
 		return fmt.Errorf("share envelope contains a malformed SHA-256 digest; refusing to download")
 	}
+	target := exactOutputTarget(*outputPath)
 	if *outputPath == "" {
 		resolved, resolveErr := resolveDefaultDownloadPath(".", envelope.Filename, *shareID+".bin")
 		if resolveErr != nil {
 			return resolveErr
 		}
-		*outputPath = resolved
+		target = resolved
 	}
 
 	// Decode FEK and download token from envelope
@@ -2959,7 +2959,7 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 	fmt.Printf("  Chunks: %d\n", chunkCount)
 
 	var verifiedSHA256 string
-	if err := writeAtomicOutput(*outputPath, func(outFile *os.File) error {
+	savedPath, err := target.write(func(outFile *os.File) error {
 		for i := int64(0); i < chunkCount; i++ {
 			if err := ctx.Err(); err != nil {
 				return fmt.Errorf("share download interrupted: %w", err)
@@ -2997,12 +2997,13 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 		}
 		verifiedSHA256 = actualSHA256
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("share download failed: %w", err)
 	}
 
 	fmt.Printf("Download complete!\n")
-	fmt.Printf("  Saved to: %s\n", *outputPath)
+	fmt.Printf("  Saved to: %s\n", sanitizeDisplayText(savedPath))
 	fmt.Printf("  Size: %s\n", formatFileSize(sizeBytes))
 	if verifiedSHA256 != "" {
 		fmt.Printf("  [OK] SHA-256 verified: %s\n", verifiedSHA256)

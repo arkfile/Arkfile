@@ -9,11 +9,24 @@ func TestBatchOutcomesToPendingSkipsCancelled(t *testing.T) {
 		{FileID: "3", Filename: "c.bin", PasswordType: "custom", Reason: "wrong_custom_password"},
 		{FileID: "4", Filename: "d.bin", PasswordType: "account", Reason: "skipped"},
 	}
-	got := batchOutcomesToPending(outcomes)
+	got := batchOutcomesToPending(outcomes, nil)
 	if len(got) != 2 {
 		t.Fatalf("len=%d, want 2", len(got))
 	}
 	if got[0].FileID != "1" || got[1].FileID != "3" {
 		t.Fatalf("unexpected pending: %+v", got)
+	}
+}
+
+func TestBatchOutcomesToPendingKeepsHintForRetry(t *testing.T) {
+	outcomes := []batchFileOutcome{
+		{FileID: "3", Filename: "c.bin", PasswordType: "custom", Reason: "wrong_custom_password"},
+	}
+	pendingByID := map[string]batchPendingFile{
+		"3": {FileID: "3", Filename: "c.bin", PasswordType: "custom", Hint: "blue door", HintState: hintPresent},
+	}
+	got := batchOutcomesToPending(outcomes, pendingByID)
+	if len(got) != 1 || got[0].Hint != "blue door" || got[0].HintState != hintPresent {
+		t.Fatalf("retry lost the hint: %+v", got)
 	}
 }

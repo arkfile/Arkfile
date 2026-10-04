@@ -16,7 +16,7 @@
  */
 
 import './setup.js';
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { describe, test, expect, beforeEach, afterAll } from 'bun:test';
 
 // ============================================================================
 // localStorage mock
@@ -451,6 +451,11 @@ describe('uploadFile chunk transfer retries', () => {
     (globalThis as any).document = {
       cookie: '__Host-arkfile-csrf=test-csrf-token',
     };
+  });
+
+  // Later test files expect no session cookie.
+  afterAll(() => {
+    delete (globalThis as any).document;
   });
 
   test('retries chunk POST on 503 then succeeds', async () => {

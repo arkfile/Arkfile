@@ -1,4 +1,5 @@
-// offline_decrypt_test.go - Tests for .arkbackup bundle parser and offline decryption.
+// offline_decrypt_test.go - Tests for the .arkbackup validator and the
+// single-bundle offline decrypt path.
 //
 // Bundles are self-describing. Every bundle must carry
 // file_id, owner_username, encrypted_fek, encrypted_filename + nonce,
@@ -16,430 +17,491 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"testing/iotest"
+	"time"
 
 	"github.com/arkfile/Arkfile/crypto"
 )
 
-// createTestBundle creates a valid .arkbackup bundle file for testing.
-func createTestBundle(t *testing.T, meta bundleMeta, blobData []byte) string {
+func accountSpec(t *testing.T, key []byte, filename string, plaintext []byte) testBundleSpec {
 	t.Helper()
-	tempDir := t.TempDir()
-	bundlePath := filepath.Join(tempDir, "test.arkbackup")
-
-	f, err := os.Create(bundlePath)
-	if err != nil {
-		t.Fatalf("failed to create test bundle: %v", err)
+	return testBundleSpec{
+		FileID:     testFileID,
+		AccountKey: key,
+		Filename:   filename,
+		Plaintext:  plaintext,
 	}
-	defer f.Close()
-
-	// Magic
-	if _, err := f.Write([]byte("ARKB")); err != nil {
-		t.Fatalf("failed to write magic: %v", err)
-	}
-	// Version
-	versionBytes := make([]byte, 2)
-	binary.BigEndian.PutUint16(versionBytes, 2)
-	if _, err := f.Write(versionBytes); err != nil {
-		t.Fatalf("failed to write version: %v", err)
-	}
-	// Header
-	metaJSON, err := json.Marshal(meta)
-	if err != nil {
-		t.Fatalf("failed to marshal metadata: %v", err)
-	}
-	headerLenBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(headerLenBytes, uint32(len(metaJSON)))
-	if _, err := f.Write(headerLenBytes); err != nil {
-		t.Fatalf("failed to write header length: %v", err)
-	}
-	if _, err := f.Write(metaJSON); err != nil {
-		t.Fatalf("failed to write metadata: %v", err)
-	}
-	// Blob
-	if blobData != nil {
-		if _, err := f.Write(blobData); err != nil {
-			t.Fatalf("failed to write blob: %v", err)
-		}
-	}
-	return bundlePath
 }
 
-// TestParseBundle_ValidBundle exercises the basic parse path with all the
-// self-describing fields populated.
-func TestParseBundle_ValidBundle(t *testing.T) {
-	meta := bundleMeta{
-		Version:            2,
-		FileID:             testFileID,
-		OwnerUsername:      testOwner,
-		EncryptedFEK:       "ZW5jcnlwdGVkLWZlaw==",
-		PasswordType:       "account",
-		SizeBytes:          1024,
-		PaddedSize:         1056,
-		EncryptedFilename:  "ZW5jcnlwdGVkLWZpbGVuYW1l",
-		FilenameNonce:      "dGVzdG5vbmNl",
-		EncryptedSHA256Sum: "ZW5jcnlwdGVkLXNoYTI1Ng==",
-		SHA256SumNonce:     "c2hhbm9uY2U=",
-		ChunkSizeBytes:     16777216,
-		ChunkCount:         1,
-		AccountKDFSalt:     crypto.EncodeBase64(testOwnerSalt()),
-		AccountKDFProfile:  int(crypto.OwnerEnvelopeKDFProfile()),
-		EnvelopeVersion:    int(crypto.OwnerEnvelopeVersion()),
-		CreatedAt:          "2025-01-01T00:00:00Z",
+func customSpec(t *testing.T, key []byte, filename, hint string, plaintext []byte) testBundleSpec {
+	t.Helper()
+	customKey, customSalt := testCustomKey(t)
+	return testBundleSpec{
+		FileID:       testFileID2,
+		AccountKey:   key,
+		PasswordType: "custom",
+		CustomKey:    customKey,
+		CustomSalt:   customSalt,
+		Filename:     filename,
+		Hint:         hint,
+		Plaintext:    plaintext,
 	}
+}
 
-	bundlePath := createTestBundle(t, meta, []byte("fake-encrypted-blob-data-for-testing"))
+func expectBundleReason(t *testing.T, err error, reason string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected %s, got success", reason)
+	}
+	if got := bundleErrorReason(err, ""); got != reason {
+		t.Fatalf("reason = %q (%v), want %q", got, err, reason)
+	}
+}
 
-	parsed, blobOffset, err := parseBundle(bundlePath)
+func TestValidateBundleFileAcceptsRealBundle(t *testing.T) {
+	key := randomBytes(t, 32)
+	path := writeTestBundle(t, accountSpec(t, key, "report.pdf", []byte("hello bundle")))
+	b, err := validateBundleFile(path)
 	if err != nil {
-		t.Fatalf("parseBundle failed: %v", err)
+		t.Fatalf("validateBundleFile: %v", err)
 	}
+	if b.Meta.FileID != testFileID || b.OuterVersion != 2 || b.FileSize <= b.BlobOffset {
+		t.Fatalf("unexpected validated bundle: %+v", b)
+	}
+	if !accountKeyUnlocks(b, key) {
+		t.Fatal("correct Account Key did not unlock the bundle")
+	}
+	if accountKeyUnlocks(b, randomBytes(t, 32)) {
+		t.Fatal("wrong Account Key unlocked the bundle")
+	}
+}
 
-	if parsed.FileID != meta.FileID {
-		t.Errorf("FileID mismatch: got %q, expected %q", parsed.FileID, meta.FileID)
+func TestValidateBundleFileAcceptsPaddingAndMultipleChunks(t *testing.T) {
+	key := randomBytes(t, 32)
+	spec := accountSpec(t, key, "chunks.bin", bytes.Repeat([]byte("abcdefgh"), 9))
+	spec.ChunkSize = 16
+	spec.PaddingBytes = 37
+	path := writeTestBundle(t, spec)
+	b, err := validateBundleFile(path)
+	if err != nil {
+		t.Fatalf("validateBundleFile: %v", err)
 	}
-	if parsed.OwnerUsername != meta.OwnerUsername {
-		t.Errorf("OwnerUsername mismatch: got %q, expected %q", parsed.OwnerUsername, meta.OwnerUsername)
+	if b.Meta.ChunkCount != 5 {
+		t.Fatalf("chunk_count = %d, want 5", b.Meta.ChunkCount)
 	}
-	if parsed.PasswordType != meta.PasswordType {
-		t.Errorf("PasswordType mismatch: got %q, expected %q", parsed.PasswordType, meta.PasswordType)
-	}
-	if parsed.SizeBytes != meta.SizeBytes {
-		t.Errorf("SizeBytes mismatch: got %d, expected %d", parsed.SizeBytes, meta.SizeBytes)
-	}
-	if parsed.ChunkCount != meta.ChunkCount {
-		t.Errorf("ChunkCount mismatch: got %d, expected %d", parsed.ChunkCount, meta.ChunkCount)
-	}
-	if parsed.EncryptedFEK != meta.EncryptedFEK {
-		t.Errorf("EncryptedFEK mismatch: got %q, expected %q", parsed.EncryptedFEK, meta.EncryptedFEK)
-	}
-	if parsed.EnvelopeVersion != meta.EnvelopeVersion {
-		t.Errorf("EnvelopeVersion mismatch: got %d, expected %d", parsed.EnvelopeVersion, meta.EnvelopeVersion)
-	}
+}
 
-	metaJSON, _ := json.Marshal(meta)
-	expectedOffset := int64(10) + int64(len(metaJSON))
-	if blobOffset != expectedOffset {
-		t.Errorf("blobOffset mismatch: got %d, expected %d", blobOffset, expectedOffset)
+func TestValidateBundleFileAcceptsOldBundleWithoutPaddedSize(t *testing.T) {
+	key := randomBytes(t, 32)
+	path := writeTestBundle(t, accountSpec(t, key, "old.bin", []byte("old bundle")))
+	rewriteBundleMeta(t, path, func(m *bundleMeta) { m.PaddedSize = 0 })
+	if _, err := validateBundleFile(path); err != nil {
+		t.Fatalf("old bundle without padded_size rejected: %v", err)
+	}
+}
+
+func TestValidateBundleFileRejectsMalformedBundles(t *testing.T) {
+	key := randomBytes(t, 32)
+	cases := []struct {
+		name   string
+		mutate func(*bundleMeta)
+		reason string
+	}{
+		{"inner version mismatch", func(m *bundleMeta) { m.Version = 3 }, reasonUnsupportedVersion},
+		{"missing file id", func(m *bundleMeta) { m.FileID = "" }, reasonInvalidBundleMetadata},
+		{"path in file id", func(m *bundleMeta) { m.FileID = "../x" }, reasonInvalidBundleMetadata},
+		{"missing owner", func(m *bundleMeta) { m.OwnerUsername = "" }, reasonInvalidBundleMetadata},
+		{"unsupported kdf profile", func(m *bundleMeta) { m.AccountKDFProfile = 99 }, reasonUnsupportedKDFProfile},
+		{"short account salt", func(m *bundleMeta) { m.AccountKDFSalt = crypto.EncodeBase64([]byte("short")) }, reasonInvalidBundleMetadata},
+		{"unknown password type", func(m *bundleMeta) { m.PasswordType = "share" }, reasonInvalidBundleMetadata},
+		{"password type mismatch", func(m *bundleMeta) { m.PasswordType = "custom" }, reasonInvalidBundleMetadata},
+		{"truncated envelope", func(m *bundleMeta) { m.EncryptedFEK = m.EncryptedFEK[:20] }, reasonInvalidBundleMetadata},
+		{"envelope version mismatch", func(m *bundleMeta) { m.EnvelopeVersion = 7 }, reasonInvalidBundleMetadata},
+		{"bad filename nonce", func(m *bundleMeta) { m.FilenameNonce = crypto.EncodeBase64([]byte("abc")) }, reasonInvalidBundleMetadata},
+		{"missing digest", func(m *bundleMeta) { m.EncryptedSHA256Sum = ""; m.SHA256SumNonce = "" }, reasonInvalidBundleMetadata},
+		{"half tags pair", func(m *bundleMeta) { m.EncryptedTags = "AAAAAAAAAAAAAAAAAAAAAA==" }, reasonInvalidBundleMetadata},
+		{"half hint pair", func(m *bundleMeta) { m.PasswordHintNonce = "AAAAAAAAAAAAAAAA" }, reasonInvalidBundleMetadata},
+		{"negative size", func(m *bundleMeta) { m.SizeBytes = -1 }, reasonInvalidBundleMetadata},
+		{"negative chunk count", func(m *bundleMeta) { m.ChunkCount = -1 }, reasonInvalidBundleMetadata},
+		{"inconsistent chunk count", func(m *bundleMeta) { m.ChunkCount = 4 }, reasonInvalidBundleMetadata},
+		{"negative chunk size", func(m *bundleMeta) { m.ChunkSizeBytes = -5 }, reasonInvalidBundleMetadata},
+		{"padded smaller than size", func(m *bundleMeta) { m.PaddedSize = m.SizeBytes - 1 }, reasonInvalidBundleMetadata},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeTestBundle(t, accountSpec(t, key, "x.bin", []byte("payload for validation")))
+			rewriteBundleMeta(t, path, tc.mutate)
+			_, err := validateBundleFile(path)
+			expectBundleReason(t, err, tc.reason)
+		})
+	}
+}
+
+func TestValidateBundleFileRejectsLengthMismatch(t *testing.T) {
+	key := randomBytes(t, 32)
+	path, data := buildTestBundleBytes(t, accountSpec(t, key, "len.bin", []byte("length checks")))
+
+	if err := os.WriteFile(path, data[:len(data)-3], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := validateBundleFile(path)
+	expectBundleReason(t, err, reasonBundleLengthMismatch)
+
+	if err := os.WriteFile(path, append(append([]byte(nil), data...), 0, 0), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = validateBundleFile(path)
+	expectBundleReason(t, err, reasonBundleLengthMismatch)
+}
+
+func TestValidateBundleFileRejectsSymlinkAndNonBundles(t *testing.T) {
+	key := randomBytes(t, 32)
+	path := writeTestBundle(t, accountSpec(t, key, "real.bin", []byte("x")))
+	link := filepath.Join(t.TempDir(), "link.arkbackup")
+	if err := os.Symlink(path, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	_, err := validateBundleFile(link)
+	expectBundleReason(t, err, reasonUnsafeBundleFile)
+
+	decoy := filepath.Join(t.TempDir(), "notes.arkbackup")
+	if err := os.WriteFile(decoy, []byte("NOTB not a bundle"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = validateBundleFile(decoy)
+	expectBundleReason(t, err, reasonNotABundle)
+
+	wrongVersion := filepath.Join(t.TempDir(), "v9.arkbackup")
+	header := []byte("ARKB\x00\x09\x00\x00\x00\x02{}")
+	if err := os.WriteFile(wrongVersion, header, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = validateBundleFile(wrongVersion)
+	expectBundleReason(t, err, reasonUnsupportedVersion)
+
+	huge := filepath.Join(t.TempDir(), "huge.arkbackup")
+	hugeHeader := make([]byte, 10)
+	copy(hugeHeader, "ARKB")
+	binary.BigEndian.PutUint16(hugeHeader[4:6], 2)
+	binary.BigEndian.PutUint32(hugeHeader[6:10], 2*1024*1024)
+	if err := os.WriteFile(huge, hugeHeader, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = validateBundleFile(huge)
+	expectBundleReason(t, err, reasonInvalidBundleMetadata)
+}
+
+func TestReadBundleHeaderHandlesShortReads(t *testing.T) {
+	key := randomBytes(t, 32)
+	_, data := buildTestBundleBytes(t, accountSpec(t, key, "short.bin", []byte("short reads")))
+	meta, version, headerLen, err := readBundleHeader(iotest.OneByteReader(bytes.NewReader(data)))
+	if err != nil {
+		t.Fatalf("readBundleHeader with one-byte reads: %v", err)
+	}
+	if meta.FileID != testFileID || version != 2 || headerLen == 0 {
+		t.Fatalf("unexpected header: %+v %d %d", meta, version, headerLen)
+	}
+}
+
+func TestDecryptBundleStreamHandlesShortReads(t *testing.T) {
+	key := randomBytes(t, 32)
+	plaintext := bytes.Repeat([]byte("0123456789"), 7)
+	spec := accountSpec(t, key, "stream.bin", plaintext)
+	spec.ChunkSize = 16
+	path, data := buildTestBundleBytes(t, spec)
+	b, err := validateBundleFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fek, _, err := unwrapFEK(b.Meta.EncryptedFEK, key, b.Meta.FileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	reader := iotest.HalfReader(bytes.NewReader(data[b.BlobOffset:]))
+	if err := decryptBundleStream(context.Background(), reader, b.Meta, fek, &out); err != nil {
+		t.Fatalf("decryptBundleStream with short reads: %v", err)
+	}
+	if !bytes.Equal(out.Bytes(), plaintext) {
+		t.Fatal("plaintext mismatch after short reads")
 	}
 }
 
 func TestDecryptBundleBlobStopsBeforeWritingWhenCanceled(t *testing.T) {
-	meta := bundleMeta{
-		FileID:         testFileID,
-		SizeBytes:      int64(crypto.AesGcmOverhead()),
-		ChunkSizeBytes: 1,
-		ChunkCount:     1,
-	}
-	bundlePath := createTestBundle(t, meta, make([]byte, meta.SizeBytes))
-	_, blobOffset, err := parseBundle(bundlePath)
+	key := randomBytes(t, 32)
+	path := writeTestBundle(t, accountSpec(t, key, "cancel.bin", []byte("cancelled payload")))
+	b, err := validateBundleFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	outputPath := filepath.Join(t.TempDir(), "output.tmp")
-	outFile, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY, 0600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer outFile.Close()
-
+	var out bytes.Buffer
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err = decryptBundleBlob(ctx, bundlePath, blobOffset, &meta, make([]byte, 32), outFile)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("decryptBundleBlob error = %v, want context.Canceled", err)
-	}
-	info, err := outFile.Stat()
+	f, err := os.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Size() != 0 {
-		t.Fatalf("canceled decryption wrote %d plaintext bytes", info.Size())
-	}
-}
-
-func TestParseBundle_InvalidMagic(t *testing.T) {
-	tempDir := t.TempDir()
-	bundlePath := filepath.Join(tempDir, "bad-magic.arkbackup")
-	f, _ := os.Create(bundlePath)
-	f.Write([]byte("NOTB"))
-	versionBytes := make([]byte, 2)
-	binary.BigEndian.PutUint16(versionBytes, 2)
-	f.Write(versionBytes)
-	headerLenBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(headerLenBytes, 2)
-	f.Write(headerLenBytes)
-	f.Write([]byte("{}"))
-	f.Close()
-	if _, _, err := parseBundle(bundlePath); err == nil {
-		t.Fatal("parseBundle should fail for invalid magic bytes")
-	}
-}
-
-func TestParseBundle_InvalidVersion(t *testing.T) {
-	tempDir := t.TempDir()
-	bundlePath := filepath.Join(tempDir, "bad-version.arkbackup")
-	f, _ := os.Create(bundlePath)
-	f.Write([]byte("ARKB"))
-	versionBytes := make([]byte, 2)
-	binary.BigEndian.PutUint16(versionBytes, 99)
-	f.Write(versionBytes)
-	headerLenBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(headerLenBytes, 2)
-	f.Write(headerLenBytes)
-	f.Write([]byte("{}"))
-	f.Close()
-	if _, _, err := parseBundle(bundlePath); err == nil {
-		t.Fatal("parseBundle should fail for unsupported version")
-	}
-}
-
-func TestParseBundle_InvalidJSON(t *testing.T) {
-	tempDir := t.TempDir()
-	bundlePath := filepath.Join(tempDir, "bad-json.arkbackup")
-	badJSON := []byte("{not valid json")
-	f, _ := os.Create(bundlePath)
-	f.Write([]byte("ARKB"))
-	versionBytes := make([]byte, 2)
-	binary.BigEndian.PutUint16(versionBytes, 2)
-	f.Write(versionBytes)
-	headerLenBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(headerLenBytes, uint32(len(badJSON)))
-	f.Write(headerLenBytes)
-	f.Write(badJSON)
-	f.Close()
-	if _, _, err := parseBundle(bundlePath); err == nil {
-		t.Fatal("parseBundle should fail for invalid JSON")
-	}
-}
-
-func TestParseBundle_TruncatedFile(t *testing.T) {
-	tempDir := t.TempDir()
-	bundlePath := filepath.Join(tempDir, "truncated.arkbackup")
-	f, _ := os.Create(bundlePath)
-	f.Write([]byte("AR"))
-	f.Close()
-	if _, _, err := parseBundle(bundlePath); err == nil {
-		t.Fatal("parseBundle should fail for truncated file")
-	}
-}
-
-func TestParseBundle_NonexistentFile(t *testing.T) {
-	if _, _, err := parseBundle("/tmp/nonexistent-arkbackup-12345.arkbackup"); err == nil {
-		t.Fatal("parseBundle should fail for nonexistent file")
-	}
-}
-
-func TestParseBundle_HeaderTooLarge(t *testing.T) {
-	tempDir := t.TempDir()
-	bundlePath := filepath.Join(tempDir, "huge-header.arkbackup")
-	f, _ := os.Create(bundlePath)
-	f.Write([]byte("ARKB"))
-	versionBytes := make([]byte, 2)
-	binary.BigEndian.PutUint16(versionBytes, 2)
-	f.Write(versionBytes)
-	headerLenBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(headerLenBytes, 2*1024*1024)
-	f.Write(headerLenBytes)
-	f.Close()
-	if _, _, err := parseBundle(bundlePath); err == nil {
-		t.Fatal("parseBundle should fail for header > 1 MiB")
-	}
-}
-
-// -- End-to-end bundle decrypt --
-//
-// Build a real encrypted .arkbackup with all AAD-bound
-// ciphertext, then decrypt it back end-to-end. This is the disaster
-// recovery path: a user with the bundle and their account password
-// must be able to recover plaintext offline.
-
-// TestOfflineArkbackupDecrypt_WithAAD_RoundTrip constructs a one-chunk
-// bundle, parses it, unwraps the FEK and decrypts chunk 0.
-func TestOfflineArkbackupDecrypt_WithAAD_RoundTrip(t *testing.T) {
-	username := "bundle-test-user"
-	password := []byte("BundleTestPassword2025!Secure")
-
-	salt := testOwnerSalt()
-	kek := deriveTestPasswordKey(t, password, crypto.AccountKDFContext)
-	fek, err := generateFEK()
-	if err != nil {
-		t.Fatalf("generateFEK failed: %v", err)
-	}
-	fileID := testFileID
-
-	wrappedFEKB64, err := wrapFEK(fek, kek, salt, "account", fileID)
-	if err != nil {
-		t.Fatalf("wrapFEK failed: %v", err)
-	}
-
-	originalPlaintext := []byte("Self-describing bundle disaster-recovery test plaintext")
-
-	encryptedChunk, err := encryptChunk(originalPlaintext, fek, fileID, 0, 1)
-	if err != nil {
-		t.Fatalf("encryptChunk failed: %v", err)
-	}
-
-	meta := bundleMeta{
-		Version:           2,
-		FileID:            fileID,
-		OwnerUsername:     username,
-		EncryptedFEK:      wrappedFEKB64,
-		PasswordType:      "account",
-		SizeBytes:         int64(len(encryptedChunk)),
-		ChunkSizeBytes:    int64(crypto.PlaintextChunkSize()),
-		ChunkCount:        1,
-		AccountKDFSalt:    crypto.EncodeBase64(salt),
-		AccountKDFProfile: int(crypto.OwnerEnvelopeKDFProfile()),
-		EnvelopeVersion:   int(crypto.OwnerEnvelopeVersion()),
-	}
-
-	bundlePath := createTestBundle(t, meta, encryptedChunk)
-
-	// Parse the bundle back and decrypt.
-	parsedMeta, blobOffset, err := parseBundle(bundlePath)
-	if err != nil {
-		t.Fatalf("parseBundle failed: %v", err)
-	}
-	if parsedMeta.FileID != fileID || parsedMeta.OwnerUsername != username {
-		t.Fatalf("bundle metadata round-trip mismatch")
-	}
-
-	unwrappedFEK, keyType, err := unwrapFEK(parsedMeta.EncryptedFEK, kek, parsedMeta.FileID)
-	if err != nil {
-		t.Fatalf("unwrapFEK failed: %v", err)
-	}
-	if keyType != "account" {
-		t.Errorf("expected key type 'account', got %q", keyType)
-	}
-
-	f, err := os.Open(bundlePath)
-	if err != nil {
-		t.Fatalf("failed to open bundle: %v", err)
-	}
 	defer f.Close()
-	if _, err := f.Seek(blobOffset, 0); err != nil {
-		t.Fatalf("failed to seek to blob: %v", err)
+	if _, err := f.Seek(b.BlobOffset, io.SeekStart); err != nil {
+		t.Fatal(err)
 	}
-	encBlob, err := io.ReadAll(f)
-	if err != nil {
-		t.Fatalf("failed to read blob: %v", err)
+	err = decryptBundleStream(ctx, f, b.Meta, make([]byte, 32), &out)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("decryptBundleStream error = %v, want context.Canceled", err)
 	}
-
-	decrypted, err := decryptChunk(encBlob, unwrappedFEK, parsedMeta.FileID, 0, parsedMeta.ChunkCount)
-	if err != nil {
-		t.Fatalf("decryptChunk failed: %v", err)
-	}
-	if !bytes.Equal(originalPlaintext, decrypted) {
-		t.Error("decrypted content does not match original")
+	if out.Len() != 0 {
+		t.Fatalf("canceled decryption wrote %d plaintext bytes", out.Len())
 	}
 }
 
 // TestOfflineArkbackupDecrypt_WrongFileID_Fails proves that a bundle
 // whose JSON metadata claims a different file_id than the one the FEK /
 // chunks were encrypted under cannot be decrypted.
-// This catches an attacker who edits the bundle JSON header in transit.
 func TestOfflineArkbackupDecrypt_WrongFileID_Fails(t *testing.T) {
-	username := "bundle-wrong-fileid-user"
-	password := []byte("BundleWrongFileIDPassword2025")
-
-	salt := testOwnerSalt()
-	kek := deriveTestPasswordKey(t, password, crypto.AccountKDFContext)
-	fek, _ := generateFEK()
-	wrappedFEKB64, _ := wrapFEK(fek, kek, salt, "account", testFileID)
-	encryptedChunk, _ := encryptChunk([]byte("payload"), fek, testFileID, 0, 1)
-
-	// Bundle metadata claims testFileID2 but FEK + chunk were encrypted
-	// under testFileID. unwrapFEK must fail at the AEAD layer.
-	tamperedMeta := bundleMeta{
-		Version:           2,
-		FileID:            testFileID2, // mismatched
-		OwnerUsername:     username,
-		EncryptedFEK:      wrappedFEKB64,
-		PasswordType:      "account",
-		SizeBytes:         int64(len(encryptedChunk)),
-		ChunkSizeBytes:    int64(crypto.PlaintextChunkSize()),
-		ChunkCount:        1,
-		AccountKDFSalt:    crypto.EncodeBase64(salt),
-		AccountKDFProfile: int(crypto.OwnerEnvelopeKDFProfile()),
-		EnvelopeVersion:   int(crypto.OwnerEnvelopeVersion()),
-	}
-	bundlePath := createTestBundle(t, tamperedMeta, encryptedChunk)
-
-	parsedMeta, _, err := parseBundle(bundlePath)
+	key := randomBytes(t, 32)
+	path := writeTestBundle(t, accountSpec(t, key, "tamper.bin", []byte("payload")))
+	rewriteBundleMeta(t, path, func(m *bundleMeta) { m.FileID = testFileID2 })
+	b, err := validateBundleFile(path)
 	if err != nil {
-		t.Fatalf("parseBundle failed: %v", err)
+		t.Fatalf("structurally valid tampered bundle rejected early: %v", err)
 	}
-	if _, _, err := unwrapFEK(parsedMeta.EncryptedFEK, kek, parsedMeta.FileID); err == nil {
-		t.Fatal("unwrapFEK with mismatched bundle file_id must fail")
-	}
-}
-
-// TestOfflineArkbackupDecrypt_WrongPassword_Fails verifies wrong-password
-// path fails cleanly.
-func TestOfflineArkbackupDecrypt_WrongPassword_Fails(t *testing.T) {
-	correct := []byte("CorrectPassword2025!Secure")
-	wrong := []byte("WrongPassword2025!Insecure")
-
-	salt := testOwnerSalt()
-	kek := deriveTestPasswordKey(t, correct, crypto.AccountKDFContext)
-	fek, _ := generateFEK()
-	wrappedFEKB64, _ := wrapFEK(fek, kek, salt, "account", testFileID)
-
-	wrongKEK := deriveTestPasswordKey(t, wrong, crypto.AccountKDFContext)
-	if _, _, err := unwrapFEK(wrappedFEKB64, wrongKEK, testFileID); err == nil {
-		t.Fatal("unwrapFEK with wrong password must fail")
+	if accountKeyUnlocks(b, key) {
+		t.Fatal("FEK envelope authenticated under a substituted file_id")
 	}
 }
 
-// TestDecryptBlobCommand_RejectsBundleMissingOwnerUsername verifies that
-// the offline decrypt CLI refuses to operate on a bundle that lacks the
-// required self-describing fields. Without this guard the
-// decrypter would silently call BuildMetadataFieldAAD with an empty
-// ownerUsername and produce confusing AEAD failures rather than a clean
-// "bundle is too old" error.
-func TestDecryptBlobCommand_RejectsBundleMissingOwnerUsername(t *testing.T) {
-	username := "bundle-missing-owner-user"
-	password := []byte("BundleMissingOwnerPassword2025")
-	salt := testOwnerSalt()
-	kek := deriveTestPasswordKey(t, password, crypto.AccountKDFContext)
+func runSingleDecrypt(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	var err error
+	out := captureStdout(t, func() { err = handleDecryptBlobCommand(args) })
+	return out, err
+}
 
-	fek, _ := generateFEK()
-	wrappedFEKB64, _ := wrapFEK(fek, kek, salt, "account", testFileID)
-	encryptedChunk, _ := encryptChunk([]byte("payload"), fek, testFileID, 0, 1)
-
-	// OwnerUsername deliberately omitted.
-	staleMeta := bundleMeta{
-		Version:           2,
-		FileID:            testFileID,
-		EncryptedFEK:      wrappedFEKB64,
-		PasswordType:      "account",
-		SizeBytes:         int64(len(encryptedChunk)),
-		ChunkSizeBytes:    int64(crypto.PlaintextChunkSize()),
-		ChunkCount:        1,
-		AccountKDFSalt:    crypto.EncodeBase64(salt),
-		AccountKDFProfile: int(crypto.OwnerEnvelopeKDFProfile()),
-		EnvelopeVersion:   int(crypto.OwnerEnvelopeVersion()),
+func TestSingleBundleAccountRestoreToExactPath(t *testing.T) {
+	key := randomBytes(t, 32)
+	plaintext := []byte("account bundle restore")
+	spec := accountSpec(t, key, "report.pdf", plaintext)
+	spec.Tags = "backup-restore"
+	bundle := writeTestBundle(t, spec)
+	output := filepath.Join(t.TempDir(), "out.bin")
+	if err := os.WriteFile(output, []byte("previous"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	bundlePath := createTestBundle(t, staleMeta, encryptedChunk)
 
-	// Account-key-file path so the CLI doesn't try to read a password
-	// during the test. Write a hex-encoded key file the CLI can ingest.
-	tempDir := t.TempDir()
-	keyFile := filepath.Join(tempDir, "key.hex")
-	if err := os.WriteFile(keyFile, []byte("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"), 0600); err != nil {
-		t.Fatalf("failed to write key file: %v", err)
+	out, err := runSingleDecrypt(t, "--bundle", bundle, "--output", output, "--account-key-file", writeAccountKeyFile(t, key))
+	if err != nil {
+		t.Fatalf("decrypt failed: %v\n%s", err, out)
 	}
-	outputPath := filepath.Join(tempDir, "out.bin")
+	got, _ := os.ReadFile(output)
+	if !bytes.Equal(got, plaintext) {
+		t.Fatal("exact --output was not replaced with the restored plaintext")
+	}
+	for _, want := range []string{"Decrypted: report.pdf", "Tags: backup-restore", "Verified: [OK]"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
 
-	err := handleDecryptBlobCommand([]string{
-		"--bundle", bundlePath,
-		"--username", username,
-		"--output", outputPath,
-		"--account-key-file", keyFile,
+func TestSingleBundleOutputDirReservesName(t *testing.T) {
+	key := randomBytes(t, 32)
+	bundle := writeTestBundle(t, accountSpec(t, key, "Photo.png", []byte("new photo")))
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "photo.png"), []byte("existing"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runSingleDecrypt(t, "--bundle", bundle, "--output-dir", dir, "--account-key-file", writeAccountKeyFile(t, key))
+	if err != nil {
+		t.Fatalf("decrypt failed: %v\n%s", err, out)
+	}
+	existing, _ := os.ReadFile(filepath.Join(dir, "photo.png"))
+	if string(existing) != "existing" {
+		t.Fatal("existing entry was replaced")
+	}
+	restored, err := os.ReadFile(filepath.Join(dir, "Photo-1.png"))
+	if err != nil || string(restored) != "new photo" {
+		t.Fatalf("expected case-insensitive reservation Photo-1.png: %v %v", listDirNames(t, dir), err)
+	}
+}
+
+func TestSingleBundleCustomShowsHintBeforePrompt(t *testing.T) {
+	key := randomBytes(t, 32)
+	plaintext := []byte("custom payload")
+	bundle := writeTestBundle(t, customSpec(t, key, "secret.txt", "blue \x1b[31mdoor\u202e", plaintext))
+	output := filepath.Join(t.TempDir(), "secret.out")
+
+	origCustom := readSingleBundleCustomPassword
+	defer func() { readSingleBundleCustomPassword = origCustom }()
+	readSingleBundleCustomPassword = func(prompt string) ([]byte, error) {
+		os.Stdout.WriteString("<<PROMPT>>\n")
+		return append([]byte(nil), testCustomPassword...), nil
+	}
+
+	out, err := runSingleDecrypt(t, "--bundle", bundle, "--output", output, "--account-key-file", writeAccountKeyFile(t, key))
+	if err != nil {
+		t.Fatalf("decrypt failed: %v\n%s", err, out)
+	}
+	hintAt := strings.Index(out, "Password hint: blue ?[31mdoor?")
+	promptAt := strings.Index(out, "<<PROMPT>>")
+	decryptedAt := strings.Index(out, "Decrypted: secret.txt")
+	if hintAt < 0 || promptAt < 0 || decryptedAt < 0 || hintAt > promptAt || promptAt > decryptedAt {
+		t.Fatalf("hint must print sanitized before the prompt and Decrypted line:\n%q", out)
+	}
+	got, _ := os.ReadFile(output)
+	if !bytes.Equal(got, plaintext) {
+		t.Fatal("custom restore produced wrong plaintext")
+	}
+}
+
+func TestSingleBundleCustomWithoutHintPrintsNoHintLine(t *testing.T) {
+	key := randomBytes(t, 32)
+	bundle := writeTestBundle(t, customSpec(t, key, "nohint.txt", "", []byte("x")))
+	origCustom := readSingleBundleCustomPassword
+	defer func() { readSingleBundleCustomPassword = origCustom }()
+	readSingleBundleCustomPassword = func(string) ([]byte, error) {
+		return append([]byte(nil), testCustomPassword...), nil
+	}
+	out, err := runSingleDecrypt(t, "--bundle", bundle, "--output", filepath.Join(t.TempDir(), "o"), "--account-key-file", writeAccountKeyFile(t, key))
+	if err != nil {
+		t.Fatalf("decrypt failed: %v", err)
+	}
+	if !strings.Contains(out, "Password hint: (none saved)") {
+		t.Fatalf("missing no-hint line:\n%s", out)
+	}
+}
+
+func TestSingleBundleUndecryptableHintWarnsAndContinues(t *testing.T) {
+	key := randomBytes(t, 32)
+	bundle := writeTestBundle(t, customSpec(t, key, "badhint.txt", "real hint", []byte("x")))
+	otherKey := randomBytes(t, 32)
+	rewriteBundleMeta(t, bundle, func(m *bundleMeta) {
+		m.EncryptedPasswordHint, m.PasswordHintNonce = encryptTestField(t, "other", otherKey, m.FileID, crypto.AADFieldPasswordHint, m.OwnerUsername)
 	})
+	origCustom := readSingleBundleCustomPassword
+	defer func() { readSingleBundleCustomPassword = origCustom }()
+	readSingleBundleCustomPassword = func(string) ([]byte, error) {
+		return append([]byte(nil), testCustomPassword...), nil
+	}
+	out, err := runSingleDecrypt(t, "--bundle", bundle, "--output", filepath.Join(t.TempDir(), "o"), "--account-key-file", writeAccountKeyFile(t, key))
+	if err != nil {
+		t.Fatalf("an undecryptable hint must not fail the bundle: %v", err)
+	}
+	if !strings.Contains(out, "Password hint could not be decrypted") || strings.Contains(out, "(none saved)") {
+		t.Fatalf("expected could-not-decrypt warning:\n%s", out)
+	}
+}
+
+func TestHintTamperingFailsAEADAcrossFilesAndOwners(t *testing.T) {
+	key := randomBytes(t, 32)
+	ciphertext, nonce := encryptTestField(t, "hint", key, testFileID, crypto.AADFieldPasswordHint, testOwner)
+	if _, state := decryptPasswordHint(ciphertext, nonce, key, testFileID, testOwner); state != hintPresent {
+		t.Fatal("hint did not round trip")
+	}
+	if _, state := decryptPasswordHint(ciphertext, nonce, key, testFileID2, testOwner); state != hintUndecryptable {
+		t.Fatal("hint decrypted under another file_id")
+	}
+	if _, state := decryptPasswordHint(ciphertext, nonce, key, testFileID, testOwner2); state != hintUndecryptable {
+		t.Fatal("hint decrypted under another owner")
+	}
+}
+
+func TestSingleBundleWrongAccountKeyFailsBeforeCustomPrompt(t *testing.T) {
+	key := randomBytes(t, 32)
+	bundle := writeTestBundle(t, customSpec(t, key, "c.txt", "hint", []byte("x")))
+	prompted := false
+	origCustom := readSingleBundleCustomPassword
+	defer func() { readSingleBundleCustomPassword = origCustom }()
+	readSingleBundleCustomPassword = func(string) ([]byte, error) {
+		prompted = true
+		return append([]byte(nil), testCustomPassword...), nil
+	}
+	output := filepath.Join(t.TempDir(), "o")
+	_, err := runSingleDecrypt(t, "--bundle", bundle, "--output", output, "--account-key-file", writeAccountKeyFile(t, randomBytes(t, 32)))
+	if err == nil || !strings.Contains(err.Error(), "wrong account password") {
+		t.Fatalf("expected wrong account password error, got %v", err)
+	}
+	if prompted {
+		t.Fatal("custom password was requested after a wrong Account Key")
+	}
+	if _, statErr := os.Stat(output); !os.IsNotExist(statErr) {
+		t.Fatal("output was created after a wrong Account Key")
+	}
+}
+
+func TestSingleBundleInteractiveAccountReentry(t *testing.T) {
+	password := []byte("Interactive-Account-Password-2026")
+	salt := testOwnerSalt()
+	key, err := crypto.DeriveAccountPasswordKey(password, salt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := writeTestBundle(t, accountSpec(t, key, "re.bin", []byte("reentry")))
+	entries := 0
+	orig := readAccountPasswordInput
+	defer func() { readAccountPasswordInput = orig }()
+	readAccountPasswordInput = func(string) ([]byte, error) {
+		entries++
+		if entries == 1 {
+			return []byte("wrong-password-first"), nil
+		}
+		return append([]byte(nil), password...), nil
+	}
+	if _, err := runSingleDecrypt(t, "--bundle", bundle, "--output", filepath.Join(t.TempDir(), "o")); err != nil {
+		t.Fatalf("re-entry should succeed: %v", err)
+	}
+	if entries != 2 {
+		t.Fatalf("entries = %d, want 2", entries)
+	}
+}
+
+func TestSingleBundleStdinWrongAccountPasswordFailsOnce(t *testing.T) {
+	key := randomBytes(t, 32)
+	bundle := writeTestBundle(t, accountSpec(t, key, "s.bin", []byte("x")))
+	entries := 0
+	orig := readAccountPasswordInput
+	defer func() { readAccountPasswordInput = orig }()
+	readAccountPasswordInput = func(string) ([]byte, error) {
+		entries++
+		return []byte("not-the-password"), nil
+	}
+	_, err := runSingleDecrypt(t, "--bundle", bundle, "--output", filepath.Join(t.TempDir(), "o"), "--password-stdin")
+	if err == nil || !strings.Contains(err.Error(), "wrong account password") {
+		t.Fatalf("expected wrong account password, got %v", err)
+	}
+	if entries != 1 {
+		t.Fatalf("stdin read %d times, want 1", entries)
+	}
+}
+
+func TestDecryptBlobCommandRejectsBundleMissingOwnerUsername(t *testing.T) {
+	key := randomBytes(t, 32)
+	bundle := writeTestBundle(t, accountSpec(t, key, "o.bin", []byte("x")))
+	rewriteBundleMeta(t, bundle, func(m *bundleMeta) { m.OwnerUsername = "" })
+	_, err := runSingleDecrypt(t, "--bundle", bundle, "--output", filepath.Join(t.TempDir(), "o"), "--account-key-file", writeAccountKeyFile(t, key))
 	if err == nil {
-		t.Fatal("handleDecryptBlobCommand must reject a bundle missing owner_username")
+		t.Fatal("decrypt-blob must reject a bundle missing owner_username")
+	}
+}
+
+func TestDecryptBlobOutputFlagRules(t *testing.T) {
+	key := randomBytes(t, 32)
+	bundle := writeTestBundle(t, accountSpec(t, key, "f.bin", []byte("x")))
+	dir := t.TempDir()
+	cases := [][]string{
+		{"--bundle", bundle, "--output", "a", "--output-dir", dir},
+		{"--bundle", bundle, "--bundle", bundle + "2", "--output", "a"},
+		{"--bundle-dir", dir, "--output", "a"},
+		{"--bundle-dir", dir},
+		{"--bundle", bundle},
+		{"--bundle-dir", dir, "--inspect", "--dry-run"},
+		{"--bundle-dir", dir, "--inspect", "--output-dir", dir},
+	}
+	for _, args := range cases {
+		if _, err := runSingleDecrypt(t, args...); err == nil {
+			t.Errorf("expected rejection for %v", args)
+		}
 	}
 }
 
@@ -450,6 +512,12 @@ func TestReadAccountKeyFromFileRejectsBroadPermissions(t *testing.T) {
 	}
 	if _, err := readAccountKeyFromFile(path); err == nil {
 		t.Fatal("accepted account key file readable by group or others")
+	}
+}
+
+func TestPasswordHintTimeoutConstantsReused(t *testing.T) {
+	if MaxBatchCustomPasswordAttempts != 3 || PasswordTimeoutBatchCustom != 2*time.Minute {
+		t.Fatal("chained decrypt relies on the batch custom-password limits")
 	}
 }
 
@@ -465,21 +533,41 @@ func FuzzParseBundle(f *testing.F) {
 		ChunkCount:        1,
 		ChunkSizeBytes:    int64(crypto.PlaintextChunkSize()),
 	})
-	valid := make([]byte, 10+len(validMeta))
-	copy(valid, []byte("ARKB"))
-	binary.BigEndian.PutUint16(valid[4:6], 2)
-	binary.BigEndian.PutUint32(valid[6:10], uint32(len(validMeta)))
-	copy(valid[10:], validMeta)
-	f.Add(valid)
+	seed := func(meta []byte) []byte {
+		out := make([]byte, 10+len(meta))
+		copy(out, []byte("ARKB"))
+		binary.BigEndian.PutUint16(out[4:6], 2)
+		binary.BigEndian.PutUint32(out[6:10], uint32(len(meta)))
+		copy(out[10:], meta)
+		return out
+	}
+	f.Add(seed(validMeta))
+	hintMeta, _ := json.Marshal(bundleMeta{
+		Version:               2,
+		FileID:                testFileID,
+		OwnerUsername:         testOwner,
+		PasswordType:          "custom",
+		EncryptedPasswordHint: "AAAAAAAAAAAAAAAAAAAAAAAA",
+		PasswordHintNonce:     "AAAAAAAAAAAAAAAA",
+	})
+	f.Add(seed(hintMeta))
+	oversizedHint, _ := json.Marshal(bundleMeta{
+		Version:               2,
+		FileID:                testFileID,
+		OwnerUsername:         testOwner,
+		EncryptedPasswordHint: strings.Repeat("A", 4096),
+		PasswordHintNonce:     "AAAAAAAAAAAAAAAA",
+	})
+	f.Add(seed(oversizedHint))
 	f.Add([]byte("ARKB"))
 	f.Fuzz(func(t *testing.T, input []byte) {
 		if len(input) > 1<<20 {
 			t.Skip()
 		}
-		path := filepath.Join(t.TempDir(), "fuzz.arkbackup")
-		if err := os.WriteFile(path, input, 0600); err != nil {
-			t.Fatal(err)
+		meta, version, headerLen, err := readBundleHeader(bytes.NewReader(input))
+		if err != nil {
+			return
 		}
-		_, _, _ = parseBundle(path)
+		_, _ = validateBundleMeta(meta, version, headerLen, int64(len(input)))
 	})
 }

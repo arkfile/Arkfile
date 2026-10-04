@@ -46,6 +46,38 @@ The website encrypts, uploads, downloads, and manages your account in your brows
 
 File tags are optional labels you attach to your own files so you can organize and filter them after upload, for example to remember which computer or topic a file came from. Tags are encrypted on your device with your Account Key before they reach the server, so the server stores only opaque ciphertext and cannot read the tag text. Anonymous share recipients never see your tags; shares do not carry them. Files may have 5 tags each, of up to 32 characters each, assigned to them. Filtering by tags happens on your device after your file list is unlocked, not as a server-side search. When you export an owner backup as an .arkbackup file, encrypted tags travel with that bundle so offline decrypt can show them again.
 
+## How do I export encrypted backups of many files at once?
+
+In the web app, select the files you want with the checkboxes, or use Select all shown or Select all matching filter, and then choose Export selected. With no tag filter active, Select all matching filter selects your whole vault. If your browser can choose a folder, it asks you for one and saves each file there as its own encrypted backup bundle named after the original file, such as photo.png.arkbackup. If your browser cannot choose a folder, each bundle starts as a separate download in your normal download folder and is named after the file's identifier instead; your browser may ask permission to download several files. Export never asks for a password, because the bundles stay encrypted.
+
+With arkfile-client you can export one file, several listed files, every file with certain tags, or your whole vault into a folder in one run. Each file becomes its own bundle, and nothing is combined into a zip archive.
+
+## Will exporting into a folder that already has backups overwrite them?
+
+No. When a bundle with the same name already exists, the new bundle gets a numbered name instead, such as photo-1.png.arkbackup, and the earlier bundle is left untouched. Names are compared without regard to upper or lower case, because many backup drives treat Photo.png and photo.png as the same file. The only time an existing file is replaced is when you give arkfile-client one exact output path for a single file, and even then the old file is replaced only after the new download has finished successfully.
+
+## Can I download and decrypt my whole vault in one go?
+
+Yes, from either client. In the web app, choose Select all matching filter with no filter active and then Download selected. With arkfile-client, use the download command with the all option and an output folder. Files protected by your account password are restored first. Files with their own custom password come last, and each one asks for its password while showing the hint you saved for it, if any.
+
+## How do I restore a whole folder of backup bundles later?
+
+Use arkfile-client to decrypt the folder. It looks inside each file to decide whether it really is a backup bundle, so renamed bundles still work and unrelated files such as notes are skipped. You enter your account password once for the folder. If the folder holds bundles from more than one account, it tells you so and asks once per account. Files protected by your account password are restored first, and then each custom-password file shows its filename, tags, and saved hint before asking for its own password on the terminal. When the same file appears more than once, for example after exporting twice, it is restored once, and a damaged copy is skipped in favor of a good one. At the end you get a summary of what was restored, what failed, and what was skipped.
+
+You can also inspect a backup folder without restoring anything. Inspection asks for your account password and then lists each file's real name, tags, and saved hint, without reading the file contents or asking for any custom passwords.
+
+## What is the backup integrity manifest?
+
+It is an optional small file that arkfile-client can create inside a backup folder. It lists each bundle's name on disk, its file identifier, its size, and a fingerprint of the whole encrypted bundle. Later you can ask arkfile-client to check the folder against it, which quickly reveals bundles that are missing, changed, damaged, or new since the manifest was made. Creating and checking the manifest needs no password, and it never contains your original filenames as separate entries, your tags, your hints, or any decrypted information. It is a check against accidental damage and incomplete copies, not protection against someone who deliberately replaces both the bundles and the manifest. You can delete it and create it again at any time, and it is never needed to decrypt your files.
+
+## Can someone see my filenames in a backup folder?
+
+Yes, if they can see the folder. Bundles saved into a folder you chose are named after your original files so you can find them easily, and that name is visible to anyone who can look in the folder. The file contents, your tags, and your hints stay encrypted. If you need the names hidden, keep the backup folder somewhere private or rename the bundle files; decryption still restores the true names from the encrypted information inside each bundle.
+
+## Does a backup of a custom-password file remind me of its password?
+
+If you saved a hint when you uploaded the file, the hint travels inside the encrypted backup. When you decrypt the backup, arkfile-client asks for your account password first, shows the file's name and hint, and only then asks for the file's own password. The hint is only a reminder: the file still needs its own password to decrypt. Hints are never included in share links, so people you share files with never see them.
+
 ## How do I contact the administrator?
 
 The administrator contact details are shown on the site. Look for Contact Admin in the footer on the homepage or when you are logged in. If your account is awaiting approval, admin contact information is also shown on the pending-approval screen.

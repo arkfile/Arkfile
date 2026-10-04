@@ -1195,6 +1195,7 @@ UPLOADED_FILE_SHA256=""
 # Custom-password file global variables (populated by files_custom_password group)
 CUSTOM_FILE_ID=""
 CUSTOM_FILE_SHA256=""
+CUSTOM_HINT_SENTINEL=""
 
 # Share D ID - share created from custom-password file (populated by shares group)
 SHARE_D_ID=""
@@ -1227,8 +1228,9 @@ run_files_custom_password() {
         error "Failed to generate custom test file:"; echo "$gen_output"
         record_test "Custom test file creation" "FAIL"
     fi
-    # Unique sentinel hint: must never appear as plaintext in API/DB/list output.
-    local CUSTOM_HINT_SENTINEL="e2e-hint-sentinel-$(date +%s)-$$"
+    # Unique sentinel hint: must never appear as plaintext in API/DB/list output,
+    # share envelopes, or exported bundles.
+    CUSTOM_HINT_SENTINEL="e2e-hint-sentinel-$(date +%s)-$$"
     # CLI prompts once for the custom batch password
     scenario "Uploading file with custom password"
     local custom_upload_output custom_upload_exit_code
@@ -1340,6 +1342,10 @@ run_files_custom_password() {
     # Uses the existing user session (no new login/logout). Files are left on the
     # server; admin delete below targets CUSTOM_FILE_ID only, not this corpus.
     seed_and_verify_multi_dl_corpus
+
+    # Whole-vault download, export, integrity manifest, inspection, and
+    # chained offline restore. Reads only; the corpus stays intact.
+    verify_backup_export_and_restore
 
     success "Custom-password file operations complete"
 }
@@ -1616,6 +1622,339 @@ seed_and_verify_multi_dl_corpus() {
 
     rm -rf "$staging"
     info "Multi-dl corpus CLI verification complete (files retained for Playwright)"
+}
+
+# Assert that every corpus account file restored into dir matches its manifest
+# digest. The two photo.png entries are compared as a set because which copy
+# becomes photo-1.png depends on processing order.
+# Args: dir test_name
+assert_corpus_account_digests() {
+    local dir="$1" test_name="$2"
+    local ok=true name want got
+    while IFS=$'\t' read -r name want; do
+        [ -z "$name" ] && continue
+        if [ "$name" = "photo.png" ]; then
+            continue
+        fi
+        got=$( { sha256sum "$dir/$name" 2>/dev/null || true; } | awk '{print $1}')
+        if [ "$got" != "$want" ]; then
+            error "$test_name: $name digest mismatch (expected $want, got ${got:-missing})"
+            ok=false
+        fi
+    done < <(jq -r '.files[] | select(.password_type=="account") | [.filename, .sha256] | @tsv' "$MULTI_DL_CORPUS_FILE")
+    local want_photos got_photos
+    want_photos=$(jq -r '.files[] | select(.filename=="photo.png") | .sha256' "$MULTI_DL_CORPUS_FILE" | sort | tr '\n' ' ')
+    got_photos=$( { sha256sum "$dir/photo.png" "$dir/photo-1.png" 2>/dev/null || true; } | awk '{print $1}' | sort | tr '\n' ' ')
+    if [ "$want_photos" != "$got_photos" ]; then
+        error "$test_name: photo.png pair digests differ (expected $want_photos, got $got_photos)"
+        ok=false
+    fi
+    if [ "$ok" = true ]; then
+        record_test "$test_name" "PASS"
+    else
+        record_test "$test_name" "FAIL"
+    fi
+}
+
+# Whole-vault backup and restore from one export --all:
+#   1-2. download --all (dry run, then a real run with no terminal)
+#   3.   export --all into one folder, with the bundle hint privacy canary
+#   4.   integrity manifest create/verify and metadata-only inspection
+#   5.   export --tags dry run
+#   6.   re-export never replaces an existing bundle
+#   7.   chained decrypt of the folder with decoys and a truncated copy
+#   8.   single-bundle custom decrypts with two-line stdin
+#   9.   a wrong account password fails before the custom password is used
+# Batch commands that could reach a custom-password prompt run under setsid
+# with a non-terminal stdin so the CLI takes its no-terminal path.
+verify_backup_export_and_restore() {
+    scenario "Whole-vault backup export and offline restore"
+
+    local work="$TEST_DATA_DIR/backup-restore"
+    rm -rf "$work"
+    mkdir -p "$work"
+    chmod 700 "$work"
+    local all_dl_dir="$work/download-all"
+    local export_dir="$work/export"
+    local restore_dir="$work/restore"
+    mkdir -p "$all_dl_dir" "$export_dir" "$restore_dir"
+
+    local vault_json vault_code
+    safe_exec vault_json vault_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure list-files --json
+    local vault_total vault_account vault_custom
+    vault_total=$(echo "$vault_json" | jq 'length' 2>/dev/null || echo 0)
+    vault_account=$(echo "$vault_json" | jq '[.[] | select(.password_type=="account")] | length' 2>/dev/null || echo 0)
+    vault_custom=$(echo "$vault_json" | jq '[.[] | select(.password_type=="custom")] | length' 2>/dev/null || echo 0)
+    if [ $vault_code -eq 0 ] && [ "$vault_total" -gt 0 ] && [ "$vault_custom" -eq 5 ]; then
+        record_test "Backup sequence: vault listing (${vault_total} files, ${vault_custom} custom)" "PASS"
+    else
+        error "Unexpected vault listing before backup sequence (total=$vault_total custom=$vault_custom)"
+        record_test "Backup sequence: vault listing" "FAIL"
+        return 0
+    fi
+
+    # Step 1: download --all dry run selects the whole vault.
+    local out code
+    safe_exec out code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+        download --all --output-dir "$all_dl_dir" --dry-run
+    if [ $code -eq 0 ] && echo "$out" | grep -q "Dry run: ${vault_total} file(s)"; then
+        record_test "download --all --dry-run selects the whole vault" "PASS"
+    else
+        error "download --all --dry-run unexpected:"; echo "$out"
+        record_test "download --all --dry-run selects the whole vault" "FAIL"
+    fi
+
+    safe_exec out code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+        download --all --password-stdin --output-dir "$all_dl_dir" --dry-run
+    if [ $code -ne 0 ] && echo "$out" | grep -q "password-stdin is only supported"; then
+        record_test "download --all rejects --password-stdin" "PASS"
+    else
+        error "download --all accepted --password-stdin:"; echo "$out"
+        record_test "download --all rejects --password-stdin" "FAIL"
+    fi
+
+    # Step 2: real download --all with no terminal. Custom files cannot prompt.
+    safe_exec out code \
+        bash -c ": | setsid -w $(printf '%q' "$CLIENT") --server-url $(printf '%q' "$SERVER_URL") --tls-insecure \
+        download --all --output-dir $(printf '%q' "$all_dl_dir")"
+    if [ $code -ne 0 ] && echo "$out" | grep -q "Batch download finished. Account succeeded: ${vault_account}. Custom succeeded: 0. Unresolved failures: ${vault_custom}. Skipped: 0."; then
+        record_test "download --all without a terminal (account restored, custom unresolved)" "PASS"
+    else
+        error "download --all unexpected (exit $code):"; echo "$out" | tail -n 30
+        record_test "download --all without a terminal (account restored, custom unresolved)" "FAIL"
+    fi
+    assert_corpus_account_digests "$all_dl_dir" "download --all corpus account digests"
+
+    # Step 3: one export --all. Readable names need the agent's Account Key.
+    assert_agent_running "Agent running before export --all"
+    safe_exec out code \
+        bash -c ": | setsid -w $(printf '%q' "$CLIENT") --server-url $(printf '%q' "$SERVER_URL") --tls-insecure \
+        export --all --output-dir $(printf '%q' "$export_dir")"
+    local bundle_count
+    bundle_count=$(find "$export_dir" -maxdepth 1 -type f -name '*.arkbackup' | wc -l | tr -d ' ')
+    if [ $code -eq 0 ] && [ "$bundle_count" -eq "$vault_total" ] \
+        && [ -f "$export_dir/custom_test_file.bin.arkbackup" ] \
+        && [ -f "$export_dir/photo.png.arkbackup" ] \
+        && [ -f "$export_dir/photo-1.png.arkbackup" ] \
+        && [ -f "$export_dir/e2e-multi-01.bin.arkbackup" ]; then
+        record_test "export --all writes one readable bundle per file (${vault_total})" "PASS"
+    else
+        error "export --all unexpected (exit $code, $bundle_count bundles):"; echo "$out" | tail -n 30
+        ls -la "$export_dir" 2>/dev/null | head -n 40 || true
+        record_test "export --all writes one readable bundle per file (${vault_total})" "FAIL"
+    fi
+
+    local corpus_custom_bundle
+    corpus_custom_bundle="$export_dir/$(jq -r '.files[] | select(.password_type=="custom") | .filename' "$MULTI_DL_CORPUS_FILE" | head -n 1).arkbackup"
+    if grep -aq 'encrypted_password_hint' "$export_dir/custom_test_file.bin.arkbackup" 2>/dev/null \
+        && ! grep -aFq "$CUSTOM_HINT_SENTINEL" "$export_dir/custom_test_file.bin.arkbackup" \
+        && ! grep -aq 'encrypted_password_hint' "$corpus_custom_bundle" 2>/dev/null; then
+        record_test "Exported bundle hint privacy canary" "PASS"
+    else
+        error "Bundle hint fields missing, unexpected, or plaintext sentinel present"
+        record_test "Exported bundle hint privacy canary" "FAIL"
+    fi
+
+    # Step 4: integrity manifest and metadata-only inspection.
+    local manifest="$export_dir/arkbackup-manifest.json"
+    safe_exec out code $CLIENT backup-manifest create --bundle-dir "$export_dir"
+    if [ $code -eq 0 ] && [ -f "$manifest" ] \
+        && jq -e --argjson n "$vault_total" '
+            .format == "arkbackup-integrity-manifest" and .version == 1
+            and (keys | sort) == ["entries","format","version"]
+            and (.entries | length) == $n
+            and all(.entries[]; (keys | sort) == ["bundle_name","bundle_size_bytes","bundle_version","file_id","sha256"])
+            and ([.entries[].bundle_name] == ([.entries[].bundle_name] | sort))
+        ' "$manifest" >/dev/null 2>&1; then
+        record_test "backup-manifest create (${vault_total} minimal entries, sorted)" "PASS"
+    else
+        error "backup-manifest create unexpected:"; echo "$out"; head -c 2000 "$manifest" 2>/dev/null || true
+        record_test "backup-manifest create (${vault_total} minimal entries, sorted)" "FAIL"
+    fi
+    local recorded_digest actual_digest
+    recorded_digest=$(jq -r '.entries[] | select(.bundle_name=="e2e-multi-01.bin.arkbackup") | .sha256' "$manifest" 2>/dev/null || true)
+    actual_digest=$( { sha256sum "$export_dir/e2e-multi-01.bin.arkbackup" 2>/dev/null || true; } | awk '{print $1}')
+    # Readable bundle names are expected; every other byte must carry no
+    # plaintext digest, tag, hint, password type, owner, or KDF field.
+    local leaked=false manifest_without_names
+    manifest_without_names=$(jq -c '.entries |= map(del(.bundle_name))' "$manifest" 2>/dev/null || true)
+    while IFS=$'\t' read -r _name corpus_sha; do
+        if [ -n "$corpus_sha" ] && echo "$manifest_without_names" | grep -Fq "$corpus_sha"; then
+            leaked=true
+        fi
+    done < <(jq -r '.files[] | [.filename, .sha256] | @tsv' "$MULTI_DL_CORPUS_FILE")
+    if [ -z "$manifest_without_names" ] \
+        || echo "$manifest_without_names" | grep -Eiq 'multi-a|multi-decoy|password|owner|kdf|hint|tags|custom|account' \
+        || echo "$manifest_without_names" | grep -Fq "$TEST_USERNAME" \
+        || grep -Fq "$CUSTOM_HINT_SENTINEL" "$manifest"; then
+        leaked=true
+    fi
+    if [ -n "$recorded_digest" ] && [ "$recorded_digest" = "$actual_digest" ] && [ "$leaked" = false ]; then
+        record_test "backup-manifest digests whole bundles and leaks no metadata" "PASS"
+    else
+        error "Manifest digest mismatch or metadata leak (recorded=$recorded_digest actual=$actual_digest leaked=$leaked)"
+        record_test "backup-manifest digests whole bundles and leaks no metadata" "FAIL"
+    fi
+    safe_exec out code $CLIENT backup-manifest verify --bundle-dir "$export_dir"
+    if [ $code -eq 0 ]; then
+        record_test "backup-manifest verify (unchanged folder)" "PASS"
+    else
+        error "backup-manifest verify failed on an unchanged folder:"; echo "$out"
+        record_test "backup-manifest verify (unchanged folder)" "FAIL"
+    fi
+
+    local before_inspect
+    before_inspect=$(ls -A "$export_dir" | sort | tr '\n' ' ')
+    safe_exec out code \
+        bash -c "printf '%s\n' $(printf '%q' "$TEST_PASSWORD") | setsid -w $(printf '%q' "$CLIENT") \
+        decrypt-blob --bundle-dir $(printf '%q' "$export_dir") --inspect --password-stdin"
+    if [ $code -eq 0 ] \
+        && echo "$out" | grep -q "File: custom_test_file.bin" \
+        && echo "$out" | grep -Fq "Password hint: $CUSTOM_HINT_SENTINEL" \
+        && echo "$out" | grep -q "Tags: multi-decoy" \
+        && echo "$out" | grep -q "Inspected: ${vault_total}" \
+        && ! echo "$out" | grep -q "Enter the custom" \
+        && [ "$(ls -A "$export_dir" | sort | tr '\n' ' ')" = "$before_inspect" ]; then
+        record_test "decrypt-blob --inspect shows metadata and hint without payloads or prompts" "PASS"
+    else
+        error "decrypt-blob --inspect unexpected (exit $code):"; echo "$out" | tail -n 30
+        record_test "decrypt-blob --inspect shows metadata and hint without payloads or prompts" "FAIL"
+    fi
+
+    # Step 5: tag selection dry run leaves the folder unchanged.
+    safe_exec out code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+        export --tags 'multi-decoy' --output-dir "$export_dir" --dry-run
+    bundle_count=$(find "$export_dir" -maxdepth 1 -type f -name '*.arkbackup' | wc -l | tr -d ' ')
+    if [ $code -eq 0 ] && echo "$out" | grep -q "Dry run: 4 file(s)" && [ "$bundle_count" -eq "$vault_total" ]; then
+        record_test "export --tags --dry-run (4 files, folder unchanged)" "PASS"
+    else
+        error "export --tags --dry-run unexpected:"; echo "$out"
+        record_test "export --tags --dry-run (4 files, folder unchanged)" "FAIL"
+    fi
+
+    # Step 6: re-export never replaces an existing bundle.
+    local multi01_id multi01_before
+    multi01_id=$(jq -r '.files[] | select(.filename=="e2e-multi-01.bin") | .file_id' "$MULTI_DL_CORPUS_FILE")
+    multi01_before=$( { sha256sum "$export_dir/e2e-multi-01.bin.arkbackup" 2>/dev/null || true; } | awk '{print $1}')
+    safe_exec out code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+        export --file-id "$multi01_id" --output-dir "$export_dir"
+    if [ $code -eq 0 ] && [ -f "$export_dir/e2e-multi-01-1.bin.arkbackup" ] \
+        && [ "$(sha256sum "$export_dir/e2e-multi-01.bin.arkbackup" | awk '{print $1}')" = "$multi01_before" ]; then
+        record_test "Re-export into a populated folder reserves a new name" "PASS"
+    else
+        error "Re-export unexpected (exit $code):"; echo "$out"
+        record_test "Re-export into a populated folder reserves a new name" "FAIL"
+    fi
+    safe_exec out code $CLIENT backup-manifest verify --bundle-dir "$export_dir"
+    if [ $code -ne 0 ] && echo "$out" | grep -q "unlisted_bundle: e2e-multi-01-1.bin.arkbackup"; then
+        record_test "backup-manifest verify reports the unlisted bundle" "PASS"
+    else
+        error "Manifest verify did not report the unlisted bundle:"; echo "$out"
+        record_test "backup-manifest verify reports the unlisted bundle" "FAIL"
+    fi
+    safe_exec out code $CLIENT backup-manifest create --bundle-dir "$export_dir"
+    local verify_out verify_code
+    safe_exec verify_out verify_code $CLIENT backup-manifest verify --bundle-dir "$export_dir"
+    if [ $code -eq 0 ] && [ $verify_code -eq 0 ] \
+        && jq -e --arg id "$multi01_id" '[.entries[] | select(.file_id == $id)] | length == 2' "$manifest" >/dev/null 2>&1; then
+        record_test "Recreated manifest keeps both physical copies of one file" "PASS"
+    else
+        error "Recreated manifest unexpected:"; echo "$out"; echo "$verify_out"
+        record_test "Recreated manifest keeps both physical copies of one file" "FAIL"
+    fi
+
+    # Step 7: decoys, a truncated copy, then the chained restore.
+    printf 'Recovery note: these are encrypted backups.\n' > "$export_dir/notes.txt"
+    head -c -16 "$export_dir/e2e-multi-02.bin.arkbackup" > "$export_dir/e2e-multi-02-truncated.arkbackup" || true
+    local manifest_before
+    manifest_before=$( { sha256sum "$manifest" 2>/dev/null || true; } | awk '{print $1}')
+    safe_exec out code $CLIENT backup-manifest verify --bundle-dir "$export_dir"
+    if [ $code -ne 0 ] && echo "$out" | grep -q "malformed_bundle: e2e-multi-02-truncated.arkbackup" \
+        && ! echo "$out" | grep -q "notes.txt" \
+        && [ "$(sha256sum "$manifest" | awk '{print $1}')" = "$manifest_before" ]; then
+        record_test "backup-manifest verify flags a truncated copy and ignores notes" "PASS"
+    else
+        error "Manifest verify with decoys unexpected:"; echo "$out"
+        record_test "backup-manifest verify flags a truncated copy and ignores notes" "FAIL"
+    fi
+
+    safe_exec out code \
+        bash -c "printf '%s\n' $(printf '%q' "$TEST_PASSWORD") | setsid -w $(printf '%q' "$CLIENT") \
+        decrypt-blob --bundle-dir $(printf '%q' "$export_dir") --output-dir $(printf '%q' "$restore_dir") --password-stdin"
+    local chained_ok=true
+    echo "$out" | grep -q "Decrypted: ${vault_account} (account: ${vault_account}, custom: 0)" || chained_ok=false
+    [ "$(echo "$out" | grep -c 'terminal_required:')" -eq "$vault_custom" ] || chained_ok=false
+    [ "$(echo "$out" | grep -c 'duplicate_file_id:')" -eq 1 ] || chained_ok=false
+    [ "$(echo "$out" | grep -c 'bundle_length_mismatch')" -eq 1 ] || chained_ok=false
+    echo "$out" | grep -q "Non-bundle files: 2" || chained_ok=false
+    echo "$out" | grep -Fq "Password hint: $CUSTOM_HINT_SENTINEL" || chained_ok=false
+    [ "$(echo "$out" | grep -c 'Password hint: (none saved)')" -eq $((vault_custom - 1)) ] || chained_ok=false
+    if [ $code -ne 0 ] && [ "$chained_ok" = true ]; then
+        record_test "Chained decrypt of the backup folder (one password, custom skipped without terminal)" "PASS"
+    else
+        error "Chained decrypt unexpected (exit $code):"; echo "$out" | tail -n 60
+        record_test "Chained decrypt of the backup folder (one password, custom skipped without terminal)" "FAIL"
+    fi
+    assert_corpus_account_digests "$restore_dir" "Chained decrypt corpus account digests"
+    if [ ! -e "$restore_dir/custom_test_file.bin" ] \
+        && ! ls -A "$restore_dir" | grep -q '^\.arkfile-output-'; then
+        record_test "Chained decrypt leaves no output for skipped bundles" "PASS"
+    else
+        error "Chained decrypt left custom output or temporary files:"; ls -la "$restore_dir"
+        record_test "Chained decrypt leaves no output for skipped bundles" "FAIL"
+    fi
+
+    # Step 8: each custom bundle on its own with two-line stdin.
+    local custom_ok=true custom_bundle saved expected_sha custom_name
+    while IFS=$'\t' read -r custom_name expected_sha; do
+        [ -z "$custom_name" ] && continue
+        custom_bundle="$export_dir/${custom_name}.arkbackup"
+        safe_exec out code \
+            bash -c "printf '%s\n%s\n' $(printf '%q' "$TEST_PASSWORD") $(printf '%q' "$CUSTOM_FILE_PASSWORD") | $(printf '%q' "$CLIENT") \
+            decrypt-blob --bundle $(printf '%q' "$custom_bundle") --output-dir $(printf '%q' "$restore_dir") --password-stdin"
+        saved=$(echo "$out" | sed -n 's/^Saved to: //p' | tail -n 1)
+        if [ $code -ne 0 ] || [ -z "$saved" ] || [ "$( { sha256sum "$saved" 2>/dev/null || true; } | awk '{print $1}')" != "$expected_sha" ]; then
+            error "Single-bundle custom decrypt failed for $custom_name (exit $code):"; echo "$out"
+            custom_ok=false
+        fi
+        if [ "$custom_name" = "custom_test_file.bin" ]; then
+            local hint_line decrypted_line
+            hint_line=$( { echo "$out" | grep -nF "Password hint: $CUSTOM_HINT_SENTINEL" || true; } | head -n 1 | cut -d: -f1)
+            decrypted_line=$( { echo "$out" | grep -n '^Decrypted:' || true; } | head -n 1 | cut -d: -f1)
+            if [ -z "$hint_line" ] || [ -z "$decrypted_line" ] || [ "$hint_line" -ge "$decrypted_line" ]; then
+                error "Hint line did not print before the Decrypted line for custom_test_file.bin"
+                custom_ok=false
+            fi
+        fi
+    done < <(
+        jq -r '.files[] | select(.password_type=="custom") | [.filename, .sha256] | @tsv' "$MULTI_DL_CORPUS_FILE"
+        printf '%s\t%s\n' "custom_test_file.bin" "$CUSTOM_FILE_SHA256"
+    )
+    if [ "$custom_ok" = true ]; then
+        record_test "Single-bundle custom decrypts with hint shown first (${vault_custom} files)" "PASS"
+    else
+        record_test "Single-bundle custom decrypts with hint shown first (${vault_custom} files)" "FAIL"
+    fi
+
+    # Step 9: a wrong account password fails before the custom password is used.
+    local wrong_out="$work/wrong-account.bin"
+    safe_exec out code \
+        bash -c "printf '%s\n%s\n' 'Definitely-Not-The-Account-Password-1!' $(printf '%q' "$CUSTOM_FILE_PASSWORD") | $(printf '%q' "$CLIENT") \
+        decrypt-blob --bundle $(printf '%q' "$export_dir/custom_test_file.bin.arkbackup") --output $(printf '%q' "$wrong_out") --password-stdin"
+    if [ $code -ne 0 ] && echo "$out" | grep -q "wrong account password" && [ ! -e "$wrong_out" ] \
+        && ! echo "$out" | grep -Fq "$CUSTOM_HINT_SENTINEL"; then
+        record_test "decrypt-blob rejects a wrong account password before the custom password" "PASS"
+    else
+        error "Wrong account password handling unexpected (exit $code):"; echo "$out"
+        record_test "decrypt-blob rejects a wrong account password before the custom password" "FAIL"
+    fi
+
+    rm -rf "$work"
 }
 
 run_files_standard() {
@@ -2643,6 +2982,29 @@ run_shares() {
     # Verify the downloaded file matches the original custom-password file
     assert_sha256_matches "$dl_d_file" "$CUSTOM_FILE_SHA256" "Share D SHA256 integrity"
     rm -f "$dl_d_file"
+
+    # Share D comes from the hinted custom-password file. Owner hints must never
+    # reach the public share path, as fields or as plaintext.
+    scenario "Share D public responses carry no password hint"
+    sleep 2 # Rate limit buffer
+    if [ -n "$SHARE_D_ID" ] && [ -n "$CUSTOM_HINT_SENTINEL" ]; then
+        local share_d_env share_d_meta
+        share_d_env=$(curl -sk "${SERVER_URL}/api/public/shares/${SHARE_D_ID}/envelope" 2>/dev/null || true)
+        share_d_meta=$(curl -sk "${SERVER_URL}/api/public/shares/${SHARE_D_ID}/metadata" 2>/dev/null || true)
+        if [ -z "$share_d_env" ]; then
+            error "Share D envelope response was empty"
+            record_test "Share D hint privacy canary" "FAIL"
+        elif printf '%s\n%s\n' "$share_d_env" "$share_d_meta" | grep -Eiq 'password_hint|hint_nonce' \
+            || printf '%s\n%s\n' "$share_d_env" "$share_d_meta" | grep -Fq "$CUSTOM_HINT_SENTINEL"; then
+            error "Security failure: public share responses exposed a password hint"
+            record_test "Share D hint privacy canary" "FAIL"
+        else
+            record_test "Share D hint privacy canary" "PASS"
+        fi
+    else
+        error "Share D ID or hint sentinel not available for hint privacy canary"
+        record_test "Share D hint privacy canary" "FAIL"
+    fi
     scenario "Visitor share download with wrong password"
     
     sleep 2 # Rate limit buffer

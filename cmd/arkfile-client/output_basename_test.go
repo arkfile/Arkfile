@@ -30,22 +30,120 @@ func TestNextAvailableBasenameNoExtension(t *testing.T) {
 	}
 }
 
-func TestReserveBasenamesStableAcrossCalls(t *testing.T) {
-	items := []struct {
-		Key      string
-		Filename string
-	}{
-		{Key: "a", Filename: "photo.png"},
-		{Key: "b", Filename: "photo.png"},
+func TestOutputNameReserverCollisionsAreCaseInsensitive(t *testing.T) {
+	r := newOutputNameReserverFromNames("/dest", "", []string{"Photo.png"})
+	if got := r.reserve("photo.png"); got != "photo-1.png" {
+		t.Fatalf("got %q, want photo-1.png", got)
 	}
-	first := reserveBasenames(items, nil)
-	if first["a"] != "photo.png" || first["b"] != "photo-1.png" {
-		t.Fatalf("unexpected first reservation: %#v", first)
+	if got := r.reserve("PHOTO.png"); got != "PHOTO-2.png" {
+		t.Fatalf("got %q, want PHOTO-2.png (case kept, collision counted)", got)
 	}
-	// Retries must reuse the same reserved names, not re-increment.
-	second := map[string]string{"a": first["a"], "b": first["b"]}
-	if second["a"] != "photo.png" || second["b"] != "photo-1.png" {
-		t.Fatalf("retry reservation drifted: %#v", second)
+}
+
+func TestOutputNameReserverSuffixReservation(t *testing.T) {
+	r := newOutputNameReserverFromNames("/dest", arkbackupSuffix, []string{"photo.png.ARKBACKUP", "photo.png", "notes.txt"})
+	if got := r.reserve("photo.png"); got != "photo-1.png.arkbackup" {
+		t.Fatalf("got %q, want photo-1.png.arkbackup", got)
+	}
+	if got := r.reserve("photo.jpg"); got != "photo.jpg.arkbackup" {
+		t.Fatalf("got %q, want photo.jpg.arkbackup", got)
+	}
+	if got := r.reserve("notes.txt"); got != "notes.txt.arkbackup" {
+		t.Fatalf("non-bundle entries must not count as taken: %q", got)
+	}
+}
+
+func TestOutputTargetRetryReusesReservation(t *testing.T) {
+	dir := t.TempDir()
+	r, err := newOutputNameReserver(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := reservedOutputTarget(r, "photo.png")
+	b := reservedOutputTarget(r, "photo.png")
+	if filepath.Base(a.path()) != "photo.png" || filepath.Base(b.path()) != "photo-1.png" {
+		t.Fatalf("unexpected reservations: %s %s", a.path(), b.path())
+	}
+	if _, err := b.write(func(*os.File) error { return os.ErrInvalid }); err == nil {
+		t.Fatal("expected failure")
+	}
+	if filepath.Base(b.path()) != "photo-1.png" {
+		t.Fatalf("failed attempt changed the reservation: %s", b.path())
+	}
+	if hasTempLeftovers(listDirNames(t, dir)) || len(listDirNames(t, dir)) != 0 {
+		t.Fatalf("failed write left entries: %v", listDirNames(t, dir))
+	}
+}
+
+func TestOutputTargetLateCollisionNeverReplaces(t *testing.T) {
+	dir := t.TempDir()
+	r, err := newOutputNameReserver(dir, arkbackupSuffix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := reservedOutputTarget(r, "photo.png")
+	late := filepath.Join(dir, "photo.png.arkbackup")
+	if err := os.WriteFile(late, []byte("appeared after the scan"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path, err := target.write(func(f *os.File) error {
+		_, werr := f.WriteString("new bundle")
+		return werr
+	})
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if filepath.Base(path) != "photo-1.png.arkbackup" {
+		t.Fatalf("late collision published at %s", path)
+	}
+	if got, _ := os.ReadFile(late); string(got) != "appeared after the scan" {
+		t.Fatal("late entry was replaced")
+	}
+	if got, _ := os.ReadFile(path); string(got) != "new bundle" {
+		t.Fatal("published bytes wrong")
+	}
+}
+
+func TestExactOutputTargetReplacesOnlyAfterSuccess(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "x.arkbackup")
+	if err := os.WriteFile(path, []byte("earlier bundle"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := exactOutputTarget(path)
+	if _, err := target.write(func(f *os.File) error {
+		f.WriteString("partial")
+		return os.ErrInvalid
+	}); err == nil {
+		t.Fatal("expected failure")
+	}
+	if got, _ := os.ReadFile(path); string(got) != "earlier bundle" {
+		t.Fatal("failed exact-path write destroyed the earlier file")
+	}
+	if _, err := target.write(func(f *os.File) error {
+		_, werr := f.WriteString("replacement")
+		return werr
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "replacement" {
+		t.Fatal("successful exact-path write did not replace")
+	}
+}
+
+func TestSafeOwnerBasenameKeepsLeadingDots(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{".bashrc", ".bashrc"},
+		{"../../.ssh/config", "config"},
+		{"..", "fallback.bin"},
+		{"...", "fallback.bin"},
+		{"dir\\.profile", ".profile"},
+		{"evil\u202ename.txt", "evilname.txt"},
+		{"--rf", "rf"},
+	}
+	for _, tc := range cases {
+		if got := safeOwnerBasename(tc.in, "fallback.bin"); got != tc.want {
+			t.Errorf("safeOwnerBasename(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }
 
@@ -118,10 +216,11 @@ func TestResolveDefaultDownloadPathAvoidsExistingEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := resolveDefaultDownloadPath(dir, "../../report.pdf", "fallback.bin")
+	target, err := resolveDefaultDownloadPath(dir, "../../report.pdf", "fallback.bin")
 	if err != nil {
 		t.Fatalf("resolveDefaultDownloadPath: %v", err)
 	}
+	got := target.path()
 	if want := filepath.Join(dir, "report-2.pdf"); got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
@@ -136,12 +235,26 @@ func TestResolveDefaultDownloadPathTreatsLinksAsTaken(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 
-	got, err := resolveDefaultDownloadPath(dir, "notes.txt", "fallback.bin")
+	target, err := resolveDefaultDownloadPath(dir, "notes.txt", "fallback.bin")
 	if err != nil {
 		t.Fatalf("resolveDefaultDownloadPath: %v", err)
 	}
-	if want := filepath.Join(dir, "notes-1.txt"); got != want {
-		t.Fatalf("got %q, want %q", got, want)
+	if want := filepath.Join(dir, "notes-1.txt"); target.path() != want {
+		t.Fatalf("got %q, want %q", target.path(), want)
+	}
+}
+
+func TestResolveDefaultDownloadPathIsCaseInsensitive(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Photo.png"), []byte("existing"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target, err := resolveDefaultDownloadPath(dir, "photo.png", "fallback.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(dir, "photo-1.png"); target.path() != want {
+		t.Fatalf("got %q, want %q", target.path(), want)
 	}
 }
 

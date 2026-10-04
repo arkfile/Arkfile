@@ -88,6 +88,7 @@ Web App Browser TypeScript Frontend
 9. Revoke the share, and attempt to download it again
 10. Export an .arkbackup of a file, use arkfile-client to decrypt locally, check tags
 11. Attempt to upload and download a 2GB+ file on Brave (blob download, fallback method) 
+12. Export selected into a chosen folder on Chromium, then again on Firefox or Safari (native download fallback); run `decrypt-blob --bundle-dir` on each folder
 
 Command-Line arkfile-client Go Utility
 
@@ -102,3 +103,4 @@ Command-Line arkfile-client Go Utility
 8. Share a file, download it from a separate private browser session
 9. Revoke the share, and attempt to download it again
 10. Export an .arkbackup of a file, use arkfile-client to decrypt locally, check tags
+11. `export --all --output-dir DIR`, `backup-manifest create/verify`, then `decrypt-blob --bundle-dir DIR` on a terminal and enter each custom password after its hint

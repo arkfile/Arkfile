@@ -11,7 +11,8 @@ import { showError, showSuccess, showWarning } from '../ui/messages.js';
 import { showProgress, updateProgress, hideProgress } from '../ui/progress.js';
 import { showPasswordPrompt, hidePasswordPrompt } from '../ui/password-modal.js';
 import { downloadFile } from './download.js';
-import { reserveBasenames } from './output-basename.js';
+import { reserveBasenames, safeOwnerBasename } from './output-basename.js';
+import { listDirectoryEntryNames } from './directory-publish.js';
 
 const CUSTOM_PASSWORD_PROMPT_MS = 2 * 60 * 1000;
 const MAX_PASSWORD_ATTEMPTS_PER_ROUND = 3;
@@ -92,24 +93,8 @@ export function partitionDownloadTargets(targets: BatchDownloadTarget[]): {
   return { account, custom };
 }
 
-async function listDirectoryFileNames(directory: FileSystemDirectoryHandle): Promise<string[]> {
-  const names: string[] = [];
-  // entries() is present on Chromium File System Access directory handles.
-  const iterable = directory as FileSystemDirectoryHandle & {
-    entries?: () => AsyncIterableIterator<[string, FileSystemHandle]>;
-  };
-  if (typeof iterable.entries !== 'function') {
-    return names;
-  }
-  for await (const [name, handle] of iterable.entries()) {
-    if (handle.kind === 'file') {
-      names.push(name);
-    }
-  }
-  return names;
-}
-
-async function ensureFreshBatchAuth(): Promise<void> {
+/** Refresh the session between batch files; throws 'auth_expired' when it is gone. */
+export async function ensureFreshBatchAuth(): Promise<void> {
   if (!isAuthenticated()) {
     throw new Error('auth_expired');
   }
@@ -231,7 +216,7 @@ export async function downloadSelectedFiles(
   let alreadyTaken: string[] = [];
   if (directoryHandle) {
     try {
-      alreadyTaken = await listDirectoryFileNames(directoryHandle);
+      alreadyTaken = await listDirectoryEntryNames(directoryHandle);
     } catch (err) {
       console.warn('[arkfile-download-batch] Failed to list directory entries:', err);
     }
@@ -239,7 +224,7 @@ export async function downloadSelectedFiles(
 
   // Reserve basenames so collision suffixes stay stable across retries.
   const reserved = reserveBasenames(
-    targets.map((t) => ({ key: t.file_id, filename: t.filename })),
+    targets.map((t) => ({ key: t.file_id, filename: safeOwnerBasename(t.filename, t.file_id) })),
     alreadyTaken,
   );
 

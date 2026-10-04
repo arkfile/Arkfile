@@ -1,5 +1,6 @@
 /**
- * Client-side selection set for owner file multi-download.
+ * Client-side selection set for owner vault multi-actions (Download selected
+ * and Export selected).
  * Selection is a Set of file_id values. Changing the tag filter should prune
  * to IDs that remain in the loaded matching set.
  */

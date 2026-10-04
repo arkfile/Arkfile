@@ -220,16 +220,21 @@ Every encrypted content chunk has the same layout: a 12-byte nonce prefix, ciphe
 
 Export files as self-contained `.arkbackup` version 2 bundles for offline decryption. The bundle begins with magic bytes ARKB and a version field, followed by length-prefixed JSON metadata and the encrypted ciphertext stream matching the stored object. Metadata includes `owner_username`, the public `account_kdf_salt` and `account_kdf_profile`, the owner FEK envelope, encrypted owner metadata, file identifiers, and chunk parameters.
 
+Encrypted owner metadata in the bundle is `encrypted_filename` / `filename_nonce`, `encrypted_sha256sum` / `sha256sum_nonce`, and, when present, `encrypted_tags` / `tags_nonce` and `encrypted_password_hint` / `password_hint_nonce`. The hint pair is opaque Account Key ciphertext (AAD label `encrypted_password_hint`) copied verbatim from the owner's file record; the server never decrypts it. Both hint fields are omitted when no hint was saved, and bundles without them remain valid.
+
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| POST | `/api/files/:fileId/export-token` | Get short-lived token for export download | MFA |
-| GET | `/api/files/:fileId/export` | Download `.arkbackup` bundle | TOTP or Export Token |
+| GET | `/api/files/:fileId/export` | Download `.arkbackup` bundle | JWT + MFA (session cookie or Bearer) |
 
-**Browser export flow:** The browser requests a short-lived export token via POST, then navigates to the GET URL with `?token=<token>` so the browser handles the download natively (no memory buffering).
+The export GET is a normal protected route under the full-session MFA stack (JWT, token revocation, approval, full-token, and current-MFA checks). Browsers authenticate with the `__Host-arkfile-token` session cookie, which `CookieTokenMiddleware` copies into the Authorization header; the CLI sends `Authorization: Bearer`. The former `POST /api/files/:fileId/export-token` endpoint and the `?token=` query credential have been removed, so no credential ever appears in a URL.
 
-**CLI export flow:** `arkfile-client export --file-id <uuid>` sends a standard `Authorization: Bearer` header to the GET endpoint.
+**Browser export flow:** The per-row Export Backup button refreshes the session and starts a native download through a hidden same-origin anchor; the response's `Content-Disposition` names the file `<file_id>.arkbackup`. Export selected uses the same per-file GET: with the File System Access directory picker it streams each response body into a writable under a readable reserved name (`photo.png.arkbackup`), and without the picker it starts one native download per file. There is no batch endpoint and no server-side archive.
 
-**Offline decryption:** `arkfile-client decrypt-blob --bundle <file>.arkbackup --output <file>` decrypts a bundle locally with no server access required. `--username` is optional; when supplied, it must match the bundle's `owner_username`.
+**CLI export flow:** `arkfile-client export --file-id <uuid> [--output PATH]` writes one bundle to an exact path (default `<file-id>.arkbackup`), replacing it only after a complete successful download. Repeatable `--file-id`, `--tags`, or `--all` with `--output-dir DIR` export many files sequentially with the same Bearer GET, naming bundles after decrypted filenames and never replacing existing entries.
+
+**Offline decryption:** `arkfile-client decrypt-blob --bundle <file>.arkbackup --output <file>` decrypts a bundle locally with no server access required. Repeatable `--bundle` or `--bundle-dir DIR` with `--output-dir` restores many bundles, grouped by Account Key with one password entry per group; `--inspect` shows decrypted owner metadata without reading payloads. `--username` is optional; when supplied, it must match every bundle's `owner_username`.
+
+**Integrity manifest:** `arkfile-client backup-manifest create|verify --bundle-dir DIR` writes or checks an optional local `arkbackup-manifest.json` listing only each bundle's stored name, `file_id`, bundle version, byte length, and whole-bundle SHA-256. It needs no password and no server.
 
 ---
 

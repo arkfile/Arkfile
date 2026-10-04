@@ -57,8 +57,9 @@ COMMANDS:
     share             Manage file shares (create, list, revoke, download)
     revoke-all        Revoke all sessions and refresh tokens
     share download    Download a shared file (no auth required)
-    export            Export an encrypted file as a .arkbackup bundle
-    decrypt-blob      Decrypt a .arkbackup bundle offline (no network required)
+    export            Export encrypted files as .arkbackup bundles (one, selected, tagged, or all)
+    decrypt-blob      Decrypt or inspect .arkbackup bundles offline (no network required)
+    backup-manifest   Create or verify an integrity manifest for a bundle folder (no password)
     contact-info      Manage your contact information (get, set, delete)
     billing           PAYG balance, usage, and top-ups
     subscription      Subscription plans and Subscription Bridge checkout
@@ -84,6 +85,13 @@ EXAMPLES:
     arkfile-client upload --file document.pdf --username alice12345 --force
     arkfile-client upload --file document.pdf --tags 'tag-1,Food,activity'
     arkfile-client download --file-id abc123 --output document.pdf --username alice12345
+    arkfile-client download --all --output-dir ./restore
+    arkfile-client export --all --output-dir ./backup
+    arkfile-client export --tags 'Food' --output-dir ./backup --dry-run
+    arkfile-client decrypt-blob --bundle-dir ./backup --inspect
+    arkfile-client decrypt-blob --bundle-dir ./backup --output-dir ./restore
+    arkfile-client backup-manifest create --bundle-dir ./backup
+    arkfile-client backup-manifest verify --bundle-dir ./backup
     arkfile-client list-files
     arkfile-client list-files --json
     arkfile-client list-files --tags 'Food,FUN'
@@ -321,6 +329,11 @@ func main() {
 	case "decrypt-blob":
 		if err := handleDecryptBlobCommand(args); err != nil {
 			logError("Decrypt failed: %v", err)
+			os.Exit(1)
+		}
+	case "backup-manifest":
+		if err := handleBackupManifestCommand(args); err != nil {
+			logError("Backup manifest failed: %v", err)
 			os.Exit(1)
 		}
 	case "generate-totp":

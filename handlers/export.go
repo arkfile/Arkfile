@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"slices"
 	"time"
 
 	"github.com/arkfile/Arkfile/auth"
@@ -20,7 +19,6 @@ import (
 	"github.com/arkfile/Arkfile/logging"
 	"github.com/arkfile/Arkfile/models"
 	"github.com/arkfile/Arkfile/storage"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 )
 
@@ -30,57 +28,45 @@ var arkbackupMagic = []byte{'A', 'R', 'K', 'B'}
 // arkbackupVersion is the current bundle format version
 const arkbackupVersion uint16 = 2
 
-// ExportTokenClaims holds claims for short-lived export download tokens
-type ExportTokenClaims struct {
-	Username string `json:"username"`
-	FileID   string `json:"file_id"`
-	Action   string `json:"action"`
-	jwt.RegisteredClaims
-}
-
 // bundleMetadata is the JSON metadata embedded in the .arkbackup bundle header.
 //
 // bundles are self-describing. OwnerUsername is required so
 // the offline decrypter can rebuild metadata-field AAD (filename, sha256)
 // without any external state. file_id is required for FEK-envelope AAD and
 // chunk AAD. The schema matches `bundleMeta` in
-// cmd/arkfile-client/offline_decrypt.go byte-for-byte.
+// cmd/arkfile-client/offline_decrypt.go field for field.
 type bundleMetadata struct {
-	Version            int    `json:"version"`
-	FileID             string `json:"file_id"`
-	OwnerUsername      string `json:"owner_username"`
-	AccountKDFSalt     string `json:"account_kdf_salt"`
-	AccountKDFProfile  int    `json:"account_kdf_profile"`
-	EncryptedFEK       string `json:"encrypted_fek"`
-	PasswordType       string `json:"password_type"`
-	SizeBytes          int64  `json:"size_bytes"`
-	PaddedSize         int64  `json:"padded_size"`
-	EncryptedFilename  string `json:"encrypted_filename"`
-	FilenameNonce      string `json:"filename_nonce"`
-	EncryptedSHA256Sum string `json:"encrypted_sha256sum"`
-	SHA256SumNonce     string `json:"sha256sum_nonce"`
-	EncryptedTags      string `json:"encrypted_tags,omitempty"`
-	TagsNonce          string `json:"tags_nonce,omitempty"`
-	ChunkSizeBytes     int64  `json:"chunk_size_bytes"`
-	ChunkCount         int64  `json:"chunk_count"`
-	EnvelopeVersion    int    `json:"envelope_version"`
-	CreatedAt          string `json:"created_at"`
+	Version               int    `json:"version"`
+	FileID                string `json:"file_id"`
+	OwnerUsername         string `json:"owner_username"`
+	AccountKDFSalt        string `json:"account_kdf_salt"`
+	AccountKDFProfile     int    `json:"account_kdf_profile"`
+	EncryptedFEK          string `json:"encrypted_fek"`
+	PasswordType          string `json:"password_type"`
+	SizeBytes             int64  `json:"size_bytes"`
+	PaddedSize            int64  `json:"padded_size"`
+	EncryptedFilename     string `json:"encrypted_filename"`
+	FilenameNonce         string `json:"filename_nonce"`
+	EncryptedSHA256Sum    string `json:"encrypted_sha256sum"`
+	SHA256SumNonce        string `json:"sha256sum_nonce"`
+	EncryptedTags         string `json:"encrypted_tags,omitempty"`
+	TagsNonce             string `json:"tags_nonce,omitempty"`
+	EncryptedPasswordHint string `json:"encrypted_password_hint,omitempty"`
+	PasswordHintNonce     string `json:"password_hint_nonce,omitempty"`
+	ChunkSizeBytes        int64  `json:"chunk_size_bytes"`
+	ChunkCount            int64  `json:"chunk_count"`
+	EnvelopeVersion       int    `json:"envelope_version"`
+	CreatedAt             string `json:"created_at"`
 }
 
 // ExportFile handles GET /api/files/:fileId/export
 // Streams a .arkbackup bundle for the authenticated user's own file.
-// Authentication: JWT + TOTP (via mfaProtectedGroup middleware)
-// Also accepts ?token= query param for browser downloads (short-lived export token).
+// Authentication: the standard mfaProtectedGroup stack, which accepts a CLI
+// Bearer session or the browser session cookie.
 func ExportFile(c echo.Context) error {
+	username := auth.GetUsernameFromToken(c)
 	fileID := c.Param("fileId")
 
-	// Determine username from JWT or export token
-	username, err := resolveExportAuth(c, fileID)
-	if err != nil {
-		return err
-	}
-
-	// Fetch file metadata
 	file, err := models.GetFileByFileID(database.DB, fileID)
 	if err != nil {
 		if err.Error() == "file not found" {
@@ -90,7 +76,6 @@ func ExportFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
 	}
 
-	// Verify ownership
 	if file.OwnerUsername != username {
 		return echo.NewHTTPError(http.StatusNotFound, "File not found")
 	}
@@ -118,149 +103,6 @@ func AdminExportFile(c echo.Context) error {
 	logging.InfoLogger.Printf("Admin export: file_id=%s owner=%s exported_by=%s", fileID, file.OwnerUsername, adminUsername)
 
 	return streamExportBundle(c, file)
-}
-
-// CreateExportToken handles POST /api/files/:fileId/export-token
-// Returns a short-lived JWT scoped to a single file export.
-// Used by the browser frontend to trigger native downloads without memory buffering.
-func CreateExportToken(c echo.Context) error {
-	username := auth.GetUsernameFromToken(c)
-	fileID := c.Param("fileId")
-
-	// Verify file exists and is owned by user
-	file, err := models.GetFileByFileID(database.DB, fileID)
-	if err != nil {
-		if err.Error() == "file not found" {
-			return echo.NewHTTPError(http.StatusNotFound, "File not found")
-		}
-		logging.ErrorLogger.Printf("Database error during export token creation: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
-	}
-
-	if file.OwnerUsername != username {
-		return echo.NewHTTPError(http.StatusNotFound, "File not found")
-	}
-
-	// Create short-lived export token (60 seconds)
-	expiresAt := time.Now().Add(60 * time.Second)
-	claims := &ExportTokenClaims{
-		Username: username,
-		FileID:   fileID,
-		Action:   "export",
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(expiresAt),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			Issuer:    "arkfile-auth",
-			Audience:  []string{"arkfile-export"},
-		},
-	}
-
-	// Export-scoped tokens are signed with the full-tier key. They carry their
-	// own audience (arkfile-export) so they cannot be replayed at JWTMiddleware.
-	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
-	tokenString, err := token.SignedString(auth.GetJWTFullPrivateKey())
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to sign export token: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create export token")
-	}
-
-	return JSONResponse(c, http.StatusOK, "Export token created", map[string]interface{}{
-		"token":      tokenString,
-		"expires_in": 60,
-	})
-}
-
-// resolveExportAuth determines the username for an export request.
-// This endpoint is on the public router (no JWT middleware) to support both:
-//   - CLI clients: send Authorization: Bearer <jwt> header
-//   - Browser downloads: send ?token=<export-token> query param
-func resolveExportAuth(c echo.Context, fileID string) (string, error) {
-	tokenStr := c.QueryParam("token")
-	if tokenStr == "" {
-		// No export token -- try Authorization: Bearer header (CLI flow)
-		return resolveExportAuthFromHeader(c)
-	}
-
-	// Parse and validate export token. The parser enforces:
-	//   - Ed25519 signature
-	//   - aud=arkfile-export (rejects full and temp tokens being replayed here)
-	//   - issuer=arkfile-auth
-	//   - non-expired
-	parser := jwt.NewParser(
-		jwt.WithValidMethods([]string{jwt.SigningMethodEdDSA.Alg()}),
-		jwt.WithAudience(auth.AudienceExport),
-		jwt.WithIssuer(auth.Issuer),
-		jwt.WithExpirationRequired(),
-	)
-	token, err := auth.ParseEdDSAClaimsAnyFullKey(parser, tokenStr, &ExportTokenClaims{})
-	if err != nil {
-		return "", echo.NewHTTPError(http.StatusUnauthorized, "Invalid or expired export token")
-	}
-
-	claims, ok := token.Claims.(*ExportTokenClaims)
-	if !ok || !token.Valid {
-		return "", echo.NewHTTPError(http.StatusUnauthorized, "Invalid export token")
-	}
-
-	// Verify token is scoped to export action and correct file
-	if claims.Action != "export" {
-		return "", echo.NewHTTPError(http.StatusUnauthorized, "Token not authorized for export")
-	}
-	if claims.FileID != fileID {
-		return "", echo.NewHTTPError(http.StatusUnauthorized, "Token not authorized for this file")
-	}
-
-	return claims.Username, nil
-}
-
-// resolveExportAuthFromHeader parses the JWT from the Authorization: Bearer header.
-// Used when the export endpoint is on the public router (no JWT middleware).
-// This handles CLI clients that send standard Bearer token auth.
-func resolveExportAuthFromHeader(c echo.Context) (string, error) {
-	authHeader := c.Request().Header.Get("Authorization")
-	if authHeader == "" {
-		return "", echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
-	}
-
-	// Expect "Bearer <token>"
-	const prefix = "Bearer "
-	if len(authHeader) <= len(prefix) || authHeader[:len(prefix)] != prefix {
-		return "", echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
-	}
-	tokenStr := authHeader[len(prefix):]
-
-	// Parse and validate the standard Arkfile JWT. The parser enforces:
-	//   - Ed25519 signature against the FULL-tier public key
-	//   - aud=arkfile-api (rejects temp post-OPAQUE tokens)
-	//   - issuer=arkfile-auth
-	//   - non-expired
-	parser := jwt.NewParser(
-		jwt.WithValidMethods([]string{jwt.SigningMethodEdDSA.Alg()}),
-		jwt.WithAudience(auth.AudienceAPI),
-		jwt.WithIssuer(auth.Issuer),
-		jwt.WithExpirationRequired(),
-	)
-	token, err := auth.ParseEdDSAClaimsAnyFullKey(parser, tokenStr, &auth.Claims{})
-	if err != nil {
-		return "", echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
-	}
-
-	claims, ok := token.Claims.(*auth.Claims)
-	if !ok || !token.Valid || claims.Username == "" {
-		return "", echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
-	}
-
-	// Defense in depth: even though aud=arkfile-api enforced above implies a
-	// full-tier token, explicitly reject requires_mfa=true and double-check
-	// the audience claim. This guards against any future parser-config drift.
-	if claims.RequiresMFA {
-		return "", echo.NewHTTPError(http.StatusForbidden, "Full authentication required for export")
-	}
-	if !slices.Contains(claims.Audience, auth.AudienceAPI) {
-		return "", echo.NewHTTPError(http.StatusForbidden, "Token audience does not permit export")
-	}
-
-	return claims.Username, nil
 }
 
 // streamExportBundle writes the .arkbackup binary bundle to the HTTP response.
@@ -374,6 +216,11 @@ func buildBundleMetadata(file *models.File, accountKDFSalt string, accountKDFPro
 	if file.EncryptedTags != "" && file.TagsNonce != "" {
 		meta.EncryptedTags = file.EncryptedTags
 		meta.TagsNonce = file.TagsNonce
+	}
+	// Opaque Account Key ciphertext copied verbatim; the server never decrypts it.
+	if file.EncryptedPasswordHint != "" && file.PasswordHintNonce != "" {
+		meta.EncryptedPasswordHint = file.EncryptedPasswordHint
+		meta.PasswordHintNonce = file.PasswordHintNonce
 	}
 	return meta
 }

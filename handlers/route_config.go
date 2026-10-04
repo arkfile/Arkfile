@@ -205,13 +205,9 @@ func RegisterRoutes() {
 	// Same enumeration / rate-limit / timing middleware as the public share API.
 	Echo.GET("/shared/:id", ShareEnumerationMiddleware(ShareRateLimitMiddleware(TimingProtectionMiddleware(GetSharedFile))))
 
-	// File export token - requires TOTP (creates short-lived download token)
-	mfaProtectedGroup.POST("/api/files/:fileId/export-token", CreateExportToken)
-
-	// File export download - registered on public router because browser downloads
-	// use ?token= query param (no Authorization header). The handler validates
-	// auth internally via resolveExportAuth() which checks either JWT or token.
-	Echo.GET("/api/files/:fileId/export", ExportFile)
+	// File export download - CLI Bearer session or browser session cookie
+	// (CookieTokenMiddleware copies the cookie into the Authorization header).
+	mfaProtectedGroup.GET("/api/files/:fileId/export", ExportFile)
 
 	// Contact information - user endpoints.
 	// These are intentionally NOT in mfaProtectedGroup (which inherits RequireApproved)

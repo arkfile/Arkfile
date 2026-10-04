@@ -41,6 +41,7 @@ import {
   visibleSelectionState,
 } from './selection';
 import { downloadSelectedFiles } from './download-batch';
+import { exportSelectedFiles } from './export-batch';
 
 // Types (match server response, snake_case)
 
@@ -729,6 +730,7 @@ function ensureSelectionToolbar(): void {
       <label class="select-all-shown"><input type="checkbox" id="selectAllShownCheckbox"> Select all shown</label>
       <button type="button" id="selectAllMatchingFilterBtn" class="btn-secondary">Select all matching filter</button>
       <button type="button" id="downloadSelectedBtn" class="btn-primary" disabled>Download selected</button>
+      <button type="button" id="exportSelectedBtn" class="btn-secondary" disabled>Export selected</button>
       <button type="button" id="clearSelectionBtn" class="btn-secondary">Clear selection</button>
       <span class="selection-count" id="selectionCount"></span>
     `;
@@ -770,6 +772,21 @@ function ensureSelectionToolbar(): void {
     void downloadSelectedFiles(targets.length > 0 ? targets : selected);
   });
 
+  document.getElementById('exportSelectedBtn')?.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    const selected = getVisibleDecryptedFiles().filter((f) => isFileSelected(f.file_id));
+    const cached = decryptedListCache.filter((f) => isFileSelected(f.file_id));
+    const chosen = cached.length > 0 ? cached : selected;
+    // The directory picker must open under this click gesture, so nothing
+    // (including the large-selection confirm) runs before it.
+    void exportSelectedFiles(
+      chosen.map((f) => ({
+        file_id: f.file_id,
+        filename: f.metadata_decrypted ? f.filename : '',
+      })),
+    );
+  });
+
   onSelectionChange(() => {
     updateSelectionToolbar(getVisibleDecryptedFiles().map((f) => f.file_id));
   });
@@ -778,6 +795,7 @@ function ensureSelectionToolbar(): void {
 function updateSelectionToolbar(visibleIds: string[]): void {
   const countEl = document.getElementById('selectionCount');
   const downloadBtn = document.getElementById('downloadSelectedBtn') as HTMLButtonElement | null;
+  const exportBtn = document.getElementById('exportSelectedBtn') as HTMLButtonElement | null;
   const selectAllShown = document.getElementById('selectAllShownCheckbox') as HTMLInputElement | null;
   const n = getSelectedCount();
   if (countEl) {
@@ -786,6 +804,10 @@ function updateSelectionToolbar(visibleIds: string[]): void {
   if (downloadBtn) {
     downloadBtn.disabled = n === 0;
     downloadBtn.textContent = n > 0 ? `Download selected (${n})` : 'Download selected';
+  }
+  if (exportBtn) {
+    exportBtn.disabled = n === 0;
+    exportBtn.textContent = n > 0 ? `Export selected (${n})` : 'Export selected';
   }
   if (selectAllShown) {
     const state = visibleSelectionState(visibleIds);

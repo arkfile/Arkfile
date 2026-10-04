@@ -48,6 +48,7 @@ import {
   showPartialDownloadWarning,
 } from './download-integrity';
 import { debugLog } from '../utils/debug-log.js';
+import { writeToDirectoryEntry } from './directory-publish.js';
 
 import { deriveFileEncryptionKey } from '../crypto/file-encryption';
 import { getAccountKey, decryptFEK, parseEncryptedFEKHeader } from '../crypto/metadata-helpers';
@@ -103,27 +104,11 @@ export interface DownloadFileOptions {
   showProgressUI?: boolean;
 }
 
-function fileSystemFileHandleSupportsMove(): boolean {
-  return typeof (FileSystemFileHandle.prototype as unknown as { move?: unknown }).move === 'function';
-}
-
-async function removeDirectoryEntryBestEffort(
-  directoryHandle: FileSystemDirectoryHandle,
-  name: string,
-): Promise<void> {
-  try {
-    await directoryHandle.removeEntry(name);
-  } catch (err) {
-    console.warn(
-      `${LOG_PREFIX} Could not remove partial directory entry "${name}":`,
-      err instanceof Error ? err.message : err,
-    );
-  }
-}
-
 /**
- * Stream-decrypt into a directory handle using a temporary entry, then publish
- * to the reserved basename when move/rename is available.
+ * Stream-decrypt into a directory handle through a temporary entry, verify
+ * SHA-256, then publish under the reserved basename. A late collision fails
+ * the file rather than replacing the entry, and cleanup removes only entries
+ * this attempt created.
  */
 async function downloadFileToDirectory(
   fileId: string,
@@ -134,53 +119,33 @@ async function downloadFileToDirectory(
   abortController: AbortController | undefined,
   showProgressUI: boolean,
 ): Promise<StreamingDownloadResult> {
-  const supportsMove = fileSystemFileHandleSupportsMove();
-  const tempName = `.arkfile-dl-${crypto.randomUUID()}.tmp`;
-  const writeName = supportsMove ? tempName : reservedFilename;
-  let createdName: string | null = null;
-
-  try {
-    if (abortController?.signal.aborted) {
-      throw new Error('Download cancelled');
-    }
-
-    const fileHandle = await directoryHandle.getFileHandle(writeName, { create: true });
-    createdName = writeName;
-    const writable = await fileHandle.createWritable();
-
-    const result = await downloadFileChunked(fileId, fek, null, {
-      accountKey: metadataDecryptionKey,
-      showProgressUI,
-      writableSink: writable,
-      ...(abortController ? { abortController } : {}),
-    });
-
-    if (!result.success) {
-      throw new Error(result.error || 'Download failed.');
-    }
-    if (result.hashVerification === 'mismatch') {
-      throw new Error('integrity_mismatch');
-    }
-
-    if (supportsMove && createdName !== reservedFilename) {
-      const movable = fileHandle as FileSystemFileHandle & {
-        move: (name: string) => Promise<void>;
-      };
-      await movable.move(reservedFilename);
-      createdName = reservedFilename;
-    }
-
-    return { ...result, writtenToWritable: true };
-  } catch (err) {
-    if (createdName) {
-      await removeDirectoryEntryBestEffort(directoryHandle, createdName);
-      // If publish renamed already, also try removing the reserved name on failure paths above.
-      if (createdName !== reservedFilename) {
-        await removeDirectoryEntryBestEffort(directoryHandle, reservedFilename);
-      }
-    }
-    throw err instanceof Error ? err : new Error(String(err));
+  if (abortController?.signal.aborted) {
+    throw new Error('Download cancelled');
   }
+  const completed: { result?: StreamingDownloadResult } = {};
+  await writeToDirectoryEntry(
+    directoryHandle,
+    reservedFilename,
+    () => {
+      throw new Error('destination_exists');
+    },
+    async (writable) => {
+      const streamed = await downloadFileChunked(fileId, fek, null, {
+        accountKey: metadataDecryptionKey,
+        showProgressUI,
+        writableSink: writable,
+        ...(abortController ? { abortController } : {}),
+      });
+      if (!streamed.success) {
+        throw new Error(streamed.error || 'Download failed.');
+      }
+      if (streamed.hashVerification === 'mismatch') {
+        throw new Error('integrity_mismatch');
+      }
+      completed.result = streamed;
+    },
+  );
+  return { ...(completed.result as StreamingDownloadResult), writtenToWritable: true };
 }
 
 export async function downloadFile(

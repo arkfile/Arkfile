@@ -1,163 +1,152 @@
 /**
- * Unit Tests -- exportBackup
+ * Unit Tests -- per-row exportBackup
  *
- * Tests the browser export flow: token request via authenticatedFetch,
- * then navigation to the export URL with the token.
+ * The protected export GET authenticates with the session cookie, so the
+ * per-row button refreshes the session and starts a native download through
+ * a hidden same-origin anchor: no export token, no URL credential, and no
+ * top-level navigation.
  */
 
 import './setup';
-import { describe, test, expect, beforeEach, mock } from 'bun:test';
+import { describe, test, expect, beforeEach, beforeAll, afterAll } from 'bun:test';
 
-// localStorage mock (needed by AuthManager)
-class MockLocalStorage implements Storage {
-  private store = new Map<string, string>();
-  get length(): number { return this.store.size; }
-  clear(): void { this.store.clear(); }
-  getItem(key: string): string | null { return this.store.get(key) ?? null; }
-  key(index: number): string | null { return Array.from(this.store.keys())[index] ?? null; }
-  removeItem(key: string): void { this.store.delete(key); }
-  setItem(key: string, value: string): void { this.store.set(key, value); }
+interface FakeAnchor {
+  tagName: string;
+  href: string;
+  download: string;
+  rel: string;
+  style: { display: string };
+  clicked: number;
+  removed: boolean;
+  click(): void;
+  remove(): void;
 }
 
-if (typeof globalThis.localStorage === 'undefined') {
-  (globalThis as any).localStorage = new MockLocalStorage();
-}
+const createdAnchors: FakeAnchor[] = [];
+let cookieValue = '__Host-arkfile-csrf=csrf-test';
+let navigatedTo = '';
 
-// Track window.location.href assignments
-let lastLocationHref = '';
-if (typeof globalThis.window !== 'undefined') {
-  Object.defineProperty(globalThis.window, 'location', {
-    value: {
+const fakeDocument = {
+  get cookie() {
+    return cookieValue;
+  },
+  createElement(tag: string): FakeAnchor {
+    if (tag !== 'a') throw new Error(`only <a> expected, got <${tag}>`);
+    const anchor: FakeAnchor = {
+      tagName: 'A',
       href: '',
-      get _lastHref() { return lastLocationHref; },
+      download: '',
+      rel: '',
+      style: { display: '' },
+      clicked: 0,
+      removed: false,
+      click() {
+        this.clicked += 1;
+      },
+      remove() {
+        this.removed = true;
+      },
+    };
+    createdAnchors.push(anchor);
+    return anchor;
+  },
+  body: {
+    appendChild(_node: unknown) {
+      return _node;
     },
-    writable: true,
-    configurable: true,
-  });
-  // Override href setter to capture assignments
-  const loc = (globalThis.window as any).location;
-  const originalDescriptor = Object.getOwnPropertyDescriptor(loc, 'href');
-  Object.defineProperty(loc, 'href', {
-    get() { return lastLocationHref; },
-    set(value: string) { lastLocationHref = value; },
-    configurable: true,
-  });
-}
+  },
+};
 
-// Mock alert
 let lastAlert = '';
-(globalThis as any).alert = (msg: string) => { lastAlert = msg; };
-
-// Track fetch calls
 let fetchCalls: { url: string; options: any }[] = [];
-let mockFetchResponse: { ok: boolean; status: number; body: any } = {
-  ok: true, status: 200, body: { success: true, data: { token: 'test-export-token-abc123' } },
+let refreshOk = true;
+
+const g = globalThis as any;
+const saved = {
+  document: g.document,
+  alert: g.alert,
+  fetch: g.fetch,
+  location: Object.getOwnPropertyDescriptor(g.window, 'location'),
 };
 
-// Mock fetch globally
-(globalThis as any).fetch = async (url: string, options?: any) => {
-  fetchCalls.push({ url, options });
-  return {
-    ok: mockFetchResponse.ok,
-    status: mockFetchResponse.status,
-    json: async () => mockFetchResponse.body,
-  };
-};
-
-// Import after mocks are set up
-import { exportBackup } from '../files/export';
+import { exportBackup, exportUrl, EXPORT_DOWNLOAD_PACING_MS } from '../files/export';
 
 describe('exportBackup', () => {
-  beforeEach(() => {
-    fetchCalls = [];
-    lastLocationHref = '';
-    lastAlert = '';
-    mockFetchResponse = {
-      ok: true, status: 200,
-      body: { success: true, data: { token: 'test-export-token-abc123' } },
+  beforeAll(() => {
+    g.document = fakeDocument;
+    g.alert = (msg: string) => {
+      lastAlert = msg;
     };
-    // Tokens are now in HttpOnly cookies; localStorage token is no longer used.
+    g.fetch = async (url: string, options?: any) => {
+      fetchCalls.push({ url, options });
+      return { ok: refreshOk, status: refreshOk ? 200 : 401, json: async () => ({}) };
+    };
+    Object.defineProperty(g.window, 'location', {
+      value: {
+        get href() {
+          return navigatedTo;
+        },
+        set href(v: string) {
+          navigatedTo = v;
+        },
+      },
+      configurable: true,
+    });
   });
 
-  test('requests export token then navigates to export URL', async () => {
+  afterAll(() => {
+    if (saved.document === undefined) delete g.document;
+    else g.document = saved.document;
+    g.alert = saved.alert;
+    g.fetch = saved.fetch;
+    if (saved.location) Object.defineProperty(g.window, 'location', saved.location);
+    else delete g.window.location;
+  });
+
+  beforeEach(() => {
+    createdAnchors.length = 0;
+    fetchCalls = [];
+    lastAlert = '';
+    navigatedTo = '';
+    refreshOk = true;
+    cookieValue = '__Host-arkfile-csrf=csrf-test';
+  });
+
+  test('starts a native download through a hidden anchor with no token', async () => {
     await exportBackup('file-id-123');
 
-    // Should have made one fetch call for the export token
-    expect(fetchCalls.length).toBe(1);
-    expect(fetchCalls[0].url).toBe('/api/files/file-id-123/export-token');
-    expect(fetchCalls[0].options.method).toBe('POST');
-
-    // Should have set window.location.href to the export URL with token
-    expect(lastLocationHref).toContain('/api/files/file-id-123/export');
-    expect(lastLocationHref).toContain('token=test-export-token-abc123');
+    expect(createdAnchors.length).toBe(1);
+    const anchor = createdAnchors[0]!;
+    expect(anchor.href).toBe('/api/files/file-id-123/export');
+    expect(anchor.href).not.toContain('token');
+    expect(anchor.download).toBe('file-id-123.arkbackup');
+    expect(anchor.style.display).toBe('none');
+    expect(anchor.clicked).toBe(1);
+    expect(anchor.removed).toBe(true);
+    expect(navigatedTo).toBe('');
+    for (const call of fetchCalls) {
+      expect(call.url).not.toContain('export-token');
+    }
   });
 
-  test('URL-encodes the export token', async () => {
-    mockFetchResponse.body = {
-      success: true,
-      data: { token: 'token+with/special=chars' },
-    };
-
+  test('refreshes the session before starting the download', async () => {
     await exportBackup('file-456');
-
-    expect(lastLocationHref).toContain('token=token%2Bwith%2Fspecial%3Dchars');
+    expect(fetchCalls.map((c) => c.url)).toEqual(['/api/refresh']);
   });
 
-  test('shows alert on fetch error response', async () => {
-    mockFetchResponse = {
-      ok: false, status: 404,
-      body: { success: false, message: 'File not found' },
-    };
-
-    await exportBackup('nonexistent-file');
-
-    // Should NOT navigate
-    expect(lastLocationHref).toBe('');
-
-    // Should show alert with error message
-    expect(lastAlert).toContain('File not found');
+  test('does not start a download without a session', async () => {
+    cookieValue = '';
+    await exportBackup('file-no-session');
+    expect(createdAnchors.length).toBe(0);
+    expect(lastAlert).toContain('session has expired');
   });
 
-  test('shows alert on missing token in response', async () => {
-    mockFetchResponse = {
-      ok: true, status: 200,
-      body: { success: true, data: {} },
-    };
-
-    await exportBackup('file-no-token');
-
-    // Should NOT navigate (no token)
-    expect(lastLocationHref).toBe('');
-
-    // Should alert about missing token
-    expect(lastAlert).toContain('no token received');
+  test('encodes the file id in the export URL', () => {
+    expect(exportUrl('a/b?c')).toBe('/api/files/a%2Fb%3Fc/export');
   });
 
-  test('shows alert on network exception', async () => {
-    // Override fetch to throw
-    const originalFetch = (globalThis as any).fetch;
-    (globalThis as any).fetch = async () => { throw new Error('Network error'); };
-
-    await exportBackup('file-network-err');
-
-    // Should NOT navigate
-    expect(lastLocationHref).toBe('');
-
-    // Should alert about error
-    expect(lastAlert).toContain('error occurred during export');
-
-    // Restore
-    (globalThis as any).fetch = originalFetch;
-  });
-
-  test('uses authenticatedFetch (credentials:include, no Authorization header)', async () => {
-    await exportBackup('file-auth-test');
-
-    expect(fetchCalls.length).toBe(1);
-    // Tokens are in HttpOnly cookies; authenticatedFetch removes any Authorization header
-    // and sets credentials:'include' so the browser sends cookies automatically.
-    const headers = fetchCalls[0].options.headers;
-    expect(headers?.['Authorization']).toBeUndefined();
-    expect(fetchCalls[0].options.credentials).toBe('include');
+  test('pacing constant is a short fixed delay', () => {
+    expect(EXPORT_DOWNLOAD_PACING_MS).toBeGreaterThan(0);
+    expect(EXPORT_DOWNLOAD_PACING_MS).toBeLessThanOrEqual(1000);
   });
 });

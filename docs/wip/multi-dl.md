@@ -56,7 +56,7 @@ Browser multi-download prefers one directory chooser (`showDirectoryPicker`) and
 | CLI selection | Repeated `--file-id` and/or `--tags` (client-side AND after decrypt over a cursor-paginated full scan); `--dry-run` lists targets without downloading |
 | CLI list output | `list-files` internally exhausts cursor pages by default; human output remains a complete list and `--json` remains a complete JSON array, preserving `[]` vs `null` tag semantics. Remove `--offset`; `--limit` becomes the requested server page size, not a cap on total returned files |
 | CLI `--tags` on list/download | Always scan all cursor pages until exhausted before declaring the complete filtered target set |
-| Bulk delete/share/export | Out of scope (selection model may be reused later) |
+| Bulk delete/share/export | Bulk delete and share remain out of scope. Bulk export is now covered by `docs/wip/multi-ab.md`, which reuses this selection model for Export selected |
 | Clients | TypeScript frontend and `arkfile-client` parity for batch state machine, summaries, and collision rules |
 | Naming in code | Do not encode planning labels (phase, section, tier, tranche, or lettered plan steps) into function names, variables, comments, or tests; use descriptive names only |
 | Docs | Update `docs/api.md`; user-facing FAQ only if end-user behavior needs a Q&A (prose paragraphs per `docs/user-faq.md` rules) |
@@ -141,7 +141,9 @@ Load the corpus manifest; verify select all shown + filter prune; select all mat
 
 - Server-side zip or bulk chunk API
 - Parallel downloads
-- Bulk delete, share, export, or retag
+- Bulk delete, share, or retag (bulk export is covered by `docs/wip/multi-ab.md`)
+
+`docs/wip/multi-ab.md` also added `download --all` for parity with the web app's Select all matching filter, and fixed the multi-file `--password-stdin` guard, which had been unreachable because the batch branch returned first; `--password-stdin` is now accepted only for one explicitly listed `--file-id`.
 - Reconstructing upload folder trees on download
 - Blind indexes or server-side tag search
 - Schema changes for list ordering (`updated_at` or similar)

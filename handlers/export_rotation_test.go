@@ -2,16 +2,12 @@ package handlers
 
 import (
 	"database/sql"
-	"net/http"
-	"net/http/httptest"
+	"encoding/json"
+	"strings"
 	"testing"
-	"time"
 
-	"github.com/arkfile/Arkfile/auth"
 	"github.com/arkfile/Arkfile/crypto"
 	"github.com/arkfile/Arkfile/models"
-	"github.com/golang-jwt/jwt/v5"
-	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,58 +32,57 @@ func TestBuildBundleMetadataIncludesAccountKDFMetadata(t *testing.T) {
 	assert.Equal(t, file.OwnerUsername, metadata.OwnerUsername)
 }
 
-// TestResolveExportAuth_QueryTokenAcrossRotation verifies that a browser
-// export token (signed with the full-tier key, aud=arkfile-export) issued
-// before a JWT signing-key rotation still resolves during the overlap window.
-func TestResolveExportAuth_QueryTokenAcrossRotation(t *testing.T) {
-	const username = "export-overlap-user"
-	const fileID = "file-123"
-
-	claims := &ExportTokenClaims{
-		Username: username,
-		FileID:   fileID,
-		Action:   "export",
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(60 * time.Second)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			Issuer:    "arkfile-auth",
-			Audience:  []string{"arkfile-export"},
-		},
+func TestBuildBundleMetadataCopiesEncryptedPasswordHint(t *testing.T) {
+	const hintCiphertext = "aGludC1jaXBoZXJ0ZXh0LWJ5dGVz"
+	const hintNonce = "bm9uY2UtYnl0ZXM="
+	file := &models.File{
+		FileID:                "00112233-4455-6677-8899-aabbccddeeff",
+		OwnerUsername:         "export-owner",
+		PasswordType:          "custom",
+		EncryptedFEK:          "encrypted-fek",
+		SizeBytes:             1024,
+		ChunkCount:            1,
+		EncryptedPasswordHint: hintCiphertext,
+		PasswordHintNonce:     hintNonce,
 	}
-	signed, err := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims).SignedString(auth.GetJWTFullPrivateKey())
-	require.NoError(t, err)
+	salt := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	metadata := buildBundleMetadata(file, salt, int(crypto.OwnerEnvelopeKDFProfile()))
+	assert.Equal(t, hintCiphertext, metadata.EncryptedPasswordHint)
+	assert.Equal(t, hintNonce, metadata.PasswordHintNonce)
+	assert.Equal(t, salt, metadata.AccountKDFSalt)
 
-	_, err = auth.RotateJWTSigningKeys()
+	encoded, err := json.Marshal(metadata)
 	require.NoError(t, err)
-
-	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/?token="+signed, nil)
-	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-
-	got, err := resolveExportAuth(c, fileID)
-	require.NoError(t, err)
-	assert.Equal(t, username, got)
+	assert.Contains(t, string(encoded), `"encrypted_password_hint":"`+hintCiphertext+`"`)
+	assert.Contains(t, string(encoded), `"password_hint_nonce":"`+hintNonce+`"`)
 }
 
-// TestResolveExportAuthFromHeader_BearerAcrossRotation verifies the CLI export
-// path (full-tier Bearer token) still validates after a rotation.
-func TestResolveExportAuthFromHeader_BearerAcrossRotation(t *testing.T) {
-	const username = "export-header-overlap-user"
-
-	token, _, err := auth.GenerateFullAccessToken(username)
-	require.NoError(t, err)
-
-	_, err = auth.RotateJWTSigningKeys()
-	require.NoError(t, err)
-
-	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-
-	got, err := resolveExportAuthFromHeader(c)
-	require.NoError(t, err)
-	assert.Equal(t, username, got)
+func TestBuildBundleMetadataOmitsIncompletePasswordHint(t *testing.T) {
+	salt := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	cases := []struct {
+		name       string
+		ciphertext string
+		nonce      string
+	}{
+		{"no hint", "", ""},
+		{"ciphertext only", "aGludA==", ""},
+		{"nonce only", "", "bm9uY2U="},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			file := &models.File{
+				FileID:                "00112233-4455-6677-8899-aabbccddeeff",
+				OwnerUsername:         "export-owner",
+				PasswordType:          "custom",
+				EncryptedPasswordHint: tc.ciphertext,
+				PasswordHintNonce:     tc.nonce,
+			}
+			metadata := buildBundleMetadata(file, salt, int(crypto.OwnerEnvelopeKDFProfile()))
+			assert.Empty(t, metadata.EncryptedPasswordHint)
+			assert.Empty(t, metadata.PasswordHintNonce)
+			encoded, err := json.Marshal(metadata)
+			require.NoError(t, err)
+			assert.False(t, strings.Contains(string(encoded), "password_hint"))
+		})
+	}
 }

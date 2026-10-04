@@ -24,7 +24,6 @@ import (
 const (
 	AudienceMFA            = "arkfile-mfa"
 	AudienceAPI            = "arkfile-api"
-	AudienceExport         = "arkfile-export"
 	AudienceReset          = "arkfile-mfa-reset"
 	AudienceReregistration = "arkfile-reregistration"
 	Issuer                 = "arkfile-auth"
@@ -185,29 +184,6 @@ func parseTokenWithAudience(keysGetter func() []ed25519.PublicKey, expectedAudie
 		}
 		return token, nil
 	}
-}
-
-// ParseEdDSAClaimsAnyFullKey parses tokenString into the provided claims using
-// the supplied parser, trying every full-tier verification key. Exposed for
-// callers outside the auth package (e.g. export-token validation) that need
-// rotation-aware verification with custom claim types. The parser should carry
-// any required audience/issuer/expiry options.
-func ParseEdDSAClaimsAnyFullKey(parser *jwt.Parser, tokenString string, claims jwt.Claims) (*jwt.Token, error) {
-	var lastErr error
-	for _, pk := range GetJWTFullVerificationKeys() {
-		pkCopy := pk
-		token, err := parser.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (interface{}, error) {
-			return pkCopy, nil
-		})
-		if err == nil && token.Valid {
-			return token, nil
-		}
-		lastErr = err
-	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("invalid token")
-	}
-	return nil, lastErr
 }
 
 // parseEdDSAAnyKey attempts to parse and validate the token against each
