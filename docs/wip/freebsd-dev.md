@@ -6,11 +6,13 @@ FreeBSD is a strong next host target for Arkfile’s development and self-hosted
 
 ## Status
 
-Draft planning document. Design decisions below are locked for the first FreeBSD bring-up. No FreeBSD-specific deploy/runtime code has been written yet. The initial validation target is FreeBSD 15.1-RELEASE amd64; releases below FreeBSD 15 are unsupported. The C/Go build layer already has partial FreeBSD awareness in `scripts/setup/build-config.sh` and related C-library scripts, but the reset/deploy/runtime path, WASM toolchain, service management, privilege transitions, application memory hardening, SeaweedFS download, e2e script, and GNU/BSD userland seams all require work.
+Draft planning document. Decisions in "Locked Decisions" are locked for the first FreeBSD bring-up. Decisions in "Decisions Pending Developer Sign-Off" are not locked; implementation must not proceed past the steps that depend on them until the developer chooses. No FreeBSD-specific deploy/runtime code has been written yet. The initial validation target is FreeBSD 15.1-RELEASE amd64; releases below FreeBSD 15 are unsupported.
+
+The C/Go build layer already has partial FreeBSD awareness in `scripts/setup/build-config.sh` and related C-library scripts, and the CLI already has a FreeBSD agent implementation (`cmd/arkfile-client/agent_freebsd.go`) that has never run under e2e. The reset/deploy/runtime path, WASM toolchain, service management, privilege transitions, application memory hardening, SeaweedFS download, e2e script, and GNU/BSD userland seams all require work. A review of the current call graph against FreeBSD 15 base userland and the current FreeBSD ports tree found several hard failures and two toolchain mismatches; they are listed in "Known Hard Failures in the Current Call Graph" and "Decisions Pending Developer Sign-Off".
 
 ## Overview
 
-Arkfile's development iteration loop today is Linux- and systemd-centric. `sudo bash scripts/dev-reset.sh` stops services, nukes data under `/opt/arkfile`, rebuilds (including vendored OPAQUE/FIDO C libraries and TypeScript), redeploys, regenerates secrets/keys, installs SeaweedFS and rqlite, and starts `seaweedfs` / `rqlite` / `arkfile` via `systemctl`. The Go application, client-side crypto, and most of `build.sh` are not inherently Linux-bound, but the reset/deploy/runtime scripts assume systemd, Linux `useradd`/`groupadd`, GNU coreutils (`sha256sum`, `stat -c`), a `sudo` + `$SUDO_USER` privilege model, and a hardcoded SeaweedFS `linux_amd64` release asset.
+Arkfile's development iteration loop today is Linux- and systemd-centric. `sudo bash scripts/dev-reset.sh` stops services, nukes data under `/opt/arkfile`, rebuilds (including vendored OPAQUE/FIDO C libraries and TypeScript), redeploys, regenerates secrets/keys, installs SeaweedFS and rqlite, and starts `seaweedfs` / `rqlite` / `arkfile` via `systemctl`. The Go application, client-side crypto, and most of `build.sh` are not inherently Linux-bound, but the reset/deploy/runtime scripts assume systemd, Linux `useradd`/`groupadd`, a group named `root`, GNU-only userland behavior (`stat -c`, `sed -i` without a suffix argument, `head -c -N`, GNU make as `make`), a `sudo` + `$SUDO_USER` privilege model, and a hardcoded SeaweedFS `linux_amd64` release asset.
 
 The goal of this WIP is a FreeBSD amd64 path that reuses the same `dev-reset.sh` entrypoint and shared setup scripts, with thin OS adapters and FreeBSD `rc.d` service scripts. A standalone forked `freebsd-dev-reset.sh` is rejected because secrets generation, health checks, nuke steps, and build flags would drift from Linux. OpenBSD, Alpine/OpenRC, production Caddy deploy, and Playwright browser e2e are explicitly out of scope here.
 
@@ -23,37 +25,62 @@ Success for this WIP requires both platforms: the existing Linux amd64 `sudo bas
 | Shape | Shared `scripts/dev-reset.sh` + OS adapters; no standalone FreeBSD fork of the full reset script |
 | Adapter location | New `scripts/setup/os-portable.sh`, sourced by `dev-reset.sh`, `deploy-common.sh`, and setup scripts that need service/user/tool shims |
 | Platform model | Detect host OS and service manager independently. Linux/systemd and FreeBSD/rc.d are implemented now; a non-systemd Linux host must fail clearly rather than being mistaken for FreeBSD. |
-| Service model | New `rc.d/` tree parallel to `systemd/` for `arkfile`, `rqlite`, and `seaweedfs`, installed under `/usr/local/etc/rc.d` with the same process args as today's unit files |
+| Service model | New `rc.d/` tree parallel to `systemd/` for `arkfile`, `rqlite`, and `seaweedfs`, installed under `/usr/local/etc/rc.d` with the same process args and working directories as today's unit files |
 | Service enablement | `sysrc arkfile_enable=YES`, `sysrc rqlite_enable=YES`, and `sysrc seaweedfs_enable=YES` |
 | Service definition owner | `deploy.sh` installs all systemd or rc.d service definitions. SeaweedFS/rqlite setup scripts install binaries and data directories only; remove their duplicate service-definition installation paths. |
-| Service logs | FreeBSD rc.d services log under `/opt/arkfile/var/log`; do not rely on syslog or journald for the development path |
-| Service safety | rc.d launchers run services as `arkfile`, use reliable pidfiles/supervision, bind rqlite/SeaweedFS to loopback exactly as today, and set `RLIMIT_CORE=0` before exec |
+| Service supervision | `daemon(8)` with a supervisor pidfile (`-P`), a child pidfile (`-p`), restart (`-r`), output file (`-o`), and service user (`-u arkfile`). The rc.subr `pidfile` variable points at the supervisor pidfile so stop/status act on the supervisor, which forwards signals to the child. |
+| Service working directory | `${name}_chdir` is mandatory. Arkfile serves `client/static/...` and other assets by relative path (`handlers/route_config.go`), so it must start in `/opt/arkfile` exactly as `WorkingDirectory=/opt/arkfile` does today. |
+| Service logs | FreeBSD rc.d services log to per-service files under `/opt/arkfile/var/log` via `daemon -o`, owned by `arkfile` with mode 0640 or stricter, rotated by a `newsyslog.conf.d` entry that `deploy.sh` installs. Do not rely on syslog or journald for the development path. |
+| Service safety | rc.d launchers run services as `arkfile`, bind rqlite/SeaweedFS to loopback exactly as today, and set the core limit to zero with rc.subr `${name}_limits="-c 0"` |
+| Service environment | rc.d scripts must not use rc.subr `${name}_env_file`, which sources the file in the root rc shell. Arkfile receives only the non-secret `ARKFILE_ENV_FILE` path. rqlite and SeaweedFS receive no `secrets.env` content. |
 | Install root | `/opt/arkfile` on FreeBSD as on Linux (path parity in secrets, units/rc scripts, and docs) |
 | Binary install paths | `/usr/local/bin/weed`, `/usr/local/bin/rqlited`, `/usr/local/bin/rqlite` |
 | Build root | `/var/tmp/arkfile-build` (already the shared default) |
 | FreeBSD baseline | FreeBSD 15.1-RELEASE amd64 is the initial validation target. Reject FreeBSD major versions below 15 and non-amd64 FreeBSD hosts during preflight. Newer releases remain unvalidated until tested. |
 | Privilege | FreeBSD path requires root (`EUID=0`). Do not require the `sudo` package. |
 | Privileged execution | Add a shared `run_as_root` helper: execute directly when already root; retain existing sudo behavior for Linux scripts invoked by a non-root operator. Route every `sudo` in the dev-reset call graph through the helper instead of requiring sudo on FreeBSD. |
-| Dev user for builds | Resolve non-root build/ownership user as `ARKFILE_DEV_USER`, else `$SUDO_USER` if set, else fail before mutation. Validate that it exists, is not root, has a writable home, and can access the repository. Never run Go/bun/git builds as root. Do not add a `--dev-user` argument in v1. |
-| Non-root execution | Add a shared argument-safe `run_as_dev_user` implementation. Linux keeps current `sudo -u` semantics; FreeBSD root uses a base-system mechanism with the dev user's real HOME, uid/gid, working directory, and required environment. Do not construct a shell command from unquoted arguments. |
+| Dev user for builds | Resolve non-root build/ownership user as `ARKFILE_DEV_USER`, else `$SUDO_USER` if set, else fail before mutation. Validate that it exists, is not root, is not `arkfile`, has a writable home, and can access the repository. Never run Go/bun/git builds as root. Do not add a `--dev-user` argument in v1. |
+| Non-root execution | Add a shared argument-safe `run_as_dev_user`. Linux keeps current `sudo -u` semantics. FreeBSD root uses `env -i` with an explicit environment plus `/usr/sbin/chroot -u <user> -g <group> -G <groups> /` and an argument-array `exec` (see "Privilege Model"). Do not construct a shell command string from arguments. |
 | Shell | Keep bash; FreeBSD hosts install `bash`, and every shared Bash script in the FreeBSD call graph uses `#!/usr/bin/env bash`. Do not require a `/bin/bash` symlink. |
 | Users/groups | FreeBSD branch in `01-setup-users.sh` via `pw groupadd` / `pw useradd`, shell `/usr/sbin/nologin` |
-| SeaweedFS | Platform-keyed release asset (`freebsd_amd64.tar.gz`) and pinned SHA-256 digest map in `05-setup-seaweedfs.sh` |
+| Root group | Never name a group called `root` in shared scripts. FreeBSD gid 0 is `wheel`. Use numeric gid `0` (`root:0`, `install -g 0`), which is valid on both Linux and FreeBSD. |
+| SeaweedFS | Platform-keyed release asset (`freebsd_amd64.tar.gz`) and pinned SHA-256 digest map in `05-setup-seaweedfs.sh`. Upstream publishes only MD5 files, so the FreeBSD SHA-256 pin is established by our own download and recorded with its acquisition procedure. |
 | rqlite | Keep build-from-source (`06-setup-rqlite-build.sh`); `deploy.sh` installs its selected service definition while the rqlite setup script owns only dependencies, source/build cache, binaries, and data directories |
-| Server linking | Linux remains fully static with its current flags and verification unchanged. On FreeBSD, vendored libopaque/liboprf/libsodium remain statically embedded while FreeBSD base-system runtime libraries may be dynamic. Verification rejects shared Arkfile crypto libraries and unexpected ports libraries, especially crypto dependencies under `/usr/local/lib`. |
-| CLI linking | Extend CLI verification with an explicit FreeBSD base-library set (`libc`, `libthr`, and other evidenced base dependencies). Reject unexpected ports libraries and keep vendored OPAQUE/FIDO/crypto archives static. |
-| Go platform functions | Implement FreeBSD user-secret-master protection in build-tagged Go: `mlock`/`munlock`, `MADV_NOCORE`, and process `RLIMIT_CORE=0`, with unit tests. Do not retain the generic non-Linux no-op for FreeBSD. |
-| Arkfile env loading | Add explicit Go application support for `ARKFILE_ENV_FILE`. Parse it with the existing `godotenv` dependency before configuration loading, without overriding pre-existing process environment values. FreeBSD rc.d passes only the non-secret path. Never source `secrets.env` as root. |
-| Shell tool shims | Use portable shell for bootstrap/host operations needed before Arkfile binaries exist: OpenSSL-backed `sha256_file`, `wc -c`-backed `stat_size`, OS-specific `stat_owner`, portable `mktemp_file`, temporary-file/rename editing instead of `sed -i`, and portable random-file generation. Do not invoke `go run` repeatedly for trivial host utilities. |
-| Bun | Native FreeBSD package is a hard prerequisite: `pkg install bun`; fail fast if missing |
-| WASM toolchain | Linux keeps the existing pinned emsdk path. FreeBSD uses native `pkg install emscripten`; it must not attempt emsdk installation. Record and validate an explicitly supported FreeBSD Emscripten version against the libopaque/libsodium WASM build. |
+| CLI linking | Extend CLI verification with an explicit FreeBSD base-library set (`libc`, `libthr`, and any other evidenced base dependency). libfido2 1.17 on FreeBSD uses the `hidraw(4)`/`uhid(4)` ioctl backend from kernel headers and needs no extra base library beyond threads. Reject unexpected ports libraries and keep vendored OPAQUE/FIDO/crypto archives static. |
+| Go platform functions | Implement FreeBSD user-secret-master protection in build-tagged Go: `mlock`/`munlock`, `MADV_NOCORE` on a page-aligned buffer, `procctl(PROC_TRACE_CTL, PROC_TRACE_CTL_DISABLE)` as the counterpart of the anti-ptrace effect of Linux `PR_SET_DUMPABLE=0`, and process `RLIMIT_CORE=0`, with unit tests. Do not retain the generic non-Linux no-op for FreeBSD. |
+| Arkfile env loading | Add explicit Go application support for `ARKFILE_ENV_FILE`. Parse it with the existing `godotenv` dependency before configuration loading, without overriding pre-existing process environment values. FreeBSD rc.d passes only the non-secret path. Never source `secrets.env` as root. Add a parsing parity test (see "Go application/runtime portability"). |
+| Shell tool shims | FreeBSD 15 base already provides GNU-compatible `sha256sum` (via `md5(1)` links), `mktemp --tmpdir`, `find -executable`, `date +%N`, `base64`, and `grep` with GNU basic-regex extensions, so those call sites need no shim. Add portable helpers only where behavior differs: `stat_size` (`wc -c`), `stat_owner` (OS-specific `stat`), in-place file editing via temporary file and rename instead of `sed -i`, byte truncation instead of `head -c -N`, and explicit process matching instead of `\|` alternation in `pgrep`/`pkill`. Do not invoke `go run` for trivial host utilities. |
+| GNU make for vendored WASM build | For the WASM step only, prepend a build-local directory to `PATH` in which `make` resolves to `gmake`. The upstream `libopaque/js/Makefile` is GNU make syntax and invokes sub-makes as a literal `make --directory=...`, so passing `gmake` at the top level is not sufficient. Do not edit vendored Makefiles. |
+| emsdk on FreeBSD | FreeBSD uses native `pkg install emscripten` and never attempts emsdk installation. The exact Emscripten version policy is pending (see below). |
 | TypeScript assets | Must be built on the FreeBSD host via bun; do not ship or reuse Linux-built `dist/` as a supported path |
-| e2e portability | `scripts/testing/e2e-test.sh` is in scope for SHA-256, file-size, prerequisite, and reset-guidance portability. Run it as the non-root dev user after root finishes FreeBSD `dev-reset`. |
+| Preflight before NUKE | All host, privilege, dev-user, and toolchain checks run before the NUKE confirmation. A missing or wrong-version tool must not be discovered after data has been destroyed. |
+| e2e portability | `scripts/testing/e2e-test.sh` is in scope for file-size, truncation, prerequisite, and reset-guidance portability. Run it as the non-root dev user after root finishes FreeBSD `dev-reset`. |
 | Playwright | Out of scope for this WIP |
 | local-deploy / prod-deploy / Caddy | Out of scope for this WIP |
+| fdre2e.sh | Remains Linux-only in this WIP; it depends on `$SUDO_USER` via `testing_sudo_developer_or_die` |
 | OpenBSD | Explicit non-goal; follow-on only after FreeBSD is green |
 | Devuan / non-systemd Linux | Not an exit criterion for this WIP. Keep OS and service-manager detection separate so a later SysVinit/OpenRC/runit adapter can reuse this work without redesign. |
 | Docs honesty | Until e2e is green: Linux is the supported deploy host; FreeBSD `dev-reset` is experimental/WIP. Update `AGENTS.md` and `docs/setup.md` accordingly when implementing and again when complete. |
+
+## Decisions Pending Developer Sign-Off
+
+### Emscripten version policy
+
+Linux pins emsdk Emscripten 4.0.23 (`EMSCRIPTEN_VERSION` in `build-config.sh`), and `ensure_emscripten` in `build-libopaque-wasm.sh` rejects any system `emcc` that does not match the pin exactly. The FreeBSD port `devel/emscripten` is 6.0.3 on `main` and `2026Q4` (6.0.2 in `2026Q3`), built against `llvm-devel`. emsdk publishes no FreeBSD host binaries. Accepting the FreeBSD port as-is means the same commit ships a different `libopaque.js` (different WASM, different SRI hash) depending on build host, which conflicts with the "one way to do things for a given client type" rule in `AGENTS.md`.
+
+Option A (recommended): move the Linux pin to the Emscripten version that the selected FreeBSD package branch ships, prove it on Linux first with `dev-reset.sh`, `e2e-test.sh`, and `e2e-playwright.sh`, then use the same version on FreeBSD. FreeBSD quarterly branches move the version each quarter, so the FreeBSD host must `pkg lock emscripten` after validation and the pin must be revalidated deliberately when it changes. The existing libsodium.js `emscripten.sh` compatibility patch must be revalidated against the new version.
+
+Option B: keep 4.0.23 on Linux and accept a validated, different FreeBSD version. This requires an explicit cross-check gate: the OPAQUE WASM interop harness (`scripts/testing/opaque-wasm-interop-harness.js`) against both builds, plus registration on one platform and login on the other, and documentation that the two hosts ship different WASM artifacts.
+
+Option C: build the pinned Emscripten 4.0.23 and its LLVM/Binaryen from source on FreeBSD. This is the most faithful but the most work and is not recommended for v1.
+
+### Server linking on FreeBSD
+
+The previous draft allowed FreeBSD base runtime libraries to be dynamically linked into the server. That is a weakening relative to both Linux and the current code: `verify_server_binary_static` in `build-config.sh` already requires a statically linked server on FreeBSD, and FreeBSD base ships static `libc` and `libthr` archives with a static-capable resolver. Recommended: keep a fully static server as the FreeBSD target with the existing `-extldflags "-static"` path, and permit dynamic base libraries only if a static link is shown to fail, with the failure, the `ldd` output, and the accepted library list recorded here and signed off. On pkgbase installs, the static archives and headers come from the base `-dev` packages, which become a documented prerequisite.
+
+### Bun package source
+
+The FreeBSD port `lang/bun` is 1.3.14, which matches `BUN_ZIG_VERSION`, but it is marked `BROKEN= Checksum error` on `main` and `2026Q4`; it was not broken in `2026Q3`. A binary package may therefore be missing from the current quarterly repository. It is also a downstream FreeBSD build rather than an oven-sh release binary. Choose one: use the package from whichever repository branch currently carries a working 1.3.14 build and `pkg lock` it, or build the port locally once the checksum issue is fixed upstream. In either case `require_bun_zig_build` still enforces 1.3.x, the dev-reset preflight fails fast if Bun is missing, and the exact package origin, version, and repository branch are recorded under "Evidence".
 
 ## Privilege Model (FreeBSD)
 
@@ -71,6 +98,21 @@ sudo bash scripts/dev-reset.sh
 
 When `$SUDO_USER` is unset and `ARKFILE_DEV_USER` is not provided, abort before mutating the system. Linux keeps today's `sudo` invocation and semantics; FreeBSD messaging describes root + dev-user resolution. The resolved dev-user identity is computed once and used by `deploy-common.sh`, `build-config.sh`, `build.sh`, `build-libopaque-wasm.sh`, `06-setup-rqlite-build.sh`, and local ownership repair in `dev-reset.sh`.
 
+Without this work, today's `run_as_user` in `deploy-common.sh` silently runs the build as root when `$SUDO_USER` is unset, which is exactly the FreeBSD root-shell case. The adapter must close that path rather than fall through to it.
+
+The FreeBSD `run_as_dev_user` shape is an argument array passed through a fixed shell snippet, never a command string built from arguments:
+
+```bash
+env -i \
+    HOME="$DEV_HOME" USER="$DEV_USER" LOGNAME="$DEV_USER" \
+    PATH="$DEV_PATH" SHELL=/bin/sh \
+    ${EMSDK_PYTHON:+EMSDK_PYTHON="$EMSDK_PYTHON"} \
+    /usr/sbin/chroot -u "$DEV_USER" -g "$DEV_GROUP" -G "$DEV_GROUPS" / \
+    /bin/sh -c 'cd "$1" && shift && exec "$@"' arkfile-dev "$PWD" "$@"
+```
+
+The selected environment passthrough list (for example `VERSION`, `GIT_COMMIT`, `SKIP_C_LIBS`, `GOTOOLCHAIN`, `LIBOPAQUE_DEFINES`, `ARKFILE_ALLOW_WASM_TRACE`) is defined once in the adapter and shared with the Linux `sudo -u ... env` path. Validate the helper on the target host with arguments containing spaces, quotes, and glob characters before routing builds through it.
+
 ## Current Call Graph (Linux baseline)
 
 ```
@@ -80,14 +122,21 @@ scripts/dev-reset.sh
 ├── stop services (systemctl) + pkill
 ├── nuke /opt/arkfile data + /tmp/arkfile-e2e-test-data
 ├── run_as_user ./scripts/setup/build.sh --build-only
+│   ├── ./scripts/setup/ensure-vendor-c.sh
+│   ├── ./scripts/setup/build-libopaque.sh        # native libsodium/liboprf/libopaque (gmake-aware)
+│   ├── ./scripts/setup/build-libopaque-wasm.sh   # emsdk, bare make, sed -i, npm/npx via upstream Makefile
+│   ├── bun install / type-check / build:prod
+│   ├── ./scripts/setup/build-libfido2.sh         # zlib, OpenSSL libcrypto, libcbor, libfido2 (CLI only)
+│   ├── go build server + CLIs, linking verification
+│   └── SRI injection (sed -i), stage systemd/ and database/
 ├── ./scripts/setup/01-setup-users.sh
 ├── ./scripts/setup/02-setup-directories.sh
-├── ./scripts/setup/deploy.sh          # copies systemd units
+├── ./scripts/setup/deploy.sh          # copies build root, chown root:root bin, installs systemd units
 ├── secrets / seaweedfs-s3.json / rqlite-auth.json
 ├── ./scripts/setup/03-setup-master-key.sh
 ├── ./scripts/setup/04-setup-tls-certs.sh
-├── ./scripts/setup/05-setup-seaweedfs.sh   # linux_amd64 tarball today
-├── ./scripts/setup/06-setup-rqlite-build.sh
+├── ./scripts/setup/05-setup-seaweedfs.sh   # linux_amd64 tarball today, installs unit
+├── ./scripts/setup/06-setup-rqlite-build.sh  # installs unit
 └── systemctl start/enable seaweedfs, rqlite, arkfile + health checks
 ```
 
@@ -95,37 +144,63 @@ FreeBSD keeps this step order. OS-specific behavior is restricted to explicit ho
 
 ## What Already Helps
 
-`build-config.sh` already normalizes `FreeBSD` into `BUILD_OS=freebsd`, prefers `gmake`, can use `sysctl hw.ncpu`, maps OpenSSL Configure targets for FreeBSD, and prints FreeBSD package hints. `build-libopaque.sh` / `build-libfido2.sh` already treat FreeBSD as a supported C build OS. `06-setup-rqlite-build.sh` already has a `pkg` dependency branch and soft-fails systemd install with a manual rc.d note. FreeBSD ports now provide native Bun and Emscripten packages. SeaweedFS 4.18 publishes a `freebsd_amd64.tar.gz` artifact. These pieces are starting points, not a complete FreeBSD reset path.
+`build-config.sh` already normalizes `FreeBSD` into `BUILD_OS=freebsd`, prefers `gmake`, can use `sysctl hw.ncpu`, maps OpenSSL Configure targets for FreeBSD, and prints FreeBSD package hints. `build-libopaque.sh` / `build-libfido2.sh` already treat FreeBSD as a supported C build OS and select `gmake` through `find_make_command`. `verify_server_binary_static` already has a FreeBSD branch that requires a statically linked server. `06-setup-rqlite-build.sh` already has a `pkg` dependency branch and soft-fails systemd install with a manual rc.d note. `cmd/arkfile-client/agent_freebsd.go` already implements `mlock` and `LOCAL_PEERCRED` peer checks for the CLI agent socket. SeaweedFS 4.18 publishes a `freebsd_amd64.tar.gz` artifact. FreeBSD 15 base provides `sha256sum`, `mktemp --tmpdir`, `find -executable`, `date +%N`, and `base64`, which removes several expected shims. FreeBSD ports carry Bun 1.3.14 and Emscripten, subject to the pending decisions above. These pieces are starting points, not a complete FreeBSD reset path.
+
+## Known Hard Failures in the Current Call Graph
+
+These were found by reading the current scripts against FreeBSD 15 base userland. Each one stops or silently corrupts a FreeBSD run and must be fixed (with Linux behavior unchanged) before bring-up.
+
+- `scripts/setup/deploy.sh`: `chown -R root:root ${BASE_DIR}/bin` fails because FreeBSD has no `root` group, and `set -e` aborts the deploy. Use `root:0`. The same pattern appears as `install -o root -g root` in the non-build-only path of `build.sh` and in the Caddy helpers and rollback in `deploy-common.sh` (out of scope here, same fix).
+- `scripts/setup/build.sh` (`inject_sri_attributes`): `sed -i -e ... -e ...` on FreeBSD consumes the first `-e` as the backup suffix and then treats the next expression as a file, so SRI injection fails. Replace with the shared in-place edit helper.
+- `scripts/setup/build-libopaque-wasm.sh` (`patch_emscripten_for_modern_emcc`): `sed -i` without a suffix, and `sed -i '1s/^/...\n/'` relies on GNU `\n` in the replacement. Replace with the shared in-place edit helper.
+- `scripts/setup/build-libopaque-wasm.sh` (`build_wasm_library`): bare `make` invocations, and the upstream `libopaque/js/Makefile` uses GNU make syntax (`$(shell ...)`, `ifeq`, `:=`) and literal `make --directory=...` sub-makes for libsodium.js and liboprf. Requires the GNU make `PATH` shim.
+- `scripts/setup/build-libopaque-wasm.sh` via the upstream Makefile: the `node_modules` target runs `npm install` and `dist/libopaque.js` runs `npx terser`. On Linux, `node`/`npm`/`npx` come from the emsdk-bundled Node. The FreeBSD `devel/emscripten` port pulls in Node but not npm, so `www/npm` is a FreeBSD prerequisite. This is an upstream Makefile requirement, not a project choice of npm over bun.
+- `scripts/setup/build.sh` (`fix_vendor_ownership`): `stat -c '%U'` does not exist on FreeBSD (`stat -f '%Su'`). Use `stat_owner`.
+- `scripts/dev-reset.sh`: `pgrep -f "arkfile\|weed\|rqlited"` and the matching `pkill -9`. FreeBSD `pgrep`/`pkill` compile patterns with libc extended regex without GNU extensions, so `\|` is not alternation and the force-kill branch silently never fires. Use separate patterns.
+- `scripts/setup/01-setup-users.sh`: `groupadd`/`useradd` and `/sbin/nologin` (FreeBSD: `pw` and `/usr/sbin/nologin`).
+- `scripts/setup/05-setup-seaweedfs.sh`: hardcoded `linux_amd64` asset and Linux digest; installs a systemd unit and runs `systemctl daemon-reload`.
+- `scripts/setup/06-setup-rqlite-build.sh`: unconditional `sudo`, its own `$SUDO_USER` handling, a `bash -c` string built around `$(pwd)` in `run_go_as_user`, and an early `exit 0` on the cached-binary path that installs a systemd unit and skips the rest of service preparation.
+- `scripts/setup/build-config.sh` (`verify_cli_binary_linking`): parses Linux `ldd` output. FreeBSD `ldd` prints a `path:` header line first, which the parser would reject as an unexpected library.
+- `scripts/setup/build-config.sh` (`missing_native_build_host_deps`) and `build-libopaque.sh` hints: require or recommend `gcc`. FreeBSD uses base `cc` (clang); `gcc` must not be required or suggested on FreeBSD.
+- `scripts/testing/e2e-test.sh`: `head -c -16` (truncated-bundle test) is rejected by FreeBSD `head`. `stat -c%s ... || echo 0` in the export/decrypt size checks silently yields 0 instead of failing. Use the truncation and `stat_size` helpers.
+- `cmd/arkfile-client/main.go` (`agent status` orphan audit): scans `/proc` for orphaned `__agent-daemon` processes. FreeBSD does not mount procfs by default, so the audit always reports "no daemon process detected", a false negative on a check whose purpose is finding key material left in memory. Use `sysctl kern.proc` (via `golang.org/x/sys/unix`) on FreeBSD and fail loudly if enumeration is unavailable.
+- `crypto/user_secret_master_other.go`: the `!linux` build tag gives FreeBSD the no-op/err implementation for core-dump suppression, `mlock`, and `madvise`.
+
+Verified non-issues on FreeBSD 15 base: `sha256sum` (GNU-compatible names via `md5(1)`), `mktemp --tmpdir=/tmp` in `04-setup-tls-certs.sh`, `find -type f -executable` in `deploy.sh`, `date +%s%N` in `e2e-test.sh`, `base64`, `seq`, and GNU basic-regex extensions such as `\+` in `grep` (base `grep` links libregex). `date -d` in `04-setup-tls-certs.sh` already has an `N/A` fallback and is harmless.
 
 ## Implementation Outline
 
 ### `scripts/setup/os-portable.sh`
 
-Add a small shared adapter (no Phase/Tier names in code). Keep host OS and service-manager detection separate. Responsibilities:
+Add a small shared adapter. Keep host OS and service-manager detection separate. Responsibilities:
 
 - Detect OS via existing `detect_build_platform` / `uname` (reuse `BUILD_OS` from `build-config.sh` where already sourced).
 - Detect service manager independently: `systemd` on the existing Linux path and `freebsd-rc` on FreeBSD. An unsupported Linux manager receives a precise error, not a FreeBSD branch.
-- Resolve `ARKFILE_DEV_USER` / `$SUDO_USER` into one validated `ORIGINAL_USER`, uid, gid, and home for ownership and non-root execution.
+- Resolve `ARKFILE_DEV_USER` / `$SUDO_USER` into one validated `ORIGINAL_USER`, uid, primary group name, gid, supplementary groups, and home for ownership and non-root execution.
 - On FreeBSD: require `EUID=0`, FreeBSD major 15 or newer, amd64, and a resolved non-root dev user; error before mutation otherwise.
 - `run_as_root`: direct exec when root; preserve current Linux sudo behavior when a setup script is intentionally run as non-root.
-- `run_as_dev_user`: argument-safe privilege drop with the correct home, working directory, and selected environment. Linux retains current `sudo -u` semantics; FreeBSD uses a base-system mechanism.
+- `run_as_dev_user`: argument-safe privilege drop with the correct home, working directory, and selected environment, as described in "Privilege Model".
+- `check_dev_reset_toolchain`: FreeBSD branch checks `bash`, `git`, `go` (meeting `go.mod`), `gmake`, `cmake`, `pkgconf`, `perl` plus the OpenSSL Configure modules, `python3` (3.10+), autotools including `libtoolize`, `curl`, `jq`, `openssl`, `npm`, Bun 1.3.x, `emcc` at the selected version, and `wasm-opt`. Linux keeps its current checks. Called by `dev-reset.sh` before the NUKE confirmation.
 - Service API used by reset/deploy: `service_stop`, `service_start`, `service_enable`, `service_is_active`, `service_install_definition`, `service_daemon_reload`, and `service_logs_hint`.
-- Tool shims: `sha256_file`, `stat_size`, `stat_owner`, `mktemp_file`, portable in-place rewrite, and portable random-file output.
+- Tool helpers: `stat_size`, `stat_owner`, `edit_in_place` (temporary file in the same directory, then rename, preserving mode), `truncate_tail_bytes`, and explicit per-name process matching.
+- `make_gnu_shim_dir`: create a build-local directory under `$BUILD_ROOT` containing `make` pointing at `gmake`, for use only around the vendored WASM build.
 - Reject unsupported OS/service-manager combinations early.
 
-Route all privilege and dev-user logic in the call graph through these helpers. This includes `deploy-common.sh`, `build-config.sh`, `dev-reset.sh`'s local ownership helper, `build.sh`, `build-libopaque-wasm.sh`, `01` through `06` setup scripts, and `deploy.sh`. Do not leave independent `$SUDO_USER` interpretations in component scripts.
+Route all privilege and dev-user logic in the call graph through these helpers. This includes `deploy-common.sh`, `build-config.sh` (`fix_go_ownership`, `run_go_as_user`, `ensure_build_dir`, `find_bun_binary`), `dev-reset.sh`'s local ownership helper, `build.sh`, `build-libopaque-wasm.sh`, `01` through `06` setup scripts, and `deploy.sh`. Do not leave independent `$SUDO_USER` interpretations in component scripts. Ownership helpers use the resolved primary group, not `user:user`, because a FreeBSD primary group need not match the username.
 
 ### FreeBSD `rc.d` scripts
 
 Add `rc.d/arkfile`, `rc.d/rqlite`, `rc.d/seaweedfs` with the same executable paths, bind addresses, config files, and working directories as `systemd/*.service` today:
 
-- arkfile: `/opt/arkfile/bin/arkfile`, non-secret `ARKFILE_ENV_FILE=/opt/arkfile/etc/secrets.env`, user/group `arkfile`
-- rqlite: `/usr/local/bin/rqlited` with the existing localhost raft/http args and auth file
-- seaweedfs: `/usr/local/bin/weed server` with the existing localhost S3/master/volume/filer ports and config path
+- arkfile: `/opt/arkfile/bin/arkfile`, `arkfile_chdir=/opt/arkfile`, non-secret `ARKFILE_ENV_FILE=/opt/arkfile/etc/secrets.env`, user/group `arkfile`
+- rqlite: `/usr/local/bin/rqlited` with the existing localhost raft/http args and auth file, `rqlite_chdir=/opt/arkfile/var/lib/database`
+- seaweedfs: `/usr/local/bin/weed server` with the existing localhost S3/master/volume/filer ports and config path, `seaweedfs_chdir=/opt/arkfile/var/lib/seaweedfs`
 
-Install into `/usr/local/etc/rc.d/` and enable with explicit `sysrc <service>_enable=YES`. Use FreeBSD `rc.subr` and `daemon` patterns with pidfiles that make status/stop/restart reliable. Service output goes to per-service files under `/opt/arkfile/var/log/`, and `service_logs_hint` points operators there instead of `journalctl`.
+Each script uses rc.subr with `command=/usr/sbin/daemon`, `command_args` of the form `-P <supervisor.pid> -p <child.pid> -r -R 5 -o /opt/arkfile/var/log/<name>.log -u arkfile <program> <args>`, `pidfile` set to the supervisor pidfile, `${name}_limits="-c 0"`, and rcorder headers (`PROVIDE`, `REQUIRE: NETWORKING`, plus `REQUIRE: rqlite seaweedfs` for arkfile, `KEYWORD: shutdown`). Confirm on the host where `daemon(8)` writes pidfiles relative to its privilege drop and choose a pidfile directory (`/var/run` or `/opt/arkfile/var/run`) accordingly. Install into `/usr/local/etc/rc.d/` and enable with explicit `sysrc <service>_enable=YES`. `service_logs_hint` points operators at the log files instead of `journalctl`.
 
-Set core size to zero before exec and run each process as `arkfile`. Never source `secrets.env` in a root shell: the file is owned by `arkfile`, so doing so would create a root command-injection path. Arkfile loads it internally via `ARKFILE_ENV_FILE`; rqlite and SeaweedFS use their existing command/config files and do not need to source it. Do not invent FreeBSD equivalents of every systemd sandbox knob in v1, but preserve security-critical controls that are portable: service identity, loopback binding, permissions, core suppression, and application-level memory protection.
+Never source `secrets.env` in a root shell: the file is owned by `arkfile`, so doing so would create a root command-injection path. This rules out rc.subr `${name}_env_file`. Arkfile loads the file internally via `ARKFILE_ENV_FILE`; rqlite and SeaweedFS use their existing command/config files and do not need it. Do not invent FreeBSD equivalents of every systemd sandbox knob in v1, but preserve the security-critical controls in "Security Parity" below.
+
+`deploy.sh` also installs `/usr/local/etc/newsyslog.conf.d/arkfile.conf` rotating the three log files as `arkfile:arkfile` mode 640, with the rotation signal or `daemon(8)` log reopen behavior verified on the host.
 
 ### Wire service control through the adapter
 
@@ -134,82 +209,117 @@ Replace direct `systemctl` / `journalctl` call sites in:
 - `scripts/dev-reset.sh`
 - `scripts/setup/deploy-common.sh` (`stop_service_if_running`)
 - `scripts/setup/deploy.sh` (unit install + enable)
-- `scripts/setup/06-setup-rqlite-build.sh` (service install branch)
-- `scripts/setup/05-setup-seaweedfs.sh` if it installs or enables a unit
+- `scripts/setup/06-setup-rqlite-build.sh` (service install branch and cached-binary early exit)
+- `scripts/setup/05-setup-seaweedfs.sh` (unit install and `daemon-reload`)
 - `scripts/setup/build.sh` (non-build-only service stop and service artifact staging)
 
-`deploy.sh` becomes the single installer of service definitions. Stage `systemd/` and `rc.d/` into distinct build artifact directories in `build.sh`; deploy only the definition family selected by the service manager. On FreeBSD, skip Caddy definition installation and treat the existing dev-reset Caddy stop as an explicit no-op/absent service. Linux behavior must remain unchanged for existing systemd hosts.
+`deploy.sh` becomes the single installer of service definitions. Stage `systemd/` and `rc.d/` into distinct build artifact directories in `build.sh` (add a `BUILD_RCD` variable next to `BUILD_SYSTEMD` in `build-config.sh`); deploy only the definition family selected by the service manager. Every place that cleans `BUILD_SYSTEMD` must also clean `BUILD_RCD`: the selective clean in `dev-reset.sh`, `wipe_build_artifacts_preserving_c_libs_if_skipping` in `deploy-common.sh`, `clean_build_dir`, and `ensure_build_dir`. On FreeBSD, skip Caddy definition installation and treat the existing dev-reset Caddy stop as an explicit no-op/absent service. Linux behavior must remain unchanged for existing systemd hosts. The update-path rollback logic in `deploy-common.sh` is systemd-only and stays out of scope with the update scripts.
 
 ### Users and directories
 
 - `01-setup-users.sh`: FreeBSD branch using `pw`; keep Linux `groupadd`/`useradd`.
-- `02-setup-directories.sh`: use `run_as_root` and portable random-file output; keep layout under `/opt/arkfile`.
-- `04-setup-tls-certs.sh`: use shared privilege/service-user helpers, portable temporary files, and portable date handling.
-- Ownership helpers: use resolved `ORIGINAL_USER` / `arkfile` consistently; avoid assuming `chown user:user` group name equals username if FreeBSD primary group differs (prefer explicit group from `id`).
+- `02-setup-directories.sh`: use `run_as_root`; keep layout under `/opt/arkfile`. `dd ... status=none` is supported by FreeBSD `dd`.
+- `04-setup-tls-certs.sh`: use shared privilege/service-user helpers in place of `sudo -u arkfile`. `mktemp --tmpdir` works on FreeBSD 15.
+- `deploy.sh` and `build.sh`: replace every `root:root` and `-g root` with numeric gid `0`.
 
 ### SeaweedFS on FreeBSD
 
 In `05-setup-seaweedfs.sh`:
 
 - Select asset from `BUILD_OS`/`BUILD_ARCH` (v1: `freebsd_amd64` only besides existing Linux).
-- Pin a separate SHA-256 for the FreeBSD tarball (do not reuse the Linux digest).
-- Use `sha256_file` shim instead of bare `sha256sum`.
+- Pin a separate SHA-256 for the FreeBSD tarball (do not reuse the Linux digest); cache under a platform-keyed tarball name.
+- Keep `sha256sum`; it exists on both platforms.
 - Keep install destination `/usr/local/bin/weed`.
+- Remove unit installation and `daemon-reload`; `deploy.sh` owns service definitions.
 
 ### rqlite on FreeBSD
 
-- Keep source build and existing `pkg` dependency install.
+- Keep source build and existing `pkg` dependency install, routed through `run_as_root`.
 - Remove component-owned service-definition installation; `deploy.sh` owns it.
 - Ensure the cached/already-current binary path does not skip required data-directory setup or adapter-driven service preparation.
-- Do not require Linux-only static-extld flags on FreeBSD if the script already gates those to Linux; keep the FreeBSD build working and installable.
-- Replace local `$SUDO_USER`/`sudo -u`/Go/git wrappers with the shared dev-user helpers.
+- Keep the existing Linux-only static-extld gating; the FreeBSD rqlite build links dynamically against base libraries, which is acceptable for a third-party service binary and is recorded under "Evidence".
+- Replace local `$SUDO_USER`/`sudo -u`/Go/git wrappers and the `bash -c` command string with the shared dev-user helpers.
 
 ### Build and link policy
 
-- Bun: require native `pkg install bun`; fail with FreeBSD-oriented guidance.
-- Emscripten: Linux retains pinned emsdk 4.0.23. FreeBSD selects native `emcc` from `pkg install emscripten`, rejects an unvalidated version, and never invokes emsdk installation. Validate the existing libsodium compatibility patch against the selected FreeBSD version.
+- Bun: per the pending Bun decision; `require_bun_zig_build` continues to enforce 1.3.x.
+- Emscripten: per the pending Emscripten decision. FreeBSD selects native `emcc`, rejects a version other than the selected one, and never invokes emsdk installation. Validate the libsodium.js `emscripten.sh` compatibility patch against the selected version.
+- WASM build on FreeBSD: run the vendored Makefile targets with the GNU make shim directory first in `PATH`, require `npm`/`npx` from `www/npm`, and keep `validate_wasm_runtime` mandatory.
 - Server on Linux: retain the current fully static flags and verifier without weakening or broadening accepted dependencies.
-- Server on FreeBSD: statically embed libopaque/liboprf/libsodium, permit evidenced FreeBSD base runtime libraries dynamically, and reject shared crypto or unexpected ports dependencies. Report build metadata accurately (do not emit unconditional `staticLinking: true`).
-- CLI FIDO: continue vendored static crypto/FIDO archives plus evidenced OS runtime libraries. Extend verifier parsing for FreeBSD `ldd` output and its base libraries; reject unexpected `/usr/local/lib` dependencies.
-- Replace GNU `stat -c`, `sha256sum`, and `sed -i` usages in `build.sh` / WASM build with portable helpers.
+- Server on FreeBSD: per the pending linking decision, recommended fully static with the existing verifier. Report build metadata accurately (do not emit unconditional `staticLinking: true` in `version.json` if any platform is permitted otherwise).
+- CLI FIDO: continue vendored static crypto/FIDO archives plus evidenced OS runtime libraries. Extend verifier parsing for FreeBSD `ldd` output (skip the `path:` header) and its base libraries; reject unexpected `/usr/local/lib` dependencies.
+- Replace GNU `stat -c` and `sed -i` usages in `build.sh` / WASM build with the shared helpers.
 - Convert relevant shared-script shebangs from `/bin/bash` to `/usr/bin/env bash`; do not create a FreeBSD filesystem symlink.
 
 ### Go application/runtime portability
 
-- Add explicit `ARKFILE_ENV_FILE` loading before `config.LoadConfig()`, using `godotenv.Load(path)` semantics so pre-existing environment variables keep precedence. Remove duplicate/default `.env` loading ambiguity or centralize it so configuration is loaded once in a clearly ordered path.
-- Add `crypto/user_secret_master_freebsd.go` (and narrow the generic build tag) with native `mlock`, `munlock`, `MADV_NOCORE`, and process core-limit behavior.
-- Add FreeBSD-targeted unit tests or compile tests for the platform functions. Warnings/no-ops used by unsupported platforms are not accepted as the FreeBSD implementation.
+- Add explicit `ARKFILE_ENV_FILE` loading before `config.LoadConfig()`, using `godotenv.Load(path)` semantics so pre-existing environment variables keep precedence. Today both `main.go` and `config.LoadConfig()` call `godotenv.Load()` for a default `.env`; centralize this so configuration is loaded once in a clearly ordered path.
+- Add a parsing parity test for `ARKFILE_ENV_FILE`. `godotenv` expands `$VAR`/`${VAR}`, strips inline `#` comments, and handles quotes, which differs from systemd `EnvironmentFile`. The test covers values containing `$`, `#`, quotes, and `=` so a secret is never silently altered.
+- Add `crypto/user_secret_master_freebsd.go` and narrow the generic build tag to `!linux && !freebsd`. Implement `mlock`/`munlock`, `MADV_NOCORE`, `setrlimit(RLIMIT_CORE, 0)`, and `procctl(P_PID, getpid, PROC_TRACE_CTL, PROC_TRACE_CTL_DISABLE)`. The vendored `golang.org/x/sys/unix` exposes `SYS_PROCCTL` but no `procctl` wrapper, so this is a raw syscall with a unit test that reads the state back with `PROC_TRACE_STATUS`.
+- Hold the user-secret master in a page-aligned, page-sized buffer (for example from `unix.Mmap` with anonymous private mapping) on both platforms, so `mlock` and `madvise` apply to a page containing only the key. See "Existing Linux Issues Surfaced by This Review".
+- Replace the CLI `agent status` `/proc` scan with a FreeBSD `kern.proc` implementation behind a build tag, keeping the Linux `/proc` path, and report an explicit error when process enumeration is unavailable instead of "no daemon process detected".
+- Add FreeBSD unit tests for the platform functions and run `go test ./...` on the FreeBSD host with the CGO environment from `AGENTS.md`. Warnings/no-ops used by unsupported platforms are not accepted as the FreeBSD implementation.
 - Keep cryptographic behavior, password contexts, key derivation, streaming, and server-visible metadata unchanged.
 
 ### `dev-reset.sh` FreeBSD entry behavior
 
 - Source `os-portable.sh` early.
-- On FreeBSD: require root; resolve/validate dev user; reject major version below 15 and architecture other than amd64 before the NUKE confirmation.
+- On FreeBSD: require root; resolve/validate dev user; reject major version below 15 and architecture other than amd64; run `check_dev_reset_toolchain`. All of this happens before the NUKE confirmation.
 - On Linux/systemd: preserve the current `sudo bash scripts/dev-reset.sh` invocation, argument parser, defaults, force-rebuild flags, systemd behavior, and fully static server build.
 - Keep the same NUKE confirmation and step order.
-- Replace ambiguous combined `pgrep`/`pkill` alternation with explicit portable process checks/kills while preserving Linux targets.
+- Replace the combined `pgrep`/`pkill` alternation with explicit per-name process checks/kills while preserving Linux targets.
 - Final status and log hints must be OS-aware.
 
 ### FreeBSD e2e portability
 
 `scripts/testing/e2e-test.sh` is part of the implementation, not only an exit criterion:
 
-- Replace `sha256sum` calls with the shared portable SHA-256 helper.
-- Replace GNU-only file-size calls with `stat_size`.
-- Add FreeBSD prerequisites (`jq`, `curl`, OpenSSL if not using base, and other evidenced commands).
+- Replace GNU-only file-size calls with `stat_size`, and make size checks fail rather than fall back to 0.
+- Replace `head -c -16` with the byte truncation helper.
+- Add FreeBSD prerequisites (`jq`, `curl`, `openssl`, and other evidenced commands); `sha256sum` needs no change.
 - Make reset/deploy guidance OS-aware.
-- Run e2e as the resolved non-root dev user, with that user's HOME/session files, after the root reset finishes.
+- Run e2e as the resolved non-root dev user, with that user's HOME/session files, after the root reset finishes. This is the first exercise of `agent_freebsd.go`; check that the dev user's login class `memorylocked` limit allows the agent's `mlock` calls.
 - Do not change test semantics, privacy assertions, generated test sizes, or server API expectations.
+
+### Adapter tests
+
+Add a developer-run, non-root test script under `scripts/testing/` that sources `os-portable.sh` with `PATH` shims under `/tmp/arkfile-*` stubbing `uname`, `systemctl`, `service`, `sysrc`, `pw`, `useradd`, and `stat`. It asserts which commands each adapter function would run for Linux/systemd and FreeBSD/rc.d, and that unsupported combinations fail. It follows the test identity rule in `AGENTS.md`: refuses root and writes only under `/tmp/arkfile-*`.
+
+### Security Parity
+
+| Linux control today | FreeBSD mechanism | Proof |
+|---------------------|-------------------|-------|
+| `User=arkfile` / `Group=arkfile` | `daemon -u arkfile` | `ps -o user` on each service child |
+| `LimitCORE=0` | rc.subr `${name}_limits="-c 0"` plus Go `setrlimit` | `procstat -l` on the child |
+| `PR_SET_DUMPABLE=0` (no core, no same-uid ptrace) | `procctl` `PROC_TRACE_CTL_DISABLE` plus core limit | Unit test via `PROC_TRACE_STATUS`; attach attempt as `arkfile` fails |
+| `mlock` of user-secret master | `unix.Mlock` on page-aligned buffer | Unit test; startup log has no mlock warning |
+| `MADV_DONTDUMP` | `MADV_NOCORE` on page-aligned buffer | Unit test |
+| Loopback-only rqlite/SeaweedFS | Same command args | `sockstat -4 -6 -l` shows only 127.0.0.1 |
+| `EnvironmentFile` read by systemd as root, not by a shell | `ARKFILE_ENV_FILE` read by Arkfile as `arkfile`; no `${name}_env_file` | rc scripts reviewed; parser parity test |
+| CLI agent `SO_PEERCRED` | `LOCAL_PEERCRED` via `GetsockoptXucred` (exists) | e2e agent tests on FreeBSD |
+| `ProtectSystem`, `PrivateTmp`, `PrivateDevices`, `SystemCallFilter`, `NoNewPrivileges` | None in v1 | Documented as a known gap; jails or Capsicum are a later decision |
 
 ### Host prerequisites (document in this WIP and later in setup docs)
 
-Initial FreeBSD 15.1 amd64 package set (verify exact package names on the target host):
+Initial FreeBSD 15.1 amd64 package set (verify exact package names and the repository branch on the target host):
 
-- `bash`, `git`, `go`, `gmake`, `cmake`, `pkgconf`, `perl5`, `python3`, `autoconf`, `automake`, `libtool`, `curl`, `ca_root_nss`, `jq`, `bun`, `emscripten`
-- Bun and Go available in the resolved dev user's PATH
-- Network access for FreeBSD packages, SeaweedFS release download, Go toolchain/modules if needed, and repository/vendor operations
+- `bash`, `git`, `go` (metaport; 2026Q4 default is the 1.26 line, which satisfies `go 1.26.6` in `go.mod`), `gmake`, `cmake`, `pkgconf`, `perl5`, `p5-Text-Template` if the OpenSSL Configure module check reports it missing, `python3`, `autoconf`, `automake`, `libtool`, `curl`, `ca_root_nss`, `jq`, `bun`, `emscripten`, `npm`
+- No `gcc`; the base `cc` (clang) is the C compiler
+- On pkgbase installs, the base development packages that provide headers and static archives (`libc.a`, `libthr.a`) for the static server link
+- Bun, Go, and npm available in the resolved dev user's PATH
+- `pkg lock` on `bun` and `emscripten` after validation so quarterly upgrades cannot silently change the pinned versions
+- Network access for FreeBSD packages, SeaweedFS release download, Go toolchain/modules if needed, npm registry access for the vendored libopaque.js `npm install`, and repository/vendor operations
 
-Exact `pkg install ...` line should be updated here once validated on a real host.
+The exact `pkg install ...` line should be updated here once validated on a real host.
+
+### Existing Linux Issues Surfaced by This Review
+
+These are pre-existing Linux behaviors found while tracing the call graph. They are flagged for the developer, not changed by this WIP without sign-off, because the Linux path must not change behavior here.
+
+- `crypto/user_secret_master.go` passes a 32-byte heap slice to `madvise(MADV_DONTDUMP)`. Linux `madvise` returns `EINVAL` for an address that is not page-aligned, so the advice most likely never applies and a warning is printed on each start (not confirmed from the journal during review). The page-aligned buffer change above fixes both platforms and should be adopted on Linux as well, with sign-off.
+- `systemd/rqlite.service` and `systemd/seaweedfs.service` load the full `secrets.env` (including `ARKFILE_MASTER_KEY`) into processes that do not need it. All three services run as `arkfile` and can read the file anyway, so the practical impact is limited, but the environment exposure is unnecessary.
+- `deploy.sh` copies the entire build root into `/opt/arkfile`, including the roughly 110 MB `c-libs` tree (vendored OpenSSL/FIDO build output) and `wasm/`. Copying only `bin`, `client`, `database`, `webroot`, `version.json`, SBOM files, and the selected service-definition family would be cleaner.
+- `deploy.sh` makes `/opt/arkfile/bin` `root`-owned "for security", but `dev-reset.sh` then runs `chown -R arkfile:arkfile "$ARKFILE_DIR"` after deploy and again after key generation, so on the dev path the service user owns its own binaries. Decide which ownership is intended and make the scripts agree.
 
 ### Devuan/non-systemd Linux follow-on
 
@@ -224,7 +334,7 @@ After Linux/systemd and FreeBSD/rc.d both pass their blocking gates, Devuan/SysV
 
 ### Documentation updates (with the implementation)
 
-- `AGENTS.md`: note Linux as primary deploy host; FreeBSD `dev-reset` experimental; root + `ARKFILE_DEV_USER` on FreeBSD; agents still must not invoke deploy scripts themselves.
+- `AGENTS.md`: note Linux as primary deploy host; FreeBSD `dev-reset` experimental; root + `ARKFILE_DEV_USER` on FreeBSD; `fdre2e.sh` Linux-only; agents still must not invoke deploy scripts themselves.
 - `docs/setup.md`: replace aspirational "BSD supported" with accurate Linux-primary / FreeBSD-experimental wording and FreeBSD package notes for this path.
 - When e2e is green, revise status in this file and soften "experimental" only to the extent proven (dev-reset + e2e-test, not prod-deploy).
 
@@ -234,45 +344,53 @@ After Linux/systemd and FreeBSD/rc.d both pass their blocking gates, Devuan/SysV
 - FreeBSD aarch64
 - FreeBSD releases below major version 15
 - `local-deploy.sh` / `prod-deploy.sh` / `test-deploy.sh` / Caddy / deSEC on FreeBSD
-- Playwright / `e2e-playwright.sh` on FreeBSD
+- Playwright / `e2e-playwright.sh` / `fdre2e.sh` on FreeBSD
 - Official FreeBSD ports/packages packaging
 - Requiring or depending on the `sudo` package on FreeBSD
 - Allowing shared libopaque, liboprf, libsodium, libfido2, libcbor, libcrypto, or zlib from FreeBSD ports in Arkfile binaries
 - Rewriting scripts from bash to POSIX sh
 - Duplicating the entire setup tree under a `freebsd/` directory
+- Editing vendored upstream Makefiles to make them portable
+- FreeBSD equivalents of the systemd sandbox directives (jails, Capsicum)
 - Claiming Devuan, SysVinit, OpenRC, or runit support before a separate backend is implemented and tested
 - Replacing simple bootstrap shell operations with repeatedly compiled Go utilities
 
 ## Implementation Order
 
-1. Record a clean Linux amd64 baseline using the developer-run `dev-reset.sh` then `e2e-test.sh`.
-2. Add `os-portable.sh`: host/service-manager detection, FreeBSD 15+/amd64 preflight, root/dev-user resolution, argument-safe privilege helpers, service API, and portable tool helpers.
-3. Route all independent `sudo`/`SUDO_USER` logic in the dev-reset call graph through the shared helpers; convert invoked Bash shebangs to `/usr/bin/env bash`.
-4. Add Go `ARKFILE_ENV_FILE` loading and FreeBSD user-secret-master memory/core protection with tests.
-5. Add `rc.d/{arkfile,rqlite,seaweedfs}` with systemd argument parity, service identity, pidfiles, file logging, loopback binds, and core suppression.
-6. Stage both service-definition families in `build.sh`; make `deploy.sh` the sole definition installer; wire service stop/start/enable/status/log operations through the adapter.
-7. Add FreeBSD `pw` user/group creation and portable directory/TLS/temp/random operations across `01` through `04`.
-8. Add platform-keyed SeaweedFS download + independently pinned FreeBSD SHA-256; remove component-owned service installation.
-9. Refactor rqlite Go/git/dev-user handling and cached path; remove component-owned service installation.
-10. Add native FreeBSD Bun/Emscripten selection and portable WASM/build editing/checksum operations.
-11. Implement OS-specific server/CLI link flags, verification, and accurate build metadata without changing Linux fully static behavior.
-12. Port `e2e-test.sh` host utilities and guidance, preserving test semantics.
-13. Run shell syntax and isolated adapter tests, then developer-run Linux `dev-reset.sh` + `e2e-test.sh`; resolve every Linux regression before FreeBSD validation.
-14. Validate on FreeBSD 15.1-RELEASE amd64: root reset with `ARKFILE_DEV_USER`, then non-root e2e.
-15. Repeat the complete Linux reset + e2e gate after FreeBSD passes.
-16. Documentation honesty pass (`AGENTS.md`, `docs/setup.md`, this file's Status); only then consider a separate Devuan/SysVinit follow-on.
+1. Developer resolves the three pending decisions (Emscripten version policy, FreeBSD server linking, Bun package source).
+2. Record a clean Linux amd64 baseline using the developer-run `dev-reset.sh` then `e2e-test.sh`.
+3. If Emscripten Option A is chosen, move the Linux pin first and prove it on Linux with `dev-reset.sh`, `e2e-test.sh`, and `e2e-playwright.sh` before any FreeBSD work depends on it.
+4. Add `os-portable.sh`: host/service-manager detection, FreeBSD 15+/amd64 preflight, root/dev-user resolution, argument-safe privilege helpers, toolchain preflight, service API, portable tool helpers, and the GNU make shim; add the adapter test script.
+5. Route all independent `sudo`/`SUDO_USER` logic in the dev-reset call graph through the shared helpers; convert invoked Bash shebangs to `/usr/bin/env bash`; move all checks ahead of the NUKE prompt.
+6. Fix the known hard failures that are shared-script changes with no Linux behavior change: numeric root gid, `sed -i` and `stat -c` call sites, `pgrep`/`pkill` patterns, `ldd` parsing.
+7. Add Go `ARKFILE_ENV_FILE` loading with the parsing parity test, FreeBSD user-secret-master protection (`mlock`, `MADV_NOCORE`, `procctl`, core limit) with tests, and the FreeBSD `agent status` process enumeration.
+8. Add `rc.d/{arkfile,rqlite,seaweedfs}` and the newsyslog entry with systemd argument parity, `daemon(8)` supervision, chdir, file logging, loopback binds, and core suppression.
+9. Stage both service-definition families in `build.sh` (with `BUILD_RCD` cleanup at every `BUILD_SYSTEMD` site); make `deploy.sh` the sole definition installer; wire service stop/start/enable/status/log operations through the adapter.
+10. Add FreeBSD `pw` user/group creation and the privilege-helper changes across `01` through `04`.
+11. Add platform-keyed SeaweedFS download + independently pinned FreeBSD SHA-256; remove component-owned service installation.
+12. Refactor rqlite Go/git/dev-user handling and cached path; remove component-owned service installation.
+13. Add native FreeBSD Bun/Emscripten selection, the GNU make shim around the vendored WASM build, and the npm prerequisite.
+14. Implement OS-specific server/CLI link flags, verification, and accurate build metadata without changing Linux fully static behavior.
+15. Port `e2e-test.sh` host utilities and guidance, preserving test semantics.
+16. Run shell syntax checks and the adapter test script, then developer-run Linux `dev-reset.sh` + `e2e-test.sh`; resolve every Linux regression before FreeBSD validation.
+17. Validate on FreeBSD 15.1-RELEASE amd64: `go test ./...`, root reset with `ARKFILE_DEV_USER`, then non-root e2e.
+18. Repeat the complete Linux reset + e2e gate after FreeBSD passes.
+19. Documentation honesty pass (`AGENTS.md`, `docs/setup.md`, this file's Status); only then consider a separate Devuan/SysVinit follow-on.
 
 ## Exit Criteria
 
 ### Shared implementation
 
+- [ ] The three pending decisions are resolved and recorded in this file
 - [ ] Host OS and service manager are detected independently; unsupported combinations fail before mutation
+- [ ] All host, privilege, dev-user, and toolchain checks run before the NUKE confirmation on both platforms
 - [ ] `os-portable.sh` centralizes root/dev-user/service/tool behavior with no remaining conflicting `$SUDO_USER` implementations in the call graph
 - [ ] Shared scripts use a Bash path valid on Linux and FreeBSD without filesystem symlinks
-- [ ] Service definitions have one install owner (`deploy.sh`) and both artifact families are staged deterministically
-- [ ] Arkfile loads an explicit env file internally without a root shell sourcing service-user-writable content
+- [ ] No shared script in the call graph names a `root` group
+- [ ] Service definitions have one install owner (`deploy.sh`), both artifact families are staged deterministically, and every build-clean path removes both
+- [ ] Arkfile loads an explicit env file internally without a root shell sourcing service-user-writable content, and the parsing parity test passes
 - [ ] Shell syntax checks pass for every modified shell script
-- [ ] Isolated adapter tests verify Linux/systemd and FreeBSD/rc.d command selection without mutating host services
+- [ ] The adapter test script verifies Linux/systemd and FreeBSD/rc.d command selection without mutating host services
 
 ### Blocking Linux regression gate
 
@@ -282,6 +400,7 @@ After Linux/systemd and FreeBSD/rc.d both pass their blocking gates, Devuan/SysV
 - [ ] Linux server remains fully static and current CLI linking policy is not weakened
 - [ ] Developer-run Linux amd64 `dev-reset.sh` completes and leaves all three services healthy
 - [ ] Linux `scripts/testing/e2e-test.sh` passes
+- [ ] Linux `scripts/testing/e2e-playwright.sh` passes if the Emscripten pin changed
 - [ ] Go tests pass with the CGO environment documented in `AGENTS.md`
 - [ ] The complete Linux reset + e2e gate is repeated after FreeBSD passes
 
@@ -289,27 +408,33 @@ After Linux/systemd and FreeBSD/rc.d both pass their blocking gates, Devuan/SysV
 
 - [ ] Preflight accepts FreeBSD 15.1-RELEASE amd64 and rejects FreeBSD <15 / non-amd64
 - [ ] Root + `ARKFILE_DEV_USER` resolution works without the sudo package; all builds/git operations run as the dev user
-- [ ] Native `pkg` Bun and validated Emscripten build TypeScript and OPAQUE WASM successfully
-- [ ] FreeBSD build embeds vendored crypto/FIDO archives and dynamically links only evidenced base-system runtime libraries
-- [ ] FreeBSD user-secret-master uses native memory locking, no-core advice, and process core suppression
+- [ ] Native Bun and the selected Emscripten build TypeScript and OPAQUE WASM successfully, and the WASM interop harness passes
+- [ ] FreeBSD server linking matches the signed-off decision (recommended: fully static), and the CLI embeds vendored crypto/FIDO archives while dynamically linking only evidenced base-system runtime libraries
+- [ ] FreeBSD user-secret-master uses native memory locking, no-core advice on a page-aligned buffer, `procctl` trace disable, and process core suppression
+- [ ] `go test ./...` passes on the FreeBSD host
 - [ ] rc.d scripts start, status, restart, and stop arkfile, rqlite, and seaweedfs reliably as `arkfile`
-- [ ] rc.d services preserve loopback bindings, permissions, environment loading, pidfiles, and per-service logs
+- [ ] rc.d services preserve loopback bindings, permissions, environment loading, working directories, pidfiles, per-service logs, and log rotation
 - [ ] SeaweedFS FreeBSD amd64 asset downloads and verifies against an independently pinned SHA-256
 - [ ] `build.sh --build-only` succeeds as the resolved dev user (Bun + WASM included)
 - [ ] Root `dev-reset.sh` completes and leaves all three services healthy
-- [ ] Non-root `scripts/testing/e2e-test.sh` passes against that instance
+- [ ] Non-root `scripts/testing/e2e-test.sh` passes against that instance, including the CLI agent tests
+- [ ] `arkfile-client agent status` reports orphaned agent processes correctly on FreeBSD
 - [ ] `AGENTS.md` and `docs/setup.md` describe Linux-primary / FreeBSD-experimental scope accurately
 
 ## Evidence to Record During Bring-Up
 
 Record these in this document as they become known:
 
-- Exact `pkg install` command validated on FreeBSD 15.1-RELEASE amd64
-- Bun and Emscripten versions used for the successful build
+- Exact `pkg install` command validated on FreeBSD 15.1-RELEASE amd64, the pkg repository branch (quarterly or latest), and which packages were locked
+- Bun package origin, version, and repository branch; Emscripten, Node, and npm versions used for the successful build
+- Whether base install used distribution sets or pkgbase, and which base development packages were required
+- Output format of FreeBSD `sha256sum` on a sample file, confirming it matches what the scripts parse
 - Pinned SHA-256 for SeaweedFS `freebsd_amd64.tar.gz` and the trusted acquisition procedure used to establish it
-- `file` and `ldd` output for Arkfile server, client, and admin binaries, identifying every accepted FreeBSD base dependency
-- rc.d/sysrc definitions, pidfile locations, log locations, and restart behavior
+- `file` and `ldd` output for Arkfile server, client, and admin binaries, identifying every accepted FreeBSD base dependency; `file` and `ldd` output for `rqlited` and `weed`
+- rc.d/sysrc definitions, `daemon(8)` arguments, pidfile locations, log locations and modes, newsyslog entry, and restart behavior
+- `procstat -l` core limit and `procctl` trace status for the running arkfile process
+- The dev user's login class `memorylocked` limit and whether the CLI agent `mlock` calls succeed
 - Linux before/after reset + e2e results
-- FreeBSD reset + e2e results
+- FreeBSD `go test`, reset, and e2e results
 
-Any new dynamic ports dependency, shared crypto dependency, weakening of Linux static verification, root build fallback, root sourcing of `secrets.env`, or Linux dev-reset behavior change is a new locked decision requiring developer sign-off. It must not be treated as an implementation detail.
+Any new dynamic ports dependency, shared crypto dependency, weakening of Linux static verification, a non-static FreeBSD server, divergent Emscripten versions between Linux and FreeBSD, root build fallback, root sourcing of `secrets.env`, or Linux dev-reset behavior change is a new locked decision requiring developer sign-off. It must not be treated as an implementation detail.
