@@ -9,7 +9,6 @@ User=arkfile
 Group=arkfile
 LimitCORE=0
 WorkingDirectory=/opt/arkfile/var/lib/seaweedfs
-EnvironmentFile=/opt/arkfile/etc/secrets.env
 
 ExecStart=/usr/local/bin/weed server \
     -dir=/opt/arkfile/var/lib/seaweedfs/data \

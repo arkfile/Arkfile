@@ -17,7 +17,8 @@ echo -e "${GREEN}Setting up Arkfile directory structure...${NC}"
 # Create main directory structure
 echo "Creating main directories..."
 sudo install -d -m 755 -o ${USER} -g ${GROUP} ${BASE_DIR}
-sudo install -d -m 755 -o ${USER} -g ${GROUP} "${BASE_DIR}/bin"
+# bin/ is root-owned so the service user cannot replace its own binaries
+sudo install -d -m 755 -o root -g 0 "${BASE_DIR}/bin"
 # etc/ and etc/keys/ are 755 so the caddy user can traverse to the public CA cert
 sudo install -d -m 755 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc"
 sudo install -d -m 755 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys"

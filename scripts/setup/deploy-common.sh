@@ -105,12 +105,13 @@ stop_service_if_running() {
 }
 stop_service_gracefully() { stop_service_if_running "$@"; }
 
-# Fail if any file under a directory is root-owned (catches stray root writes).
+# Fail if any file outside bin/ is root-owned (catches stray root writes), or
+# if anything under bin/ is not root-owned (see apply_arkfile_bin_ownership).
 verify_ownership() {
     local check_dir="$1"
     print_status "INFO" "Verifying directory ownership for $check_dir..."
-    local root_owned
-    root_owned=$(find "$check_dir" -user root 2>/dev/null | grep -v "^$" || true)
+    local root_owned bin_not_root
+    root_owned=$(find "$check_dir" -path "$check_dir/bin" -prune -o -user root -print 2>/dev/null | grep -v "^$" || true)
     if [ -n "$root_owned" ]; then
         print_status "ERROR" "Found root-owned files/directories:"
         echo "$root_owned" | while read -r file; do
@@ -118,8 +119,46 @@ verify_ownership() {
         done
         return 1
     fi
-    print_status "SUCCESS" "All files in $check_dir owned by arkfile user"
+    if [ -d "$check_dir/bin" ]; then
+        bin_not_root=$(find "$check_dir/bin" ! -user root 2>/dev/null | grep -v "^$" || true)
+        if [ -n "$bin_not_root" ]; then
+            print_status "ERROR" "Found binaries not owned by root:"
+            echo "$bin_not_root" | while read -r file; do
+                echo "  - $file"
+            done
+            return 1
+        fi
+    fi
+    print_status "SUCCESS" "All files in $check_dir owned by arkfile user (bin/ owned by root)"
     return 0
+}
+
+# Installed executables stay root-owned so the arkfile service user cannot
+# replace its own binaries; services only need read and execute access.
+# Group 0 is named root on Linux and wheel on FreeBSD.
+apply_arkfile_bin_ownership() {
+    local root="${1:-$ARKFILE_DIR}"
+    [ -d "$root/bin" ] || return 0
+    chown -R root:0 "$root/bin"
+    chmod 755 "$root/bin"
+}
+
+# c-libs/ and wasm/ under the install root are build output only; nothing
+# reads them at runtime. Removes exactly those two directories.
+remove_stale_build_output_from_install_root() {
+    local root="${1:-$ARKFILE_DIR}"
+    local root_abs build_abs name
+    [ -n "$root" ] && [ -d "$root" ] || return 0
+    root_abs="$(cd "$root" && pwd -P)"
+    [ "$root_abs" != "/" ] || return 0
+    build_abs="$(cd "$BUILD_ROOT" 2>/dev/null && pwd -P || true)"
+    [ "$root_abs" != "$build_abs" ] || return 0
+    for name in c-libs wasm; do
+        if [ -d "$root_abs/$name" ] && [ ! -L "$root_abs/$name" ]; then
+            rm -rf "${root_abs:?}/${name:?}"
+            print_status "INFO" "Removed build-only directory from install root: $root_abs/$name"
+        fi
+    done
 }
 
 # Username rules mirror the Go validator in utils/username_validator.go.
@@ -391,7 +430,7 @@ rollback_on_failure() {
     if [ "${BACKUP_COMPLETE:-false}" = "true" ] && [ -d "${BACKUP_DIR:-}" ]; then
         if [ "${BACKUP_APPLICATION_COMMITTED:-false}" != "true" ]; then
             cp "$BACKUP_DIR"/arkfile* "$ARKFILE_DIR/bin/" 2>/dev/null || rollback_failed=true
-            chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/bin" || rollback_failed=true
+            apply_arkfile_bin_ownership "$ARKFILE_DIR" || rollback_failed=true
         fi
         if [ -f "$BACKUP_DIR/caddy" ]; then
             install -m 755 -o root -g root "$BACKUP_DIR/caddy" /usr/local/bin/caddy || rollback_failed=true
@@ -578,10 +617,11 @@ backup_binaries_before_overwrite() {
 
 install_binaries_from_build() {
     print_status "INFO" "Deploying Go binaries..."
-    install -m 755 -o "$ARKFILE_USER" -g "$ARKFILE_GROUP" "$BUILD_BIN/arkfile"        "$ARKFILE_DIR/bin/arkfile"
-    install -m 755 -o "$ARKFILE_USER" -g "$ARKFILE_GROUP" "$BUILD_BIN/arkfile-client" "$ARKFILE_DIR/bin/arkfile-client"
-    install -m 755 -o "$ARKFILE_USER" -g "$ARKFILE_GROUP" "$BUILD_BIN/arkfile-admin"  "$ARKFILE_DIR/bin/arkfile-admin"
-    print_status "SUCCESS" "Binaries deployed"
+    install -m 755 -o root -g 0 "$BUILD_BIN/arkfile"        "$ARKFILE_DIR/bin/arkfile"
+    install -m 755 -o root -g 0 "$BUILD_BIN/arkfile-client" "$ARKFILE_DIR/bin/arkfile-client"
+    install -m 755 -o root -g 0 "$BUILD_BIN/arkfile-admin"  "$ARKFILE_DIR/bin/arkfile-admin"
+    apply_arkfile_bin_ownership "$ARKFILE_DIR"
+    print_status "SUCCESS" "Binaries deployed (root-owned)"
 }
 
 sync_static_assets_from_build() {

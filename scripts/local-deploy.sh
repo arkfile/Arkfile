@@ -519,6 +519,7 @@ print_deploy_phase "Set ownership"
 
 chown -R arkfile:arkfile "$ARKFILE_DIR"
 apply_arkfile_key_permissions "$ARKFILE_DIR"
+apply_arkfile_bin_ownership "$ARKFILE_DIR"
 
 # Create and permission log directory
 mkdir -p "$ARKFILE_DIR/var/log"
@@ -754,11 +755,13 @@ print_status "SUCCESS" "TLS certificates generated"
 # Fix ownership after key generation
 chown -R arkfile:arkfile "$ARKFILE_DIR"
 apply_arkfile_key_permissions "$ARKFILE_DIR"
+apply_arkfile_bin_ownership "$ARKFILE_DIR"
 
 if ! verify_ownership "$ARKFILE_DIR"; then
     print_status "WARNING" "Fixing ownership after key generation..."
     chown -R arkfile:arkfile "$ARKFILE_DIR"
     apply_arkfile_key_permissions "$ARKFILE_DIR"
+    apply_arkfile_bin_ownership "$ARKFILE_DIR"
     if ! verify_ownership "$ARKFILE_DIR"; then
         print_status "ERROR" "Failed to fix ownership"
         exit 1

@@ -4,6 +4,16 @@ package crypto
 
 import "fmt"
 
+// allocSecretPage reports no dedicated page on non-Linux systems; the key stays on the heap.
+func allocSecretPage() ([]byte, error) {
+	return nil, nil
+}
+
+// freeSecretPage is a no-op on non-Linux systems.
+func freeSecretPage(page []byte) error {
+	return nil
+}
+
 // prctlDisableCoredump is a no-op on non-Linux systems.
 func prctlDisableCoredump() error {
 	return nil

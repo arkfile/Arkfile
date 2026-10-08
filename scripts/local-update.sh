@@ -239,6 +239,7 @@ print_deploy_phase "Deploy binaries and static assets"
 backup_binaries_before_overwrite "arkfile"
 install_binaries_from_build
 sync_static_assets_from_build
+remove_stale_build_output_from_install_root "$ARKFILE_DIR"
 
 print_status "INFO" "Deploying updated systemd service files (fail closed on copy failure)..."
 # Caddy is not used by local deployments (self-signed TLS served by Arkfile directly),

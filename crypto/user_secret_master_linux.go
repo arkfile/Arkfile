@@ -3,10 +3,21 @@
 package crypto
 
 import (
+	"os"
 	"syscall"
 
 	"golang.org/x/sys/unix"
 )
+
+// allocSecretPage maps one anonymous private page outside the Go heap.
+func allocSecretPage() ([]byte, error) {
+	return unix.Mmap(-1, 0, os.Getpagesize(), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
+}
+
+// freeSecretPage unmaps a page returned by allocSecretPage.
+func freeSecretPage(page []byte) error {
+	return unix.Munmap(page)
+}
 
 // prctlDisableCoredump disables core dumps for the current process on Linux.
 func prctlDisableCoredump() error {

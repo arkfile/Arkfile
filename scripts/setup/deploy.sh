@@ -15,27 +15,25 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m'
 
-# Function to verify no root-owned files exist in /opt/arkfile
-verify_ownership() {
-    local check_dir="$1"
-    echo -e "${BLUE}[VERIFY] Checking directory ownership for $check_dir...${NC}"
-    
-    # Find any root-owned files/directories, ignoring the bin directory (which is root-owned for security)
-    local root_owned=$(find "$check_dir" -path "$check_dir/bin" -prune -o -user root -print 2>/dev/null | grep -v "^$" || true)
-    
-    if [ -n "$root_owned" ]; then
-        echo -e "${RED}[X] Found root-owned files/directories:${NC}"
-        echo "$root_owned" | while read -r file; do
-            echo "  - $file"
-        done
-        return 1
-    fi
-    
-    echo -e "${GREEN}[OK] All non-binary assets in $check_dir owned by arkfile user${NC}"
-    return 0
-}
+if [ "$EUID" -ne 0 ]; then
+    echo -e "${RED}[X] deploy.sh must run as root (it is called by dev-reset.sh, local-deploy.sh, and the VPS deploy scripts).${NC}"
+    exit 1
+fi
+
+# Shared helpers: print_status, verify_ownership, apply_arkfile_bin_ownership,
+# remove_stale_build_output_from_install_root.
+ARKFILE_DIR="$BASE_DIR"
+ARKFILE_USER="arkfile"
+ARKFILE_GROUP="arkfile"
+source "$SCRIPT_DIR/deploy-common.sh"
+
+# Runtime artifacts copied from the build root. Other build-root content
+# (c-libs/, wasm/) is build output and must not land in the install root.
+REQUIRED_ARTIFACT_DIRS="bin client database systemd webroot"
+OPTIONAL_ARTIFACT_FILES="version.json sbom.cdx.json build-dependencies.json"
 
 echo -e "${GREEN}Deploying ${APP_NAME} locally...${NC}"
 
@@ -77,11 +75,24 @@ echo -e "${GREEN}[OK] libopaque.js found in build directory${NC}"
 
 # Copy build artifacts to installation directory with proper ownership
 echo -e "${YELLOW}Copying build artifacts to ${BASE_DIR}...${NC}"
-sudo cp -r ${BUILD_DIR}/* ${BASE_DIR}/
+for artifact in $REQUIRED_ARTIFACT_DIRS; do
+    if [ ! -d "${BUILD_DIR}/${artifact}" ]; then
+        echo -e "${RED}[X] Required build artifact directory missing: ${BUILD_DIR}/${artifact}${NC}"
+        exit 1
+    fi
+    cp -r "${BUILD_DIR}/${artifact}" "${BASE_DIR}/"
+done
+for artifact in $OPTIONAL_ARTIFACT_FILES; do
+    if [ -f "${BUILD_DIR}/${artifact}" ]; then
+        cp "${BUILD_DIR}/${artifact}" "${BASE_DIR}/"
+    fi
+done
+remove_stale_build_output_from_install_root "$BASE_DIR"
+
 # Set proper ownership after copy
 echo -e "${YELLOW}[KEY] Setting permissions (least-privilege secured: bin directory remains root-owned)...${NC}"
-sudo chown -R arkfile:arkfile ${BASE_DIR}
-sudo chown -R root:root ${BASE_DIR}/bin
+chown -R arkfile:arkfile "${BASE_DIR}"
+apply_arkfile_bin_ownership "$BASE_DIR"
 
 # Ensure executable permissions on binaries
 sudo find ${BASE_DIR} -type f -executable -exec chmod 755 {} \;
@@ -105,8 +116,9 @@ sudo systemctl enable ${APP_NAME} 2>/dev/null || true
 if ! verify_ownership "$BASE_DIR"; then
     echo -e "${RED}[X] Ownership verification failed after deployment${NC}"
     echo -e "${YELLOW}[FIX] Attempting to fix ownership...${NC}"
-    sudo chown -R arkfile:arkfile "$BASE_DIR"
-    
+    chown -R arkfile:arkfile "$BASE_DIR"
+    apply_arkfile_bin_ownership "$BASE_DIR"
+
     if ! verify_ownership "$BASE_DIR"; then
         echo -e "${RED}[X] Failed to fix ownership issues${NC}"
         exit 1
@@ -118,7 +130,7 @@ echo -e "${GREEN}[OK] Deployment complete!${NC}"
 echo
 echo -e "${YELLOW}[STATS] Deployment Summary:${NC}"
 echo "- Build artifacts copied to: ${BASE_DIR}"
-echo "- Permissions set for arkfile:arkfile user"
+echo "- Permissions set for arkfile:arkfile user (bin/ owned by root)"
 echo "- Systemd services installed and enabled"
 echo
 echo -e "${BLUE}[START] To start the services:${NC}"

@@ -378,6 +378,7 @@ generate_crypto_material() {
     ./scripts/setup/04-setup-tls-certs.sh
     chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR"
     apply_arkfile_key_permissions "$ARKFILE_DIR"
+    apply_arkfile_bin_ownership "$ARKFILE_DIR"
     verify_ownership "$ARKFILE_DIR"
     print_status "SUCCESS" "Cryptographic material ready"
 }
@@ -950,6 +951,7 @@ deploy_build_artifacts
 
 chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR"
 apply_arkfile_key_permissions "$ARKFILE_DIR"
+apply_arkfile_bin_ownership "$ARKFILE_DIR"
 
 mkdir -p "$ARKFILE_DIR/var/log"
 chown "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/var/log"

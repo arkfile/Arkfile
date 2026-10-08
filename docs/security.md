@@ -406,8 +406,9 @@ JWT signing keys are managed in `system_keys` via KeyManager and support online,
 Arkfile partitions system secrets into separate trust layers (envelope master, operational, server-identity, and the user-secret master). The user-secret master holds user-secret-wrapping keys (`mfa_user` and `contact_info` purpose keys derived via HKDF-SHA256 from the `/opt/arkfile/etc/keys/user-secret-master.bin` file with 0400 owner-only permissions).
 
 **In-Memory Hardening:**
-- System loader pins the user-secret master key using POSIX `mlock` to disable memory swapping of keys to disk storage.
-- Key pages are marked on initialization using `madvise(..., MADV_DONTDUMP)` to ensure they won't leak into core logs.
+- On Linux the user-secret master key is loaded into its own anonymous, page-aligned memory mapping outside the Go heap, so page-granular protections cover only key bytes.
+- System loader pins that page using POSIX `mlock` to disable memory swapping of keys to disk storage.
+- The key page is marked on initialization using `madvise(..., MADV_DONTDUMP)` to ensure it won't leak into core logs.
 - Disables process-wide core dumps entirely using `prctl(PR_SET_DUMPABLE, 0)`.
 
 **Lost-Device User Recovery Model:**

@@ -247,6 +247,7 @@ backup_binaries_before_overwrite "caddy arkfile"
 install_binaries_from_build
 install_caddy_binary_from_build
 sync_static_assets_from_build
+remove_stale_build_output_from_install_root "$ARKFILE_DIR"
 
 print_status "INFO" "Deploying updated systemd service files (fail closed on copy failure)..."
 if [ -d "$BUILD_ROOT/systemd" ]; then

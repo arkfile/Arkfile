@@ -21,6 +21,9 @@ func randomHex(n int) string {
 var (
 	userSecretMasterKey     []byte
 	userSecretMasterMlocked bool
+	// userSecretMasterPage is the dedicated page backing userSecretMasterKey,
+	// or nil when the key lives on the Go heap.
+	userSecretMasterPage []byte
 )
 
 const (
@@ -31,16 +34,36 @@ const (
 // LoadUserSecretMaster loads and memory-hardens the user-secret master key.
 // It is intended to run once at startup.
 func LoadUserSecretMaster() error {
-	// Read Master Key
-	file, err := os.Open(UserSecretMasterPath)
+	return loadUserSecretMasterFrom(UserSecretMasterPath)
+}
+
+func loadUserSecretMasterFrom(path string) error {
+	file, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("failed to open user-secret master key file: %w", err)
 	}
 	defer file.Close()
 
-	key := make([]byte, 32)
+	// madvise rejects addresses that are not page-aligned, and mlock/madvise act on
+	// whole pages, so the key gets a page of its own where the platform supports it.
+	page, err := allocSecretPage()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to allocate a dedicated page for the user-secret master key, using heap memory: %v\n", err)
+		page = nil
+	}
+	var key []byte
+	if page != nil {
+		key = page[:32:32]
+	} else {
+		key = make([]byte, 32)
+	}
+
 	n, err := io.ReadFull(file, key)
 	if err != nil {
+		zeroBytes(key)
+		if page != nil {
+			_ = freeSecretPage(page)
+		}
 		return fmt.Errorf("failed to read user-secret master key (got %d bytes): %w", n, err)
 	}
 
@@ -51,26 +74,32 @@ func LoadUserSecretMaster() error {
 		fmt.Fprintf(os.Stderr, "Warning: failed to set PR_SET_DUMPABLE=0: %v\n", err)
 	}
 
+	protected := key
+	if page != nil {
+		protected = page
+	}
+
 	// Try to mlock the key to prevent swapping to disk
-	if err := mLockMemory(key); err == nil {
+	if err := mLockMemory(protected); err == nil {
 		userSecretMasterMlocked = true
 	} else {
 		fmt.Fprintf(os.Stderr, "Warning: failed to mlock user-secret master key: %v\n", err)
 	}
 
-	// Mark page as MADV_DONTDUMP to exclude it from core dumps
-	// Note: unix.Madvise requires passing a pointer offset or the whole slice
-	if len(key) > 0 {
-		// Madvise requires slice page alignment but since key is small, madvising key slice is best-effort.
-		// On Linux we can pass the slice directly.
-		err := mAdviseDontDump(key)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to madvise MADV_DONTDUMP on user-secret master key: %v\n", err)
-		}
+	// Exclude the key page from core dumps
+	if err := mAdviseDontDump(protected); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to madvise MADV_DONTDUMP on user-secret master key: %v\n", err)
 	}
 
 	userSecretMasterKey = key
+	userSecretMasterPage = page
 	return nil
+}
+
+func zeroBytes(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
 }
 
 // DeriveUserSecretSubkey derives a context-specific key from the loaded user-secret master using HKDF-Expand.
@@ -141,20 +170,24 @@ func WriteUserSecretMasterFile(path string, key []byte, uid, gid int) error {
 
 // SecureZeroUserSecretMaster zeroes out userSecretMasterKey from memory (intended for graceful shutdown)
 func SecureZeroUserSecretMaster() {
-	if len(userSecretMasterKey) > 0 {
+	zeroBytes(userSecretMasterKey)
+	if userSecretMasterPage != nil {
 		if userSecretMasterMlocked {
-			_ = mUnlockMemory(userSecretMasterKey)
-			userSecretMasterMlocked = false
+			_ = mUnlockMemory(userSecretMasterPage)
 		}
-		// Zero memory
-		for i := range userSecretMasterKey {
-			userSecretMasterKey[i] = 0
-		}
-		userSecretMasterKey = nil
+		_ = freeSecretPage(userSecretMasterPage)
+	} else if userSecretMasterMlocked && len(userSecretMasterKey) > 0 {
+		_ = mUnlockMemory(userSecretMasterKey)
 	}
+	userSecretMasterKey = nil
+	userSecretMasterPage = nil
+	userSecretMasterMlocked = false
 }
 
 // SetUserSecretMasterForTest allows unit tests to set a mock/temp master key
 func SetUserSecretMasterForTest(key []byte) {
+	if userSecretMasterPage != nil {
+		SecureZeroUserSecretMaster()
+	}
 	userSecretMasterKey = key
 }

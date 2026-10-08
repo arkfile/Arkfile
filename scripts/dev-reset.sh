@@ -377,6 +377,7 @@ echo "===================================="
 print_status "INFO" "Ensuring correct ownership of all directories..."
 chown -R arkfile:arkfile "$ARKFILE_DIR"
 apply_arkfile_key_permissions "$ARKFILE_DIR"
+apply_arkfile_bin_ownership "$ARKFILE_DIR"
 
 print_status "SUCCESS" "Directory ownership verified"
 
@@ -570,6 +571,7 @@ print_status "SUCCESS" "TLS certificates generated"
 
 chown -R arkfile:arkfile "$ARKFILE_DIR"
 apply_arkfile_key_permissions "$ARKFILE_DIR"
+apply_arkfile_bin_ownership "$ARKFILE_DIR"
 
 # Verify ownership after key generation
 if ! verify_ownership "$ARKFILE_DIR"; then
@@ -577,6 +579,7 @@ if ! verify_ownership "$ARKFILE_DIR"; then
     print_status "INFO" "Attempting to fix ownership..."
     chown -R arkfile:arkfile "$ARKFILE_DIR"
     apply_arkfile_key_permissions "$ARKFILE_DIR"
+    apply_arkfile_bin_ownership "$ARKFILE_DIR"
 
     if ! verify_ownership "$ARKFILE_DIR"; then
         print_status "ERROR" "Failed to fix ownership issues"
