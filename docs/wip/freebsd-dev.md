@@ -6,9 +6,9 @@ FreeBSD is a strong next host target for Arkfile’s development and self-hosted
 
 ## Status
 
-Draft planning document. Decisions in "Locked Decisions" are locked for the first FreeBSD bring-up. Decisions in "Decisions Pending Developer Sign-Off" are not locked; implementation must not proceed past the steps that depend on them until the developer chooses. No FreeBSD-specific deploy/runtime code has been written yet. The initial validation target is FreeBSD 15.1-RELEASE amd64; releases below FreeBSD 15 are unsupported.
+Draft planning document. Decisions in "Locked Decisions" and "Toolchain Decisions" are locked for the first FreeBSD bring-up; the three toolchain decisions (Emscripten version, FreeBSD server linking, Bun source) were signed off by the developer on 2026-10-08. No FreeBSD-specific deploy/runtime code has been written yet. The initial validation target is FreeBSD 15.1-RELEASE amd64; releases below FreeBSD 15 are unsupported.
 
-The C/Go build layer already has partial FreeBSD awareness in `scripts/setup/build-config.sh` and related C-library scripts, and the CLI already has a FreeBSD agent implementation (`cmd/arkfile-client/agent_freebsd.go`) that has never run under e2e. The reset/deploy/runtime path, WASM toolchain, service management, privilege transitions, application memory hardening, SeaweedFS download, e2e script, and GNU/BSD userland seams all require work. A review of the current call graph against FreeBSD 15 base userland and the current FreeBSD ports tree found several hard failures and two toolchain mismatches; they are listed in "Known Hard Failures in the Current Call Graph" and "Decisions Pending Developer Sign-Off".
+The C/Go build layer already has partial FreeBSD awareness in `scripts/setup/build-config.sh` and related C-library scripts, and the CLI already has a FreeBSD agent implementation (`cmd/arkfile-client/agent_freebsd.go`) that has never run under e2e. The reset/deploy/runtime path, WASM toolchain, service management, privilege transitions, application memory hardening, SeaweedFS download, e2e script, and GNU/BSD userland seams all require work. A review of the current call graph against FreeBSD 15 base userland, the FreeBSD 15 package repositories, and upstream release artifacts found several hard failures and toolchain mismatches; they are listed in "Known Hard Failures in the Current Call Graph" and resolved in "Toolchain Decisions".
 
 ## Overview
 
@@ -51,7 +51,10 @@ Success for this WIP requires both platforms: the existing Linux amd64 `sudo bas
 | Arkfile env loading | Add explicit Go application support for `ARKFILE_ENV_FILE`. Parse it with the existing `godotenv` dependency before configuration loading, without overriding pre-existing process environment values. FreeBSD rc.d passes only the non-secret path. Never source `secrets.env` as root. Add a parsing parity test (see "Go application/runtime portability"). |
 | Shell tool shims | FreeBSD 15 base already provides GNU-compatible `sha256sum` (via `md5(1)` links), `mktemp --tmpdir`, `find -executable`, `date +%N`, `base64`, and `grep` with GNU basic-regex extensions, so those call sites need no shim. Add portable helpers only where behavior differs: `stat_size` (`wc -c`), `stat_owner` (OS-specific `stat`), in-place file editing via temporary file and rename instead of `sed -i`, byte truncation instead of `head -c -N`, and explicit process matching instead of `\|` alternation in `pgrep`/`pkill`. Do not invoke `go run` for trivial host utilities. |
 | GNU make for vendored WASM build | For the WASM step only, prepend a build-local directory to `PATH` in which `make` resolves to `gmake`. The upstream `libopaque/js/Makefile` is GNU make syntax and invokes sub-makes as a literal `make --directory=...`, so passing `gmake` at the top level is not sufficient. Do not edit vendored Makefiles. |
-| emsdk on FreeBSD | FreeBSD uses native `pkg install emscripten` and never attempts emsdk installation. The exact Emscripten version policy is pending (see below). |
+| Emscripten | Emscripten 6.0.3 on both platforms: emsdk 6.0.3 on Linux, `pkg install emscripten` 6.0.3 on FreeBSD. FreeBSD never attempts emsdk installation. See "Toolchain Decisions". |
+| Server linking | Fully static Arkfile server on FreeBSD, as on Linux, verified by the existing `verify_server_binary_static`. See "Toolchain Decisions". |
+| Bun | Official oven-sh `bun-v1.3.14` FreeBSD release binary, installed by the developer from a pinned, signature-verified zip. Not the FreeBSD `lang/bun` port and not `lang/bun-linux`. See "Toolchain Decisions". |
+| FreeBSD package branch | FreeBSD dev hosts use the `latest` pkg repository, and `pkg lock` Emscripten and Go after validation. See "Toolchain Decisions". |
 | TypeScript assets | Must be built on the FreeBSD host via bun; do not ship or reuse Linux-built `dist/` as a supported path |
 | Preflight before NUKE | All host, privilege, dev-user, and toolchain checks run before the NUKE confirmation. A missing or wrong-version tool must not be discovered after data has been destroyed. |
 | e2e portability | `scripts/testing/e2e-test.sh` is in scope for file-size, truncation, prerequisite, and reset-guidance portability. Run it as the non-root dev user after root finishes FreeBSD `dev-reset`. |
@@ -62,25 +65,80 @@ Success for this WIP requires both platforms: the existing Linux amd64 `sudo bas
 | Devuan / non-systemd Linux | Not an exit criterion for this WIP. Keep OS and service-manager detection separate so a later SysVinit/OpenRC/runit adapter can reuse this work without redesign. |
 | Docs honesty | Until e2e is green: Linux is the supported deploy host; FreeBSD `dev-reset` is experimental/WIP. Update `AGENTS.md` and `docs/setup.md` accordingly when implementing and again when complete. |
 
-## Decisions Pending Developer Sign-Off
+## Toolchain Decisions
 
-### Emscripten version policy
+These three decisions were signed off by the developer on 2026-10-08. Facts below were checked on that date against the FreeBSD 15 amd64 `quarterly` and `latest` package catalogs, the FreeBSD ports tree, and upstream release artifacts.
 
-Linux pins emsdk Emscripten 4.0.23 (`EMSCRIPTEN_VERSION` in `build-config.sh`), and `ensure_emscripten` in `build-libopaque-wasm.sh` rejects any system `emcc` that does not match the pin exactly. The FreeBSD port `devel/emscripten` is 6.0.3 on `main` and `2026Q4` (6.0.2 in `2026Q3`), built against `llvm-devel`. emsdk publishes no FreeBSD host binaries. Accepting the FreeBSD port as-is means the same commit ships a different `libopaque.js` (different WASM, different SRI hash) depending on build host, which conflicts with the "one way to do things for a given client type" rule in `AGENTS.md`.
+### Emscripten 6.0.3 on both platforms
 
-Option A (recommended): move the Linux pin to the Emscripten version that the selected FreeBSD package branch ships, prove it on Linux first with `dev-reset.sh`, `e2e-test.sh`, and `e2e-playwright.sh`, then use the same version on FreeBSD. FreeBSD quarterly branches move the version each quarter, so the FreeBSD host must `pkg lock emscripten` after validation and the pin must be revalidated deliberately when it changes. The existing libsodium.js `emscripten.sh` compatibility patch must be revalidated against the new version.
+Linux currently pins emsdk Emscripten 4.0.23 (`EMSCRIPTEN_VERSION` in `build-config.sh`), and `ensure_emscripten` in `build-libopaque-wasm.sh` rejects any system `emcc` that does not match the pin exactly. emsdk publishes no FreeBSD host binaries. The FreeBSD `devel/emscripten` package is 6.0.3 in `latest` and 6.0.2 in `quarterly`, built against `llvm-devel`. emsdk has a 6.0.3 tag for Linux.
 
-Option B: keep 4.0.23 on Linux and accept a validated, different FreeBSD version. This requires an explicit cross-check gate: the OPAQUE WASM interop harness (`scripts/testing/opaque-wasm-interop-harness.js`) against both builds, plus registration on one platform and login on the other, and documentation that the two hosts ship different WASM artifacts.
+Decision: move `EMSCRIPTEN_VERSION` to 6.0.3 and prove it on Linux first as its own change (`dev-reset.sh`, `e2e-test.sh`, `e2e-playwright.sh`, and the OPAQUE WASM interop harness) before any FreeBSD work depends on it. FreeBSD then uses the `latest` package at 6.0.3 and runs `pkg lock emscripten` after validation. Keeping 4.0.23 on Linux next to 6.x on FreeBSD was rejected because it would mean two compatibility patch sets and two different `libopaque.js` artifacts from one commit, against the "one way to do things for a given client type" rule in `AGENTS.md`.
 
-Option C: build the pinned Emscripten 4.0.23 and its LLVM/Binaryen from source on FreeBSD. This is the most faithful but the most work and is not recommended for v1.
+Known required change: Emscripten 6.0.0 flipped the `FAKE_DYLIBS` default from true to false, so `-shared` now produces a real dynamic library. The upstream libopaque.js Makefile builds `libopaque.so` with `emcc -shared` and then statically links `-L. -lopaque` into `libopaque.js`, which relies on the old behavior. Add `-sFAKE_DYLIBS=1` to `WASM_LIBOPAQUE_LDFLAGS` in `build-libopaque-wasm.sh` (the setting still exists in 6.0.3) rather than editing the vendored Makefile. The libsodium.js `emscripten.sh` compatibility patch must be revalidated against 6.0.3.
 
-### Server linking on FreeBSD
+Unchanged between 4.0.23 and 6.0.3: the generated-code browser minimums (`MIN_FIREFOX_VERSION` 79, `MIN_CHROME_VERSION` 85, `MIN_SAFARI_VERSION` 15.0), so no supported browser, including Tor Browser and older mobile browsers, loses support. `MIN_NODE_VERSION` rose from 16.0 to 18.3, which does not affect Arkfile because Bun runs the WASM harness.
 
-The previous draft allowed FreeBSD base runtime libraries to be dynamically linked into the server. That is a weakening relative to both Linux and the current code: `verify_server_binary_static` in `build-config.sh` already requires a statically linked server on FreeBSD, and FreeBSD base ships static `libc` and `libthr` archives with a static-capable resolver. Recommended: keep a fully static server as the FreeBSD target with the existing `-extldflags "-static"` path, and permit dynamic base libraries only if a static link is shown to fail, with the failure, the `ldd` output, and the accepted library list recorded here and signed off. On pkgbase installs, the static archives and headers come from the base `-dev` packages, which become a documented prerequisite.
+Limitation: the FreeBSD package is built against an `llvm-devel` snapshot rather than the LLVM that emsdk bundles, so Linux and FreeBSD builds will not be byte-identical even at the same Emscripten version. The cross-platform gate is behavioral: the interop harness passes on both builds, and a user registered through one platform's build logs in through the other's. When the FreeBSD package version changes, the pin is revalidated deliberately on Linux first.
 
-### Bun package source
+### Fully static server on FreeBSD
 
-The FreeBSD port `lang/bun` is 1.3.14, which matches `BUN_ZIG_VERSION`, but it is marked `BROKEN= Checksum error` on `main` and `2026Q4`; it was not broken in `2026Q3`. A binary package may therefore be missing from the current quarterly repository. It is also a downstream FreeBSD build rather than an oven-sh release binary. Choose one: use the package from whichever repository branch currently carries a working 1.3.14 build and `pkg lock` it, or build the port locally once the checksum issue is fixed upstream. In either case `require_bun_zig_build` still enforces 1.3.x, the dev-reset preflight fails fast if Bun is missing, and the exact package origin, version, and repository branch are recorded under "Evidence".
+`verify_server_binary_static` already requires a statically linked server on FreeBSD, FreeBSD base ships static `libc` and `libthr`, and static linking on FreeBSD avoids the glibc resolver caveats. Decision: keep the existing `-extldflags "-static"` path on FreeBSD. If the static link reports libc resolver or user-lookup problems, add `-tags netgo,osusergo` for FreeBSD only. Dynamic base libraries are permitted only if a static link is shown to fail, with the error, the `ldd` output, and the accepted library list recorded here and signed off. On pkgbase installs, the base development packages that provide headers and static archives are a documented prerequisite. rqlite, a third-party service binary, may link dynamically against base libraries; record its `ldd` output.
+
+### Bun: pinned upstream `bun-v1.3.14` FreeBSD release binary
+
+Neither FreeBSD 15 package repository has a native `bun` package: `lang/bun` is marked `BROKEN= Checksum error`. `latest` carries `lang/bun-linux` 1.3.14, which runs the Linux binary under the Linux compatibility layer. Neither is used. oven-sh publishes official native FreeBSD binaries starting with `bun-v1.3.14`, the exact Zig-built version Arkfile pins (`BUN_ZIG_VERSION`), signed with the same release process as the Linux binaries. 1.3.13 and earlier have no FreeBSD assets. This gives FreeBSD the same upstream release, at the same version, that Linux developers run, with no Linux compatibility layer and no dependence on the broken port.
+
+Pinned artifact (verified 2026-10-08):
+
+| Item | Value |
+|------|-------|
+| Release | `bun-v1.3.14` (published 2026-05-13) |
+| Zip | `https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-freebsd-x64.zip` |
+| Zip SHA-256 | `b881dc4ddbd68c79a35bd3549088bd1d7003b562cec3cb7954c0ca8b6f5288a5` |
+| Binary inside zip | `bun-freebsd-x64/bun` (ELF 64-bit x86-64, FreeBSD) |
+| Binary SHA-256 | `72aa72cad645cddb83601eb34105a72f3d76d332ec3aa5a469a5a6f0ca845793` |
+| Checksum source | `SHASUMS256.txt`, clearsigned as `SHASUMS256.txt.asc` in the same release |
+| Signing key | "Robobun <robobun@oven.sh>", EdDSA, fingerprint `F3DC C08A 8572 C074 9B3E 1888 8EAB 4D40 A7B2 2B59`, fetched from keys.openpgp.org |
+
+The `bun-freebsd-x64-baseline.zip` (zip SHA-256 `cf24aff5d2b7d7c1d9838f58ae6162a5565e87584495fb8bcd2cfbae4f645d92`) contains a byte-identical `bun` binary, so one binary pin covers both and the CPU-baseline choice does not arise for 1.3.14 on FreeBSD. The `-profile` zips are debug builds and are not used. This is upstream's first FreeBSD release, so its behavior must be validated on the host (see "Exit Criteria").
+
+Establishing or refreshing the pin (developer, once per Bun version, on any host with `gpg`):
+
+```bash
+B=https://github.com/oven-sh/bun/releases/download/bun-v1.3.14
+curl -fsSLO "$B/SHASUMS256.txt.asc" && curl -fsSLO "$B/bun-freebsd-x64.zip"
+gpg --recv-keys F3DCC08A8572C0749B3E18888EAB4D40A7B22B59   # or import from keys.openpgp.org
+gpg --verify SHASUMS256.txt.asc                            # must report a good signature from that fingerprint
+gpg --decrypt SHASUMS256.txt.asc 2>/dev/null | grep ' bun-freebsd-x64.zip$'
+sha256sum bun-freebsd-x64.zip                              # must equal the signed line
+unzip -p bun-freebsd-x64.zip bun-freebsd-x64/bun | sha256sum   # binary pin
+```
+
+The two digests are recorded in `build-config.sh` next to `BUN_ZIG_VERSION` as `BUN_FREEBSD_X64_ZIP_SHA256` and `BUN_FREEBSD_X64_BIN_SHA256`. Scripts never run `gpg`; the signature check is a pin-establishment step, and the scripts trust the recorded digests.
+
+Installing on a FreeBSD dev host (developer, as the dev user, matching the Linux rule that `dev-reset.sh` does not install Bun). `bun.sh/install` has no FreeBSD support, so the install is manual:
+
+```sh
+fetch https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-freebsd-x64.zip
+sha256sum bun-freebsd-x64.zip      # must equal BUN_FREEBSD_X64_ZIP_SHA256
+unzip -q bun-freebsd-x64.zip
+install -d -m 755 ~/.bun/bin
+install -m 755 bun-freebsd-x64/bun ~/.bun/bin/bun
+~/.bun/bin/bun --version           # 1.3.14
+```
+
+`~/.bun/bin/bun` is the same location the Linux installer uses, and `find_bun_binary` already searches it. Do not install `lang/bun-linux` alongside it: that package installs a conflicting `/usr/local/bin/bun` wrapper that `find_bun_binary` would find first via `PATH`.
+
+Script support (implementation):
+
+- `build-config.sh`: add `BUN_FREEBSD_X64_ZIP_SHA256` and `BUN_FREEBSD_X64_BIN_SHA256`; give `print_bun_install_hint` a FreeBSD branch that prints the install procedure above with the pinned digest instead of the `bun.sh/install` command.
+- `find_bun_binary`: resolve the dev user's home through the adapter's `ORIGINAL_USER`, not `$SUDO_USER`, so a FreeBSD root shell with `ARKFILE_DEV_USER` finds `~dev/.bun/bin/bun`.
+- `check_dev_reset_toolchain` (FreeBSD branch, before NUKE): require Bun 1.3.x through `require_bun_zig_build`, and require `sha256sum` of the resolved Bun binary to equal `BUN_FREEBSD_X64_BIN_SHA256`. A mismatch is a hard failure with the install hint. Linux Bun checks are unchanged.
+
+### FreeBSD package branch: `latest`
+
+FreeBSD dev hosts use the `latest` pkg repository. Reasons, from the 2026-10-08 catalogs: `latest` has Emscripten 6.0.3 (quarterly has 6.0.2), and in `quarterly` the `go` metaport is still Go 1.25, which is too old for `go 1.26.6` in `go.mod` (the separate `go126` package is 1.26.7 there, but `find_go_binary` would pick the older `go` first if both are installed). `latest` has the `go` metaport at 1.26. After validation, `pkg lock emscripten go` (and the concrete `go126` package it depends on) so routine upgrades cannot change the pinned toolchain; record locked versions under "Evidence". A host that must use `quarterly` installs `go126` explicitly, puts `/usr/local/go126/bin` first in the dev user's `PATH`, and still needs Emscripten 6.0.3, which may not be available there yet.
 
 ## Privilege Model (FreeBSD)
 
@@ -144,7 +202,7 @@ FreeBSD keeps this step order. OS-specific behavior is restricted to explicit ho
 
 ## What Already Helps
 
-`build-config.sh` already normalizes `FreeBSD` into `BUILD_OS=freebsd`, prefers `gmake`, can use `sysctl hw.ncpu`, maps OpenSSL Configure targets for FreeBSD, and prints FreeBSD package hints. `build-libopaque.sh` / `build-libfido2.sh` already treat FreeBSD as a supported C build OS and select `gmake` through `find_make_command`. `verify_server_binary_static` already has a FreeBSD branch that requires a statically linked server. `06-setup-rqlite-build.sh` already has a `pkg` dependency branch and soft-fails systemd install with a manual rc.d note. `cmd/arkfile-client/agent_freebsd.go` already implements `mlock` and `LOCAL_PEERCRED` peer checks for the CLI agent socket. SeaweedFS 4.18 publishes a `freebsd_amd64.tar.gz` artifact. FreeBSD 15 base provides `sha256sum`, `mktemp --tmpdir`, `find -executable`, `date +%N`, and `base64`, which removes several expected shims. FreeBSD ports carry Bun 1.3.14 and Emscripten, subject to the pending decisions above. These pieces are starting points, not a complete FreeBSD reset path.
+`build-config.sh` already normalizes `FreeBSD` into `BUILD_OS=freebsd`, prefers `gmake`, can use `sysctl hw.ncpu`, maps OpenSSL Configure targets for FreeBSD, and prints FreeBSD package hints. `build-libopaque.sh` / `build-libfido2.sh` already treat FreeBSD as a supported C build OS and select `gmake` through `find_make_command`. `verify_server_binary_static` already has a FreeBSD branch that requires a statically linked server. `06-setup-rqlite-build.sh` already has a `pkg` dependency branch and soft-fails systemd install with a manual rc.d note. `cmd/arkfile-client/agent_freebsd.go` already implements `mlock` and `LOCAL_PEERCRED` peer checks for the CLI agent socket. SeaweedFS 4.18 publishes a `freebsd_amd64.tar.gz` artifact. FreeBSD 15 base provides `sha256sum`, `mktemp --tmpdir`, `find -executable`, `date +%N`, and `base64`, which removes several expected shims. oven-sh publishes an official native FreeBSD binary for the pinned Bun 1.3.14, and the FreeBSD `latest` repository carries Emscripten 6.0.3 and Go 1.26 (see "Toolchain Decisions"). These pieces are starting points, not a complete FreeBSD reset path.
 
 ## Known Hard Failures in the Current Call Graph
 
@@ -180,7 +238,7 @@ Add a small shared adapter. Keep host OS and service-manager detection separate.
 - On FreeBSD: require `EUID=0`, FreeBSD major 15 or newer, amd64, and a resolved non-root dev user; error before mutation otherwise.
 - `run_as_root`: direct exec when root; preserve current Linux sudo behavior when a setup script is intentionally run as non-root.
 - `run_as_dev_user`: argument-safe privilege drop with the correct home, working directory, and selected environment, as described in "Privilege Model".
-- `check_dev_reset_toolchain`: FreeBSD branch checks `bash`, `git`, `go` (meeting `go.mod`), `gmake`, `cmake`, `pkgconf`, `perl` plus the OpenSSL Configure modules, `python3` (3.10+), autotools including `libtoolize`, `curl`, `jq`, `openssl`, `npm`, Bun 1.3.x, `emcc` at the selected version, and `wasm-opt`. Linux keeps its current checks. Called by `dev-reset.sh` before the NUKE confirmation.
+- `check_dev_reset_toolchain`: FreeBSD branch checks `bash`, `git`, `go` (meeting `go.mod`), `gmake`, `cmake`, `pkgconf`, `perl` plus the OpenSSL Configure modules, `python3` (3.10+), autotools including `libtoolize`, `curl`, `jq`, `openssl`, `unzip`, `npm`, Bun 1.3.x whose binary SHA-256 equals `BUN_FREEBSD_X64_BIN_SHA256`, `emcc` 6.0.3, and `wasm-opt`. Linux keeps its current checks. Called by `dev-reset.sh` before the NUKE confirmation.
 - Service API used by reset/deploy: `service_stop`, `service_start`, `service_enable`, `service_is_active`, `service_install_definition`, `service_daemon_reload`, and `service_logs_hint`.
 - Tool helpers: `stat_size`, `stat_owner`, `edit_in_place` (temporary file in the same directory, then rename, preserving mode), `truncate_tail_bytes`, and explicit per-name process matching.
 - `make_gnu_shim_dir`: create a build-local directory under `$BUILD_ROOT` containing `make` pointing at `gmake`, for use only around the vendored WASM build.
@@ -242,11 +300,11 @@ In `05-setup-seaweedfs.sh`:
 
 ### Build and link policy
 
-- Bun: per the pending Bun decision; `require_bun_zig_build` continues to enforce 1.3.x.
-- Emscripten: per the pending Emscripten decision. FreeBSD selects native `emcc`, rejects a version other than the selected one, and never invokes emsdk installation. Validate the libsodium.js `emscripten.sh` compatibility patch against the selected version.
+- Bun: the pinned upstream FreeBSD binary from "Toolchain Decisions"; `require_bun_zig_build` continues to enforce 1.3.x on both platforms, and the FreeBSD preflight additionally checks the binary digest.
+- Emscripten: 6.0.3 on both platforms. The Linux pin move (including `-sFAKE_DYLIBS=1` in `WASM_LIBOPAQUE_LDFLAGS`) lands and passes the Linux gate first. FreeBSD selects native `emcc`, rejects any version other than `EMSCRIPTEN_VERSION`, and never invokes emsdk installation. Revalidate the libsodium.js `emscripten.sh` compatibility patch against 6.0.3.
 - WASM build on FreeBSD: run the vendored Makefile targets with the GNU make shim directory first in `PATH`, require `npm`/`npx` from `www/npm`, and keep `validate_wasm_runtime` mandatory.
 - Server on Linux: retain the current fully static flags and verifier without weakening or broadening accepted dependencies.
-- Server on FreeBSD: per the pending linking decision, recommended fully static with the existing verifier. Report build metadata accurately (do not emit unconditional `staticLinking: true` in `version.json` if any platform is permitted otherwise).
+- Server on FreeBSD: fully static with the existing verifier; `-tags netgo,osusergo` only if the FreeBSD static link requires it. `version.json` keeps `staticLinking: true` only while every platform build is verified static.
 - CLI FIDO: continue vendored static crypto/FIDO archives plus evidenced OS runtime libraries. Extend verifier parsing for FreeBSD `ldd` output (skip the `path:` header) and its base libraries; reject unexpected `/usr/local/lib` dependencies.
 - Replace GNU `stat -c` and `sed -i` usages in `build.sh` / WASM build with the shared helpers.
 - Convert relevant shared-script shebangs from `/bin/bash` to `/usr/bin/env bash`; do not create a FreeBSD filesystem symlink.
@@ -301,14 +359,15 @@ Add a developer-run, non-root test script under `scripts/testing/` that sources 
 
 ### Host prerequisites (document in this WIP and later in setup docs)
 
-Initial FreeBSD 15.1 amd64 package set (verify exact package names and the repository branch on the target host):
+Initial FreeBSD 15.1 amd64 package set from the `latest` repository (verify exact package names on the target host):
 
-- `bash`, `git`, `go` (metaport; 2026Q4 default is the 1.26 line, which satisfies `go 1.26.6` in `go.mod`), `gmake`, `cmake`, `pkgconf`, `perl5`, `p5-Text-Template` if the OpenSSL Configure module check reports it missing, `python3`, `autoconf`, `automake`, `libtool`, `curl`, `ca_root_nss`, `jq`, `bun`, `emscripten`, `npm`
-- No `gcc`; the base `cc` (clang) is the C compiler
+- `bash`, `git`, `go` (metaport at 1.26 in `latest`, which satisfies `go 1.26.6` in `go.mod`), `gmake`, `cmake`, `pkgconf`, `perl5`, `p5-Text-Template` if the OpenSSL Configure module check reports it missing, `python3`, `autoconf`, `automake`, `libtool`, `curl`, `ca_root_nss`, `jq`, `emscripten` (6.0.3; pulls in Node and `llvm-devel`), `npm`
+- Bun is not a package: install the pinned `bun-v1.3.14` FreeBSD zip into the dev user's `~/.bun/bin` as described in "Toolchain Decisions". Do not install `bun-linux`.
+- No `gcc`; the base `cc` (clang) is the C compiler. `unzip` and `fetch` come from base.
 - On pkgbase installs, the base development packages that provide headers and static archives (`libc.a`, `libthr.a`) for the static server link
 - Bun, Go, and npm available in the resolved dev user's PATH
-- `pkg lock` on `bun` and `emscripten` after validation so quarterly upgrades cannot silently change the pinned versions
-- Network access for FreeBSD packages, SeaweedFS release download, Go toolchain/modules if needed, npm registry access for the vendored libopaque.js `npm install`, and repository/vendor operations
+- `pkg lock` on `emscripten` and Go after validation so routine upgrades cannot silently change the pinned versions
+- Network access for FreeBSD packages, the Bun and SeaweedFS release downloads, Go toolchain/modules if needed, npm registry access for the vendored libopaque.js `npm install`, and repository/vendor operations
 
 The exact `pkg install ...` line should be updated here once validated on a real host.
 
@@ -334,9 +393,15 @@ After Linux/systemd and FreeBSD/rc.d both pass their blocking gates, Devuan/SysV
 
 ### Documentation updates (with the implementation)
 
-- `AGENTS.md`: note Linux as primary deploy host; FreeBSD `dev-reset` experimental; root + `ARKFILE_DEV_USER` on FreeBSD; `fdre2e.sh` Linux-only; agents still must not invoke deploy scripts themselves.
-- `docs/setup.md`: replace aspirational "BSD supported" with accurate Linux-primary / FreeBSD-experimental wording and FreeBSD package notes for this path.
+- `AGENTS.md`: note Linux as primary deploy host; FreeBSD `dev-reset` experimental; root + `ARKFILE_DEV_USER` on FreeBSD; `fdre2e.sh` Linux-only; agents still must not invoke deploy scripts themselves. Update the Bun paragraph so FreeBSD installs the pinned upstream 1.3.14 FreeBSD binary (the 1.3.x-only and no-`bun upgrade` rules are unchanged), and update any emsdk 4.0.23 references when the Emscripten pin moves to 6.0.3.
+- `docs/setup.md`: replace aspirational "BSD supported" with accurate Linux-primary / FreeBSD-experimental wording, FreeBSD package notes for this path, and the pinned Bun install procedure.
 - When e2e is green, revise status in this file and soften "experimental" only to the extent proven (dev-reset + e2e-test, not prod-deploy).
+
+### Follow-on considerations (out of scope here)
+
+Production FreeBSD. Bun, Emscripten, npm, and the compilers are build-time tools; nothing on a running Arkfile host needs them. Today `prod-update.sh` builds on the production host itself, which puts that whole toolchain and package-registry access on the machine holding users' encrypted data. Because the shipped JavaScript is the trust anchor of the end-to-end encryption model, the stronger long-term design for both Linux and FreeBSD is a dedicated build host that produces the frontend bundle, WASM, and binaries once, records their hashes alongside the existing SBOM and SRI values, and lets production hosts verify and install those exact artifacts. That is a separate, signed-off change to the update model. The native upstream Bun binary means a FreeBSD production build, if ever needed, would not require the Linux compatibility layer.
+
+Bun 1.3.x freeze. Bun 1.4.x is the Rust rewrite (the `bun-v1.4.0` tag has `Cargo.toml` and no `build.zig`); 1.4.2 (2026-09-05) is the latest stable release on 2026-10-08, with official Linux and native FreeBSD binaries and the same signed `SHASUMS256.txt`. `AGENTS.md` currently forbids 1.4. Staying on 1.3.14 indefinitely means a build tool that downloads registry packages and writes the security-critical bundle stops receiving fixes. Any move to 1.4.x is a project-wide decision, proven on Linux first (lockfile compatibility, bundler output under the SRI and e2e checks, `bun:test` behavior, `bun audit`, full e2e and Playwright), and then applied to FreeBSD with new pinned digests established by the procedure in "Toolchain Decisions".
 
 ## Non-goals during this initial project
 
@@ -357,9 +422,9 @@ After Linux/systemd and FreeBSD/rc.d both pass their blocking gates, Devuan/SysV
 
 ## Implementation Order
 
-1. Developer resolves the three pending decisions (Emscripten version policy, FreeBSD server linking, Bun package source).
+1. Toolchain decisions are resolved (see "Toolchain Decisions").
 2. Record a clean Linux amd64 baseline using the developer-run `dev-reset.sh` then `e2e-test.sh`.
-3. If Emscripten Option A is chosen, move the Linux pin first and prove it on Linux with `dev-reset.sh`, `e2e-test.sh`, and `e2e-playwright.sh` before any FreeBSD work depends on it.
+3. Move the Linux Emscripten pin to 6.0.3 with `-sFAKE_DYLIBS=1` in `WASM_LIBOPAQUE_LDFLAGS`, and prove it on Linux with `dev-reset.sh`, `e2e-test.sh`, `e2e-playwright.sh`, and the WASM interop harness as a standalone change before any FreeBSD work depends on it. Add the Bun FreeBSD digests and the FreeBSD `print_bun_install_hint` branch to `build-config.sh` in the same or a following change.
 4. Add `os-portable.sh`: host/service-manager detection, FreeBSD 15+/amd64 preflight, root/dev-user resolution, argument-safe privilege helpers, toolchain preflight, service API, portable tool helpers, and the GNU make shim; add the adapter test script.
 5. Route all independent `sudo`/`SUDO_USER` logic in the dev-reset call graph through the shared helpers; convert invoked Bash shebangs to `/usr/bin/env bash`; move all checks ahead of the NUKE prompt.
 6. Fix the known hard failures that are shared-script changes with no Linux behavior change: numeric root gid, `sed -i` and `stat -c` call sites, `pgrep`/`pkill` patterns, `ldd` parsing.
@@ -369,7 +434,7 @@ After Linux/systemd and FreeBSD/rc.d both pass their blocking gates, Devuan/SysV
 10. Add FreeBSD `pw` user/group creation and the privilege-helper changes across `01` through `04`.
 11. Add platform-keyed SeaweedFS download + independently pinned FreeBSD SHA-256; remove component-owned service installation.
 12. Refactor rqlite Go/git/dev-user handling and cached path; remove component-owned service installation.
-13. Add native FreeBSD Bun/Emscripten selection, the GNU make shim around the vendored WASM build, and the npm prerequisite.
+13. Add the FreeBSD Bun digest preflight and dev-user `find_bun_binary` resolution, native FreeBSD Emscripten selection, the GNU make shim around the vendored WASM build, and the npm prerequisite.
 14. Implement OS-specific server/CLI link flags, verification, and accurate build metadata without changing Linux fully static behavior.
 15. Port `e2e-test.sh` host utilities and guidance, preserving test semantics.
 16. Run shell syntax checks and the adapter test script, then developer-run Linux `dev-reset.sh` + `e2e-test.sh`; resolve every Linux regression before FreeBSD validation.
@@ -381,7 +446,9 @@ After Linux/systemd and FreeBSD/rc.d both pass their blocking gates, Devuan/SysV
 
 ### Shared implementation
 
-- [ ] The three pending decisions are resolved and recorded in this file
+- [x] The three toolchain decisions are resolved and recorded in this file (2026-10-08)
+- [ ] Linux builds with Emscripten 6.0.3 and passes `dev-reset.sh`, `e2e-test.sh`, `e2e-playwright.sh`, and the WASM interop harness before FreeBSD depends on it
+- [ ] `build-config.sh` records `BUN_FREEBSD_X64_ZIP_SHA256` and `BUN_FREEBSD_X64_BIN_SHA256`, and the FreeBSD install hint prints the pinned procedure
 - [ ] Host OS and service manager are detected independently; unsupported combinations fail before mutation
 - [ ] All host, privilege, dev-user, and toolchain checks run before the NUKE confirmation on both platforms
 - [ ] `os-portable.sh` centralizes root/dev-user/service/tool behavior with no remaining conflicting `$SUDO_USER` implementations in the call graph
@@ -400,7 +467,7 @@ After Linux/systemd and FreeBSD/rc.d both pass their blocking gates, Devuan/SysV
 - [ ] Linux server remains fully static and current CLI linking policy is not weakened
 - [ ] Developer-run Linux amd64 `dev-reset.sh` completes and leaves all three services healthy
 - [ ] Linux `scripts/testing/e2e-test.sh` passes
-- [ ] Linux `scripts/testing/e2e-playwright.sh` passes if the Emscripten pin changed
+- [ ] Linux `scripts/testing/e2e-playwright.sh` passes with the Emscripten 6.0.3 pin
 - [ ] Go tests pass with the CGO environment documented in `AGENTS.md`
 - [ ] The complete Linux reset + e2e gate is repeated after FreeBSD passes
 
@@ -408,8 +475,10 @@ After Linux/systemd and FreeBSD/rc.d both pass their blocking gates, Devuan/SysV
 
 - [ ] Preflight accepts FreeBSD 15.1-RELEASE amd64 and rejects FreeBSD <15 / non-amd64
 - [ ] Root + `ARKFILE_DEV_USER` resolution works without the sudo package; all builds/git operations run as the dev user
-- [ ] Native Bun and the selected Emscripten build TypeScript and OPAQUE WASM successfully, and the WASM interop harness passes
-- [ ] FreeBSD server linking matches the signed-off decision (recommended: fully static), and the CLI embeds vendored crypto/FIDO archives while dynamically linking only evidenced base-system runtime libraries
+- [ ] Preflight rejects a missing Bun, a non-1.3.x Bun, and a Bun binary whose SHA-256 does not match `BUN_FREEBSD_X64_BIN_SHA256`
+- [ ] The pinned upstream Bun 1.3.14 FreeBSD binary runs `bun install --frozen-lockfile`, `bun audit`, `type-check`, `build:prod`, the TypeScript unit tests (`scripts/testing/test-typescript.sh`), and the WASM interop harness
+- [ ] Emscripten 6.0.3 builds the OPAQUE WASM successfully, the interop harness passes, and a user registered through the Linux build logs in through the FreeBSD build and vice versa
+- [ ] The FreeBSD server is fully static, and the CLI embeds vendored crypto/FIDO archives while dynamically linking only evidenced base-system runtime libraries
 - [ ] FreeBSD user-secret-master uses native memory locking, no-core advice on a page-aligned buffer, `procctl` trace disable, and process core suppression
 - [ ] `go test ./...` passes on the FreeBSD host
 - [ ] rc.d scripts start, status, restart, and stop arkfile, rqlite, and seaweedfs reliably as `arkfile`
@@ -425,8 +494,8 @@ After Linux/systemd and FreeBSD/rc.d both pass their blocking gates, Devuan/SysV
 
 Record these in this document as they become known:
 
-- Exact `pkg install` command validated on FreeBSD 15.1-RELEASE amd64, the pkg repository branch (quarterly or latest), and which packages were locked
-- Bun package origin, version, and repository branch; Emscripten, Node, and npm versions used for the successful build
+- Exact `pkg install` command validated on FreeBSD 15.1-RELEASE amd64 from the `latest` repository, and which packages were locked
+- Bun: `sha256sum ~/.bun/bin/bun` output matching `BUN_FREEBSD_X64_BIN_SHA256`, `bun --version`, and the `gpg --verify SHASUMS256.txt.asc` result used to establish the pin; Emscripten, Node, npm, and `llvm-devel` versions used for the successful build
 - Whether base install used distribution sets or pkgbase, and which base development packages were required
 - Output format of FreeBSD `sha256sum` on a sample file, confirming it matches what the scripts parse
 - Pinned SHA-256 for SeaweedFS `freebsd_amd64.tar.gz` and the trusted acquisition procedure used to establish it
@@ -437,4 +506,4 @@ Record these in this document as they become known:
 - Linux before/after reset + e2e results
 - FreeBSD `go test`, reset, and e2e results
 
-Any new dynamic ports dependency, shared crypto dependency, weakening of Linux static verification, a non-static FreeBSD server, divergent Emscripten versions between Linux and FreeBSD, root build fallback, root sourcing of `secrets.env`, or Linux dev-reset behavior change is a new locked decision requiring developer sign-off. It must not be treated as an implementation detail.
+Any new dynamic ports dependency, shared crypto dependency, weakening of Linux static verification, a non-static FreeBSD server, divergent Emscripten versions between Linux and FreeBSD, a Bun binary other than the pinned upstream release, use of `lang/bun-linux` or the Linux compatibility layer, root build fallback, root sourcing of `secrets.env`, or Linux dev-reset behavior change is a new locked decision requiring developer sign-off. It must not be treated as an implementation detail.
