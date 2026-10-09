@@ -140,7 +140,7 @@ Script support (implementation):
 
 ### FreeBSD package branch: `latest`
 
-FreeBSD dev hosts use the `latest` pkg repository. Reasons, from the 2026-10-08 catalogs: `latest` has Emscripten 6.0.3 (quarterly has 6.0.2), and in `quarterly` the `go` metaport is still Go 1.25, which is too old for `go 1.26.6` in `go.mod` (the separate `go126` package is 1.26.7 there, but `find_go_binary` would pick the older `go` first if both are installed). `latest` has the `go` metaport at 1.26. After validation, `pkg lock emscripten go` (and the concrete `go126` package it depends on) so routine upgrades cannot change the pinned toolchain; record locked versions under "Evidence". A host that must use `quarterly` installs `go126` explicitly, puts `/usr/local/go126/bin` first in the dev user's `PATH`, and still needs Emscripten 6.0.3, which may not be available there yet.
+FreeBSD dev hosts use the `latest` pkg repository. Reasons, from the 2026-10-08 catalogs: `latest` has Emscripten 6.0.3 (quarterly has 6.0.2), and in `quarterly` the `go` metaport is still Go 1.25 (the separate `go126` package is 1.26.7 there, and `find_go_binary` would pick the older `go` first if both are installed). `latest` has the `go` metaport at 1.26 (`go126` 1.26.8 on 2026-10-08). `go.mod` now requires `go 1.26.9` (raised 2026-10-09 for the go1.26.9 standard-library security fixes), so until the FreeBSD package reaches 1.26.9 the host either relies on Go's automatic toolchain download (`GOTOOLCHAIN=auto`, which the build scripts use through `go<version>+auto`) or installs the official `go1.26.9.freebsd-amd64.tar.gz` from go.dev; record which under "Evidence". After validation, `pkg lock emscripten go` (and the concrete `go126` package it depends on) so routine upgrades cannot change the pinned toolchain; record locked versions under "Evidence". A host that must use `quarterly` installs `go126` explicitly, puts `/usr/local/go126/bin` first in the dev user's `PATH`, and still needs Emscripten 6.0.3, which may not be available there yet.
 
 ## Privilege Model (FreeBSD)
 
@@ -363,7 +363,7 @@ Add a developer-run, non-root test script under `scripts/testing/` that sources 
 
 Initial FreeBSD 15.1 amd64 package set from the `latest` repository (verify exact package names on the target host):
 
-- `bash`, `git`, `go` (metaport at 1.26 in `latest`, which satisfies `go 1.26.6` in `go.mod`), `gmake`, `cmake`, `pkgconf`, `perl5`, `p5-Text-Template` if the OpenSSL Configure module check reports it missing, `python3`, `autoconf`, `automake`, `libtool`, `curl`, `ca_root_nss`, `jq`, `emscripten` (6.0.3; pulls in Node and `llvm-devel`), `npm`
+- `bash`, `git`, `go` (metaport at 1.26 in `latest`; `go.mod` requires `go 1.26.9`, so either the package must be at least 1.26.9 or Go's automatic toolchain download supplies it), `gmake`, `cmake`, `pkgconf`, `perl5`, `p5-Text-Template` if the OpenSSL Configure module check reports it missing, `python3`, `autoconf`, `automake`, `libtool`, `curl`, `ca_root_nss`, `jq`, `emscripten` (6.0.3; pulls in Node and `llvm-devel`), `npm`
 - Bun is not a package: install the pinned `bun-v1.3.14` FreeBSD zip into the dev user's `~/.bun/bin` as described in "Toolchain Decisions". Do not install `bun-linux`.
 - No `gcc`; the base `cc` (clang) is the C compiler. `unzip` and `fetch` come from base.
 - On pkgbase installs, the base development packages that provide headers and static archives (`libc.a`, `libthr.a`) for the static server link

@@ -287,7 +287,13 @@ run_application_build() {
 
 build_caddy_binary() {
     local output_path="$1"
-    local gopath xcaddy_bin go_bin_dir caddy_build_path
+    local gopath xcaddy_bin go_bin_dir caddy_build_path required_go
+
+    required_go="$(gomod_go_version)"
+    if [ -z "$required_go" ]; then
+        print_status "ERROR" "Cannot read the go directive from go.mod for the Caddy toolchain floor"
+        return 1
+    fi
 
     print_status "INFO" "Installing pinned xcaddy ${XCADDY_VERSION}..."
     if ! run_as_user "$GO_BINARY" install "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"; then
@@ -307,8 +313,10 @@ build_caddy_binary() {
     # the directory containing the Go binary found during deploy preflight.
     go_bin_dir="$(dirname "$GO_BINARY")"
     caddy_build_path="${go_bin_dir}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-    print_status "INFO" "Building Caddy ${CADDY_VERSION} with ${CADDY_DESEC_MODULE}..."
-    if ! run_as_user env "PATH=$caddy_build_path" "$xcaddy_bin" build "$CADDY_VERSION" \
+    # Caddy is the internet-facing HTTP server and must not be built with an
+    # older Go standard library than the Arkfile binaries.
+    print_status "INFO" "Building Caddy ${CADDY_VERSION} with ${CADDY_DESEC_MODULE} (Go ${required_go} or newer)..."
+    if ! run_as_user env "PATH=$caddy_build_path" "GOTOOLCHAIN=go${required_go}+auto" "$xcaddy_bin" build "$CADDY_VERSION" \
         --with "$CADDY_DESEC_MODULE" \
         --output "$output_path"; then
         print_status "ERROR" "Failed to build pinned Caddy with the deSEC module"
@@ -361,7 +369,7 @@ verify_caddy_binary() {
     local expected_version="${CADDY_VERSION#v}"
     local desec_package="${CADDY_DESEC_MODULE%@*}"
     local desec_version="${CADDY_DESEC_MODULE##*@}"
-    local actual_version
+    local actual_version caddy_go_version required_go
 
     if [ ! -x "$caddy_binary" ]; then
         print_status "ERROR" "Caddy candidate is not executable: $caddy_binary"
@@ -384,7 +392,13 @@ verify_caddy_binary() {
         print_status "ERROR" "Caddy candidate does not contain pinned ${CADDY_DESEC_MODULE}"
         return 1
     fi
-    print_status "SUCCESS" "Verified Caddy $actual_version with dns.providers.desec"
+    caddy_go_version="$("$GO_BINARY" version "$caddy_binary" 2>/dev/null | awk '{print $2}')"
+    required_go="$(gomod_go_version)"
+    if ! go_version_at_least "$caddy_go_version" "$required_go"; then
+        print_status "ERROR" "Caddy candidate was built with ${caddy_go_version:-unknown Go}; go.mod requires go${required_go} or newer"
+        return 1
+    fi
+    print_status "SUCCESS" "Verified Caddy $actual_version with dns.providers.desec (built with $caddy_go_version)"
 }
 
 install_caddy_binary_from_build() {

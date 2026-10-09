@@ -1075,16 +1075,30 @@ require_bun_zig_build() {
     return 0
 }
 
+# Print the `go` directive from the repository go.mod (e.g. 1.26.9).
+gomod_go_version() {
+    grep '^go [0-9]' "$BUILD_CONFIG_DIR/../../go.mod" 2>/dev/null | awk '{print $2}' | head -1
+}
+
+# Return 0 when Go version $1 (e.g. 1.26.9 or go1.26.9) is at least $2.
+go_version_at_least() {
+    local have="${1#go}" want="${2#go}" have_num want_num
+    [ -n "$have" ] && [ -n "$want" ] || return 1
+    have_num="$(echo "$have" | awk -F. '{printf "%d%02d%02d", $1, $2, ($3 == "" ? 0 : $3)}')"
+    want_num="$(echo "$want" | awk -F. '{printf "%d%02d%02d", $1, $2, ($3 == "" ? 0 : $3)}')"
+    [ "$have_num" -ge "$want_num" ]
+}
+
 # Return 0 when GO_BINARY (or find_go_binary) meets the go.mod toolchain line.
 host_go_meets_gomod_requirement() {
-    local required_version current_version current_num required_num go_bin
+    local required_version current_version go_bin
     go_bin="${GO_BINARY:-}"
     if [ -z "$go_bin" ]; then
         if ! go_bin="$(find_go_binary)"; then
             return 1
         fi
     fi
-    required_version="$(grep '^go [0-9]' go.mod | awk '{print $2}')"
+    required_version="$(gomod_go_version)"
     if [ -z "$required_version" ]; then
         return 0
     fi
@@ -1092,9 +1106,7 @@ host_go_meets_gomod_requirement() {
     if [ -z "$current_version" ]; then
         return 1
     fi
-    current_num="$(echo "$current_version" | awk -F. '{printf "%d%02d%02d", $1, $2, ($3 == "" ? 0 : $3)}')"
-    required_num="$(echo "$required_version" | awk -F. '{printf "%d%02d%02d", $1, $2, ($3 == "" ? 0 : $3)}')"
-    [ "$current_num" -ge "$required_num" ]
+    go_version_at_least "$current_version" "$required_version"
 }
 
 # Fix ownership of Go-related files when running as root via sudo
