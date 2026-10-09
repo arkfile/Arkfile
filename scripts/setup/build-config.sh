@@ -70,7 +70,7 @@ export ZLIB_VERSION="${ZLIB_VERSION:-1.3.2}"
 export ZLIB_COMMIT="${ZLIB_COMMIT:-da607da739fa6047df13e66a2af6b8bec7c2a498}"
 export OPENSSL_VERSION="${OPENSSL_VERSION:-3.5.7}"
 export OPENSSL_COMMIT="${OPENSSL_COMMIT:-8cf17aaeb4599f8af87fefd810b5b5fee90fe69e}"
-export EMSCRIPTEN_VERSION="${EMSCRIPTEN_VERSION:-4.0.23}"
+export EMSCRIPTEN_VERSION="${EMSCRIPTEN_VERSION:-6.0.3}"
 export LIBSODIUM_JS_VERSION="${LIBSODIUM_JS_VERSION:-0.8.4}"
 export LIBSODIUM_JS_COMMIT="${LIBSODIUM_JS_COMMIT:-2830fcf2ce8cefd3fdc7e1efc9fc1cee1d2d95b7}"
 
@@ -90,6 +90,7 @@ export LIBSODIUM_DIR="$VENDOR_C_ROOT/jedisct1/libsodium"
 export LIBSODIUM_INCLUDE="$LIBSODIUM_DIR/src/libsodium/include"
 export LIBSODIUM_A="$LIBSODIUM_DIR/src/libsodium/.libs/libsodium.a"
 export NATIVE_CRYPTO_BUILD_STAMP="$BUILD_CLIBS/native-crypto-build.stamp"
+export LIBOPAQUE_WASM_BUILD_STAMP="$BUILD_WASM/libopaque-wasm-build.stamp"
 
 # CLI FIDO2 stack (libfido2 + libcbor + zlib + libcrypto); not linked by the server.
 # Paths are set by init_fido_paths() after detect_build_platform() (per BUILD_PLATFORM).
@@ -1213,12 +1214,22 @@ c_libs_exist() {
     native_crypto_cache_valid && fido_cache_valid
 }
 
-# Check if WASM files exist
-wasm_exists() {
-    if [ -f "$BUILD_WASM/libopaque.js" ]; then
-        return 0
-    fi
-    return 1
+# Inputs that determine the libopaque.js artifacts; any change forces a WASM rebuild.
+# Call from the repo root.
+libopaque_wasm_build_stamp() {
+    local opaque_commit oprf_commit script_hash
+    opaque_commit=$(git -C "$VENDOR_C_LIBOPAQUE_DIR" rev-parse HEAD 2>/dev/null || echo unknown)
+    oprf_commit=$(git -C "$VENDOR_C_LIBOPRF_DIR" rev-parse HEAD 2>/dev/null || echo unknown)
+    script_hash=$(sha256sum "$BUILD_CONFIG_DIR/build-libopaque-wasm.sh" 2>/dev/null | awk '{print $1}')
+    echo "libopaque-wasm-v1:emscripten-${EMSCRIPTEN_VERSION}:libopaque-${opaque_commit}:liboprf-${oprf_commit}:libsodium-js-${LIBSODIUM_JS_COMMIT}:defines-${LIBOPAQUE_DEFINES:-}:script-${script_hash:-unknown}"
+}
+
+# True when the deployed libopaque.js artifacts exist and were built from the current inputs.
+libopaque_wasm_cache_valid() {
+    [ -f "client/static/js/libopaque.js" ] || return 1
+    [ -f "client/static/js/libopaque.debug.js" ] || return 1
+    [ -f "$LIBOPAQUE_WASM_BUILD_STAMP" ] || return 1
+    [ "$(cat "$LIBOPAQUE_WASM_BUILD_STAMP" 2>/dev/null)" = "$(libopaque_wasm_build_stamp)" ]
 }
 
 # Print build configuration (for debugging)

@@ -320,12 +320,11 @@ REBUILD_WASM=true
 if [ "$PRODUCTION_BUILD" = "true" ]; then
     echo -e "${YELLOW}Production build: rebuilding trace-free WASM from pinned sources${NC}"
 elif [ "${SKIP_C_LIBS}" = "true" ]; then
-    # Verify WASM files exist in client directory
-    if [ -f "client/static/js/libopaque.js" ] && [ -f "client/static/js/libopaque.debug.js" ]; then
-        echo -e "${GREEN}[OK] Skipping WASM library rebuild (libraries already exist)${NC}"
+    if libopaque_wasm_cache_valid; then
+        echo -e "${GREEN}[OK] Skipping WASM library rebuild (libraries match current Emscripten version, sources, and defines)${NC}"
         REBUILD_WASM=false
     else
-        echo -e "${YELLOW}[WARNING] Expected WASM libraries missing, forcing rebuild...${NC}"
+        echo -e "${YELLOW}[WARNING] WASM libraries missing or built from different inputs, rebuilding...${NC}"
     fi
 fi
 

@@ -270,7 +270,7 @@ if [ -d "$BUILD_ROOT" ]; then
         print_status "INFO" "Preserving C libraries in $BUILD_CLIBS (use --force-rebuild-all to rebuild)"
         rm -rf "$BUILD_BIN" "$BUILD_CLIENT" "$BUILD_DATABASE" "$BUILD_SYSTEMD" "$BUILD_WEBROOT" 2>/dev/null || true
         rm -f "$BUILD_ROOT/version.json" 2>/dev/null || true
-        # Note: WASM is preserved too since it depends on the same libsodium
+        # WASM output is preserved too; build.sh rebuilds it when its build stamp no longer matches
         print_status "SUCCESS" "Build artifacts cleaned (C libraries preserved)"
     else
         # Full clean - remove everything including C libraries
@@ -297,7 +297,16 @@ fix_go_ownership
 
 # Run build script as the original user to prevent root-owned artifacts
 # Use --build-only to skip redundant sudo calls (service stopping and deployment)
-if ! run_as_user ./scripts/setup/build.sh --build-only; then
+# sudo -u resets the environment, so build identity, cache policy, and the dev
+# WASM trace profile are passed explicitly.
+DEV_BUILD_PATH="$(dirname "$GO_BINARY"):/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+if ! run_as_user env \
+    "VERSION=$VERSION" \
+    "SKIP_C_LIBS=$SKIP_C_LIBS" \
+    "LIBOPAQUE_DEFINES=$LIBOPAQUE_DEFINES" \
+    "ARKFILE_ALLOW_WASM_TRACE=$ARKFILE_ALLOW_WASM_TRACE" \
+    "PATH=$DEV_BUILD_PATH" \
+    ./scripts/setup/build.sh --build-only; then
     print_status "ERROR" "Build script failed - this is CRITICAL"
     exit 1
 fi

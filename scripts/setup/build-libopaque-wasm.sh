@@ -132,11 +132,23 @@ install_emscripten_emsdk() {
             print_status "ERROR" "Failed to clone emsdk repository"
             return 1
         fi
-    else
-        print_status "INFO" "emsdk directory already exists, updating..."
-        cd "$EMSDK_DIR"
-        run_git_as_user fetch --all || true
-        cd ../..
+    fi
+
+    # emsdk resolves installable versions from its checked-out release list, so
+    # an older checkout may not know the pinned version. Pin emsdk to the tag
+    # that matches EMSCRIPTEN_VERSION.
+    print_status "INFO" "Pinning emsdk checkout to tag $EMSCRIPTEN_VERSION..."
+    if ! run_git_as_user -C "$EMSDK_DIR" fetch --tags --force origin; then
+        print_status "ERROR" "Failed to fetch emsdk tags"
+        return 1
+    fi
+    if ! run_git_as_user -C "$EMSDK_DIR" rev-parse -q --verify "refs/tags/${EMSCRIPTEN_VERSION}^{commit}" >/dev/null; then
+        print_status "ERROR" "emsdk has no tag $EMSCRIPTEN_VERSION"
+        return 1
+    fi
+    if ! run_git_as_user -C "$EMSDK_DIR" checkout --quiet --detach "refs/tags/${EMSCRIPTEN_VERSION}"; then
+        print_status "ERROR" "Failed to check out emsdk tag $EMSCRIPTEN_VERSION"
+        return 1
     fi
     
     cd "$EMSDK_DIR"
@@ -498,7 +510,10 @@ build_wasm_library() {
     # WASM-compatible CFLAGS - same as upstream but without -march=native
     # The $(SODIUMDIR), $(LIBOPRFHOME), and $(DEFINES) are expanded by make
     WASM_LIBOPAQUE_CFLAGS='-I$(SODIUMDIR)/include -I$(LIBOPRFHOME) -Wall -O2 -g -fno-stack-protector -D_FORTIFY_SOURCE=2 -DHAVE_SODIUM_HKDF=1 -fasynchronous-unwind-tables -fpic -Werror=format-security -Werror=implicit-function-declaration -ftrapv $(DEFINES)'
-    WASM_LIBOPAQUE_LDFLAGS='-g -L$(SODIUMDIR)/.libs -lsodium'
+    # Emscripten 6.0.0+ defaults FAKE_DYLIBS to 0, making -shared emit a real
+    # dynamic library. The upstream Makefile builds libopaque.so with -shared and
+    # links it statically into libopaque.js, which requires FAKE_DYLIBS=1.
+    WASM_LIBOPAQUE_LDFLAGS='-g -L$(SODIUMDIR)/.libs -lsodium -sFAKE_DYLIBS=1'
     
     # Step 1: Build libopaque.so with emcc (WASM shared library)
     # This is CRITICAL - we must build libopaque with emcc, not use the native libopaque.a from ../src/
@@ -527,7 +542,7 @@ build_wasm_library() {
     
     # LDFLAGS must use -L. to link against the local libopaque.so we just built with emcc
     # The upstream Makefile has -L../src which would link against native x86 libopaque.a
-    WASM_LDFLAGS='-L. -lopaque'
+    WASM_LDFLAGS='-L. -lopaque -sFAKE_DYLIBS=1'
     # Emscripten 4.0.7+ no longer exposes memory views on Module by default.
     # libopaque's wrapper reads and writes WASM memory through Module.HEAPU8.
     WASM_EXPORTED_RUNTIME_METHODS='"cwrap", "getValue", "setValue", "stringToUTF8", "UTF8ToString", "HEAPU8"'
@@ -581,6 +596,10 @@ deploy_wasm_files() {
     fi
     
     print_status "SUCCESS" "WASM library copied to client/static/js/"
+
+    mkdir -p "$(dirname "$LIBOPAQUE_WASM_BUILD_STAMP")"
+    libopaque_wasm_build_stamp > "$LIBOPAQUE_WASM_BUILD_STAMP"
+    print_status "INFO" "Recorded WASM build stamp: $(cat "$LIBOPAQUE_WASM_BUILD_STAMP")"
     
     # Show file sizes
     MINIFIED_SIZE=$(du -h client/static/js/libopaque.js | cut -f1)
@@ -597,6 +616,9 @@ deploy_wasm_files() {
 
 # Main execution
 main() {
+    # A failed or partial build must not leave a stamp that matches old artifacts.
+    rm -f "$LIBOPAQUE_WASM_BUILD_STAMP"
+
     # Validate build configuration (security check)
     validate_build_config
     

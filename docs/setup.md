@@ -349,7 +349,8 @@ sudo bash scripts/setup/build-client.sh
 - Alpine, macOS, FreeBSD client, OpenBSD, and Windows client packaging are not covered by this Group A path yet. A green Devuan client build does not mean Arkfile server deploy on Devuan is supported. See `docs/wip/cli-builder.md`.
 
 **WASM / Emscripten (libopaque.js) Python note:**
-- Building the browser OPAQUE WASM module installs Emscripten via `vendor/emsdk`, which requires **Python 3.10 or newer**.
+- Building the browser OPAQUE WASM module installs Emscripten `EMSCRIPTEN_VERSION` (currently 6.0.3, set in `scripts/setup/build-config.sh`) via `vendor/emsdk`, which requires **Python 3.10 or newer**. The emsdk checkout is pinned to the emsdk tag that matches `EMSCRIPTEN_VERSION`.
+- Non-production builds reuse existing `client/static/js/libopaque.js` artifacts only when the WASM build stamp (`/var/tmp/arkfile-build/wasm/libopaque-wasm-build.stamp`) matches the current Emscripten version, libopaque/liboprf/libsodium.js sources, trace defines, and WASM build script; otherwise the WASM library is rebuilt. Production builds always rebuild it.
 - Deploy and build scripts call `ensure_emsdk_python` (in `scripts/setup/build-config.sh`), which prefers `python3.13` .. `python3.10`, then a new-enough `python3`, and exports `EMSDK_PYTHON` for emsdk.
 - On RHEL/Alma/Rocky 9, install `python3.11` (or newer). The default `/usr/bin/python3` (3.9) is not sufficient.
 - On Linux, emsdk's prebuilt Binaryen tools require `libatomic.so.1` (`libatomic1` on Debian/Ubuntu/Devuan and openSUSE/SLES, `libatomic` on RHEL/Alma/Rocky/Fedora and Alpine, or `gcc-libs` on Arch). Build scripts also execute the pinned `wasm-opt` before compiling libsodium so loader incompatibilities fail early.
