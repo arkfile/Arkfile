@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arkfile/Arkfile/cli/secureinput"
 	"github.com/arkfile/Arkfile/crypto"
 	"github.com/google/uuid"
 )
@@ -985,14 +986,76 @@ func downloadOwnerFilesBatch(client *HTTPClient, config *ClientConfig, session *
 		return err
 	}
 	reserved := make(map[string]*outputTarget, len(pending))
-	pendingByID := make(map[string]batchPendingFile, len(pending))
 	for _, p := range pending {
 		reserved[p.FileID] = reservedOutputTarget(reserver, safeOwnerBasename(p.Filename, p.FileID+".bin"))
+	}
+
+	totals := runOwnerDownloadBatch(ctx, pending, batchDownloadOps{
+		download: func(ctx context.Context, p batchPendingFile, customPass []byte) error {
+			return downloadOneOwnerFile(ctx, client, session, accountKey, p.FileID, reserved[p.FileID], outputDir, customPass)
+		},
+		readCustom: func(ctx context.Context, prompt string) ([]byte, error) {
+			return readPasswordWithTimeoutContext(ctx, prompt, PasswordTimeoutBatchCustom)
+		},
+		confirmRetry: func(failed, round int) bool {
+			fmt.Printf("%d file(s) failed in round %d. Retry failed downloads? [y/N]: ", failed, round)
+			var answer string
+			if _, scanErr := fmt.Scanln(&answer); scanErr != nil {
+				return false
+			}
+			return answer == "y" || answer == "Y" || answer == "yes" || answer == "YES"
+		},
+		targetPath: func(fileID string) string {
+			return reserved[fileID].path()
+		},
+		stdinPasswords: passwordFromStdin,
+	})
+
+	fmt.Printf(
+		"Batch download finished. Account succeeded: %d. Custom succeeded: %d. Unresolved failures: %d. Skipped: %d.\n",
+		totals.AccountOK, totals.CustomOK, totals.Unresolved, totals.Skipped,
+	)
+	if totals.Cancelled {
+		return fmt.Errorf("batch download cancelled")
+	}
+	if totals.Unresolved > 0 || totals.Skipped > 0 {
+		return fmt.Errorf("batch download incomplete")
+	}
+	return nil
+}
+
+// batchDownloadOps carries the side effects of an owner batch download, so the
+// partition, prompt, retry, and cleanup rules can run without a server.
+type batchDownloadOps struct {
+	download       func(ctx context.Context, p batchPendingFile, customPass []byte) error
+	readCustom     func(ctx context.Context, prompt string) ([]byte, error)
+	confirmRetry   func(failed, round int) bool
+	targetPath     func(fileID string) string
+	stdinPasswords bool
+}
+
+// batchDownloadTotals summarizes a finished owner batch download.
+type batchDownloadTotals struct {
+	AccountOK    int
+	CustomOK     int
+	Unresolved   int
+	Skipped      int
+	Cancelled    bool
+	LastFailures []batchFileOutcome
+}
+
+// runOwnerDownloadBatch downloads account-password files first and
+// custom-password files last in each round, retries only per-file failures for
+// up to MaxBatchDownloadRounds rounds, and clears every custom password buffer
+// after its attempt.
+func runOwnerDownloadBatch(ctx context.Context, pending []batchPendingFile, ops batchDownloadOps) batchDownloadTotals {
+	pendingByID := make(map[string]batchPendingFile, len(pending))
+	for _, p := range pending {
 		pendingByID[p.FileID] = p
 	}
 
 	work := append([]batchPendingFile(nil), pending...)
-	var totalAccountOK, totalCustomOK, totalSkipped int
+	var totals batchDownloadTotals
 
 	for round := 1; round <= MaxBatchDownloadRounds && len(work) > 0; round++ {
 		accountFirst := make([]batchPendingFile, 0, len(work))
@@ -1024,8 +1087,7 @@ func downloadOwnerFilesBatch(client *HTTPClient, config *ClientConfig, session *
 				}
 				break
 			}
-			target := reserved[p.FileID]
-			if err := downloadOneOwnerFile(ctx, client, session, accountKey, p.FileID, target, outputDir, nil); err != nil {
+			if err := ops.download(ctx, p, nil); err != nil {
 				reason := err.Error()
 				if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 					reason = "cancelled"
@@ -1053,7 +1115,7 @@ func downloadOwnerFilesBatch(client *HTTPClient, config *ClientConfig, session *
 			accountOK = append(accountOK, batchFileOutcome{
 				FileID: p.FileID, Filename: p.Filename, PasswordType: "account",
 			})
-			fmt.Printf("[OK] %s -> %s\n", p.FileID, sanitizeDisplayText(target.path()))
+			fmt.Printf("[OK] %s -> %s\n", p.FileID, sanitizeDisplayText(ops.targetPath(p.FileID)))
 		}
 
 		if !abortRound {
@@ -1068,7 +1130,6 @@ func downloadOwnerFilesBatch(client *HTTPClient, config *ClientConfig, session *
 					break
 				}
 
-				target := reserved[p.FileID]
 				displayName := sanitizeDisplayText(p.Filename)
 
 				succeeded := false
@@ -1081,18 +1142,23 @@ func downloadOwnerFilesBatch(client *HTTPClient, config *ClientConfig, session *
 						break
 					}
 
-					customPass, perr := readPasswordWithTimeout(
+					customPass, perr := ops.readCustom(
+						ctx,
 						fmt.Sprintf("Enter custom password for '%s'%s (attempt %d/%d, wait up to 2 minutes): ",
 							displayName, formatPromptHint(p.Hint, p.HintState), attempt, MaxBatchCustomPasswordAttempts),
-						PasswordTimeoutBatchCustom,
 					)
 					if perr != nil {
+						if errors.Is(perr, secureinput.ErrInputCancelled) || ctx.Err() != nil {
+							lastReason = "cancelled"
+							abortRound = true
+							break
+						}
 						if strings.Contains(perr.Error(), "timed out") {
 							lastReason = "prompt_timeout"
 							fmt.Fprintf(os.Stderr, "[!] %s: password prompt timed out\n", displayName)
 							continue
 						}
-						if passwordFromStdin || strings.Contains(perr.Error(), "no controlling terminal") {
+						if ops.stdinPasswords || strings.Contains(perr.Error(), "no controlling terminal") {
 							lastReason = "prompt_cancelled"
 							fmt.Fprintf(os.Stderr, "[X] %s: custom password required interactively: %v\n", displayName, perr)
 							break
@@ -1101,7 +1167,7 @@ func downloadOwnerFilesBatch(client *HTTPClient, config *ClientConfig, session *
 						continue
 					}
 
-					derr := downloadOneOwnerFile(ctx, client, session, accountKey, p.FileID, target, outputDir, customPass)
+					derr := ops.download(ctx, p, customPass)
 					clearBytes(customPass)
 					if derr == nil {
 						succeeded = true
@@ -1114,11 +1180,11 @@ func downloadOwnerFilesBatch(client *HTTPClient, config *ClientConfig, session *
 					}
 					if strings.Contains(derr.Error(), "wrong password") || strings.Contains(derr.Error(), "unwrap FEK") {
 						lastReason = "wrong_custom_password"
-						fmt.Fprintf(os.Stderr, "[!] %s: wrong custom password (attempt %d/%d)\n", p.Filename, attempt, MaxBatchCustomPasswordAttempts)
+						fmt.Fprintf(os.Stderr, "[!] %s: wrong custom password (attempt %d/%d)\n", displayName, attempt, MaxBatchCustomPasswordAttempts)
 						continue
 					}
 					lastReason = derr.Error()
-					fmt.Fprintf(os.Stderr, "[X] %s (%s): %v\n", p.Filename, p.FileID, derr)
+					fmt.Fprintf(os.Stderr, "[X] %s (%s): %v\n", displayName, p.FileID, derr)
 					break
 				}
 
@@ -1126,7 +1192,7 @@ func downloadOwnerFilesBatch(client *HTTPClient, config *ClientConfig, session *
 					customOK = append(customOK, batchFileOutcome{
 						FileID: p.FileID, Filename: p.Filename, PasswordType: "custom",
 					})
-					fmt.Printf("[OK] %s -> %s\n", p.FileID, sanitizeDisplayText(target.path()))
+					fmt.Printf("[OK] %s -> %s\n", p.FileID, sanitizeDisplayText(ops.targetPath(p.FileID)))
 				} else {
 					customFail = append(customFail, batchFileOutcome{
 						FileID: p.FileID, Filename: p.Filename, PasswordType: "custom", Reason: lastReason,
@@ -1153,36 +1219,32 @@ func downloadOwnerFilesBatch(client *HTTPClient, config *ClientConfig, session *
 			fmt.Fprintf(os.Stderr, "  [X] %s: %s\n", sanitizeDisplayText(f.Filename), f.Reason)
 		}
 
-		totalAccountOK += len(accountOK)
-		totalCustomOK += len(customOK)
-		totalSkipped += len(skipped)
+		totals.AccountOK += len(accountOK)
+		totals.CustomOK += len(customOK)
+		totals.Skipped += len(skipped)
+		totals.LastFailures = append(append([]batchFileOutcome(nil), accountFail...), customFail...)
 
 		failedOnly := append(append([]batchPendingFile(nil), batchOutcomesToPending(accountFail, pendingByID)...), batchOutcomesToPending(customFail, pendingByID)...)
 		work = failedOnly
 
+		if abortRound {
+			totals.Cancelled = true
+		}
 		if abortRound || len(work) == 0 || round >= MaxBatchDownloadRounds {
 			break
 		}
 
-		if passwordFromStdin {
+		if ops.stdinPasswords {
 			fmt.Fprintf(os.Stderr, "[!] %d file(s) failed; not prompting for retry without a TTY interactive session.\n", len(work))
 			break
 		}
-		fmt.Printf("%d file(s) failed in round %d. Retry failed downloads? [y/N]: ", len(work), round)
-		var answer string
-		if _, scanErr := fmt.Scanln(&answer); scanErr != nil || (answer != "y" && answer != "Y" && answer != "yes" && answer != "YES") {
+		if !ops.confirmRetry(len(work), round) {
 			break
 		}
 	}
 
-	fmt.Printf(
-		"Batch download finished. Account succeeded: %d. Custom succeeded: %d. Unresolved failures: %d. Skipped: %d.\n",
-		totalAccountOK, totalCustomOK, len(work), totalSkipped,
-	)
-	if len(work) > 0 || totalSkipped > 0 {
-		return fmt.Errorf("batch download incomplete")
-	}
-	return nil
+	totals.Unresolved = len(work)
+	return totals
 }
 
 // batchOutcomesToPending returns the retryable failures, keeping each file's

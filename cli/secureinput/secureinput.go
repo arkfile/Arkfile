@@ -1,14 +1,12 @@
 package secureinput
 
 import (
-	"bufio"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
-
-	"golang.org/x/term"
 )
 
 const (
@@ -16,17 +14,21 @@ const (
 	DefaultPipeTimeout        = 10 * time.Second
 )
 
+// ErrInputCancelled reports a prompt ended by Ctrl-C or by cancellation of the
+// caller's context, as opposed to a timeout.
+var ErrInputCancelled = errors.New("password input cancelled")
+
 // openControllingTTY opens the process controlling terminal.
 // Overridable in tests.
 var openControllingTTY = func() (*os.File, error) {
 	return os.OpenFile("/dev/tty", os.O_RDWR, 0)
 }
 
-// readPasswordInteractive reads a password with echo disabled from fd.
+// readPasswordInteractive reads one password with echo disabled from a
+// terminal file. It returns only after its read has finished, so no reader is
+// left behind on the terminal after a timeout or cancellation.
 // Overridable in tests.
-var readPasswordInteractive = func(fd int) ([]byte, error) {
-	return term.ReadPassword(fd)
-}
+var readPasswordInteractive = readPasswordFromTerminalFile
 
 // readLineInteractive reads one echoed line from a terminal file.
 // Overridable in tests.
@@ -37,13 +39,19 @@ var readLineInteractive = readLineFromTerminal
 // stdin free for other data (for example bootstrap --token-stdin).
 // Returns a byte slice the caller must zero after use.
 func ReadPassword(prompt string, timeout time.Duration) ([]byte, error) {
+	return ReadPasswordContext(context.Background(), prompt, timeout)
+}
+
+// ReadPasswordContext is ReadPassword that also stops waiting when ctx is
+// cancelled, for example when the caller's interrupt handler fires.
+func ReadPasswordContext(ctx context.Context, prompt string, timeout time.Duration) ([]byte, error) {
 	if timeout <= 0 {
 		timeout = DefaultInteractiveTimeout
 	}
 
 	if tty, err := openControllingTTY(); err == nil {
 		defer tty.Close()
-		return readPasswordFromTerminal(tty, prompt, timeout)
+		return readPasswordFromTerminal(ctx, tty, prompt, timeout)
 	}
 
 	fi, err := os.Stdin.Stat()
@@ -56,7 +64,7 @@ func ReadPassword(prompt string, timeout time.Duration) ([]byte, error) {
 	if prompt != "" {
 		fmt.Print(prompt)
 	}
-	return readPasswordFromTerminal(os.Stdin, "", timeout)
+	return readPasswordFromTerminal(ctx, os.Stdin, "", timeout)
 }
 
 // ReadPasswordFromStdin reads one password line from stdin.
@@ -93,69 +101,13 @@ func ReadLine(prompt string, timeout time.Duration) (string, error) {
 	return readLineInteractive(os.Stdin, prompt, timeout)
 }
 
-func readPasswordFromTerminal(f *os.File, prompt string, timeout time.Duration) ([]byte, error) {
+func readPasswordFromTerminal(ctx context.Context, f *os.File, prompt string, timeout time.Duration) ([]byte, error) {
 	if prompt != "" {
 		if _, err := fmt.Fprint(f, prompt); err != nil {
 			return nil, fmt.Errorf("failed to write password prompt: %w", err)
 		}
 	}
-
-	result := make(chan []byte, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		bytePassword, err := readPasswordInteractive(int(f.Fd()))
-		if err != nil {
-			errCh <- err
-			return
-		}
-		_, _ = fmt.Fprintln(f)
-		result <- append([]byte(nil), bytePassword...)
-	}()
-
-	select {
-	case pw := <-result:
-		return pw, nil
-	case err := <-errCh:
-		return nil, err
-	case <-time.After(timeout):
-		return nil, fmt.Errorf("password input timed out after %s", timeout)
-	}
-}
-
-func readLineFromTerminal(f *os.File, prompt string, timeout time.Duration) (string, error) {
-	if prompt != "" {
-		if _, err := fmt.Fprint(f, prompt); err != nil {
-			return "", fmt.Errorf("failed to write prompt: %w", err)
-		}
-	}
-
-	type readResult struct {
-		line string
-		err  error
-	}
-	ch := make(chan readResult, 1)
-	go func() {
-		line, err := bufio.NewReader(f).ReadString('\n')
-		if err != nil {
-			if err == io.EOF && strings.TrimSpace(line) != "" {
-				ch <- readResult{line: line}
-				return
-			}
-			ch <- readResult{err: err}
-			return
-		}
-		ch <- readResult{line: line}
-	}()
-
-	select {
-	case res := <-ch:
-		if res.err != nil {
-			return "", res.err
-		}
-		return strings.TrimRight(res.line, "\r\n"), nil
-	case <-time.After(timeout):
-		return "", fmt.Errorf("interactive input timed out after %s", timeout)
-	}
+	return readPasswordInteractive(ctx, f, timeout)
 }
 
 func readPasswordFromPipe(r io.Reader, timeout time.Duration) ([]byte, error) {

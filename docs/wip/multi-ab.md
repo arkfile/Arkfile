@@ -8,7 +8,7 @@ Nothing here weakens the sharing boundary. Anonymous share recipients must never
 
 ## Status
 
-Implemented; Go and Bun unit suites are green. Awaiting the developer's `dev-reset.sh`, `e2e-test.sh`, and `e2e-playwright.sh` run. Two decisions changed during implementation and are recorded in the Locked Decisions table: the browser fallback trigger is a hidden same-origin anchor rather than an iframe, and the CLI no-clobber publish primitive is `renameat2(RENAME_NOREPLACE)` with a hard-link fallback. The e2e sequence reads vault counts at runtime rather than assuming 19 files, because `run_files_standard` leaves several account files in the vault before the corpus is seeded.
+Complete. Go and Bun unit suites are green, and the developer's `dev-reset.sh`, `e2e-test.sh`, and `e2e-playwright.sh` run passed, including `verify_backup_export_and_restore`, the Share D hint canary, and the Playwright export checks. A post-completion review (2026-10-11) replaced the CLI's timed terminal password read, used by the chained-decrypt custom-password prompts, with a cancellable poll-based read so a timed-out or interrupted prompt leaves no reader on the terminal; see the Implementation Checklist. Two decisions changed during implementation and are recorded in the Locked Decisions table: the browser fallback trigger is a hidden same-origin anchor rather than an iframe, and the CLI no-clobber publish primitive is `renameat2(RENAME_NOREPLACE)` with a hard-link fallback. The e2e sequence reads vault counts at runtime rather than assuming 19 files, because `run_files_standard` leaves several account files in the vault before the corpus is seeded.
 
 ## Overview
 
@@ -133,7 +133,7 @@ The browser passes `file.password_hint` into the batch custom-password modal, bu
 
 Both clients call `GET /api/files/:fileId/export` once per file with their normal session credential and mint no export tokens. Move the GET from the public router to `mfaProtectedGroup`, where the standard JWT, token-revocation, approval, full-token, and current-MFA middleware stack validates both clients. The CLI continues to send `Authorization: Bearer` and adds `ensureFreshSessionToken`, or the existing refresh-on-401 helper, between files.
 
-The browser's session lives in the `__Host-arkfile-token` cookie (`HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/`). The global `CookieTokenMiddleware` copies it into the Authorization header before the protected route middleware runs, and `CSRFMiddleware` exempts GET as a safe method. A folder-picker `fetch` and a hidden same-origin iframe therefore authenticate through the same route stack as the CLI, after the same per-file refresh that `download-batch.ts` performs with `ensureFreshBatchAuth`. This keeps credentials out of URLs and removes a round trip per file.
+The browser's session lives in the `__Host-arkfile-token` cookie (`HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/`). The global `CookieTokenMiddleware` copies it into the Authorization header before the protected route middleware runs, and `CSRFMiddleware` exempts GET as a safe method. A folder-picker `fetch` and a hidden same-origin anchor download therefore authenticate through the same route stack as the CLI, after the same per-file refresh that `download-batch.ts` performs with `ensureFreshBatchAuth`. This keeps credentials out of URLs and removes a round trip per file.
 
 Verify the cookie path first: the Playwright check below asserts that the logged-in context can GET the protected export URL with no query token and receive ARKB bytes. Once that proof passes, delete `POST /api/files/:fileId/export-token`, `ExportTokenClaims`, query-token parsing, the manual full-JWT parser in `resolveExportAuth`, and their tests as part of this work. If the cookie-path proof initially fails, fix the protected cookie-authenticated route rather than retaining the special public export authentication path.
 
@@ -435,4 +435,7 @@ The manifest is deliberately not signed, encrypted, or keyed. It detects acciden
 - [x] Playwright: protected cookie-path export check, chooser-cancel and unavailable-picker behavior, Export selected and per-row Export downloads, and the no-filter whole-vault selection count
 - [x] Go and TypeScript unit tests green
 - [x] `docs/api.md`, `docs/security.md`, `docs/user-faq.md`, and `docs/wip/multi-dl.md` updated
-- [ ] Developer runs `dev-reset.sh`, then `e2e-test.sh` and `e2e-playwright.sh`
+- [x] Developer runs `dev-reset.sh`, then `e2e-test.sh` and `e2e-playwright.sh`
+- [x] Go negative assertions that public share responses (`GetShareEnvelope`, `GetShareDownloadMetadata`) carry no hint fields, alongside the e2e Share D canary
+- [x] Chained-decrypt custom-password prompts use the cancellable terminal read (`secureinput.ReadPasswordContext` with the run context); Ctrl-C at the prompt cancels the run instead of waiting out the 2 minute timeout
+- Deferred: dedicated unit tests that observe secret-disposal boundaries in chained decrypt on every path (success, wrong password, timeout, integrity failure, cancellation); the code clears buffers with `clearBytes` at the narrowest scope, and the cancellable read zeroes its own input buffer

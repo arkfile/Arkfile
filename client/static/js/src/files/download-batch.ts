@@ -4,6 +4,10 @@
  * Sequential only. Account-password files run first; custom-password files
  * follow with per-attempt password prompts (2 minute wait, 3 attempts per
  * round, 3 rounds max). Secrets are disposed on every path.
+ *
+ * The state machine (runDownloadBatch) takes its side effects through
+ * BatchDownloadEnvironment so it can be unit-tested; downloadSelectedFiles
+ * supplies the browser implementation.
  */
 
 import { isAuthenticated, refreshToken } from '../utils/auth.js';
@@ -14,9 +18,9 @@ import { downloadFile } from './download.js';
 import { reserveBasenames, safeOwnerBasename } from './output-basename.js';
 import { listDirectoryEntryNames } from './directory-publish.js';
 
-const CUSTOM_PASSWORD_PROMPT_MS = 2 * 60 * 1000;
-const MAX_PASSWORD_ATTEMPTS_PER_ROUND = 3;
-const MAX_ROUNDS = 3;
+export const CUSTOM_PASSWORD_PROMPT_MS = 2 * 60 * 1000;
+export const MAX_PASSWORD_ATTEMPTS_PER_ROUND = 3;
+export const MAX_ROUNDS = 3;
 
 export type BatchDownloadFailureReason =
   | 'wrong_custom_password'
@@ -67,6 +71,38 @@ export interface BatchDownloadResult {
   cancelled: boolean;
 }
 
+export type CustomPasswordPromptResult =
+  | { password: string }
+  | { reason: BatchDownloadFailureReason };
+
+export interface BatchDownloadOneOptions {
+  customPassword?: string;
+  abortController: AbortController;
+  directoryHandle?: FileSystemDirectoryHandle;
+  reservedFilename?: string;
+}
+
+/** Side effects of a batch download, injected so the state machine is testable. */
+export interface BatchDownloadEnvironment {
+  /** Ask for a destination folder; undefined means use the browser download folder. */
+  pickDirectory: () => Promise<FileSystemDirectoryHandle | undefined>;
+  listDirectoryNames: (dir: FileSystemDirectoryHandle) => Promise<string[]>;
+  /** Download, decrypt, verify, and publish one file. Throws on failure. */
+  downloadOne: (target: BatchDownloadTarget, opts: BatchDownloadOneOptions) => Promise<void>;
+  promptCustomPassword: (
+    filename: string,
+    hint: string,
+    signal: AbortSignal,
+  ) => Promise<CustomPasswordPromptResult>;
+  ensureAuth: () => Promise<void>;
+  confirmRetry: (failedCount: number, round: number) => boolean;
+  onRoundStart: (round: number, remaining: number, cancel: () => void) => void;
+  onProgress: (message: string) => void;
+  onRoundEnd: (summary: BatchDownloadRoundSummary) => void;
+  onFinished: (result: BatchDownloadResult) => void;
+  abortController: AbortController;
+}
+
 function toTarget(entry: BatchDownloadSourceFile): BatchDownloadTarget {
   return {
     file_id: entry.file_id,
@@ -107,25 +143,21 @@ export async function ensureFreshBatchAuth(): Promise<void> {
 async function promptCustomPasswordWithTimeout(
   filename: string,
   hint: string,
-  abortSignal?: AbortSignal,
-): Promise<{ password: string } | { reason: BatchDownloadFailureReason }> {
-  if (abortSignal?.aborted) {
+  abortSignal: AbortSignal,
+): Promise<CustomPasswordPromptResult> {
+  if (abortSignal.aborted) {
     return { reason: 'cancelled' };
   }
 
-  const abortPromise = abortSignal
-    ? new Promise<{ reason: BatchDownloadFailureReason }>((resolve) => {
-        const onAbort = () => {
-          hidePasswordPrompt();
-          resolve({ reason: 'cancelled' });
-        };
-        if (abortSignal.aborted) {
-          onAbort();
-          return;
-        }
-        abortSignal.addEventListener('abort', onAbort, { once: true });
-      })
-    : null;
+  let removeAbortListener: () => void = () => {};
+  const abortPromise = new Promise<CustomPasswordPromptResult>((resolve) => {
+    const onAbort = () => {
+      hidePasswordPrompt();
+      resolve({ reason: 'cancelled' });
+    };
+    abortSignal.addEventListener('abort', onAbort, { once: true });
+    removeAbortListener = () => abortSignal.removeEventListener('abort', onAbort);
+  });
 
   const promptPromise = showPasswordPrompt({
     title: 'File Password Required',
@@ -135,20 +167,21 @@ async function promptCustomPasswordWithTimeout(
     submitLabel: 'Decrypt',
     cancelLabel: 'Skip file',
     timeoutMs: CUSTOM_PASSWORD_PROMPT_MS,
-  }).then((result) => {
+  }).then((result): CustomPasswordPromptResult => {
     if (result === 'timeout') {
-      return { reason: 'prompt_timeout' as const };
+      return { reason: 'prompt_timeout' };
     }
     if (!result) {
-      return { reason: 'prompt_cancelled' as const };
+      return { reason: 'prompt_cancelled' };
     }
     return { password: result.password };
   });
 
-  if (abortPromise) {
+  try {
     return await Promise.race([promptPromise, abortPromise]);
+  } finally {
+    removeAbortListener();
   }
-  return await promptPromise;
 }
 
 function formatRoundSummary(summary: BatchDownloadRoundSummary): string {
@@ -166,7 +199,7 @@ function formatRoundSummary(summary: BatchDownloadRoundSummary): string {
   return lines.join('\n');
 }
 
-function classifyDownloadError(err: unknown): BatchDownloadFailureReason {
+export function classifyDownloadError(err: unknown): BatchDownloadFailureReason {
   const msg = err instanceof Error ? err.message : String(err || '');
   if (!msg) return 'download_failed';
   if (msg === 'cancelled' || /cancelled/i.test(msg)) return 'cancelled';
@@ -181,42 +214,25 @@ function classifyDownloadError(err: unknown): BatchDownloadFailureReason {
 }
 
 /**
- * Download the provided vault files using the batch state machine.
- * Directory picker is attempted under the user gesture of the caller when
- * available; otherwise files use the normal browser download path.
+ * Run the batch state machine over the given files. Account-password files go
+ * first and custom-password files last in every round; only per-file failures
+ * are retried, for at most MAX_ROUNDS rounds.
  */
-export async function downloadSelectedFiles(
+export async function runDownloadBatch(
   entries: readonly BatchDownloadSourceFile[],
+  env: BatchDownloadEnvironment,
 ): Promise<BatchDownloadResult> {
   const targets = entries.map(toTarget);
+  const result: BatchDownloadResult = { rounds: [], cancelled: false };
   if (targets.length === 0) {
-    showError('No files selected for download.');
-    return { rounds: [], cancelled: false };
+    return result;
   }
 
-  let directoryHandle: FileSystemDirectoryHandle | undefined;
-  try {
-    if (typeof window !== 'undefined' && 'showDirectoryPicker' in window) {
-      directoryHandle = await (
-        window as Window & {
-          showDirectoryPicker: (opts?: { mode?: string }) => Promise<FileSystemDirectoryHandle>;
-        }
-      ).showDirectoryPicker({ mode: 'readwrite' });
-    } else {
-      console.info(
-        '[arkfile-download-batch] Folder picker unavailable; using browser download folder. The browser may ask permission for multiple downloads or block them.',
-      );
-    }
-  } catch {
-    console.info(
-      '[arkfile-download-batch] No download folder chosen; using browser download folder.',
-    );
-  }
-
+  const directoryHandle = await env.pickDirectory();
   let alreadyTaken: string[] = [];
   if (directoryHandle) {
     try {
-      alreadyTaken = await listDirectoryEntryNames(directoryHandle);
+      alreadyTaken = await env.listDirectoryNames(directoryHandle);
     } catch (err) {
       console.warn('[arkfile-download-batch] Failed to list directory entries:', err);
     }
@@ -228,8 +244,12 @@ export async function downloadSelectedFiles(
     alreadyTaken,
   );
 
-  const abortController = new AbortController();
-  const result: BatchDownloadResult = { rounds: [], cancelled: false };
+  const abortController = env.abortController;
+  const destination = (file: BatchDownloadTarget): Partial<BatchDownloadOneOptions> =>
+    directoryHandle
+      ? { directoryHandle, reservedFilename: reserved.get(file.file_id) || file.filename }
+      : {};
+
   let pending = targets.slice();
   let fatalAuth = false;
 
@@ -239,16 +259,7 @@ export async function downloadSelectedFiles(
       break;
     }
 
-    showProgress({
-      title: `Downloading files (round ${round})`,
-      message: `${pending.length} file(s) remaining`,
-      indeterminate: true,
-      allowCancel: true,
-      onCancel: () => {
-        abortController.abort();
-        hidePasswordPrompt();
-      },
-    });
+    env.onRoundStart(round, pending.length, () => abortController.abort());
 
     const { account, custom } = partitionDownloadTargets(pending);
     const summary: BatchDownloadRoundSummary = {
@@ -282,23 +293,11 @@ export async function downloadSelectedFiles(
         break;
       }
 
-      updateProgress({
-        message: `Account file ${i + 1} of ${account.length}: ${file.filename}`,
-      });
+      env.onProgress(`Account file ${i + 1} of ${account.length}: ${file.filename}`);
 
       try {
-        await ensureFreshBatchAuth();
-        await downloadFile(file.file_id, file.password_hint, file.sha256sum, file.password_type, {
-          throwOnFailure: true,
-          abortController,
-          showProgressUI: false,
-          ...(directoryHandle
-            ? {
-                directoryHandle,
-                reservedFilename: reserved.get(file.file_id) || file.filename,
-              }
-            : {}),
-        });
+        await env.ensureAuth();
+        await env.downloadOne(file, { abortController, ...destination(file) });
         summary.accountSucceeded.push({
           fileId: file.file_id,
           filename: file.filename,
@@ -306,37 +305,25 @@ export async function downloadSelectedFiles(
         });
       } catch (err) {
         const reason = classifyDownloadError(err);
-        if (reason === 'auth_expired') {
-          fatalAuth = true;
-          aborting = true;
-          summary.accountFailed.push({
-            fileId: file.file_id,
-            filename: file.filename,
-            passwordType: 'account',
-            reason,
-          });
-          markSkippedRest(account.slice(i + 1), 'skipped');
-          markSkippedRest(custom, 'skipped');
-          break;
-        }
-        if (reason === 'cancelled') {
-          aborting = true;
-          summary.accountFailed.push({
-            fileId: file.file_id,
-            filename: file.filename,
-            passwordType: 'account',
-            reason,
-          });
-          markSkippedRest(account.slice(i + 1), 'cancelled');
-          markSkippedRest(custom, 'cancelled');
-          break;
-        }
         summary.accountFailed.push({
           fileId: file.file_id,
           filename: file.filename,
           passwordType: 'account',
           reason,
         });
+        if (reason === 'auth_expired') {
+          fatalAuth = true;
+          aborting = true;
+          markSkippedRest(account.slice(i + 1), 'skipped');
+          markSkippedRest(custom, 'skipped');
+          break;
+        }
+        if (reason === 'cancelled') {
+          aborting = true;
+          markSkippedRest(account.slice(i + 1), 'cancelled');
+          markSkippedRest(custom, 'cancelled');
+          break;
+        }
       }
     }
 
@@ -349,9 +336,7 @@ export async function downloadSelectedFiles(
           break;
         }
 
-        updateProgress({
-          message: `Custom-password file ${i + 1} of ${custom.length}: ${file.filename}`,
-        });
+        env.onProgress(`Custom-password file ${i + 1} of ${custom.length}: ${file.filename}`);
 
         let succeeded = false;
         let lastReason: BatchDownloadFailureReason = 'download_failed';
@@ -362,7 +347,7 @@ export async function downloadSelectedFiles(
             break;
           }
 
-          const promptResult = await promptCustomPasswordWithTimeout(
+          const promptResult = await env.promptCustomPassword(
             file.filename,
             file.password_hint,
             abortController.signal,
@@ -370,30 +355,22 @@ export async function downloadSelectedFiles(
 
           if ('reason' in promptResult) {
             lastReason = promptResult.reason;
-            if (
-              promptResult.reason === 'cancelled' ||
-              promptResult.reason === 'prompt_cancelled'
-            ) {
+            if (lastReason === 'cancelled' || lastReason === 'prompt_cancelled') {
               break;
             }
-            // prompt_timeout: count as an attempt and continue
+            // prompt_timeout counts as an attempt.
             continue;
           }
 
+          // The password string cannot be wiped in JavaScript; keep it in this
+          // attempt's scope only and drop the reference when the attempt ends.
           let password = promptResult.password;
           try {
-            await ensureFreshBatchAuth();
-            await downloadFile(file.file_id, file.password_hint, file.sha256sum, file.password_type, {
+            await env.ensureAuth();
+            await env.downloadOne(file, {
               customPassword: password,
-              throwOnFailure: true,
               abortController,
-              showProgressUI: false,
-              ...(directoryHandle
-                ? {
-                    directoryHandle,
-                    reservedFilename: reserved.get(file.file_id) || file.filename,
-                  }
-                : {}),
+              ...destination(file),
             });
             succeeded = true;
             break;
@@ -434,9 +411,8 @@ export async function downloadSelectedFiles(
       }
     }
 
-    hideProgress();
     result.rounds.push(summary);
-    showSuccess(formatRoundSummary(summary));
+    env.onRoundEnd(summary);
 
     if (abortController.signal.aborted) {
       result.cancelled = true;
@@ -444,41 +420,121 @@ export async function downloadSelectedFiles(
     }
     if (fatalAuth) {
       result.cancelled = true;
-      showError('Session expired during batch download. Remaining files were skipped.');
       break;
     }
 
     const failedIds = new Set(
-      [...summary.accountFailed, ...summary.customFailed].map((f) => f.fileId),
+      [...summary.accountFailed, ...summary.customFailed]
+        .filter((f) => f.reason !== 'cancelled')
+        .map((f) => f.fileId),
     );
-    // Do not retry files skipped due to cancel/auth; only true per-file failures.
+    // Do not retry files skipped or cancelled; only true per-file failures.
     pending = pending.filter((t) => failedIds.has(t.file_id));
 
     if (pending.length === 0 || round >= MAX_ROUNDS) {
       break;
     }
 
-    const retry = window.confirm(
-      `${pending.length} file(s) failed in round ${round}. Retry failed downloads?`,
-    );
-    if (!retry) {
+    if (!env.confirmRetry(pending.length, round)) {
       break;
     }
   }
 
-  const last = result.rounds[result.rounds.length - 1];
-  if (last) {
-    const remaining = last.accountFailed.length + last.customFailed.length;
-    if (result.cancelled) {
-      showWarning('Batch download cancelled. See the round summary for details.');
-    } else if (remaining > 0) {
-      showWarning(
-        `Batch download finished with ${remaining} unresolved failure(s). See the round summary for details.`,
-      );
-    } else {
-      showSuccess('Batch download finished. All selected files succeeded.');
-    }
-  }
-
+  env.onFinished(result);
   return result;
+}
+
+function browserBatchEnvironment(): BatchDownloadEnvironment {
+  return {
+    pickDirectory: async () => {
+      try {
+        if (typeof window !== 'undefined' && 'showDirectoryPicker' in window) {
+          return await (
+            window as Window & {
+              showDirectoryPicker: (opts?: { mode?: string }) => Promise<FileSystemDirectoryHandle>;
+            }
+          ).showDirectoryPicker({ mode: 'readwrite' });
+        }
+        console.info(
+          '[arkfile-download-batch] Folder picker unavailable; using browser download folder. The browser may ask permission for multiple downloads or block them.',
+        );
+      } catch {
+        console.info(
+          '[arkfile-download-batch] No download folder chosen; using browser download folder.',
+        );
+      }
+      return undefined;
+    },
+    listDirectoryNames: listDirectoryEntryNames,
+    downloadOne: async (target, opts) => {
+      await downloadFile(target.file_id, target.password_hint, target.sha256sum, target.password_type, {
+        ...(opts.customPassword !== undefined ? { customPassword: opts.customPassword } : {}),
+        throwOnFailure: true,
+        abortController: opts.abortController,
+        showProgressUI: false,
+        ...(opts.directoryHandle && opts.reservedFilename
+          ? { directoryHandle: opts.directoryHandle, reservedFilename: opts.reservedFilename }
+          : {}),
+      });
+    },
+    promptCustomPassword: promptCustomPasswordWithTimeout,
+    ensureAuth: ensureFreshBatchAuth,
+    confirmRetry: (failedCount, round) =>
+      window.confirm(`${failedCount} file(s) failed in round ${round}. Retry failed downloads?`),
+    onRoundStart: (round, remaining, cancel) => {
+      showProgress({
+        title: `Downloading files (round ${round})`,
+        message: `${remaining} file(s) remaining`,
+        indeterminate: true,
+        allowCancel: true,
+        onCancel: () => {
+          cancel();
+          hidePasswordPrompt();
+        },
+      });
+    },
+    onProgress: (message) => updateProgress({ message }),
+    onRoundEnd: (summary) => {
+      hideProgress();
+      showSuccess(formatRoundSummary(summary));
+    },
+    onFinished: (result) => {
+      const last = result.rounds[result.rounds.length - 1];
+      if (!last) {
+        return;
+      }
+      const lastRoundFailed = [...last.accountFailed, ...last.customFailed].some(
+        (f) => f.reason === 'auth_expired',
+      );
+      if (lastRoundFailed) {
+        showError('Session expired during batch download. Remaining files were skipped.');
+      }
+      const remaining = last.accountFailed.length + last.customFailed.length;
+      if (result.cancelled) {
+        showWarning('Batch download cancelled. See the round summary for details.');
+      } else if (remaining > 0) {
+        showWarning(
+          `Batch download finished with ${remaining} unresolved failure(s). See the round summary for details.`,
+        );
+      } else {
+        showSuccess('Batch download finished. All selected files succeeded.');
+      }
+    },
+    abortController: new AbortController(),
+  };
+}
+
+/**
+ * Download the provided vault files using the batch state machine.
+ * Directory picker is attempted under the user gesture of the caller when
+ * available; otherwise files use the normal browser download path.
+ */
+export async function downloadSelectedFiles(
+  entries: readonly BatchDownloadSourceFile[],
+): Promise<BatchDownloadResult> {
+  if (entries.length === 0) {
+    showError('No files selected for download.');
+    return { rounds: [], cancelled: false };
+  }
+  return runDownloadBatch(entries, browserBatchEnvironment());
 }

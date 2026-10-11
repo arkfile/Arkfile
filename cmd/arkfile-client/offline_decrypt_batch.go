@@ -21,8 +21,8 @@ import (
 // readTerminalPassword reads a custom password from the controlling terminal
 // only, even when --password-stdin supplied the account password.
 // Overridable in tests.
-var readTerminalPassword = func(prompt string, timeout time.Duration) ([]byte, error) {
-	return secureinput.ReadPassword(prompt, timeout)
+var readTerminalPassword = func(ctx context.Context, prompt string, timeout time.Duration) ([]byte, error) {
+	return secureinput.ReadPasswordContext(ctx, prompt, timeout)
 }
 
 // readAccountPasswordInput reads the account password from the terminal, or
@@ -498,6 +498,8 @@ func (run *offlineDecryptRun) restoreCustomFile(lf *logicalBundleFile, accountKe
 		if err != nil {
 			msg := err.Error()
 			switch {
+			case errors.Is(err, secureinput.ErrInputCancelled) || run.ctx.Err() != nil:
+				lastReason = reasonCancelled
 			case strings.Contains(msg, "no controlling terminal"):
 				lastReason = reasonTerminalRequired
 			case strings.Contains(msg, "timed out"):
@@ -566,6 +568,7 @@ func (run *offlineDecryptRun) readCustomPassword(displayName string, attempt, at
 		return readSingleBundleCustomPassword(prompt)
 	}
 	return readTerminalPassword(
+		run.ctx,
 		fmt.Sprintf("Enter the custom password for '%s' (attempt %d/%d, wait up to 2 minutes): ", displayName, attempt, attempts),
 		PasswordTimeoutBatchCustom,
 	)

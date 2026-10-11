@@ -8,13 +8,20 @@ Owners already encrypt and upload many files in one batch from the browser or `a
 
 Complete for the planned multi-file select/download scope. Cursor-paginated owner list, selection UI (select all shown / select all matching filter / prune), frontend and CLI batch download state machines (account-then-custom, retries, summaries, cancel, reserved basenames, directory-handle sink with SW/Blob fallback), shared e2e corpus, and Playwright multi-select/download coverage are implemented and validated (`e2e-test.sh` and `e2e-playwright.sh` passing).
 
-Deferred follow-ups (not blocking this work): browser infinite-scroll / cross-page select-all under a reduced test page size; automated Playwright assertion of the live directory-picker write path (fallback path is covered). Decisions below remain the locked design record unless this document is explicitly revised.
+A post-completion review (2026-10-11) closed four gaps against this document's own rules:
+
+- **Terminal read.** The CLI's timed terminal password read left a blocked reader on the TTY after a timeout and ignored Ctrl-C until the 2 minute wait expired. `cli/secureinput` now reads in raw mode with bounded polls that observe the deadline and a context, edits input in a fixed buffer it zeroes, always restores the terminal, and re-delivers Ctrl-C as SIGINT. Batch custom prompts pass the batch's interrupt context.
+- **Select-all-matching scan.** The browser scan could loop forever when a page fetch failed. Paging now lives in `files/list-paging.ts`, which stops on a failed load, an in-flight load that never finishes, or a page that does not advance. The CLI page walk refuses a non-advancing cursor.
+- **Unit coverage.** The Tests section previously overstated it. The TypeScript batch is now dependency-injected (`runDownloadBatch` with a `BatchDownloadEnvironment`) and has state-machine tests. The CLI round loop is `runOwnerDownloadBatch` with injected side effects and Go tests.
+- **Terminal safety.** Two CLI batch error lines printed decrypted filenames without `sanitizeDisplayText`.
+
+Deferred follow-ups (not blocking this work): browser infinite-scroll / cross-page select-all under a reduced test page size; automated Playwright assertion of the live directory-picker write path (fallback path is covered); a fake-timer test of the password modal's own 2 minute countdown (the batch tests drive `prompt_timeout` through the injected prompt; the modal needs a DOM test environment the Bun suite does not provide). Decisions below remain the locked design record unless this document is explicitly revised.
 
 ## Overview
 
 This work adds multi-select download on the TypeScript frontend and `arkfile-client`, with tag-filter-aware selection including select-all matching the active filter, sequential streaming (never parallel), custom-password files deferred to the end of each download round with prompt/retry/timeout rules, and a clear account-vs-custom success/failure report with up to three retry rounds.
 
-Pagination is a prerequisite. Today `GET /api/files` returns the full owner set via `models.GetFilesByOwner`; the CLI sends `limit`/`offset` query parameters but the handler ignores them. A separate lightweight `GET /api/files/metadata` already paginates but omits tags and is unused by live clients once the main list is paged. Infinite-scroll selection and honest "select all matching filter" both require a stable, newest-first paged owner list that still carries opaque tag ciphertext for client-side AND filtering after decrypt. The new owner list uses cursor pagination, not offsets, so uploads that occur during a page walk cannot shift later offsets and cause duplicate or skipped rows.
+Pagination was a prerequisite. Before this work, `GET /api/files` returned the full owner set via `models.GetFilesByOwner`, and the CLI sent `limit`/`offset` query parameters that the handler ignored. A separate lightweight `GET /api/files/metadata` paginated but omitted tags and had no live client once the main list was paged; it has been removed. Infinite-scroll selection and honest "select all matching filter" both require a stable, newest-first paged owner list that still carries opaque tag ciphertext for client-side AND filtering after decrypt. The new owner list uses cursor pagination, not offsets, so uploads that occur during a page walk cannot shift later offsets and cause duplicate or skipped rows.
 
 Browser multi-download prefers one directory chooser (`showDirectoryPicker`) and streams each decrypted file into that folder. Where the File System Access API is unavailable, fall back to sequential browser downloads into the default Downloads folder (no per-file Save As under default browser settings). CLI uses `--output-dir` with the same basename collision rule. No zip packaging -- each file streams to its own path so constrained devices stay within chunk-bounded memory.
 
@@ -129,6 +136,15 @@ Shared rule on both clients: split on the final extension; if `name + ext` exist
 
 TypeScript coverage for selection, collision helper, reserved names across retries, partial cleanup, batch cancellation, batch partition order, fatal vs non-fatal download errors, two-minute prompt timeout (fake timers), secret-disposal callbacks, and round/retry accounting. Go coverage for target collection from IDs and tags, collision helper, temporary-file finalization/cleanup, interrupt handling, secret disposal, partition order, and round/retry counters without requiring a live server where possible.
 
+Where this lives now:
+
+- **`download-batch.test.ts`** drives `runDownloadBatch` through an injected environment. It covers partition order, per-file auth refresh, hint display, the attempt budget for wrong passwords, `prompt_timeout` as an attempt, a skipped prompt failing only its file, retry of failed files only, the round limit, a declined retry, session loss, batch cancel during a download and during a prompt, reservation reuse across retries with case-insensitive collisions, and the absence of passwords from the batch result.
+- **`list-paging.test.ts`** covers append and dedupe across pages, stop-when-exhausted, stale-filter cancellation, failed loads, non-advancing cursors, and in-flight waits.
+- **`batch_download_run_test.go`** drives `runOwnerDownloadBatch` and covers partition order, retry of failed files only, the round limit, a declined retry, the custom-password attempt budget with every password buffer verified zeroed, `prompt_timeout`, a cancelled prompt, an interrupt during the account phase, and no-terminal handling.
+- **`cli/secureinput/terminal_poll_test.go`** proves a timed-out or cancelled read leaves no reader on the input and that editing keys, Ctrl-C, end of input, and overlong input behave as specified.
+
+The password modal's own countdown is not unit-tested (no DOM in the Bun suite), and JavaScript strings cannot be proven erased; the tests prove the batch does not retain them.
+
 ### e2e-test.sh
 
 Seed a durable shared corpus (~18 small files: account + custom, tags `multi-a` / `multi-a,multi-b` / `multi-decoy`, plus a `photo.png` collision pair) during `files_custom_password` with no extra login/logout; write `multi-dl-corpus.json` for Playwright. CLI checks: `list-files --tags`, `download --tags --dry-run`, account multi-download into `--output-dir` with summary line, basename collision rename, and one custom file via single-file `--password-stdin`. Keep the separate large 3-file batch upload test (still deleted afterward). Do not admin-delete corpus files.
@@ -142,11 +158,11 @@ Load the corpus manifest; verify select all shown + filter prune; select all mat
 - Server-side zip or bulk chunk API
 - Parallel downloads
 - Bulk delete, share, or retag (bulk export is covered by `docs/wip/multi-ab.md`)
-
-`docs/wip/multi-ab.md` also added `download --all` for parity with the web app's Select all matching filter, and fixed the multi-file `--password-stdin` guard, which had been unreachable because the batch branch returned first; `--password-stdin` is now accepted only for one explicitly listed `--file-id`.
 - Reconstructing upload folder trees on download
 - Blind indexes or server-side tag search
 - Schema changes for list ordering (`updated_at` or similar)
+
+`docs/wip/multi-ab.md` also added `download --all` for parity with the web app's Select all matching filter, and fixed the multi-file `--password-stdin` guard, which had been unreachable because the batch branch returned first; `--password-stdin` is now accepted only for one explicitly listed `--file-id`.
 
 ## Implementation Checklist
 
@@ -159,4 +175,8 @@ Load the corpus manifest; verify select all shown + filter prune; select all mat
 - [OK] Batch download machine on frontend and CLI (directory picker / `--output-dir`, safe partial output, cancellation, collisions, custom-password deferral, two-minute prompts, secret disposal, retries, summaries)
 - [OK] Relevant Go and TypeScript unit tests green
 - [OK] Developer `dev-reset.sh` then `e2e-test.sh` and `e2e-playwright.sh` passed
-- Deferred: Playwright directory-picker write-path assertion; browser cross-page scroll/select-all with test page-size hook
+- [OK] Cancellable terminal password read with no reader left behind after timeout or interrupt; batch custom prompts honor the interrupt context
+- [OK] Select-all-matching scan stops on failed or non-advancing page loads; CLI page walk rejects a non-advancing cursor
+- [OK] Batch state machines dependency-injected and unit-tested on both clients (`runDownloadBatch`, `runOwnerDownloadBatch`)
+- [OK] Remaining unsanitized CLI batch filename prints routed through `sanitizeDisplayText`
+- Deferred: Playwright directory-picker write-path assertion; browser cross-page scroll/select-all with test page-size hook; DOM-level fake-timer test of the password modal countdown

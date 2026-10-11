@@ -182,6 +182,7 @@ func fetchAllOwnerFiles(client *HTTPClient, session *AuthSession, pageLimit int)
 			merged.Storage = page.Storage
 		}
 		merged.Limit = page.Limit
+		added := 0
 		for _, f := range page.Files {
 			if f.FileID == "" {
 				continue
@@ -191,9 +192,13 @@ func fetchAllOwnerFiles(client *HTTPClient, session *AuthSession, pageLimit int)
 			}
 			seen[f.FileID] = struct{}{}
 			merged.Files = append(merged.Files, f)
+			added++
 		}
 		if !page.HasMore || page.NextCursor == nil || *page.NextCursor == "" {
 			break
+		}
+		if added == 0 || *page.NextCursor == cursor {
+			return nil, fmt.Errorf("file list paging made no progress; refusing to loop")
 		}
 		cursor = *page.NextCursor
 	}

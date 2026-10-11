@@ -24,7 +24,9 @@ const (
 func overrideTerminalPassword(t *testing.T, fn func(prompt string, timeout time.Duration) ([]byte, error)) {
 	t.Helper()
 	orig := readTerminalPassword
-	readTerminalPassword = fn
+	readTerminalPassword = func(_ context.Context, prompt string, timeout time.Duration) ([]byte, error) {
+		return fn(prompt, timeout)
+	}
 	t.Cleanup(func() { readTerminalPassword = orig })
 }
 

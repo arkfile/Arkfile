@@ -42,6 +42,12 @@ import {
 } from './selection';
 import { downloadSelectedFiles } from './download-batch';
 import { exportSelectedFiles } from './export-batch';
+import {
+  mergeUniqueByFileId,
+  pageMadeNoProgress,
+  scanRemainingPages,
+  type PageLoadResult,
+} from './list-paging';
 
 // Types (match server response, snake_case)
 
@@ -157,22 +163,34 @@ async function fetchOwnerFilePage(cursor: string | null): Promise<FilesResponse 
   return response.json() as Promise<FilesResponse>;
 }
 
-async function loadMoreFiles(): Promise<void> {
-  if (!listHasMore || listLoadInFlight || !listNextCursor) {
-    return;
+async function loadMoreFiles(): Promise<PageLoadResult> {
+  if (listLoadInFlight) {
+    return 'busy';
+  }
+  if (!listHasMore || !listNextCursor) {
+    return 'loaded';
   }
   listLoadInFlight = true;
   setFileListLoadStatus(activeFilterTags.length > 0 ? 'Loading more matches…' : 'Loading more files…');
+  const previousCursor = listNextCursor;
   try {
-    const data = await fetchOwnerFilePage(listNextCursor);
+    const data = await fetchOwnerFilePage(previousCursor);
     if (!data) {
       showError('Failed to load more files.');
-      return;
+      return 'failed';
     }
-    await displayFiles(data, { append: true });
+    const added = await displayFiles(data, { append: true });
+    if (pageMadeNoProgress(previousCursor, listNextCursor, listHasMore, added)) {
+      listHasMore = false;
+      listNextCursor = null;
+      showError('The file list stopped advancing; reload the page to try again.');
+      return 'failed';
+    }
+    return 'loaded';
   } catch (error) {
     console.error('Load more files error:', error);
     showError('An error occurred while loading more files.');
+    return 'failed';
   } finally {
     listLoadInFlight = false;
     if (!listHasMore) {
@@ -360,13 +378,14 @@ function setFileListLoadStatus(message: string): void {
 
 // File Display (with client-side decryption)
 
+/** Render a page of files and return how many new file entries it added. */
 export async function displayFiles(
   data: FilesResponse,
   options: { append?: boolean } = {},
-): Promise<void> {
+): Promise<number> {
   const append = options.append === true;
   const filesList = document.getElementById('filesList');
-  if (!filesList) return;
+  if (!filesList) return 0;
 
   if (!append) {
     filesList.innerHTML = '';
@@ -378,7 +397,7 @@ export async function displayFiles(
   if ((!data.files || data.files.length === 0) && decryptedListCache.length === 0) {
     filesList.innerHTML = '<div class="no-files">No files uploaded yet.</div>';
     updateStorageInfo(data.storage);
-    return;
+    return 0;
   }
 
   let username = getUsernameFromToken();
@@ -413,29 +432,16 @@ export async function displayFiles(
   }
 
   const decryptedFiles = await decryptServerFiles(data.files, accountKey);
-  if (append) {
-    for (const entry of decryptedFiles) {
-      if (seenFileIds.has(entry.file_id)) {
-        continue;
-      }
-      seenFileIds.add(entry.file_id);
-      decryptedListCache.push(entry);
-    }
-  } else {
+  if (!append) {
     seenFileIds.clear();
     decryptedListCache = [];
-    for (const entry of decryptedFiles) {
-      if (seenFileIds.has(entry.file_id)) {
-        continue;
-      }
-      seenFileIds.add(entry.file_id);
-      decryptedListCache.push(entry);
-    }
   }
+  const added = mergeUniqueByFileId(seenFileIds, decryptedListCache, decryptedFiles);
 
   await ensureTagFilterReady(!!accountKey);
   renderFilteredFileList();
   updateStorageInfo(data.storage);
+  return added;
 }
 
 async function decryptServerFiles(
@@ -821,28 +827,7 @@ async function selectAllMatchingFilter(): Promise<void> {
   const filterSnapshot = activeFilterTags.slice();
   const matched = new Map<string, DecryptedFileEntry>();
 
-  for (const file of decryptedListCache) {
-    if (filterSnapshot.length === 0) {
-      matched.set(file.file_id, file);
-      continue;
-    }
-    if (file.tags_available && fileHasAllTags(file.tags, filterSnapshot)) {
-      matched.set(file.file_id, file);
-    }
-  }
-
-  setFileListLoadStatus(`Loading matches… ${matched.size} so far`);
-  while (listHasMore && listNextCursor) {
-    if (scanToken !== matchingFilterScanToken) {
-      setFileListLoadStatus('');
-      return;
-    }
-    if (activeFilterTags.join('\0') !== filterSnapshot.join('\0')) {
-      setFileListLoadStatus('');
-      showError('Tag filter changed; select-all matching filter was cancelled.');
-      return;
-    }
-    await loadMoreFiles();
+  const collectMatches = (): void => {
     for (const file of decryptedListCache) {
       if (matched.has(file.file_id)) {
         continue;
@@ -856,14 +841,30 @@ async function selectAllMatchingFilter(): Promise<void> {
       }
     }
     setFileListLoadStatus(`Loading matches… ${matched.size} so far`);
-  }
+  };
+
+  collectMatches();
+  const scanResult = await scanRemainingPages({
+    hasMore: () => listHasMore && !!listNextCursor,
+    loadNext: loadMoreFiles,
+    isStale: () =>
+      scanToken !== matchingFilterScanToken
+      || activeFilterTags.join('\0') !== filterSnapshot.join('\0'),
+    onPage: collectMatches,
+  });
 
   if (scanToken !== matchingFilterScanToken) {
+    // A newer scan replaced this one; it owns the status line now.
     return;
   }
-  if (activeFilterTags.join('\0') !== filterSnapshot.join('\0')) {
+  if (scanResult === 'stale') {
     setFileListLoadStatus('');
     showError('Tag filter changed; select-all matching filter was cancelled.');
+    return;
+  }
+  if (scanResult === 'failed') {
+    setFileListLoadStatus('');
+    showError('Could not load every page of files; select-all matching filter was cancelled.');
     return;
   }
 

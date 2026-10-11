@@ -1,6 +1,7 @@
 package secureinput
 
 import (
+	"context"
 	"io"
 	"os"
 	"testing"
@@ -40,9 +41,9 @@ func TestReadPasswordUsesControllingTTYNotStdinPipe(t *testing.T) {
 	openControllingTTY = func() (*os.File, error) {
 		return ttyR, nil
 	}
-	readPasswordInteractive = func(fd int) ([]byte, error) {
-		if fd != int(ttyR.Fd()) {
-			t.Fatalf("expected tty fd %d, got %d", ttyR.Fd(), fd)
+	readPasswordInteractive = func(_ context.Context, f *os.File, _ time.Duration) ([]byte, error) {
+		if f != ttyR {
+			t.Fatalf("expected tty file, got %#v", f)
 		}
 		return []byte("from-tty"), nil
 	}

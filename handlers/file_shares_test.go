@@ -399,6 +399,57 @@ func TestGetShareEnvelope_SuccessOmitsOwnerAndPlaintextMetadata(t *testing.T) {
 	assert.Equal(t, envelope, resp["encrypted_envelope"])
 	assert.Equal(t, float64(1048576), resp["size_bytes"])
 	assert.NotContains(t, rec.Body.String(), ownerUsername)
+	assert.NotContains(t, rec.Body.String(), "password_hint")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// Custom-password hints are owner-only metadata and must never reach anonymous
+// share recipients through the public download metadata either.
+func TestGetShareDownloadMetadata_OmitsOwnerMetadataAndHints(t *testing.T) {
+	shareID := testShareID
+	fileID := "11111111-2222-4333-8444-555555555555"
+
+	c, rec, mock, _ := setupTestEnv(t, http.MethodGet, "/api/public/shares/"+shareID+"/metadata", nil)
+	c.SetParamNames("id")
+	c.SetParamValues(shareID)
+
+	rateLimitIgnoreInsertSQL := `INSERT OR IGNORE INTO share_access_attempts`
+	mock.ExpectExec(rateLimitIgnoreInsertSQL).WithArgs(shareID, sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	rateLimitSQL := `SELECT share_id, entity_id, failed_count, last_failed_attempt, next_allowed_attempt FROM share_access_attempts WHERE share_id = \? AND entity_id = \?`
+	mock.ExpectQuery(rateLimitSQL).WithArgs(shareID, sqlmock.AnyArg()).WillReturnError(sql.ErrNoRows)
+
+	shareSQL := `SELECT file_id, expires_at, revoked_at, revoked_reason, access_count, max_accesses FROM file_share_keys WHERE share_id = \?`
+	mock.ExpectQuery(shareSQL).WithArgs(shareID).WillReturnRows(
+		sqlmock.NewRows([]string{"file_id", "expires_at", "revoked_at", "revoked_reason", "access_count", "max_accesses"}).
+			AddRow(fileID, nil, nil, nil, 0, nil),
+	)
+
+	chunkSQL := `SELECT size_bytes, chunk_count, chunk_size_bytes FROM file_metadata WHERE file_id = \?`
+	mock.ExpectQuery(chunkSQL).WithArgs(fileID).WillReturnRows(
+		sqlmock.NewRows([]string{"size_bytes", "chunk_count", "chunk_size_bytes"}).
+			AddRow(float64(1048576), float64(1), float64(16777216)),
+	)
+
+	err := GetShareDownloadMetadata(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+
+	allowed := map[string]struct{}{
+		"file_id":          {},
+		"size_bytes":       {},
+		"chunk_count":      {},
+		"chunk_size_bytes": {},
+	}
+	for key := range resp {
+		if _, ok := allowed[key]; !ok {
+			t.Errorf("anonymous share metadata JSON included unexpected key %q", key)
+		}
+	}
+	assert.NotContains(t, rec.Body.String(), "password_hint")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -1747,10 +1748,15 @@ func readPassword(prompt string) ([]byte, error) {
 
 // readPasswordWithTimeout is like readPassword but uses an explicit TTY wait limit.
 func readPasswordWithTimeout(prompt string, timeout time.Duration) ([]byte, error) {
+	return readPasswordWithTimeoutContext(context.Background(), prompt, timeout)
+}
+
+// readPasswordWithTimeoutContext also stops waiting when ctx is cancelled.
+func readPasswordWithTimeoutContext(ctx context.Context, prompt string, timeout time.Duration) ([]byte, error) {
 	if passwordFromStdin {
 		return secureinput.ReadPasswordFromStdin(PasswordTimeoutPipe)
 	}
-	return secureinput.ReadPassword(prompt, timeout)
+	return secureinput.ReadPasswordContext(ctx, prompt, timeout)
 }
 
 // readPasswordWithStrengthCheck prompts for password, validates strength, loops until valid.
