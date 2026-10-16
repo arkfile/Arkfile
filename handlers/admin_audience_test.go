@@ -177,7 +177,7 @@ func TestAdminStackHead_AcceptsValidFullToken(t *testing.T) {
 		return c.NoContent(http.StatusOK)
 	})
 
-	fullToken, _, err := auth.GenerateFullAccessToken("alice")
+	fullToken, _, err := auth.GenerateFullAccessToken("alice", "admin-audience-family", "")
 	if err != nil {
 		t.Fatalf("GenerateFullAccessToken: %v", err)
 	}

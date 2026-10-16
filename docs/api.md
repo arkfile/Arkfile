@@ -16,7 +16,7 @@ Arkfile uses JSON Web Tokens (JWT) after OPAQUE authentication and MFA. Tokens s
 
 Tokens can be obtained by completing the OPAQUE authentication flow via the `/api/opaque/login/*` endpoints, then completing MFA. Arkfile uses a username-based authentication system. Accounts are not keyed by email.
 
-A stolen access token that is never revoked remains valid until it expires. Logout, `POST /api/auth/revoke-all`, admin force-logout, and refresh-token reuse write a user-wide revocation so existing access tokens fail on the next checked request.
+A stolen access token remains subject to its expiry, the login family's six-hour idle limit, and revocation checks. Logout ends the current login family. `POST /api/auth/revoke-all`, admin force-logout, and refresh-token reuse write a user-wide revocation so existing access tokens for the account fail on the next checked request.
 
 ## Endpoints
 
@@ -81,8 +81,10 @@ When an operator has flagged an account for OPAQUE credential rotation, `/api/op
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
 | POST | `/api/refresh` | Exchange refresh token for new access token | Refresh Cookie |
-| POST | `/api/logout` | Invalidate session and revoke tokens | Access |
+| POST | `/api/logout` | End the current login family and clear browser cookies | Access |
 | GET | `/api/auth/crypto-metadata` | Get username, public Account Key salt, and KDF profile | Access (approval not required) |
+
+Every completed full login has a server-side family. A family ends after six hours without a user-started authenticated request; `POST /api/refresh` does not count as activity. Requests and refresh attempts for an idle family return HTTP 401 with `{"success":false,"error":"session_idle","message":"Your session ended after 6 hours without activity. Please log in again."}`. `POST /api/logout` ends only the caller's family and clears browser session cookies. Other logins for the same account remain active. A later request or refresh using credentials copied from the logged-out family returns HTTP 401 with `error` set to `session_logged_out`.
 
 #### Token Revocation (Require MFA)
 

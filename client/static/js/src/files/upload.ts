@@ -304,7 +304,7 @@ async function apiRequest<T>(
   // 401: try a single refresh-and-retry. If still 401 after refresh, treat as fatal.
   if (response.status === 401) {
     const refreshed = await doRefreshToken();
-    if (!refreshed) {
+    if (!refreshed.ok) {
       throw new AuthExpiredError();
     }
     response = await performFetch();

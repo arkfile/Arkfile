@@ -45,6 +45,17 @@ if (typeof globalThis.sessionStorage === 'undefined') {
   (globalThis as any).sessionStorage = new MockStorage();
 }
 
+if (typeof globalThis.CustomEvent === 'undefined') {
+  (globalThis as any).CustomEvent = class<T = unknown> extends Event {
+    detail: T;
+
+    constructor(type: string, init?: CustomEventInit<T>) {
+      super(type);
+      this.detail = init?.detail as T;
+    }
+  };
+}
+
 // ============================================================================
 // window mock (minimal -- just enough for addEventListener / setTimeout)
 // ============================================================================
@@ -61,6 +72,12 @@ if (typeof globalThis.window === 'undefined') {
       if (_listeners[event]) {
         _listeners[event] = _listeners[event].filter((h) => h !== handler);
       }
+    },
+    dispatchEvent(event: Event): boolean {
+      for (const handler of _listeners[event.type] ?? []) {
+        handler(event);
+      }
+      return true;
     },
     setTimeout: globalThis.setTimeout.bind(globalThis),
     clearTimeout: globalThis.clearTimeout.bind(globalThis),

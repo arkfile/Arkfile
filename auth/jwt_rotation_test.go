@@ -58,7 +58,7 @@ func TestJWTKeyRotation_OverlapAndRetire(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tokA, _, err := GenerateFullAccessToken("rotation-tester")
+	tokA, _, err := GenerateFullAccessToken("rotation-tester", "rotation-family-a", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestJWTKeyRotation_OverlapAndRetire(t *testing.T) {
 	}
 
 	// Token issued after rotation is signed under the new active key.
-	tokB, _, err := GenerateFullAccessToken("rotation-tester")
+	tokB, _, err := GenerateFullAccessToken("rotation-tester", "rotation-family-b", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestJWTMiddleware_AcceptsTokensAcrossRotation(t *testing.T) {
 	okHandler := func(c echo.Context) error { return c.String(http.StatusOK, "ok") }
 	handler := JWTMiddleware()(okHandler)
 
-	oldTok, _, err := GenerateFullAccessToken("mw-rotation-user")
+	oldTok, _, err := GenerateFullAccessToken("mw-rotation-user", "rotation-middleware-old", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestJWTMiddleware_AcceptsTokensAcrossRotation(t *testing.T) {
 		t.Fatalf("old token during overlap (pre-built middleware): code=%d err=%v", code, err)
 	}
 
-	newTok, _, err := GenerateFullAccessToken("mw-rotation-user")
+	newTok, _, err := GenerateFullAccessToken("mw-rotation-user", "rotation-middleware-new", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestMFAResetJWTMiddleware_AcrossRotation(t *testing.T) {
 	okHandler := func(c echo.Context) error { return c.String(http.StatusOK, "ok") }
 	handler := MFAResetJWTMiddleware()(okHandler)
 
-	fullTok, _, err := GenerateFullAccessToken("reset-rotation-user")
+	fullTok, _, err := GenerateFullAccessToken("reset-rotation-user", "reset-rotation-family", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestParseEitherTierToken_AcrossRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fullTok, _, err := GenerateFullAccessToken("logout-rotation-user")
+	fullTok, _, err := GenerateFullAccessToken("logout-rotation-user", "logout-rotation-family", "")
 	if err != nil {
 		t.Fatal(err)
 	}

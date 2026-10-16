@@ -127,7 +127,11 @@ func RegisterRoutes() {
 	// MFA Setup/Verify/Auth/Recovery/Reset - temp or dual-tier JWT depending on route
 	mfaGroup := Echo.Group("/api/mfa")
 	mfaGroup.POST("/recover-with-backup-code", RecoverWithBackupCode, auth.MFAJWTMiddleware())
-	mfaGroup.POST("/reset", MFAReset, auth.MFAResetJWTMiddleware())
+	mfaGroup.POST("/reset", MFAReset,
+		auth.MFAResetJWTMiddleware(),
+		auth.FullTokenRevocationMiddleware(database.DB),
+		SessionLifetimeMiddleware(database.DB),
+	)
 	mfaGroup.POST("/setup", MFASetup, auth.MFAJWTMiddleware())
 	mfaGroup.POST("/verify", MFARateLimitMiddleware("mfa_verify")(MFAVerify), auth.MFAJWTMiddleware())
 	mfaGroup.POST("/auth", MFARateLimitMiddleware("mfa_auth")(MFAAuth), auth.MFAJWTMiddleware())
@@ -216,6 +220,7 @@ func RegisterRoutes() {
 	pendingAllowedGroup := Echo.Group("")
 	pendingAllowedGroup.Use(auth.JWTMiddleware())
 	pendingAllowedGroup.Use(auth.TokenRevocationMiddleware(database.DB))
+	pendingAllowedGroup.Use(SessionLifetimeMiddleware(database.DB))
 	pendingAllowedGroup.Use(auth.RequireFullJWT)
 	pendingAllowedGroup.Use(RequireMFA)
 	pendingAllowedGroup.GET("/api/user/contact-info", GetContactInfo)
@@ -352,6 +357,8 @@ func RegisterRoutes() {
 	// Development/Testing admin endpoints (gated by ADMIN_DEV_TEST_API_ENABLED)
 	// SECURITY: These endpoints are ONLY for development and testing
 	if isDevTestAdminAPIEnabled() {
+		mfaProtectedGroup.POST("/api/dev-test/sessions/shift-self", ShiftOwnSessionClocks)
+
 		// Same stack as adminGroup; dev-test endpoints must not skip any layer.
 		devTestAdminGroup := Echo.Group("/api/admin/dev-test")
 		devTestAdminGroup.Use(auth.JWTMiddleware())
@@ -371,6 +378,7 @@ func RegisterRoutes() {
 		// so it does not leave the test host's entityID in a multi-hour
 		// cooldown that would block manual testing afterward. Dev/test only.
 		devTestAdminGroup.POST("/registration-throttle/reset", AdminResetRegistrationThrottle)
+		devTestAdminGroup.POST("/sessions/shift", AdminShiftSessionClocks)
 	}
 }
 

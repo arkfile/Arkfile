@@ -16,6 +16,7 @@ import (
 	"github.com/labstack/echo/v4"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestMain sets up necessary environment variables for config loading before running tests
@@ -118,7 +119,7 @@ func TestGenerateFullAccessToken(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			tokenString, _, err := GenerateFullAccessToken(tc.username)
+			tokenString, _, err := GenerateFullAccessToken(tc.username, "test-family", "")
 
 			assert.NoError(t, err)
 			assert.NotEmpty(t, tokenString)
@@ -142,6 +143,8 @@ func TestGenerateFullAccessToken(t *testing.T) {
 			assert.Contains(t, claims.Audience, AudienceAPI, "Audience claim should contain 'arkfile-api'")
 			assert.NotContains(t, claims.Audience, AudienceMFA, "Full token must NOT carry the temp audience")
 			assert.False(t, claims.RequiresMFA, "Full token must have requires_mfa=false")
+			assert.Equal(t, "test-family", claims.FamilyID)
+			assert.Empty(t, claims.LoginKind)
 			assert.NotEmpty(t, claims.ID, "ID (jti) claim should not be empty")
 
 			expectedExpiry := time.Now().Add(24 * time.Hour)
@@ -150,6 +153,18 @@ func TestGenerateFullAccessToken(t *testing.T) {
 			assert.True(t, claims.NotBefore.Time.Before(time.Now().Add(time.Second)), "NotBefore time should be in the past")
 		})
 	}
+}
+
+func TestGenerateFullAccessTokenCarriesLoginKind(t *testing.T) {
+	tokenString, _, err := GenerateFullAccessToken("admin-user", "admin-family", "admin")
+	require.NoError(t, err)
+	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		return GetJWTFullPublicKey(), nil
+	})
+	require.NoError(t, err)
+	claims := token.Claims.(*Claims)
+	assert.Equal(t, "admin-family", claims.FamilyID)
+	assert.Equal(t, "admin", claims.LoginKind)
 }
 
 // TestGenerateTemporaryMFAToken_ClaimsAndKey verifies the temp-tier token
@@ -212,7 +227,7 @@ func TestGetUsernameFromToken(t *testing.T) {
 // carrying aud=arkfile-api, requires_mfa=false, and the standard claims.
 func mintFullToken(t *testing.T, username string, expiry time.Duration) string {
 	t.Helper()
-	tokenString, _, err := GenerateFullAccessToken(username)
+	tokenString, _, err := GenerateFullAccessToken(username, "test-family", "")
 	_ = expiry // expiry is controlled by config; helper kept for future variants
 	assert.NoError(t, err)
 	return tokenString

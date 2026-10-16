@@ -125,6 +125,31 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
     FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 
+-- One row per completed full login. Refresh-token rotation keeps the same
+-- family id, so idle and later absolute lifetime state does not slide.
+CREATE TABLE IF NOT EXISTS session_families (
+    family_id TEXT PRIMARY KEY,
+    username TEXT NOT NULL,
+    login_kind TEXT,
+    session_started_at TIMESTAMP NOT NULL,
+    last_user_activity TIMESTAMP NOT NULL,
+    last_transfer_request_at TIMESTAMP,
+    grace_target TEXT,
+    grace_target_kind TEXT,
+    grace_last_request_at TIMESTAMP,
+    ended_at TIMESTAMP,
+    ended_reason TEXT,
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE,
+    CHECK (login_kind IS NULL OR login_kind IN ('admin')),
+    CHECK (grace_target_kind IS NULL OR grace_target_kind IN ('upload_session', 'file')),
+    CHECK (ended_reason IS NULL OR ended_reason IN ('idle', 'absolute', 'logout'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_family_id
+    ON refresh_tokens(family_id);
+CREATE INDEX IF NOT EXISTS idx_session_families_username
+    ON session_families(username);
+
 -- User-wide JWT revocation table.
 -- A row here causes TokenRevocationMiddleware to reject any full JWT for the user
 -- whose iat claim is before revoked_at.

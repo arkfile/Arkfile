@@ -332,27 +332,27 @@ func ValidateDevAdminAuthentication(db *sql.DB, username, password, totpSecret s
 	log.Printf("[DEV-ADMIN] Validating refresh token lifecycle...")
 
 	// 1. Create Token
-	token, err := models.CreateRefreshToken(db, username)
+	session, err := models.CreateRefreshSession(db, username, "")
 	if err != nil {
 		return fmt.Errorf("failed to create test refresh token: %w", err)
 	}
 
-	// 2. Validate Token (returns username, newRotatedToken, error)
-	valUser, _, err := models.ValidateRefreshToken(db, token)
+	// 2. Validate Token
+	rotatedSession, err := models.ValidateRefreshSession(db, session.RefreshToken)
 	if err != nil {
 		return fmt.Errorf("failed to validate test refresh token: %w", err)
 	}
-	if valUser != username {
-		return fmt.Errorf("refresh token validation returned wrong user: expected %s, got %s", username, valUser)
+	if rotatedSession.Username != username {
+		return fmt.Errorf("refresh token validation returned wrong user: expected %s, got %s", username, rotatedSession.Username)
 	}
 
 	// 3. Revoke Token
-	if err := models.RevokeRefreshToken(db, token); err != nil {
+	if err := models.RevokeRefreshToken(db, rotatedSession.RefreshToken); err != nil {
 		return fmt.Errorf("failed to revoke test refresh token: %w", err)
 	}
 
 	// 4. Verify Revocation
-	_, _, err = models.ValidateRefreshToken(db, token)
+	_, err = models.ValidateRefreshSession(db, rotatedSession.RefreshToken)
 	if err != models.ErrRefreshTokenNotFound {
 		return fmt.Errorf("revoked token should be invalid, got error: %v", err)
 	}

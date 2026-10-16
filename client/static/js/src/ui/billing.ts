@@ -545,7 +545,7 @@ async function ensureSessionForBillingPoll(): Promise<boolean> {
     }
   }
   const refreshed = await refreshToken();
-  if (!refreshed) {
+  if (!refreshed.ok) {
     return false;
   }
   return validateToken();
@@ -667,7 +667,7 @@ async function pollInvoiceStatus(
         }
       } else if (response.status === 401) {
         const refreshed = await refreshToken();
-        if (refreshed) {
+        if (refreshed.ok) {
           continue;
         }
         return 'pending';

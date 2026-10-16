@@ -35,6 +35,17 @@ type RefreshToken struct {
 	FamilyRevokedAt  *time.Time
 }
 
+// RefreshSession carries the stable per-login identity alongside the raw
+// refresh token returned to the client.
+type RefreshSession struct {
+	Username         string
+	RefreshToken     string
+	FamilyID         string
+	LoginKind        string
+	SessionStartedAt time.Time
+	SessionEndedNow  bool
+}
+
 // generateRefreshTokenRaw generates a cryptographically secure 256-bit refresh token.
 // Returns the raw base64url-encoded token (44 chars) and its SHA-256 hex hash.
 func generateRefreshTokenRaw() (raw string, hash string, err error) {
@@ -64,23 +75,41 @@ func hashRefreshToken(raw string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// CreateRefreshToken generates a new 256-bit refresh token for a user and persists it.
-// A fresh family_id is generated (new login event). Returns the raw token string.
-func CreateRefreshToken(db *sql.DB, username string) (string, error) {
+// CreateRefreshSession creates a refresh token and its per-login family state.
+func CreateRefreshSession(db *sql.DB, username, loginKind string) (*RefreshSession, error) {
 	raw, hash, err := generateRefreshTokenRaw()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	familyID, err := generateFamilyID()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	expiresAt := time.Now().Add(30 * 24 * time.Hour)
 	createdAt := time.Now()
+	expiresAt := createdAt.Add(30 * 24 * time.Hour)
+	var storedLoginKind interface{}
+	if loginKind != "" {
+		storedLoginKind = loginKind
+	}
 
-	_, err = db.Exec(
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	if _, err = tx.Exec(
+		`INSERT INTO session_families
+		 (family_id, username, login_kind, session_started_at, last_user_activity)
+		 VALUES (?, ?, ?, ?, ?)`,
+		familyID, username, storedLoginKind, createdAt, createdAt,
+	); err != nil {
+		return nil, err
+	}
+
+	_, err = tx.Exec(
 		`INSERT INTO refresh_tokens
 		 (id, username, token_hash, expires_at, created_at, revoked, last_used,
 		  family_id, superseded_by_hash, family_revoked_at)
@@ -89,21 +118,33 @@ func CreateRefreshToken(db *sql.DB, username string) (string, error) {
 		familyID, nil, nil,
 	)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	return raw, nil
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	sessionActivityCache.Lock()
+	sessionActivityCache.entries[familyID] = sessionActivityEntry{
+		acceptedAt:  createdAt,
+		persistedAt: createdAt,
+	}
+	sessionActivityCache.Unlock()
+
+	return &RefreshSession{
+		Username:         username,
+		RefreshToken:     raw,
+		FamilyID:         familyID,
+		LoginKind:        loginKind,
+		SessionStartedAt: createdAt,
+	}, nil
 }
 
-// ValidateRefreshToken checks if a refresh token is valid and returns the username.
-// It implements four-step family-revoke logic:
-//  1. Unknown token → 401.
-//  2. superseded_by_hash IS NOT NULL → reuse detected → revoke family + user JWTs → 401.
-//  3. family_revoked_at IS NOT NULL → family already revoked → 401.
-//  4. Normal rotation: insert new token (same family_id), set superseded_by_hash on old row.
-//
-// Returns (username, newRawToken, error). newRawToken is non-empty on successful rotation.
-func ValidateRefreshToken(db *sql.DB, tokenString string) (username string, newRawToken string, err error) {
+// ValidateRefreshSession checks token reuse, family revocation and idle state
+// before rotating the refresh token. The returned session preserves the family
+// identity and login kind across rotation.
+func ValidateRefreshSession(db *sql.DB, tokenString string) (*RefreshSession, error) {
 	hash := hashRefreshToken(tokenString)
 
 	debugMode := strings.ToLower(os.Getenv("DEBUG_MODE"))
@@ -111,6 +152,7 @@ func ValidateRefreshToken(db *sql.DB, tokenString string) (username string, newR
 
 	var (
 		id                 string
+		username           string
 		expiresAtStr       string
 		revoked            bool
 		lastUsedStr        sql.NullString
@@ -119,7 +161,7 @@ func ValidateRefreshToken(db *sql.DB, tokenString string) (username string, newR
 		familyRevokedAtStr sql.NullString
 	)
 
-	err = db.QueryRow(
+	err := db.QueryRow(
 		`SELECT id, username, expires_at, revoked, last_used,
 		        family_id, superseded_by_hash, family_revoked_at
 		 FROM refresh_tokens
@@ -131,62 +173,142 @@ func ValidateRefreshToken(db *sql.DB, tokenString string) (username string, newR
 	if err != nil {
 		if debug {
 			if err == sql.ErrNoRows {
-				fmt.Printf("[DEBUG] ValidateRefreshToken: token not found\n")
+				fmt.Printf("[DEBUG] ValidateRefreshSession: token not found\n")
 			} else {
-				fmt.Printf("[DEBUG] ValidateRefreshToken: DB error: %v\n", err)
+				fmt.Printf("[DEBUG] ValidateRefreshSession: DB error: %v\n", err)
 			}
 		}
 		if err == sql.ErrNoRows {
-			return "", "", ErrRefreshTokenNotFound
+			return nil, ErrRefreshTokenNotFound
 		}
-		return "", "", err
-	}
-
-	// Parse expiry
-	expiresAt, parseErr := time.Parse(time.RFC3339, expiresAtStr)
-	if parseErr != nil {
-		if expiresAt, parseErr = time.Parse("2006-01-02 15:04:05", expiresAtStr); parseErr != nil {
-			return "", "", fmt.Errorf("failed to parse expires_at: %w", parseErr)
-		}
-	}
-
-	if time.Now().After(expiresAt) {
-		return "", "", ErrRefreshTokenExpired
-	}
-
-	if revoked {
-		return "", "", ErrRefreshTokenNotFound
+		return nil, err
 	}
 
 	// Step 2: reuse detection.
 	if supersededByHash.Valid && supersededByHash.String != "" {
 		// This token has already been rotated past. Revoke the entire family.
 		if revokeErr := RevokeFamilyByFamilyID(db, familyID); revokeErr != nil && debug {
-			fmt.Printf("[DEBUG] ValidateRefreshToken: RevokeFamilyByFamilyID error: %v\n", revokeErr)
+			fmt.Printf("[DEBUG] ValidateRefreshSession: RevokeFamilyByFamilyID error: %v\n", revokeErr)
 		}
 		// Write user-wide JWT revocation so outstanding full JWTs are also rejected.
 		if revokeErr := RevokeAllUserJWTsByUsername(db, username, "refresh token reuse detected"); revokeErr != nil && debug {
-			fmt.Printf("[DEBUG] ValidateRefreshToken: RevokeAllUserJWTs error: %v\n", revokeErr)
+			fmt.Printf("[DEBUG] ValidateRefreshSession: RevokeAllUserJWTs error: %v\n", revokeErr)
 		}
-		return username, "", ErrRefreshTokenReuse
+		return &RefreshSession{Username: username, FamilyID: familyID}, ErrRefreshTokenReuse
 	}
 
 	// Step 3: family already revoked.
 	if familyRevokedAtStr.Valid && familyRevokedAtStr.String != "" {
-		return "", "", ErrRefreshTokenNotFound
+		return nil, ErrRefreshTokenNotFound
+	}
+
+	now := time.Now()
+	family, familyErr := CheckSessionFamily(db, familyID, now)
+	if familyErr != nil {
+		session := &RefreshSession{Username: username, FamilyID: familyID}
+		if family != nil {
+			session.LoginKind = family.LoginKind
+			session.SessionStartedAt = family.SessionStartedAt
+			session.SessionEndedNow = family.EndedNow
+		}
+		return session, familyErr
+	}
+	if family.Username != username {
+		return nil, fmt.Errorf("refresh token username does not match session family")
+	}
+
+	if revoked {
+		return nil, ErrRefreshTokenNotFound
+	}
+
+	expiresAt, parseErr := parseDatabaseTime(expiresAtStr)
+	if parseErr != nil {
+		return nil, fmt.Errorf("failed to parse expires_at: %w", parseErr)
+	}
+	if now.After(expiresAt) {
+		return nil, ErrRefreshTokenExpired
 	}
 
 	// Step 4: normal rotation.
 	newRaw, newHash, err := generateRefreshTokenRaw()
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 
-	newExpiresAt := time.Now().Add(14 * 24 * time.Hour)
-	now := time.Now()
+	newExpiresAt := now.Add(14 * 24 * time.Hour)
+
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	// Claim this token for one rotation before inserting its successor.
+	result, err := tx.Exec(
+		`UPDATE refresh_tokens
+		 SET superseded_by_hash = ?, last_used = ?
+		 WHERE id = ?
+		   AND superseded_by_hash IS NULL
+		   AND revoked = false
+		   AND family_revoked_at IS NULL
+		   AND EXISTS (
+		       SELECT 1 FROM session_families
+		        WHERE session_families.family_id = refresh_tokens.family_id
+		          AND session_families.ended_at IS NULL
+		   )`,
+		newHash, now, id,
+	)
+	if err != nil {
+		return nil, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if rowsAffected == 0 {
+		_ = tx.Rollback()
+
+		var concurrentSuperseded, concurrentFamilyRevoked sql.NullString
+		var concurrentRevoked bool
+		if err := db.QueryRow(
+			`SELECT revoked, superseded_by_hash, family_revoked_at
+			   FROM refresh_tokens
+			  WHERE id = ?`,
+			id,
+		).Scan(&concurrentRevoked, &concurrentSuperseded, &concurrentFamilyRevoked); err != nil {
+			if err == sql.ErrNoRows {
+				return nil, ErrRefreshTokenNotFound
+			}
+			return nil, err
+		}
+
+		if endedFamily, endedErr := CheckSessionFamily(db, familyID, time.Now()); SessionErrorCode(endedErr) != "" {
+			return &RefreshSession{
+				Username:         username,
+				FamilyID:         familyID,
+				LoginKind:        endedFamily.LoginKind,
+				SessionStartedAt: endedFamily.SessionStartedAt,
+				SessionEndedNow:  endedFamily.EndedNow,
+			}, endedErr
+		}
+
+		if concurrentSuperseded.Valid && concurrentSuperseded.String != "" {
+			if revokeErr := RevokeFamilyByFamilyID(db, familyID); revokeErr != nil && debug {
+				fmt.Printf("[DEBUG] ValidateRefreshSession: concurrent RevokeFamilyByFamilyID error: %v\n", revokeErr)
+			}
+			if revokeErr := RevokeAllUserJWTsByUsername(db, username, "refresh token reuse detected"); revokeErr != nil && debug {
+				fmt.Printf("[DEBUG] ValidateRefreshSession: concurrent RevokeAllUserJWTs error: %v\n", revokeErr)
+			}
+			return &RefreshSession{Username: username, FamilyID: familyID}, ErrRefreshTokenReuse
+		}
+		if concurrentRevoked || (concurrentFamilyRevoked.Valid && concurrentFamilyRevoked.String != "") {
+			return nil, ErrRefreshTokenNotFound
+		}
+		return nil, ErrRefreshTokenNotFound
+	}
 
 	// Insert the new token in the same family.
-	_, err = db.Exec(
+	_, err = tx.Exec(
 		`INSERT INTO refresh_tokens
 		 (id, username, token_hash, expires_at, created_at, revoked, last_used,
 		  family_id, superseded_by_hash, family_revoked_at)
@@ -195,21 +317,20 @@ func ValidateRefreshToken(db *sql.DB, tokenString string) (username string, newR
 		familyID, nil, nil,
 	)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 
-	// Mark the consumed row as superseded.
-	_, err = db.Exec(
-		`UPDATE refresh_tokens
-		 SET superseded_by_hash = ?, last_used = ?
-		 WHERE id = ?`,
-		newHash, now, id,
-	)
-	if err != nil {
-		return "", "", err
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
 
-	return username, newRaw, nil
+	return &RefreshSession{
+		Username:         username,
+		RefreshToken:     newRaw,
+		FamilyID:         familyID,
+		LoginKind:        family.LoginKind,
+		SessionStartedAt: family.SessionStartedAt,
+	}, nil
 }
 
 // RevokeRefreshToken marks a specific token as revoked by its raw value.

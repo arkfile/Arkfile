@@ -35,7 +35,15 @@ var Echo *echo.Group
 type Claims struct {
 	Username    string `json:"username"`
 	RequiresMFA bool   `json:"requires_mfa,omitempty"`
+	FamilyID    string `json:"family_id,omitempty"`
+	LoginKind   string `json:"login_kind,omitempty"`
 	jwt.RegisteredClaims
+}
+
+var processStartedAt = time.Now().UTC().Truncate(time.Second)
+
+func ProcessStartedAt() time.Time {
+	return processStartedAt
 }
 
 // GenerateRefreshToken creates a cryptographically secure random string to be used as a refresh token.
@@ -138,13 +146,15 @@ func GenerateReregistrationToken(username string) (string, time.Time, error) {
 // GenerateFullAccessToken creates a full access JWT token after MFA validation.
 // Signed with the full-tier key; carries aud=arkfile-api and requires_mfa=false.
 // Valid at every JWTMiddleware-protected route.
-func GenerateFullAccessToken(username string) (string, time.Time, error) {
+func GenerateFullAccessToken(username, familyID, loginKind string) (string, time.Time, error) {
 	tokenID := uuid.New().String()
 	expirationTime := time.Now().Add(utils.GetJWTTokenLifetime())
 
 	claims := &Claims{
 		Username:    username,
 		RequiresMFA: false,
+		FamilyID:    familyID,
+		LoginKind:   loginKind,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),

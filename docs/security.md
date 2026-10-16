@@ -211,7 +211,7 @@ Arkfile requires a second factor for every account. After OPAQUE authentication,
 - Shared per-user failure lockout across TOTP and backup-code verification
 
 **Authentication Flow Enhancement:**
-The OPAQUE login process returns a temporary token instead of full access credentials. This temporary token permits only MFA verification operations and expires after 10 minutes if unused. Upon successful MFA verification, the system issues full access and refresh tokens for normal operation. New accounts remain in `requires_mfa_setup` until enrollment completes.
+The OPAQUE login process returns a temporary token instead of full access credentials. This temporary token permits only MFA verification operations and expires after 20 minutes if unused. Upon successful MFA verification, the system issues full access and refresh tokens for normal operation. New accounts remain in `requires_mfa_setup` until enrollment completes.
 
 **Backup Code Recovery (two paths):**
 The system generates cryptographically secure backup codes during MFA setup. Each backup code is a 10-character alphanumeric string (~59.5 bits of entropy) hashed with Argon2id and stored single-use. Used backup codes are immediately invalidated and logged.
@@ -288,12 +288,16 @@ Arkfile issues short-lived JWT access tokens after OPAQUE plus MFA. Tokens shoul
 **Token Architecture:**
 - **30-minute access tokens**: Short-lived tokens for API access
 - **Automatic refresh at 25 minutes**: Clients renew before expiration
+- **Six-hour idle limit**: A full login family ends after six hours without a user-started authenticated request. Refresh does not count as activity
+- **Per-login enforcement**: Browser and command-line logins have separate family clocks; activity on one login does not extend another
 - **Revocation on authenticated requests**: `TokenRevocationMiddleware` checks every authenticated request against the per-token (`revoked_tokens`) list and the per-user `user_jwt_revocations` row
 - **User-wide cache**: The per-user revocation timestamp may be cached in-process for up to 30 seconds to avoid a database read on every request. `InvalidateUserRevocationCache` clears that entry when a revocation is written on the same process. A second process could see a stale "not revoked" result for up to that cache TTL
 - Secure storage with HttpOnly, Secure, SameSite=Strict cookies
 
 **Session Security:**
-- Logout, `revoke-all`, admin force-logout, and refresh-token reuse write `user_jwt_revocations` so existing access tokens fail on the next checked request
+- Logout ends only the current login family. Other logins for the account remain usable
+- `revoke-all`, admin force-logout, and refresh-token reuse write `user_jwt_revocations` so existing access tokens for the account fail on the next checked request
+- A family ended by the idle limit is rejected even when its access JWT has not expired. Later refresh attempts return the stable `session_idle` reason
 - Per-JTI revocation is stored in `revoked_tokens` and consulted on each authenticated request
 - A stolen access token that is never revoked remains valid until it expires (up to 30 minutes)
 - Cryptographically independent from file encryption
@@ -302,8 +306,9 @@ Arkfile issues short-lived JWT access tokens after OPAQUE plus MFA. Tokens shoul
 **Token Lifecycle Management:**
 1. **Initial Authentication**: A 30-minute access token is issued after OPAQUE and MFA
 2. **Automatic Refresh**: The client refreshes at about 25 minutes if the refresh token is still valid
-3. **Revocation**: Authenticated routes reject revoked JTIs and JWTs issued before a user-wide revocation timestamp
-4. **Unaffected theft**: If the owner does not revoke, a stolen cookie or Bearer token works until expiry, then fails if the refresh token was also revoked
+3. **Idle enforcement**: Authenticated routes and refresh reject a family after six hours without user activity. Upload and download chunk requests count as activity while bytes continue moving
+4. **Revocation**: Authenticated routes reject ended families, revoked JTIs, and JWTs issued before a user-wide revocation timestamp
+5. **Unaffected theft**: If the owner does not revoke and the idle clock has not ended the family, a stolen cookie or Bearer token works until expiry, then fails if the refresh token was also revoked
 
 ### Access Control and Rate Limiting
 

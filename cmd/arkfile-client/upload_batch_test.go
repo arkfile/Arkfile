@@ -525,6 +525,77 @@ func TestMakeRequestWithSession_401ThenRefreshAlso401(t *testing.T) {
 	}
 }
 
+func TestMakeRequestWithSession_IdleResponseClearsLocalSession(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sessionPath := filepath.Join(home, ".arkfile-session.json")
+	session := newTestSession("idle-token", "idle-refresh", 30*time.Minute)
+	if err := atomicSaveAuthSession(session, sessionPath); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"success":false,"error":"session_idle","message":"idle"}`)
+	}))
+	defer srv.Close()
+
+	client := newHTTPClient(srv.URL, false, 10, false)
+	_, err := client.makeRequestWithSession("GET", "/api/protected", nil, session)
+	if !errors.Is(err, errAuthExpired) {
+		t.Fatalf("expected auth expiry, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "session ended after 6 hours") {
+		t.Fatalf("expected idle notice, got %v", err)
+	}
+	if _, statErr := os.Stat(sessionPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected session file removal, stat error: %v", statErr)
+	}
+	if session.AccessToken != "" || session.RefreshToken != "" {
+		t.Fatal("expected in-memory tokens to be cleared")
+	}
+}
+
+func TestLogoutEndsServerSessionBeforeLocalCleanup(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sessionPath := filepath.Join(home, ".arkfile-session.json")
+	session := newTestSession("logout-access", "logout-refresh", 30*time.Minute)
+	if err := atomicSaveAuthSession(session, sessionPath); err != nil {
+		t.Fatal(err)
+	}
+
+	logoutCalled := false
+	authHeader := ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/logout" {
+			http.NotFound(w, r)
+			return
+		}
+		logoutCalled = true
+		authHeader = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"success":true,"message":"Logged out successfully."}`)
+	}))
+	defer srv.Close()
+
+	client := newHTTPClient(srv.URL, false, 10, false)
+	config := &ClientConfig{TokenFile: sessionPath}
+	if err := handleLogoutCommand(client, config, nil); err != nil {
+		t.Fatalf("logout failed: %v", err)
+	}
+	if !logoutCalled {
+		t.Fatal("expected server logout request")
+	}
+	if authHeader != "Bearer logout-access" {
+		t.Fatalf("unexpected authorization header %q", authHeader)
+	}
+	if _, err := os.Stat(sessionPath); !os.IsNotExist(err) {
+		t.Fatalf("expected local session removal, stat error: %v", err)
+	}
+}
+
 func TestMakeRequestWithSession_429TooManyInProgress(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)

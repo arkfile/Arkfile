@@ -31,6 +31,19 @@ func setupTestDB_RefreshToken(t *testing.T) *sql.DB {
 		superseded_by_hash TEXT,
 		family_revoked_at TIMESTAMP
 	);
+	CREATE TABLE session_families (
+		family_id TEXT PRIMARY KEY,
+		username TEXT NOT NULL,
+		login_kind TEXT,
+		session_started_at TIMESTAMP NOT NULL,
+		last_user_activity TIMESTAMP NOT NULL,
+		last_transfer_request_at TIMESTAMP,
+		grace_target TEXT,
+		grace_target_kind TEXT,
+		grace_last_request_at TIMESTAMP,
+		ended_at TIMESTAMP,
+		ended_reason TEXT
+	);
 	CREATE TABLE user_jwt_revocations (
 		username TEXT PRIMARY KEY,
 		revoked_at TIMESTAMP NOT NULL,
@@ -47,6 +60,22 @@ func setupTestDB_RefreshToken(t *testing.T) *sql.DB {
 func hashStr(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:])
+}
+
+func CreateRefreshToken(db *sql.DB, username string) (string, error) {
+	session, err := CreateRefreshSession(db, username, "")
+	if err != nil {
+		return "", err
+	}
+	return session.RefreshToken, nil
+}
+
+func ValidateRefreshToken(db *sql.DB, token string) (string, string, error) {
+	session, err := ValidateRefreshSession(db, token)
+	if session == nil {
+		return "", "", err
+	}
+	return session.Username, session.RefreshToken, err
 }
 
 func TestCreateRefreshToken(t *testing.T) {

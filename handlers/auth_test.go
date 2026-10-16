@@ -89,6 +89,35 @@ func TestLogout_NoRefreshToken(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestLogout_EndsOnlyClaimedSessionFamily(t *testing.T) {
+	username := "family-logout-user"
+	familyID := "family-logout-id"
+	body, _ := json.Marshal(map[string]string{"refresh_token": "family-refresh-token"})
+	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/logout", bytes.NewReader(body))
+
+	claims := &auth.Claims{Username: username, FamilyID: familyID}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	mock.ExpectExec(`UPDATE session_families SET ended_at = \?, ended_reason = \? WHERE family_id = \? AND ended_at IS NULL`).
+		WithArgs(sqlmock.AnyArg(), models.SessionEndReasonLogout, familyID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT ended_reason FROM session_families WHERE family_id = \?`).
+		WithArgs(familyID).
+		WillReturnRows(sqlmock.NewRows([]string{"ended_reason"}).AddRow(models.SessionEndReasonLogout))
+	mock.ExpectExec(`UPDATE refresh_tokens SET revoked = true WHERE token_hash = \?`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`).
+		WithArgs(username, "logged out", "").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err := Logout(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestLogout_InvalidBody verifies malformed body returns 400
 func TestLogout_InvalidBody(t *testing.T) {
 	c, rec, _, _ := setupTestEnv(t, http.MethodPost, "/api/auth/logout", bytes.NewReader([]byte("{invalid json")))
@@ -438,6 +467,14 @@ func TestRefreshToken_ExpiredToken(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"id", "username", "expires_at", "revoked", "last_used", "family_id", "superseded_by_hash", "family_revoked_at"}).
 		AddRow("token-id", "testuser", expiredTime, false, nil, "family-1", nil, nil)
 	mock.ExpectQuery(validateSQL).WithArgs(sqlmock.AnyArg()).WillReturnRows(rows)
+	familySQL := `SELECT family_id, username, login_kind, session_started_at, last_user_activity, last_transfer_request_at, grace_target, grace_target_kind, grace_last_request_at, ended_at, ended_reason FROM session_families WHERE family_id = \?`
+	mock.ExpectQuery(familySQL).WithArgs("family-1").WillReturnRows(
+		sqlmock.NewRows([]string{
+			"family_id", "username", "login_kind", "session_started_at", "last_user_activity",
+			"last_transfer_request_at", "grace_target", "grace_target_kind",
+			"grace_last_request_at", "ended_at", "ended_reason",
+		}).AddRow("family-1", "testuser", nil, time.Now().Add(-time.Hour).Format(time.RFC3339), time.Now().Format(time.RFC3339), nil, nil, nil, nil, nil, nil),
+	)
 
 	err := RefreshToken(c)
 	require.NoError(t, err)
@@ -464,6 +501,56 @@ func TestRefreshToken_RevokedToken(t *testing.T) {
 	err := RefreshToken(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func TestRefreshToken_IdleFamilyReturnsStableCode(t *testing.T) {
+	refreshTokenValue := "idle-refresh-token"
+	username := "idle-refresh-user"
+	familyID := "idle-refresh-family"
+	body, _ := json.Marshal(map[string]string{"refresh_token": refreshTokenValue})
+	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/refresh", bytes.NewReader(body))
+
+	validateSQL := `SELECT id, username, expires_at, revoked, last_used, family_id, superseded_by_hash, family_revoked_at FROM refresh_tokens WHERE token_hash = \?`
+	mock.ExpectQuery(validateSQL).WithArgs(sqlmock.AnyArg()).WillReturnRows(
+		sqlmock.NewRows([]string{
+			"id", "username", "expires_at", "revoked", "last_used",
+			"family_id", "superseded_by_hash", "family_revoked_at",
+		}).AddRow("idle-token-id", username, time.Now().Add(time.Hour).Format(time.RFC3339), false, nil, familyID, nil, nil),
+	)
+
+	familySQL := `SELECT family_id, username, login_kind, session_started_at, last_user_activity, last_transfer_request_at, grace_target, grace_target_kind, grace_last_request_at, ended_at, ended_reason FROM session_families WHERE family_id = \?`
+	mock.ExpectQuery(familySQL).WithArgs(familyID).WillReturnRows(
+		sqlmock.NewRows([]string{
+			"family_id", "username", "login_kind", "session_started_at", "last_user_activity",
+			"last_transfer_request_at", "grace_target", "grace_target_kind",
+			"grace_last_request_at", "ended_at", "ended_reason",
+		}).AddRow(familyID, username, nil, time.Now().Add(-7*time.Hour).Format(time.RFC3339), time.Now().Add(-7*time.Hour).Format(time.RFC3339), nil, nil, nil, nil, nil, nil),
+	)
+	mock.ExpectExec(`UPDATE session_families SET ended_at = \?, ended_reason = \? WHERE family_id = \? AND ended_at IS NULL`).
+		WithArgs(sqlmock.AnyArg(), models.SessionEndReasonIdle, familyID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT ended_reason FROM session_families WHERE family_id = \?`).
+		WithArgs(familyID).
+		WillReturnRows(sqlmock.NewRows([]string{"ended_reason"}).AddRow(models.SessionEndReasonIdle))
+
+	err := RefreshToken(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+
+	var response APIResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+	assert.Equal(t, models.SessionErrorIdle, response.Error)
+	assert.Contains(t, response.Message, "6 hours")
+	cleared := map[string]bool{}
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.MaxAge < 0 {
+			cleared[cookie.Name] = true
+		}
+	}
+	assert.True(t, cleared[CookieFullToken])
+	assert.True(t, cleared[CookieRefresh])
+	assert.True(t, cleared[CookieCSRF])
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 // -- AdminForceLogout handler tests --
@@ -580,16 +667,26 @@ func TestRefreshToken_Success(t *testing.T) {
 	}).AddRow("token-id-1", username, futureExpiry, false, nil, "fam-abc", nil, nil)
 	mock.ExpectQuery(validateSQL).WithArgs(sqlmock.AnyArg()).WillReturnRows(rows)
 
+	familySQL := `SELECT family_id, username, login_kind, session_started_at, last_user_activity, last_transfer_request_at, grace_target, grace_target_kind, grace_last_request_at, ended_at, ended_reason FROM session_families WHERE family_id = \?`
+	familyRows := sqlmock.NewRows([]string{
+		"family_id", "username", "login_kind", "session_started_at", "last_user_activity",
+		"last_transfer_request_at", "grace_target", "grace_target_kind",
+		"grace_last_request_at", "ended_at", "ended_reason",
+	}).AddRow("fam-abc", username, nil, time.Now().Add(-time.Hour).Format(time.RFC3339), time.Now().Format(time.RFC3339), nil, nil, nil, nil, nil, nil)
+	mock.ExpectQuery(familySQL).WithArgs("fam-abc").WillReturnRows(familyRows)
+
+	mock.ExpectBegin()
+
+	updateSupersededSQL := `UPDATE refresh_tokens SET superseded_by_hash = \?, last_used = \? WHERE id = \? AND superseded_by_hash IS NULL AND revoked = false AND family_revoked_at IS NULL AND EXISTS \( SELECT 1 FROM session_families WHERE session_families.family_id = refresh_tokens.family_id AND session_families.ended_at IS NULL \)`
+	mock.ExpectExec(updateSupersededSQL).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "token-id-1").WillReturnResult(sqlmock.NewResult(0, 1))
+
 	// Mock: ValidateRefreshToken INSERT new token (10-column insert with family fields)
 	insertNewSQL := `INSERT INTO refresh_tokens`
 	mock.ExpectExec(insertNewSQL).WithArgs(
 		sqlmock.AnyArg(), username, sqlmock.AnyArg(), sqlmock.AnyArg(),
 		sqlmock.AnyArg(), false, nil, "fam-abc", nil, nil,
 	).WillReturnResult(sqlmock.NewResult(1, 1))
-
-	// Mock: ValidateRefreshToken UPDATE superseded_by_hash on consumed row
-	updateSupersededSQL := `UPDATE refresh_tokens SET superseded_by_hash = \?, last_used = \? WHERE id = \?`
-	mock.ExpectExec(updateSupersededSQL).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "token-id-1").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	// Mock: GetUserByUsername for approval gate after refresh
 	getUserSQL := `SELECT id, username, created_at,
@@ -637,14 +734,24 @@ func TestRefreshToken_UnapprovedUser(t *testing.T) {
 	}).AddRow("token-id-1", username, futureExpiry, false, nil, "fam-abc", nil, nil)
 	mock.ExpectQuery(validateSQL).WithArgs(sqlmock.AnyArg()).WillReturnRows(rows)
 
+	familySQL := `SELECT family_id, username, login_kind, session_started_at, last_user_activity, last_transfer_request_at, grace_target, grace_target_kind, grace_last_request_at, ended_at, ended_reason FROM session_families WHERE family_id = \?`
+	familyRows := sqlmock.NewRows([]string{
+		"family_id", "username", "login_kind", "session_started_at", "last_user_activity",
+		"last_transfer_request_at", "grace_target", "grace_target_kind",
+		"grace_last_request_at", "ended_at", "ended_reason",
+	}).AddRow("fam-abc", username, nil, time.Now().Add(-time.Hour).Format(time.RFC3339), time.Now().Format(time.RFC3339), nil, nil, nil, nil, nil, nil)
+	mock.ExpectQuery(familySQL).WithArgs("fam-abc").WillReturnRows(familyRows)
+
+	mock.ExpectBegin()
+	updateSupersededSQL := `UPDATE refresh_tokens SET superseded_by_hash = \?, last_used = \? WHERE id = \? AND superseded_by_hash IS NULL AND revoked = false AND family_revoked_at IS NULL AND EXISTS \( SELECT 1 FROM session_families WHERE session_families.family_id = refresh_tokens.family_id AND session_families.ended_at IS NULL \)`
+	mock.ExpectExec(updateSupersededSQL).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "token-id-1").WillReturnResult(sqlmock.NewResult(0, 1))
+
 	insertNewSQL := `INSERT INTO refresh_tokens`
 	mock.ExpectExec(insertNewSQL).WithArgs(
 		sqlmock.AnyArg(), username, sqlmock.AnyArg(), sqlmock.AnyArg(),
 		sqlmock.AnyArg(), false, nil, "fam-abc", nil, nil,
 	).WillReturnResult(sqlmock.NewResult(1, 1))
-
-	updateSupersededSQL := `UPDATE refresh_tokens SET superseded_by_hash = \?, last_used = \? WHERE id = \?`
-	mock.ExpectExec(updateSupersededSQL).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "token-id-1").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	getUserSQL := `SELECT id, username, created_at,
 		       total_storage_bytes, storage_limit_bytes,

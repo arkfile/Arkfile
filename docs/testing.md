@@ -72,6 +72,8 @@ bash scripts/testing/e2e-playwright.sh
 
 The full reset-plus-test sequence for a local dev machine is `sudo bash fdre2e.sh`, which runs `dev-reset.sh` as root and then drops to your user for `e2e-test.sh` and `e2e-playwright.sh`.
 
+The session-idle cases use development-only clock-shift endpoints and never wait six hours. `e2e-test.sh` shifts a normal login beyond the limit, verifies that a still-unexpired access token and its refresh token both return `session_idle`, and verifies that arkfile-client removes its session file and clears its agent. `e2e-playwright.sh` shifts only its own signed family, triggers the visibility refresh, verifies the authentication screen and six-hour notice, verifies Account Key cleanup, and verifies that the notice survives exactly one reload.
+
 ### Manual Testing
 
 Web App Browser TypeScript Frontend

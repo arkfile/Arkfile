@@ -4,6 +4,8 @@ import {
   clearAllSessionData,
   startAutoRefresh,
   refreshToken,
+  consumeSessionNotice,
+  SESSION_ENDED_EVENT,
 } from '../utils/auth';
 import { registerAccountKeyCleanupHandlers } from '../crypto/account-key-cache';
 import { initSitewideFooters } from '../ui/footer';
@@ -13,6 +15,8 @@ import { registerSwDownload } from '../files/sw-streaming-download';
 import { setupHomePageListeners } from './home-listeners';
 import type { AppShell } from './shell';
 import { debugLog } from '../utils/debug-log.js';
+
+let sessionEndListenerAttached = false;
 
 async function checkServiceReady(): Promise<boolean> {
   try {
@@ -59,7 +63,7 @@ export async function handleInitialAuth(shell: AppShell): Promise<void> {
         }
       } else {
         const refreshed = await refreshToken();
-        if (refreshed && (await validateToken())) {
+        if (refreshed.ok && (await validateToken())) {
           const { getCurrentUser } = await import('../utils/auth.js');
           const currentUser = await getCurrentUser();
           if (currentUser && !currentUser.is_approved) {
@@ -84,7 +88,22 @@ export async function handleInitialAuth(shell: AppShell): Promise<void> {
       showAuthSection();
     }
   } else {
-    showAuthSection();
+    const refreshed = await refreshToken();
+    if (refreshed.ok && (await validateToken())) {
+      const { getCurrentUser } = await import('../utils/auth.js');
+      const currentUser = await getCurrentUser();
+      if (currentUser && !currentUser.is_approved) {
+        const { showPendingApprovalSection } = await import('../ui/sections.js');
+        showPendingApprovalSection();
+      } else {
+        showFileSection();
+        startAutoRefresh();
+        await shell.loadUserFiles();
+        await resumeBillingCheckouts();
+      }
+    } else {
+      showAuthSection();
+    }
   }
 }
 
@@ -95,6 +114,14 @@ export async function handleInitialAuth(shell: AppShell): Promise<void> {
 export async function bootstrapApplication(shell: AppShell): Promise<boolean> {
   try {
     registerAccountKeyCleanupHandlers();
+    if (!sessionEndListenerAttached) {
+      window.addEventListener(SESSION_ENDED_EVENT, (event) => {
+        const detail = (event as CustomEvent<{ message?: string }>).detail;
+        showAuthSection();
+        showError(detail?.message ?? 'Your session has expired. Please log in again.');
+      });
+      sessionEndListenerAttached = true;
+    }
 
     const ready = await checkServiceReady();
     if (!ready) {
@@ -143,6 +170,12 @@ export async function bootstrapApplication(shell: AppShell): Promise<boolean> {
     } else {
       shell.setupAppListeners();
       await handleInitialAuth(shell);
+    }
+
+    const sessionNotice = consumeSessionNotice();
+    if (sessionNotice !== null) {
+      showAuthSection();
+      showError(sessionNotice);
     }
 
     debugLog('ArkFile TypeScript application initialized');

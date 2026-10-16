@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -285,6 +286,22 @@ func TokenRevocationMiddleware(db *sql.DB) echo.MiddlewareFunc {
 			}
 
 			return next(c)
+		}
+	}
+}
+
+// FullTokenRevocationMiddleware applies revocation checks only when a
+// dual-tier route received a full API token. Temporary reset tokens keep
+// their existing handoff behavior.
+func FullTokenRevocationMiddleware(db *sql.DB) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		checked := TokenRevocationMiddleware(db)(next)
+		return func(c echo.Context) error {
+			claims, ok := GetClaimsFromContext(c)
+			if !ok || !slices.Contains(claims.Audience, AudienceAPI) {
+				return next(c)
+			}
+			return checked(c)
 		}
 	}
 }

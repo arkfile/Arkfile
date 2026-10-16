@@ -537,6 +537,20 @@ assert_agent_not_running() {
     fi
 }
 
+assert_agent_key_cleared() {
+    local test_name="$1"
+    local status_out status_code
+    safe_exec status_out status_code "$CLIENT" agent status
+    if [ $status_code -eq 0 ] \
+        && echo "$status_out" | grep -q "Agent Status: RUNNING" \
+        && echo "$status_out" | grep -q "(no key stored)"; then
+        record_test "$test_name" "PASS"
+    else
+        echo "$status_out"
+        record_test "$test_name" "FAIL"
+    fi
+}
+
 share_download_with_password() {
     local share_pass="$1"
     local share_id="$2"
@@ -5203,6 +5217,86 @@ run_enable_auto_approval() {
     success "Auto-approval enabled for Playwright and manual testing"
 }
 
+run_session_idle_enforcement() {
+    group "Session idle enforcement"
+
+    user_login_with_totp "User login for idle session test" >/dev/null
+    admin_login_with_totp "Admin login for idle session test" >/dev/null
+
+    local user_token user_refresh admin_token
+    user_token=$(jq -r '.access_token // empty' "$HOME/.arkfile-session.json" 2>/dev/null)
+    user_refresh=$(jq -r '.refresh_token // empty' "$HOME/.arkfile-session.json" 2>/dev/null)
+    admin_token=$(jq -r '.access_token // empty' "$HOME/.arkfile-admin-session.json" 2>/dev/null)
+    if [ -z "$user_token" ] || [ -z "$user_refresh" ] || [ -z "$admin_token" ]; then
+        record_test "Idle session test tokens available" "FAIL"
+        return
+    fi
+    record_test "Idle session test tokens available" "PASS"
+
+    local shift_body shift_code
+    shift_body=$(curl -sk -w $'\n%{http_code}' -X POST \
+        -H "Authorization: Bearer $admin_token" \
+        -H "Content-Type: application/json" \
+        -d "{\"username\":\"$TEST_USERNAME\",\"idle_seconds\":21660}" \
+        "$SERVER_URL/api/admin/dev-test/sessions/shift")
+    shift_code=$(printf '%s\n' "$shift_body" | tail -n 1)
+    shift_body=$(printf '%s\n' "$shift_body" | sed '$d')
+    if [ "$shift_code" = "200" ] && echo "$shift_body" | grep -q '"families_shifted"'; then
+        record_test "Shift user session beyond idle limit" "PASS"
+    else
+        error "Session clock shift failed: HTTP $shift_code"
+        echo "$shift_body"
+        record_test "Shift user session beyond idle limit" "FAIL"
+    fi
+
+    local protected_body protected_code
+    protected_body=$(curl -sk -w $'\n%{http_code}' \
+        -H "Authorization: Bearer $user_token" \
+        "$SERVER_URL/api/files")
+    protected_code=$(printf '%s\n' "$protected_body" | tail -n 1)
+    protected_body=$(printf '%s\n' "$protected_body" | sed '$d')
+    if [ "$protected_code" = "401" ] && echo "$protected_body" | grep -q '"error":"session_idle"'; then
+        record_test "Idle middleware rejects still-valid access token" "PASS"
+    else
+        error "Idle middleware response was HTTP $protected_code: $protected_body"
+        record_test "Idle middleware rejects still-valid access token" "FAIL"
+    fi
+
+    local refresh_body refresh_code
+    refresh_body=$(curl -sk -w $'\n%{http_code}' -X POST \
+        -H "Content-Type: application/json" \
+        -d "{\"refresh_token\":\"$user_refresh\"}" \
+        "$SERVER_URL/api/refresh")
+    refresh_code=$(printf '%s\n' "$refresh_body" | tail -n 1)
+    refresh_body=$(printf '%s\n' "$refresh_body" | sed '$d')
+    if [ "$refresh_code" = "401" ] && echo "$refresh_body" | grep -q '"error":"session_idle"'; then
+        record_test "Idle refresh returns stored reason" "PASS"
+    else
+        error "Idle refresh response was HTTP $refresh_code: $refresh_body"
+        record_test "Idle refresh returns stored reason" "FAIL"
+    fi
+
+    local idle_upload="$TEST_DATA_DIR/idle-session-upload.txt"
+    printf 'idle session enforcement\n' > "$idle_upload"
+    local cli_out cli_code
+    safe_exec cli_out cli_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure upload --file "$idle_upload"
+    if [ $cli_code -ne 0 ] && echo "$cli_out" | grep -q "session ended after 6 hours without activity"; then
+        record_test "CLI reports idle session expiry" "PASS"
+    else
+        error "CLI idle expiry output was unexpected:"
+        echo "$cli_out"
+        record_test "CLI reports idle session expiry" "FAIL"
+    fi
+
+    if [ ! -e "$HOME/.arkfile-session.json" ]; then
+        record_test "CLI removes idle session file" "PASS"
+    else
+        record_test "CLI removes idle session file" "FAIL"
+    fi
+    assert_agent_key_cleared "CLI clears agent key after idle expiry"
+}
+
 run_teardown() {
     group "Teardown"
 
@@ -5424,6 +5518,7 @@ main() {
         run_payments
         run_subscriptions
         run_registration_throttle
+        run_session_idle_enforcement
         run_enable_auto_approval
         run_teardown
     )

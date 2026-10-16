@@ -15,8 +15,8 @@ import (
 	"github.com/arkfile/Arkfile/database"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
-	"github.com/pquerna/otp/totp"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/pquerna/otp/totp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -100,6 +100,19 @@ func openAdminMFAResetTestDB(t *testing.T) *sql.DB {
 			family_id TEXT NOT NULL,
 			superseded_by_hash TEXT,
 			family_revoked_at TIMESTAMP
+		);
+		CREATE TABLE session_families (
+			family_id TEXT PRIMARY KEY,
+			username TEXT NOT NULL,
+			login_kind TEXT,
+			session_started_at TIMESTAMP NOT NULL,
+			last_user_activity TIMESTAMP NOT NULL,
+			last_transfer_request_at TIMESTAMP,
+			grace_target TEXT,
+			grace_target_kind TEXT,
+			grace_last_request_at TIMESTAMP,
+			ended_at TIMESTAMP,
+			ended_reason TEXT
 		);
 		CREATE TABLE revoked_tokens (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -208,7 +221,7 @@ func TestAdminResetUserMFA_Stack_RejectsWithoutConfirm(t *testing.T) {
 	insertAdminMFAResetUser(t, database.DB, adminUsername, true)
 	seedTargetMFA(t, adminUsername)
 
-	token, _, err := auth.GenerateFullAccessToken(adminUsername)
+	token, _, err := auth.GenerateFullAccessToken(adminUsername, "admin-reset-family-1", "")
 	require.NoError(t, err)
 
 	rec, err := invokeAdminMFAReset(t, "some-user", token, map[string]interface{}{})
@@ -231,7 +244,7 @@ func TestAdminResetUserMFA_Stack_ScopedResetByCredentialID(t *testing.T) {
 		targetUsername,
 	).Scan(&credentialID))
 
-	token, _, err := auth.GenerateFullAccessToken(adminUsername)
+	token, _, err := auth.GenerateFullAccessToken(adminUsername, "admin-reset-family-2", "")
 	require.NoError(t, err)
 
 	rec, err := invokeAdminMFAReset(t, targetUsername, token, map[string]interface{}{
@@ -257,7 +270,7 @@ func TestAdminResetUserMFA_Stack_AdminResetsTarget(t *testing.T) {
 	seedTargetMFA(t, adminUsername)
 	seedTargetMFA(t, targetUsername)
 
-	token, _, err := auth.GenerateFullAccessToken(adminUsername)
+	token, _, err := auth.GenerateFullAccessToken(adminUsername, "admin-reset-family-3", "")
 	require.NoError(t, err)
 
 	rec, err := invokeAdminMFAReset(t, targetUsername, token, map[string]interface{}{"confirm": true})
@@ -279,7 +292,7 @@ func TestAdminResetUserMFA_Stack_RejectsNonAdmin(t *testing.T) {
 	insertAdminMFAResetUser(t, database.DB, username, false)
 	seedTargetMFA(t, username)
 
-	token, _, err := auth.GenerateFullAccessToken(username)
+	token, _, err := auth.GenerateFullAccessToken(username, "user-reset-family", "")
 	require.NoError(t, err)
 
 	_, err = invokeAdminMFAReset(t, username, token, map[string]interface{}{"confirm": true})

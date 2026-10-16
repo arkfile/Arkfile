@@ -28,7 +28,7 @@
  *     multi-dl corpus written to /tmp/arkfile-e2e-test-data/multi-dl-corpus.json)
  *   - Environment variables set by scripts/testing/e2e-playwright.sh
  *
- * Run via: sudo bash scripts/testing/e2e-playwright.sh
+ * Run via: bash scripts/testing/e2e-playwright.sh
  */
 
 import { test, expect, type Page, type Download, type BrowserContext } from '@playwright/test';
@@ -445,6 +445,57 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await sharedPage.waitForTimeout(1500);
 
     console.log('[OK] Login successful, Account Key cached in page heap');
+  });
+
+  test('Six-hour idle session ends on visibility refresh', async () => {
+    const shiftResult = await sharedPage.evaluate(async () => {
+      const csrfName = '__Host-arkfile-csrf=';
+      const csrf = document.cookie
+        .split(';')
+        .map((value) => value.trim())
+        .find((value) => value.startsWith(csrfName))
+        ?.slice(csrfName.length) ?? '';
+      const response = await fetch('/api/dev-test/sessions/shift-self', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': decodeURIComponent(csrf),
+        },
+        body: JSON.stringify({ idle_seconds: 21660 }),
+      });
+      return response.status;
+    });
+    expect(shiftResult).toBe(200);
+
+    await sharedPage.evaluate(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await expect(sharedPage.locator('#auth-section')).toBeVisible({ timeout: 15_000 });
+    await expect(sharedPage.locator('.toast-error')).toContainText(
+      'Your session ended after 6 hours without activity. Please log in again.',
+    );
+
+    const cachedKeyParts = await sharedPage.evaluate(() => {
+      const keys: string[] = [];
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i);
+        if (key?.startsWith('arkfile_account_key')) keys.push(key);
+      }
+      return keys;
+    });
+    expect(cachedKeyParts).toEqual([]);
+
+    await sharedPage.reload({ waitUntil: 'networkidle' });
+    await expect(sharedPage.locator('.toast-error')).toContainText(
+      'Your session ended after 6 hours without activity. Please log in again.',
+    );
+    await sharedPage.reload({ waitUntil: 'networkidle' });
+    await expect(sharedPage.locator('.toast-error')).toHaveCount(0);
+
+    await performLogin(sharedPage, 'post-idle-login');
+    await expect(sharedPage.locator('#filesList')).toBeVisible({ timeout: 15_000 });
+    console.log('[OK] Idle session ended with one-reload notice and clean re-login');
   });
 
   // --------------------------------------------------------------------------

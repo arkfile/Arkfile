@@ -135,7 +135,7 @@ export async function ensureFreshBatchAuth(): Promise<void> {
     throw new Error('auth_expired');
   }
   const refreshed = await refreshToken();
-  if (!refreshed && !isAuthenticated()) {
+  if (!refreshed.ok && !isAuthenticated()) {
     throw new Error('auth_expired');
   }
 }

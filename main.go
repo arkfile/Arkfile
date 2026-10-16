@@ -72,6 +72,7 @@ func setupRoutes(e *echo.Echo) {
 	auth.Echo = e.Group("")
 	auth.Echo.Use(auth.JWTMiddleware())
 	auth.Echo.Use(auth.TokenRevocationMiddleware(database.DB))
+	auth.Echo.Use(handlers.SessionLifetimeMiddleware(database.DB))
 	auth.Echo.Use(handlers.RequireApproved)
 
 	// Register all routes
@@ -546,6 +547,11 @@ func runSchemaMigrations() {
 			log.Printf("Migration: %s applied successfully", m.description)
 		}
 	}
+
+	if err := models.BackfillSessionFamilies(database.DB, time.Now()); err != nil {
+		log.Fatalf("Migration: Backfill session families failed: %v", err)
+	}
+	log.Printf("Migration: Backfill session families completed")
 
 	migrateCreditTransactionsPaymentType()
 }

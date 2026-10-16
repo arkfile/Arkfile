@@ -43,15 +43,15 @@ func completeMFALogin(c echo.Context, username, authMethod string) error {
 		}
 	}
 
-	token, expirationTime, err := auth.GenerateFullAccessToken(username)
+	session, err := models.CreateRefreshSession(database.DB, username, "")
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate full access token for %s: %v", username, err)
+		logging.ErrorLogger.Printf("Failed to generate refresh token for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to create session")
 	}
 
-	refreshToken, err := models.CreateRefreshToken(database.DB, username)
+	token, expirationTime, err := auth.GenerateFullAccessToken(username, session.FamilyID, session.LoginKind)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate refresh token for %s: %v", username, err)
+		logging.ErrorLogger.Printf("Failed to generate full access token for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to create session")
 	}
 
@@ -60,7 +60,7 @@ func completeMFALogin(c echo.Context, username, authMethod string) error {
 		logging.ErrorLogger.Printf("Failed to generate CSRF token for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to create session")
 	}
-	issueSessionCookies(c, token, refreshToken, csrfToken)
+	issueSessionCookies(c, token, session.RefreshToken, csrfToken)
 	c.SetCookie(&http.Cookie{
 		Name: CookieTempToken, Value: "", Path: "/", MaxAge: -1,
 		Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode,
@@ -81,7 +81,7 @@ func completeMFALogin(c echo.Context, username, authMethod string) error {
 
 	return JSONResponse(c, http.StatusOK, "MFA authentication completed", map[string]interface{}{
 		"token":         token,
-		"refresh_token": refreshToken,
+		"refresh_token": session.RefreshToken,
 		"expires_at":    expirationTime,
 		"auth_method":   authMethod,
 		"user": map[string]interface{}{
@@ -97,15 +97,15 @@ func completeMFALogin(c echo.Context, username, authMethod string) error {
 
 // completeMFARegistrationSetup issues full session after enrollment during registration flow.
 func completeMFARegistrationSetup(c echo.Context, username, authMethod string) error {
-	token, expirationTime, err := auth.GenerateFullAccessToken(username)
+	session, err := models.CreateRefreshSession(database.DB, username, "")
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate full access token for %s: %v", username, err)
+		logging.ErrorLogger.Printf("Failed to generate refresh token for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to create session")
 	}
 
-	refreshToken, err := models.CreateRefreshToken(database.DB, username)
+	token, expirationTime, err := auth.GenerateFullAccessToken(username, session.FamilyID, session.LoginKind)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate refresh token for %s: %v", username, err)
+		logging.ErrorLogger.Printf("Failed to generate full access token for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to create session")
 	}
 
@@ -120,7 +120,7 @@ func completeMFARegistrationSetup(c echo.Context, username, authMethod string) e
 		logging.ErrorLogger.Printf("Failed to generate CSRF token for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to create session")
 	}
-	issueSessionCookies(c, token, refreshToken, csrfToken)
+	issueSessionCookies(c, token, session.RefreshToken, csrfToken)
 	c.SetCookie(&http.Cookie{
 		Name: CookieTempToken, Value: "", Path: "/", MaxAge: -1,
 		Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode,
@@ -132,7 +132,7 @@ func completeMFARegistrationSetup(c echo.Context, username, authMethod string) e
 	return JSONResponse(c, http.StatusOK, "MFA setup and registration completed successfully", map[string]interface{}{
 		"enabled":       true,
 		"token":         token,
-		"refresh_token": refreshToken,
+		"refresh_token": session.RefreshToken,
 		"expires_at":    expirationTime,
 		"auth_method":   authMethod,
 		"user": map[string]interface{}{

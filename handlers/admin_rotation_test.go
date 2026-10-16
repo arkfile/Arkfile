@@ -151,7 +151,7 @@ func seedAdminMFA(t *testing.T, username string) {
 
 func setFullTokenOnContext(t *testing.T, c echo.Context, username string) {
 	t.Helper()
-	fullToken, _, err := auth.GenerateFullAccessToken(username)
+	fullToken, _, err := auth.GenerateFullAccessToken(username, "admin-rotation-family-1", "")
 	require.NoError(t, err)
 	token, err := jwt.ParseWithClaims(fullToken, &auth.Claims{}, func(tok *jwt.Token) (interface{}, error) {
 		return auth.GetJWTFullPublicKey(), nil
@@ -254,7 +254,7 @@ func TestAdminRotationStack_RejectsAdminWithoutMFA(t *testing.T) {
 	const adminUsername = "no-mfa-admin"
 	insertRotationAdminUser(t, database.DB, adminUsername, true)
 
-	token, _, err := auth.GenerateFullAccessToken(adminUsername)
+	token, _, err := auth.GenerateFullAccessToken(adminUsername, "admin-rotation-family-2", "")
 	require.NoError(t, err)
 
 	_, err = invokeAdminRotationPrepare(t, token)
@@ -269,7 +269,7 @@ func TestAdminRotationStack_IssuesMandateForAdminWithMFA(t *testing.T) {
 	insertRotationAdminUser(t, database.DB, adminUsername, true)
 	seedAdminMFA(t, adminUsername)
 
-	token, _, err := auth.GenerateFullAccessToken(adminUsername)
+	token, _, err := auth.GenerateFullAccessToken(adminUsername, "admin-rotation-family-3", "")
 	require.NoError(t, err)
 
 	rec, err := invokeAdminRotationPrepare(t, token)
@@ -294,7 +294,7 @@ func TestAdminRotationStack_RejectsNonAdminWithMFA(t *testing.T) {
 	insertRotationAdminUser(t, database.DB, username, false)
 	seedAdminMFA(t, username)
 
-	token, _, err := auth.GenerateFullAccessToken(username)
+	token, _, err := auth.GenerateFullAccessToken(username, "admin-rotation-family-4", "")
 	require.NoError(t, err)
 
 	_, err = invokeAdminRotationPrepare(t, token)
@@ -392,7 +392,7 @@ func TestAdminRotateJWTKeysStack_IssuesForAdminWithMFA(t *testing.T) {
 	insertRotationAdminUser(t, database.DB, adminUsername, true)
 	seedAdminMFA(t, adminUsername)
 
-	token, _, err := auth.GenerateFullAccessToken(adminUsername)
+	token, _, err := auth.GenerateFullAccessToken(adminUsername, "admin-rotation-family-5", "")
 	require.NoError(t, err)
 
 	rec, err := invokeAdminJWTHandler(t, AdminRotateJWTKeys, "/api/admin/system/rotate-jwt-keys", token, nil)
@@ -405,7 +405,7 @@ func TestAdminRotateJWTKeysStack_RejectsAdminWithoutMFA(t *testing.T) {
 	const adminUsername = "jwt-rotate-nomfa-admin"
 	insertRotationAdminUser(t, database.DB, adminUsername, true)
 
-	token, _, err := auth.GenerateFullAccessToken(adminUsername)
+	token, _, err := auth.GenerateFullAccessToken(adminUsername, "admin-rotation-family-6", "")
 	require.NoError(t, err)
 
 	_, err = invokeAdminJWTHandler(t, AdminRotateJWTKeys, "/api/admin/system/rotate-jwt-keys", token, nil)

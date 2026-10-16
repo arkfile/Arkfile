@@ -42,6 +42,10 @@ Yes. Tor Browser is a supported browser for Arkfile. TOTP-based two-factor authe
 
 The website encrypts, uploads, downloads, and manages your account in your browser. You do not have to install anything. arkfile-client is a program you can install on your computer to do the same jobs from the command line, which is handy for large files and for working without the website. Login and two-factor codes work with both. Your files stay encrypted on your device either way.
 
+## How long can I leave Arkfile unused before I need to sign in again?
+
+A sign-in ends after six hours without activity. Using Arkfile, including transferring file chunks, keeps that login active, but automatic token refresh does not. Each browser or command-line login has its own activity clock, so using one device does not keep another device signed in. When the idle limit is reached, Arkfile ends that login and asks you to sign in again.
+
 ## What are file tags?
 
 File tags are optional labels you attach to your own files so you can organize and filter them after upload, for example to remember which computer or topic a file came from. Tags are encrypted on your device with your Account Key before they reach the server, so the server stores only opaque ciphertext and cannot read the tag text. Anonymous share recipients never see your tags; shares do not carry them. Files may have 5 tags each, of up to 32 characters each, assigned to them. Filtering by tags happens on your device after your file list is unlocked, not as a server-side search. When you export an owner backup as an .arkbackup file, encrypted tags travel with that bundle so offline decrypt can show them again.

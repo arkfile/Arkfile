@@ -368,7 +368,7 @@ func main() {
 			os.Exit(1)
 		}
 	case "logout":
-		if err := handleLogoutCommand(config, args); err != nil {
+		if err := handleLogoutCommand(client, config, args); err != nil {
 			logError("Logout failed: %v", err)
 			os.Exit(1)
 		}
@@ -512,6 +512,13 @@ func (c *HTTPClient) makeRequest(method, endpoint string, payload interface{}, t
 	}
 
 	if resp.StatusCode >= 400 {
+		if apiResp.Error == "session_idle" {
+			clearExpiredLocalSession(nil)
+			return &apiResp, fmt.Errorf(
+				"HTTP %d: session ended after 6 hours without activity. Please run: arkfile-client login --username <user>",
+				resp.StatusCode,
+			)
+		}
 		errMsg := apiResp.Error
 		if errMsg == "" {
 			errMsg = apiResp.Message
@@ -1191,7 +1198,21 @@ func populateDigestCache(client *HTTPClient, session *AuthSession, accountKey []
 	return nil
 }
 
-func handleLogoutCommand(config *ClientConfig, args []string) error {
+func handleLogoutCommand(client *HTTPClient, config *ClientConfig, args []string) error {
+	var serverErr error
+	if session, err := loadAuthSession(config.TokenFile); err == nil {
+		if err := ensureFreshSessionToken(client, session, 0); err == nil {
+			_, serverErr = client.makeRequest(
+				"POST",
+				"/api/logout",
+				map[string]string{"refresh_token": session.RefreshToken},
+				session.AccessToken,
+			)
+		} else {
+			serverErr = err
+		}
+	}
+
 	agentClient, err := NewAgentClient()
 	if err != nil {
 		logVerbose("Warning: Failed to create agent client: %v", err)
@@ -1207,6 +1228,9 @@ func handleLogoutCommand(config *ClientConfig, args []string) error {
 		}
 	}
 
+	if serverErr != nil && !errors.Is(serverErr, errSessionIdle) {
+		return fmt.Errorf("local session cleared but server logout failed: %w", serverErr)
+	}
 	fmt.Println("Logged out successfully")
 	return nil
 }
@@ -1474,6 +1498,18 @@ const jwtRefreshThreshold = 5 * time.Minute
 // logs in again. Recognized by isFatalUploadError.
 var errAuthExpired = errors.New("session expired (refresh failed)")
 
+type sessionIdleError struct{}
+
+func (sessionIdleError) Error() string {
+	return "session ended after 6 hours without activity. Please run: arkfile-client login --username <user>"
+}
+
+func (sessionIdleError) Unwrap() error {
+	return errAuthExpired
+}
+
+var errSessionIdle error = sessionIdleError{}
+
 // errTooManyInProgressUploads matches the server's stable error code
 // 'too_many_in_progress_uploads' (HTTP 429) introduced with the per-user
 // in-progress upload session cap. Fatal for the current batch loop.
@@ -1544,6 +1580,10 @@ func refreshSessionToken(client *HTTPClient, session *AuthSession) error {
 		"refresh_token": session.RefreshToken,
 	}, "")
 	if err != nil {
+		if resp != nil && resp.Error == "session_idle" {
+			clearExpiredLocalSession(session)
+			return errSessionIdle
+		}
 		// makeRequest returns an error for any 4xx/5xx; treat all of
 		// these as terminal for the refresh flow.
 		return fmt.Errorf("%w: %v", errAuthExpired, err)
@@ -1680,6 +1720,10 @@ func (c *HTTPClient) makeRequestWithSession(method, endpoint string, payload int
 	if !is401 {
 		return resp, err
 	}
+	if resp != nil && resp.Error == "session_idle" {
+		clearExpiredLocalSession(session)
+		return resp, errSessionIdle
+	}
 
 	// One refresh-and-retry attempt.
 	if rerr := refreshSessionToken(c, session); rerr != nil {
@@ -1693,6 +1737,23 @@ func (c *HTTPClient) makeRequestWithSession(method, endpoint string, payload int
 		return resp2, fmt.Errorf("%w: still unauthorized after refresh", errAuthExpired)
 	}
 	return resp2, err2
+}
+
+func clearExpiredLocalSession(session *AuthSession) {
+	if session != nil {
+		session.AccessToken = ""
+		session.RefreshToken = ""
+		session.TempToken = ""
+		session.ExpiresAt = time.Time{}
+	}
+	if agentClient, err := NewAgentClient(); err == nil {
+		if err := agentClient.Clear(); err != nil {
+			logVerbose("Warning: failed to clear agent after session expiry: %v", err)
+		}
+	}
+	if err := os.Remove(getSessionFilePath()); err != nil && !os.IsNotExist(err) {
+		logVerbose("Warning: failed to remove expired session file: %v", err)
+	}
 }
 
 func loadConfigFile(config *ClientConfig, filePath string) error {

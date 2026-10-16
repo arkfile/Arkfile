@@ -14,13 +14,14 @@
  *  - Admin contact helpers clear state after any failed refresh.
  */
 
-import './setup';
+import { resetMocks } from './setup';
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 
 // Import after setup so that document/window globals are available
 import {
   AuthManager,
   ServiceUnavailableError,
+  SESSION_ENDED_EVENT,
 } from '../utils/auth';
 
 // ============================================================================
@@ -28,10 +29,74 @@ import {
 // ============================================================================
 
 beforeEach(() => {
+  resetMocks();
   // Clear cached user state between tests.
   // The CSRF cookie is not set in the bun test environment (no document.cookie),
   // so isAuthenticated() always returns false in tests -- which is correct.
   AuthManager.clearAllSessionData();
+});
+
+describe('AuthManager idle session expiry', () => {
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    (globalThis as any).document = {
+      cookie: '',
+      visibilityState: 'visible',
+      addEventListener(): void {},
+    };
+    AuthManager.startAutoRefresh();
+    AuthManager.stopAutoRefresh();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  test('returns session_idle, clears browser state, and stores a one-shot notice', async () => {
+    let eventMessage = '';
+    window.addEventListener(SESSION_ENDED_EVENT, ((event: CustomEvent<{ message: string }>) => {
+      eventMessage = event.detail.message;
+    }) as EventListener);
+    (globalThis as any).fetch = async () => new Response(
+      JSON.stringify({
+        success: false,
+        error: 'session_idle',
+        message: 'Your session ended after 6 hours without activity. Please log in again.',
+      }),
+      {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      },
+    );
+
+    const result = await AuthManager.refreshToken();
+
+    expect(result).toEqual({ ok: false, error: 'session_idle' });
+    expect(eventMessage).toContain('6 hours without activity');
+    expect(AuthManager.consumeSessionNotice()).toContain('6 hours without activity');
+    expect(AuthManager.consumeSessionNotice()).toBeNull();
+  });
+
+  test('handles session_idle from an authenticated request before refresh', async () => {
+    (globalThis as any).fetch = async () => new Response(
+      JSON.stringify({
+        success: false,
+        error: 'session_idle',
+        message: 'idle',
+      }),
+      {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      },
+    );
+
+    const response = await AuthManager.authenticatedFetch('/api/files');
+
+    expect(response.status).toBe(401);
+    expect(AuthManager.consumeSessionNotice()).toContain('6 hours without activity');
+  });
 });
 
 // ============================================================================

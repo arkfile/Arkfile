@@ -17,6 +17,25 @@ import { cleanupAccountKeyCache } from '../crypto/file-encryption.js';
 
 // Cookie names (must match handlers/cookies.go constants)
 const CSRF_COOKIE_NAME = '__Host-arkfile-csrf';
+const SESSION_NOTICE_KEY = 'arkfile_session_notice';
+export const SESSION_ENDED_EVENT = 'arkfile:session-ended';
+
+export type SessionErrorCode = 'session_idle' | 'session_absolute' | 'session_logged_out';
+
+export interface RefreshResult {
+  ok: boolean;
+  error?: string;
+}
+
+const SESSION_MESSAGES: Record<SessionErrorCode, string> = {
+  session_idle: 'Your session ended after 6 hours without activity. Please log in again.',
+  session_absolute: 'Your session ended 24 hours after you signed in. Please log in again.',
+  session_logged_out: 'You have been logged out.',
+};
+
+function isSessionErrorCode(value: unknown): value is SessionErrorCode {
+  return value === 'session_idle' || value === 'session_absolute' || value === 'session_logged_out';
+}
 
 /**
  * Read the CSRF token from the non-HttpOnly cookie set by the server.
@@ -82,6 +101,8 @@ export class AuthManager {
   // Auto-refresh timer: fires slightly before the 30-minute JWT TTL.
   private static autoRefreshTimer: number | null = null;
   private static visibilityRefreshAttached = false;
+  private static visibilityRefreshEnabled = false;
+  private static sessionEnded = false;
   // 25 minutes -- fires with 5 minutes to spare before the 30-minute JWT TTL.
   private static readonly AUTO_REFRESH_INTERVAL = 25 * 60 * 1000;
 
@@ -94,7 +115,7 @@ export class AuthManager {
   }
 
   // Token refresh: sends cookie automatically; no body needed for browser clients.
-  public static async refreshToken(): Promise<boolean> {
+  public static async refreshToken(): Promise<RefreshResult> {
     try {
       const response = await fetch('/api/refresh', {
         method: 'POST',
@@ -109,13 +130,53 @@ export class AuthManager {
 
       if (response.ok) {
         // New cookies issued by server automatically replace old ones.
-        return true;
-      } else {
-        return false;
+        return { ok: true };
       }
+      const code = await this.readErrorCode(response);
+      if (isSessionErrorCode(code)) {
+        this.endBrowserSession(code);
+      }
+      return { ok: false, error: code };
     } catch (error) {
       console.error('Token refresh error:', error);
-      return false;
+      return { ok: false };
+    }
+  }
+
+  private static async readErrorCode(response: Response): Promise<string | undefined> {
+    try {
+      const body = await response.clone().json() as { error?: unknown };
+      return typeof body.error === 'string' ? body.error : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private static endBrowserSession(code: SessionErrorCode): void {
+    if (this.sessionEnded) return;
+    this.sessionEnded = true;
+    const message = SESSION_MESSAGES[code];
+    this.clearAllSessionData();
+    document.cookie = `${CSRF_COOKIE_NAME}=; Path=/; Max-Age=0; Secure; SameSite=Strict`;
+    try {
+      sessionStorage.setItem(SESSION_NOTICE_KEY, message);
+    } catch {
+      // The current page still receives the event when storage is unavailable.
+    }
+    window.dispatchEvent(new CustomEvent(SESSION_ENDED_EVENT, {
+      detail: { code, message },
+    }));
+  }
+
+  public static consumeSessionNotice(): string | null {
+    try {
+      const message = sessionStorage.getItem(SESSION_NOTICE_KEY);
+      if (message !== null) {
+        sessionStorage.removeItem(SESSION_NOTICE_KEY);
+      }
+      return message;
+    } catch {
+      return null;
     }
   }
 
@@ -241,11 +302,18 @@ export class AuthManager {
   // Auto-refresh timer management
   public static startAutoRefresh(): void {
     this.stopAutoRefresh();
+    this.sessionEnded = false;
+    this.visibilityRefreshEnabled = true;
+    try {
+      sessionStorage.removeItem(SESSION_NOTICE_KEY);
+    } catch {
+      // Session operation remains valid when storage is unavailable.
+    }
     this.attachVisibilityRefresh();
     this.autoRefreshTimer = window.setInterval(async () => {
       if (this.isAuthenticated()) {
-        const success = await this.refreshToken();
-        if (!success) {
+        const result = await this.refreshToken();
+        if (!result.ok && !isSessionErrorCode(result.error)) {
           console.warn('Auto-refresh failed, session may expire soon');
         }
       }
@@ -259,7 +327,7 @@ export class AuthManager {
     }
     this.visibilityRefreshAttached = true;
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && this.isAuthenticated()) {
+      if (document.visibilityState === 'visible' && this.visibilityRefreshEnabled && !this.sessionEnded) {
         void this.refreshToken();
       }
     });
@@ -304,6 +372,12 @@ export class AuthManager {
     if (response.status === 503) {
       throw new ServiceUnavailableError();
     }
+    if (response.status === 401) {
+      const code = await this.readErrorCode(response);
+      if (isSessionErrorCode(code)) {
+        this.endBrowserSession(code);
+      }
+    }
 
     return response;
   }
@@ -323,6 +397,7 @@ export class AuthManager {
   public static clearAllSessionData(): void {
     _cachedUser = null;
     this.stopAutoRefresh();
+    this.visibilityRefreshEnabled = false;
 
     cleanupAccountKeyCache();
 
@@ -378,3 +453,4 @@ export const startAutoRefresh = AuthManager.startAutoRefresh.bind(AuthManager);
 export const stopAutoRefresh = AuthManager.stopAutoRefresh.bind(AuthManager);
 export const getCurrentUser = AuthManager.getCurrentUser.bind(AuthManager);
 export const getCachedUser = AuthManager.getCachedUser.bind(AuthManager);
+export const consumeSessionNotice = AuthManager.consumeSessionNotice.bind(AuthManager);

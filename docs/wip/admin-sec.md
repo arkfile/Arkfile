@@ -2,7 +2,7 @@
 
 ## Goal
 
-Admin endpoints and admin functionality must be reachable only through `arkfile-admin`, run directly on the server it administers, talking to the Go server over a direct local connection (the default `--server-url https://localhost:8443`). A login made through the web app or `arkfile-client`, including a login of an admin account, must never be usable on admin routes, and an `arkfile-admin` login must never be usable as a web app session or from any other machine. This work comes before the session lifetime work in `docs/wip/auto-logout.md`, which builds on the admin login marking described here.
+Admin endpoints and admin functionality must be reachable only through `arkfile-admin`, run directly on the server it administers, talking to the Go server over a direct local connection (the default `--server-url https://localhost:8443`). A login made through the web app or `arkfile-client`, including a login of an admin account, must never be usable on admin routes, and an `arkfile-admin` login must never be usable as a web app session or from any other machine. The session-family foundation and six-hour idle enforcement in `docs/wip/auto-logout.md` ship first. This work then marks admin families and adds the direct-local and scope restrictions; the later absolute-lifetime work adds the 60-minute admin cap.
 
 ## Findings
 
@@ -39,7 +39,7 @@ One middleware defines a direct local connection as a loopback kernel peer with 
 
 ## Layer three: admin logins are marked and confined
 
-A login is marked as an admin login only when it starts at `/api/admin/login/*`, at the bootstrap registration, or at the admin re-registration ceremony. The temporary MFA token issued there carries a signed `login_kind` claim with the value `admin`. Temporary tokens are signed with the temp-tier key, so a client cannot add the claim. The mark is carried through every token derived from that login: the full access token issued after TOTP verify, after WebAuthn authentication, and after first MFA setup; the reset-tier token from `/api/mfa/recover-with-backup-code`; the new temporary MFA token that `MFAReset` issues; and the refresh token, through a new `login_kind` column on `refresh_tokens` that rotation copies, so `/api/refresh` reissues a marked access token. Any token derived from an unmarked token stays unmarked, so the mark can never be gained after login. When the session lifetime work lands, the per-login family row takes over this field.
+A login is marked as an admin login only when it starts at `/api/admin/login/*`, at the bootstrap registration, or at the admin re-registration ceremony. The temporary MFA token issued there carries a signed `login_kind` claim with the value `admin`. Temporary tokens are signed with the temp-tier key, so a client cannot add the claim. The mark is carried through every token derived from that login: the full access token issued after TOTP verify, after WebAuthn authentication, and after first MFA setup; the reset-tier token from `/api/mfa/recover-with-backup-code`; the new temporary MFA token that `MFAReset` issues; and the login's `session_families` row, which `/api/refresh` reads before reissuing a marked access token. Any token derived from an unmarked token stays unmarked, so the mark can never be gained after login. `refresh_tokens` continues to carry the family id but does not duplicate `login_kind`; the family row is the source of truth.
 
 `AdminMiddleware` requires the mark in addition to its existing checks, and still checks admin privileges in the database on every request, so demoting an admin takes effect immediately. An unmarked token, such as one from a web app or `arkfile-client` login of an admin account, gets a 403 on every admin route.
 
@@ -65,13 +65,13 @@ A consequence of this decision, accepted: an admin who loses SSH access to the s
 
 ## Existing data and rollout
 
-All changes are additive. The `login_kind` column is added to the `refresh_tokens` table in `unified_schema.sql` for new installs and as an `ADD COLUMN` migration in `runSchemaMigrations` for existing ones, matching how `stored_blob_sha256sum` was added. A missing value means an unmarked login. Existing access tokens carry no mark, so at the upgrade every saved `arkfile-admin` session stops working on admin routes and each admin runs `arkfile-admin login` once on each box. No account, MFA, file, share, credit, or billing record is touched, and web app and `arkfile-client` sessions keep working on their normal routes.
+All changes are additive. `session_families.login_kind` already exists from the initial idle-lifetime work. A missing value means an unmarked login. Existing access tokens carry no mark, so at the upgrade every saved `arkfile-admin` session stops working on admin routes and each admin runs `arkfile-admin login` once on each box. Existing unmarked family rows stay unmarked. No account, MFA, file, share, credit, or billing row is rewritten, and web app and `arkfile-client` sessions keep working on their normal routes.
 
 Rollout is `test-update.sh` on the test VPS, the outside `curl` check (expect `404`), an on-box `arkfile-admin login` and a few read-only admin commands, then the same on production with `prod-update.sh`. Rolling back to the previous code is safe for data, since the old binary ignores the new column, but it reopens the gap: a rollback through `prod-update.sh` from an older checkout also regenerates the Caddyfile from the older template, so both layers are gone until the hand edit from the interim operator step is re-applied.
 
 ## Testing
 
-Unit tests cover the direct-local-connection middleware with a non-loopback peer and with each proxy header present; the mark carried through every token hop listed above, and never gained from an unmarked token; an unmarked full token refused on admin routes; a marked token refused on a non-admin route such as `/api/files`, refused when it arrives by cookie, and refused when any proxy header is present; marked logins receiving no cookies from MFA completion, setup completion, and refresh; `login_kind` preserved across refresh-token rotation; the admin re-registration handlers, including refusal of an unmarked handoff token and refusal of admin accounts on the normal re-registration routes; and the `ADD COLUMN` migration being idempotent.
+Unit tests cover the direct-local-connection middleware with a non-loopback peer and with each proxy header present; the mark carried through every token hop listed above, and never gained from an unmarked token; an unmarked full token refused on admin routes; a marked token refused on a non-admin route such as `/api/files`, refused when it arrives by cookie, and refused when any proxy header is present; marked logins receiving no cookies from MFA completion, setup completion, and refresh; `login_kind` preserved on the family across refresh-token rotation; the admin re-registration handlers, including refusal of an unmarked handoff token and refusal of admin accounts on the normal re-registration routes; and existing unmarked families remaining unmarked.
 
 `e2e-test.sh` runs against `dev-reset.sh`, which has no Caddy, so it covers the Go layers directly. New cases: the dev admin signs in through the normal login with `arkfile-client` and `/api/admin/users` with that token returns 403; an admin request carrying an `X-Arkfile-Peer` header is refused while normal `arkfile-admin` calls succeed; the marked admin access token is refused on `/api/files`; `arkfile-admin logout` revokes the server-side refresh token, so presenting it afterward fails; and, late in the run or followed by a fresh admin login because flagging force-logs-out the account, the dev admin is flagged for re-registration, `arkfile-admin login` completes the admin ceremony and the resulting login works on admin routes, and the same flagged account cannot re-register through the normal login. The Caddy layer is verified by the outside `curl` check after `test-update.sh`.
 
@@ -94,15 +94,14 @@ The other amendments agreed for `docs/wip/auto-logout.md` during the same review
 - `handlers/admin_auth.go` (flagged admin accounts get the marked 409 re-registration response; marked temporary MFA token; shared admin check)
 - `handlers/bootstrap.go` (replace the bare loopback check; marked temporary MFA token; no cookies)
 - `handlers/reregistration.go` (admin ceremony handlers sharing internals; normal ceremony refuses admin accounts; marked handoff and temporary tokens without cookies)
-- `handlers/auth.go` (normal login handling of flagged admin accounts; `MFAReset` and `RecoverWithBackupCode` carry the mark; `RefreshToken` reads `login_kind`, enforces direct local connection for marked refresh tokens, and sets no cookies for them)
+- `handlers/auth.go` (normal login handling of flagged admin accounts; `MFAReset` and `RecoverWithBackupCode` carry the mark; `RefreshToken` reads `login_kind` from the session family, enforces direct local connection for marked refresh tokens, and sets no cookies for them)
 - `handlers/mfa_login_complete.go` (carry the mark onto the full token and refresh token; no cookies for marked logins)
 - `handlers/mfa_webauthn.go` (pass the mark through WebAuthn completion)
 - `handlers/cookies.go` (helpers to skip cookie issuance for marked logins)
 - `auth/jwt.go` (`login_kind` claim on temporary, reset, re-registration, and full tokens; generator signatures take the login kind; marked tokens accepted only over a direct local connection and not from a cookie)
-- `models/refresh_token.go` (`login_kind` column written at creation and copied on rotation; returned by validation)
+- The session-family model (`login_kind` written when the marked login completes and returned with refresh validation)
 - `models/user.go` (single admin-privilege helper)
-- `database/unified_schema.sql` (`login_kind` on `refresh_tokens` for new installs)
-- `main.go` (`ADD COLUMN` migration for `refresh_tokens.login_kind`)
+- `database/unified_schema.sql` and `main.go` only if the session-family schema or backfill needs an admin-specific adjustment; no duplicate `refresh_tokens.login_kind` column is added
 - `auth/dev_admin.go` (refresh token lifecycle validation follows the new signatures)
 - `cmd/arkfile-admin/auth_commands.go` (handle the 409 and run the shared re-registration ceremony against the admin routes; `logout` calls `/api/logout` first)
 - `cmd/arkfile-admin/client.go` (requester wiring for the shared ceremony)

@@ -14,8 +14,8 @@ import (
 	"github.com/arkfile/Arkfile/crypto"
 	"github.com/arkfile/Arkfile/database"
 	"github.com/labstack/echo/v4"
-	"github.com/pquerna/otp/totp"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/pquerna/otp/totp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -104,6 +104,19 @@ func openMFATestDB(t *testing.T) *sql.DB {
 			family_id TEXT NOT NULL,
 			superseded_by_hash TEXT,
 			family_revoked_at TIMESTAMP
+		);
+		CREATE TABLE session_families (
+			family_id TEXT PRIMARY KEY,
+			username TEXT NOT NULL,
+			login_kind TEXT,
+			session_started_at TIMESTAMP NOT NULL,
+			last_user_activity TIMESTAMP NOT NULL,
+			last_transfer_request_at TIMESTAMP,
+			grace_target TEXT,
+			grace_target_kind TEXT,
+			grace_last_request_at TIMESTAMP,
+			ended_at TIMESTAMP,
+			ended_reason TEXT
 		);
 	`
 	_, err = db.Exec(schema)

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -27,7 +28,7 @@ type RefreshTokenRequest struct {
 }
 
 // RefreshToken handles refresh token requests.
-// ValidateRefreshToken performs atomic rotation internally (family-revoke on reuse).
+// ValidateRefreshSession performs rotation and preserves the login family.
 // Tokens are delivered via cookies for browser clients; the JSON body also carries
 // them so non-browser clients using bearer auth can update their session.
 func RefreshToken(c echo.Context) error {
@@ -47,15 +48,22 @@ func RefreshToken(c echo.Context) error {
 	}
 
 	// Validate and rotate the refresh token atomically.
-	// On reuse detection, ValidateRefreshToken revokes the family and all user JWTs internally.
-	username, newRefreshToken, err := models.ValidateRefreshToken(database.DB, request.RefreshToken)
+	// On reuse detection, ValidateRefreshSession revokes the family and all user JWTs internally.
+	session, err := models.ValidateRefreshSession(database.DB, request.RefreshToken)
 	if err != nil {
+		if code := models.SessionErrorCode(err); code != "" {
+			if session != nil && session.SessionEndedNow {
+				logging.InfoLogger.Printf("SECURITY: Session ended for user %s: %s", session.Username, strings.TrimPrefix(code, "session_"))
+			}
+			clearSessionCookies(c)
+			return JSONErrorCode(c, http.StatusUnauthorized, code, sessionErrorMessage(code))
+		}
 		if err == models.ErrRefreshTokenExpired {
 			return JSONError(c, http.StatusUnauthorized, "Refresh token expired")
 		}
 		if err == models.ErrRefreshTokenReuse {
-			if username != "" {
-				auth.InvalidateUserRevocationCache(username)
+			if session != nil && session.Username != "" {
+				auth.InvalidateUserRevocationCache(session.Username)
 			}
 			logging.InfoLogger.Printf("SECURITY: Refresh token reuse detected for a session; all sessions revoked")
 			return JSONError(c, http.StatusUnauthorized, "All tokens have been revoked for security reasons")
@@ -63,9 +71,9 @@ func RefreshToken(c echo.Context) error {
 		return JSONError(c, http.StatusUnauthorized, "Invalid or expired refresh token")
 	}
 
-	user, err := models.GetUserByUsername(database.DB, username)
+	user, err := models.GetUserByUsername(database.DB, session.Username)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to load user for refresh %s: %v", username, err)
+		logging.ErrorLogger.Printf("Failed to load user for refresh %s: %v", session.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to refresh token")
 	}
 	if !user.IsApproved && !user.HasAdminPrivileges() {
@@ -73,26 +81,26 @@ func RefreshToken(c echo.Context) error {
 	}
 
 	// Generate new full-tier JWT.
-	token, expirationTime, err := auth.GenerateFullAccessToken(username)
+	token, expirationTime, err := auth.GenerateFullAccessToken(session.Username, session.FamilyID, session.LoginKind)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate token for %s: %v", username, err)
+		logging.ErrorLogger.Printf("Failed to generate token for %s: %v", session.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to create new token")
 	}
 
 	// Issue updated cookies for browser clients; CLI clients use the JSON body.
 	csrfToken, err := GenerateCSRFToken()
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate CSRF token for %s: %v", username, err)
+		logging.ErrorLogger.Printf("Failed to generate CSRF token for %s: %v", session.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to create new token")
 	}
-	issueSessionCookies(c, token, newRefreshToken, csrfToken)
+	issueSessionCookies(c, token, session.RefreshToken, csrfToken)
 
-	database.LogUserAction(username, "refreshed token", "")
-	logging.InfoLogger.Printf("Token refreshed for user: %s", username)
+	database.LogUserAction(session.Username, "refreshed token", "")
+	logging.InfoLogger.Printf("Token refreshed for user: %s", session.Username)
 
 	return JSONResponse(c, http.StatusOK, "Token refreshed successfully", map[string]interface{}{
 		"token":         token,
-		"refresh_token": newRefreshToken,
+		"refresh_token": session.RefreshToken,
 		"expires_at":    expirationTime,
 	})
 }
@@ -120,8 +128,27 @@ func Logout(c echo.Context) error {
 		}
 	}
 
-	// Revoke the refresh token if provided
-	if request.RefreshToken != "" {
+	claims, hasClaims := auth.GetClaimsFromContext(c)
+	if hasClaims && claims.FamilyID != "" {
+		if _, err := models.EndSessionFamily(
+			database.DB,
+			claims.FamilyID,
+			models.SessionEndReasonLogout,
+			time.Now(),
+		); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			logging.ErrorLogger.Printf("Failed to end session family: %v", err)
+			return JSONError(c, http.StatusInternalServerError, "Failed to end session")
+		}
+		if request.RefreshToken != "" {
+			if err := models.RevokeRefreshToken(database.DB, request.RefreshToken); err != nil &&
+				!errors.Is(err, models.ErrRefreshTokenNotFound) {
+				logging.ErrorLogger.Printf("Failed to revoke refresh token: %v", err)
+				return JSONError(c, http.StatusInternalServerError, "Failed to revoke refresh token")
+			}
+		}
+	} else if request.RefreshToken != "" {
+		// Pre-upgrade sessions have no family claim and retain the old
+		// single-refresh-token logout behavior for one JWT lifetime.
 		err := models.RevokeRefreshToken(database.DB, request.RefreshToken)
 		if err != nil {
 			// If the token is not found, it might already be revoked, which is not a failure for the user.
@@ -142,6 +169,19 @@ func Logout(c echo.Context) error {
 	}
 
 	return JSONResponse(c, http.StatusOK, "Logged out successfully.", nil)
+}
+
+func sessionErrorMessage(code string) string {
+	switch code {
+	case models.SessionErrorIdle:
+		return "Your session ended after 6 hours without activity. Please log in again."
+	case models.SessionErrorAbsolute:
+		return "Your session reached its maximum lifetime. Please log in again."
+	case models.SessionErrorLoggedOut:
+		return "This session has been logged out."
+	default:
+		return "Your session has expired. Please log in again."
+	}
 }
 
 // RevokeToken revokes a specific JWT token
