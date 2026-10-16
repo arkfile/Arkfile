@@ -84,7 +84,7 @@ When an operator has flagged an account for OPAQUE credential rotation, `/api/op
 | POST | `/api/logout` | End the current login family and clear browser cookies | Access |
 | GET | `/api/auth/crypto-metadata` | Get username, public Account Key salt, and KDF profile | Access (approval not required) |
 
-Every completed full login has a server-side family. A family ends after six hours without a user-started authenticated request; `POST /api/refresh` does not count as activity. Requests and refresh attempts for an idle family return HTTP 401 with `{"success":false,"error":"session_idle","message":"Your session ended after 6 hours without activity. Please log in again."}`. `POST /api/logout` ends only the caller's family and clears browser session cookies. Other logins for the same account remain active. A later request or refresh using credentials copied from the logged-out family returns HTTP 401 with `error` set to `session_logged_out`.
+Every completed full login has a server-side family. A family ends after six hours without a user-started authenticated request; `POST /api/refresh` does not count as activity. Requests and refresh attempts for an idle family return HTTP 401 with `{"success":false,"error":"session_idle","message":"Your session ended after 6 hours without activity. Please log in again."}`. `POST /api/logout` ends only the caller's family and clears browser session cookies. Other logins for the same account remain active. Logout remains idempotent when the presented JWT has already been revoked, provided it is still correctly signed and unexpired. A later request or refresh using credentials copied from the logged-out family returns HTTP 401 with `error` set to `session_logged_out`.
 
 #### Token Revocation (Require MFA)
 

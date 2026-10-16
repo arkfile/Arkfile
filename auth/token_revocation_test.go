@@ -79,7 +79,7 @@ func createTestTokenWithTier(t *testing.T, username, tokenID string, expiry time
 		requiresTOTP = true
 	}
 	claims := &Claims{
-		Username:     username,
+		Username:    username,
 		RequiresMFA: requiresTOTP,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiry),
@@ -454,7 +454,7 @@ func TestTokenRevocationMiddleware_UserWideRevocation(t *testing.T) {
 
 	// Create a valid full-tier JWT.
 	claims := &Claims{
-		Username:     username,
+		Username:    username,
 		RequiresMFA: false,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiry),
@@ -498,6 +498,17 @@ func TestTokenRevocationMiddleware_UserWideRevocation(t *testing.T) {
 	httpErr, ok := err.(*echo.HTTPError)
 	require.True(t, ok)
 	assert.Equal(t, http.StatusUnauthorized, httpErr.Code)
+
+	logoutReq := httptest.NewRequest(http.MethodPost, "/api/logout", nil)
+	logoutRec := httptest.NewRecorder()
+	logoutContext := e.NewContext(logoutReq, logoutRec)
+	logoutContext.SetPath("/api/logout")
+	logoutContext.Set("user", parsedToken)
+
+	err = handlerWithMiddleware(logoutContext)
+	require.NoError(t, err, "logout should remain idempotent after user-wide revocation")
+	assert.Equal(t, http.StatusOK, logoutRec.Code)
+	assert.Equal(t, "ok", logoutRec.Body.String())
 }
 
 // TestTokenRevocationMiddleware_JWTIssuedAfterRevocation verifies that a JWT
@@ -520,7 +531,7 @@ func TestTokenRevocationMiddleware_JWTIssuedAfterRevocation(t *testing.T) {
 
 	// Issue a JWT with issuedAt = now (after the revocation).
 	claims := &Claims{
-		Username:     username,
+		Username:    username,
 		RequiresMFA: false,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiry),
@@ -561,7 +572,7 @@ func TestRevokeAllUserJWTTokens_EnforcesMiddleware(t *testing.T) {
 	expiry := time.Now().Add(10 * time.Minute)
 
 	claims := &Claims{
-		Username:     username,
+		Username:    username,
 		RequiresMFA: false,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiry),

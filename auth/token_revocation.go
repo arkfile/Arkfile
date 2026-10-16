@@ -247,6 +247,13 @@ func DeleteAllRefreshTokensForUser(db *sql.DB, username string) error {
 func TokenRevocationMiddleware(db *sql.DB) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
+			// Logout is self-denying and must remain idempotent after a
+			// user-wide or per-token revocation. JWT validation and browser
+			// CSRF protection still run before this middleware.
+			if c.Path() == "/api/logout" {
+				return next(c)
+			}
+
 			user := c.Get("user")
 			if user == nil {
 				return next(c)

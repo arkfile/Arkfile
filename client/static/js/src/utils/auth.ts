@@ -136,7 +136,7 @@ export class AuthManager {
       if (isSessionErrorCode(code)) {
         this.endBrowserSession(code);
       }
-      return { ok: false, error: code };
+      return code === undefined ? { ok: false } : { ok: false, error: code };
     } catch (error) {
       console.error('Token refresh error:', error);
       return { ok: false };
