@@ -8,7 +8,7 @@
  * 4. Show file section and load files
  */
 
-import { showError, showSuccess } from '../ui/messages.js';
+import { MessageManager, showError, showSuccess } from '../ui/messages.js';
 import { showProgressMessage, hideProgress } from '../ui/progress.js';
 import { clearAllSessionData, authenticatedFetch, csrfHeader, startAutoRefresh } from '../utils/auth.js';
 import { showFileSection } from '../ui/sections.js';
@@ -77,6 +77,8 @@ export class LoginManager {
     LoginManager.loginInProgress = true;
 
     try {
+      // Error toasts persist until dismissed; drop any left from a prior attempt.
+      MessageManager.clearAllMessages();
       showProgressMessage('Authenticating...');
 
       // Initialize OPAQUE client
@@ -499,6 +501,7 @@ export class LoginManager {
         }
       }
 
+      MessageManager.clearAllMessages();
       showSuccess('Login successful');
 
       // Navigate to file section and load files

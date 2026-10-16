@@ -168,7 +168,11 @@ function computeSha256(filePath: string): string {
  * Perform the full login flow on the given page: OPAQUE auth + MFA (TOTP) + cache opt-in.
  * After this returns, the Account Key wrapping key is live in the page's JS heap.
  */
-async function performLogin(page: Page, context: string): Promise<void> {
+async function performLogin(
+  page: Page,
+  context: string,
+  options: { wrongPasswordFirst?: boolean } = {},
+): Promise<void> {
   logStep(context, 'Navigating to app and initiating login...');
   await page.goto(SERVER_URL);
 
@@ -177,6 +181,14 @@ async function performLogin(page: Page, context: string): Promise<void> {
 
   await page.waitForSelector('#login-username', { state: 'visible', timeout: 10_000 });
   await page.fill('#login-username', TEST_USERNAME);
+
+  if (options.wrongPasswordFirst) {
+    logStep(context, 'Submitting a wrong password first...');
+    await page.fill('#login-password', `${TEST_PASSWORD}-wrong`);
+    await page.click('#login-submit-btn');
+    await page.waitForSelector('#message-container .toast-error', { state: 'visible', timeout: 60_000 });
+  }
+
   await page.fill('#login-password', TEST_PASSWORD);
 
   logStep(context, 'Submitting OPAQUE authentication...');
@@ -198,6 +210,12 @@ async function performLogin(page: Page, context: string): Promise<void> {
   await page.click('#cache-optin-ok-btn');
 
   await page.waitForSelector('#file-section', { state: 'visible', timeout: 120_000 });
+
+  if (options.wrongPasswordFirst) {
+    await expect(page.locator('#message-container .toast-error')).toHaveCount(0);
+    logStep(context, 'Failed-attempt error toast cleared after successful login');
+  }
+
   logStep(context, 'Login complete -- file section visible, Account Key cached in JS heap');
 }
 
@@ -493,7 +511,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await sharedPage.reload({ waitUntil: 'networkidle' });
     await expect(sharedPage.locator('.toast-error')).toHaveCount(0);
 
-    await performLogin(sharedPage, 'post-idle-login');
+    await performLogin(sharedPage, 'post-idle-login', { wrongPasswordFirst: true });
     await expect(sharedPage.locator('#filesList')).toBeVisible({ timeout: 15_000 });
     console.log('[OK] Idle session ended with one-reload notice and clean re-login');
   });
