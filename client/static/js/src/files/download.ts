@@ -42,7 +42,6 @@ import {
 import { isSwAvailable } from './sw-streaming-download';
 import {
   finalizeDownloadIntegrity,
-  showSwStreamingTip,
   showBlobBufferWarning,
   dismissBlobBufferWarning,
   showPartialDownloadWarning,
@@ -302,12 +301,8 @@ export async function downloadFile(
       typeof options.reservedFilename === 'string' &&
       options.reservedFilename.length > 0;
 
-    if (!useDirectory) {
-      if (isSwAvailable()) {
-        showSwStreamingTip();
-      } else {
-        showBlobBufferWarning(meta.size_bytes);
-      }
+    if (!useDirectory && !isSwAvailable()) {
+      showBlobBufferWarning(meta.size_bytes);
     }
 
     try {

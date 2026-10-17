@@ -34,7 +34,6 @@ import {
 } from '../files/streaming-download';
 import {
   finalizeDownloadIntegrity,
-  showSwStreamingTip,
   showBlobBufferWarning,
   dismissBlobBufferWarning,
   shouldShowBlobBufferWarning,
@@ -381,9 +380,7 @@ export class ShareAccessUI {
       statusDiv.className = '';
     }
 
-    if (isSwAvailable()) {
-      showSwStreamingTip();
-    } else {
+    if (!isSwAvailable()) {
       showBlobBufferWarning(sizeBytes);
     }
 

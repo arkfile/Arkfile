@@ -19,7 +19,7 @@
  *   error but the file may already exist on disk.
  */
 
-import { showError, showSuccess, showWarning, showInfo, dismissToast } from '../ui/messages.js';
+import { showError, showSuccess, showWarning, dismissToast } from '../ui/messages.js';
 import { closeNavInlinePanelsExcept } from '../ui/sections.js';
 import { openVerifyFilePanel } from './verify-file.js';
 
@@ -40,9 +40,6 @@ export const BLOB_BUFFER_WARN_BYTES = 250 * 1024 * 1024;
 
 const MATCH_AUTO_HIDE_MS = 11000;
 
-const STREAMING_TIP =
-  'This file streams to your download folder with chunk-bounded memory. Whole-file SHA-256 is checked as data flows, but a problem may only be detected after the file is saved. Use Verify File afterward if you need to re-check the saved copy.';
-
 const BLOB_BUFFER_WARNING =
   'Service Worker streaming is unavailable. This large download will buffer the complete decrypted file in the browser before saving, which may fail under memory or storage limits. Prefer a browser with Service Worker support, or use the arkfile-client CLI.';
 
@@ -51,6 +48,9 @@ const PARTIAL_DOWNLOAD_TIP =
 
 const SW_MISMATCH_TIP =
   'SHA-256 verification failed after the file was streamed to disk. Delete the downloaded file. Use Verify File with the expected digest below, or re-download.';
+
+const SW_UNCHECKED_TIP =
+  'Service Worker path: if you need certainty about the file on disk, compare this expected digest with Verify File or an offline tool.';
 
 let activeBlobWarningToast: HTMLElement | null = null;
 const matchHideTimers = new Map<string, number>();
@@ -65,11 +65,6 @@ export function shouldBlockBlobDownload(hashVerification: HashVerification | und
 /** Whether a Blob-path size warrants a sticky buffer warning. */
 export function shouldShowBlobBufferWarning(fileSizeBytes: number): boolean {
   return Number.isFinite(fileSizeBytes) && fileSizeBytes >= BLOB_BUFFER_WARN_BYTES;
-}
-
-/** Surface SW streaming limits before/during a large SW download. */
-export function showSwStreamingTip(): void {
-  showInfo(STREAMING_TIP, 12000);
 }
 
 /**
@@ -234,11 +229,11 @@ export function renderDownloadIntegrityPanel(
     tip.className = 'warning-note';
     tip.textContent = SW_MISMATCH_TIP;
     panel.appendChild(tip);
-  } else if (result.streamedViaSw) {
+  } else if (result.streamedViaSw && result.expectedSha256 && (hv === 'skipped' || hv === 'unavailable')) {
+    // Expected digest present, but it was not compared to the saved file.
     const tip = document.createElement('p');
     tip.className = 'warning-note';
-    tip.textContent =
-      'Service Worker path: if you need certainty about the file on disk, compare this expected digest with Verify File or an offline tool.';
+    tip.textContent = SW_UNCHECKED_TIP;
     panel.appendChild(tip);
   }
 
