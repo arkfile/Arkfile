@@ -67,6 +67,14 @@ func AdminOpaqueAuthResponse(c echo.Context) error {
 			request.Username).Scan(&userRecordHex)
 		if dbErr != nil {
 			if dbErr == sql.ErrNoRows {
+				flagged, flagErr := models.UserRequiresReregistration(database.DB, request.Username)
+				if flagErr != nil {
+					logging.ErrorLogger.Printf("Failed to check re-registration flag for admin %s: %v", request.Username, flagErr)
+					return JSONError(c, http.StatusInternalServerError, "Authentication failed")
+				}
+				if flagged {
+					return respondAccountRequiresReregistration(c, request.Username, models.LoginKindAdmin)
+				}
 				// If opaque record is missing, fall back to fake record gracefully
 				var fakeErr error
 				userRecord, fakeErr = auth.DeriveFakeUserRecord(request.Username)
@@ -194,7 +202,7 @@ func AdminOpaqueAuthFinalize(c echo.Context) error {
 		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 	}
 
-	tempToken, _, err := auth.GenerateTemporaryMFAToken(request.Username)
+	tempToken, _, err := auth.GenerateTemporaryMFATokenForLogin(request.Username, models.LoginKindAdmin)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate temporary MFA token for admin %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Authentication failed")

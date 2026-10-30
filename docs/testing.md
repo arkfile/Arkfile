@@ -72,7 +72,7 @@ bash scripts/testing/e2e-playwright.sh
 
 The full reset-plus-test sequence for a local dev machine is `sudo bash fdre2e.sh`, which runs `dev-reset.sh` as root and then drops to your user for `e2e-test.sh` and `e2e-playwright.sh`.
 
-The session-idle cases use development-only clock-shift endpoints and never wait six hours. `e2e-test.sh` shifts a normal login beyond the limit, verifies that a still-unexpired access token and its refresh token both return `session_idle`, and verifies that arkfile-client removes its session file and clears its agent. `e2e-playwright.sh` shifts only its own signed family, triggers the visibility refresh, verifies the authentication screen and six-hour notice, verifies Account Key cleanup, and verifies that the notice survives exactly one reload.
+The session-lifetime cases use development-only clock-shift endpoints and never wait six or 24 hours. `e2e-test.sh` shifts a normal login beyond the idle limit, verifies that a still-unexpired access token and its refresh token both return `session_idle`, and verifies that arkfile-client removes its session file and clears its agent. It also shifts a normal login past 24 hours and expects `session_absolute`, refuses an unmarked token on `/api/admin/users`, refuses a marked admin token on `/api/files`, and refuses an admin request that carries `X-Arkfile-Peer`. `e2e-playwright.sh` shifts only its own signed family, triggers the visibility refresh, verifies the authentication screen and six-hour notice, verifies Account Key cleanup, and verifies that the notice survives exactly one reload. The Caddy 404 for `/api/admin` and `/api/bootstrap` is checked with a request from outside the server after `test-update.sh`, because `dev-reset.sh` has no Caddy.
 
 ### Manual Testing
 

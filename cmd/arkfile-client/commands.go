@@ -366,6 +366,14 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 		// Classify error.
 		if isFatalUploadError(err) {
 			fatalReason = err.Error()
+			if errors.Is(err, errSessionAbsolute) {
+				remaining := len(files) - i - 1
+				if remaining == 1 {
+					fatalReason += " 1 other file in the queue was not uploaded."
+				} else if remaining > 1 {
+					fatalReason += fmt.Sprintf(" %d other files in the queue were not uploaded.", remaining)
+				}
+			}
 			failed++
 			fmt.Printf("[X] %s: %s\n", filepath.Base(path), err)
 			for j := i + 1; j < len(files); j++ {

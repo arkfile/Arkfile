@@ -35,6 +35,25 @@ func buildVerifierResponse(t *testing.T, password, owner string) *Response {
 	}
 }
 
+func TestApplyResponseDataFields_CarriesMFAChallenge(t *testing.T) {
+	resp := &Response{Data: map[string]interface{}{
+		"requires_mfa": true,
+		"temp_token":   "temp-mfa-token",
+		"auth_method":  "OPAQUE",
+		"expires_at":   "2026-10-30T22:00:00Z",
+	}}
+	applyResponseDataFields(resp)
+	if !resp.RequiresMFA {
+		t.Fatal("requires_mfa was not copied onto the response")
+	}
+	if resp.TempToken != "temp-mfa-token" {
+		t.Fatalf("temp_token = %q", resp.TempToken)
+	}
+	if resp.ExpiresAt.IsZero() {
+		t.Fatal("expires_at was not copied onto the response")
+	}
+}
+
 func TestVerifyReregistrationPassword_CorrectPassword(t *testing.T) {
 	const password = "Correct-Account-Password-2026!"
 	const owner = testOwner

@@ -42,14 +42,17 @@ func SessionLifetimeMiddleware(db *sql.DB) echo.MiddlewareFunc {
 				return next(c)
 			}
 
-			family, err := models.CheckSessionFamily(db, claims.FamilyID, time.Now())
+			now := time.Now()
+			family, err := models.AuthorizeSessionUse(db, claims.FamilyID, now, sessionUseForRequest(c, db, claims.Username))
 			if err != nil {
 				if code := models.SessionErrorCode(err); code != "" {
 					if family != nil && family.EndedNow {
 						logging.InfoLogger.Printf("SECURITY: Session ended for user %s: %s", family.Username, family.EndedReason)
 					}
-					clearSessionCookies(c)
-					return JSONErrorCode(c, http.StatusUnauthorized, code, sessionErrorMessage(code))
+					if family == nil || family.EndedAt != nil {
+						clearSessionCookies(c)
+					}
+					return JSONErrorCode(c, http.StatusUnauthorized, code, sessionErrorMessage(code, family))
 				}
 				if err == sql.ErrNoRows {
 					clearSessionCookies(c)
@@ -63,14 +66,6 @@ func SessionLifetimeMiddleware(db *sql.DB) echo.MiddlewareFunc {
 				return JSONError(c, http.StatusUnauthorized, "Session identity does not match")
 			}
 
-			if err := models.RecordSessionActivity(db, claims.FamilyID, time.Now()); err != nil {
-				if err == sql.ErrNoRows {
-					return JSONError(c, http.StatusUnauthorized, "Session not found")
-				}
-				logging.ErrorLogger.Printf("Failed to record session activity: %v", err)
-				return JSONError(c, http.StatusInternalServerError, "Failed to update session")
-			}
-
 			handlerErr := next(c)
 			if handlerErr == nil && c.Path() != "/api/dev-test/sessions/shift-self" {
 				if err := models.RecordSessionActivity(db, claims.FamilyID, time.Now()); err != nil && err != sql.ErrNoRows {
@@ -80,4 +75,51 @@ func SessionLifetimeMiddleware(db *sql.DB) echo.MiddlewareFunc {
 			return handlerErr
 		}
 	}
+}
+
+func sessionUseForRequest(c echo.Context, db *sql.DB, username string) models.SessionUse {
+	switch c.Path() {
+	case "/api/uploads/:sessionId/chunks/:chunkNumber",
+		"/api/uploads/:sessionId/complete",
+		"/api/uploads/:sessionId/status",
+		"/api/uploads/:sessionId":
+		sessionID := c.Param("sessionId")
+		use := models.SessionUse{
+			Transfer:  true,
+			GraceKind: models.GraceKindUpload,
+			GraceID:   sessionID,
+		}
+		if started, ok := uploadSessionStartedAt(db, sessionID, username); ok {
+			use.UploadStarted = &started
+		}
+		return use
+	case "/api/files/:fileId/chunks/:chunkIndex":
+		return models.SessionUse{
+			Transfer:  true,
+			GraceKind: models.GraceKindFile,
+			GraceID:   c.Param("fileId"),
+		}
+	default:
+		return models.SessionUse{}
+	}
+}
+
+func uploadSessionStartedAt(db *sql.DB, sessionID, username string) (time.Time, bool) {
+	var raw string
+	err := db.QueryRow(
+		`SELECT created_at FROM upload_sessions WHERE id = ? AND owner_username = ?`,
+		sessionID, username,
+	).Scan(&raw)
+	if err != nil {
+		return time.Time{}, false
+	}
+	started, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		if started, err = time.Parse(time.RFC3339, raw); err != nil {
+			if started, err = time.Parse("2006-01-02 15:04:05", raw); err != nil {
+				return time.Time{}, false
+			}
+		}
+	}
+	return started, true
 }

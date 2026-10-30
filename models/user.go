@@ -75,9 +75,7 @@ func isAdminUsername(username string) bool {
 // When autoApprove is true (the instance default when REQUIRE_APPROVAL=false),
 // the account is created already approved with approved_by set to the
 // "system" sentinel so the audit trail distinguishes system auto-approval
-// from explicit admin approval. Admin usernames are always approved regardless
-// of autoApprove; their approved_by is left NULL to preserve the existing
-// bootstrap self-approval provenance.
+// from explicit admin approval. Bootstrap sets is_admin after this insert.
 func CreateUser(dbtx DBTX, username, accountKDFSalt string, accountKDFProfile int, autoApprove bool) (*User, error) {
 	// Validate username
 	if err := validateUsername(username); err != nil {
@@ -97,8 +95,11 @@ func CreateUser(dbtx DBTX, username, accountKDFSalt string, accountKDFProfile in
 		return nil, fmt.Errorf("unsupported account KDF profile: %d", accountKDFProfile)
 	}
 
-	isAdmin := isAdminUsername(username)
-	approved := isAdmin || autoApprove
+	// Admin access comes only from the is_admin flag. Bootstrap and the dev
+	// admin seeder set that flag. ADMIN_USERNAMES is a deployment check, not
+	// a second way to grant admin access.
+	isAdmin := false
+	approved := autoApprove
 	folded := utils.FoldUsername(username)
 
 	// Only system-auto-approved non-admin accounts carry the "system" sentinel
@@ -254,20 +255,20 @@ func UserExists(dbtx DBTX, username string) (bool, error) {
 	return count > 0, nil
 }
 
-// HasAdminPrivileges checks if a user has admin privileges
+// HasAdminPrivileges reports the account's is_admin flag.
 func (u *User) HasAdminPrivileges() bool {
-	// Check if user is admin by username
-	return u.IsAdmin || isAdminUsername(u.Username)
+	return u.IsAdmin
 }
 
 // ApproveUser approves a user (admin only)
 func (u *User) ApproveUser(dbtx DBTX, adminUsername string) error {
-	if !isAdminUsername(adminUsername) {
+	admin, err := GetUserByUsername(dbtx, adminUsername)
+	if err != nil || admin == nil || !admin.IsAdmin {
 		return errors.New("unauthorized: admin privileges required")
 	}
 
 	now := time.Now()
-	_, err := dbtx.Exec(`
+	_, err = dbtx.Exec(`
 		UPDATE users 
 		SET is_approved = true, 
 		approved_by = ?,

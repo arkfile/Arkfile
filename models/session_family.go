@@ -44,8 +44,12 @@ type SessionFamily struct {
 }
 
 type sessionActivityEntry struct {
-	acceptedAt  time.Time
-	persistedAt time.Time
+	acceptedAt        time.Time
+	persistedAt       time.Time
+	transferAccepted  time.Time
+	transferPersisted time.Time
+	graceAccepted     time.Time
+	gracePersisted    time.Time
 }
 
 var sessionActivityCache = struct {

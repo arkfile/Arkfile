@@ -257,7 +257,6 @@ func TestDeleteUser_Error_AdminFetchError(t *testing.T) {
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
 
-
 	err := DeleteUser(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
@@ -277,7 +276,6 @@ func TestDeleteUser_BadRequest_MissingUsernameParam(t *testing.T) {
 	adminClaims := &auth.Claims{Username: adminUsername}
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
-
 
 	err := DeleteUser(c)
 	require.NoError(t, err)
@@ -301,7 +299,6 @@ func TestDeleteUser_Error_SelfDeletionAttempt(t *testing.T) {
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
 
-
 	err := DeleteUser(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
@@ -324,7 +321,6 @@ func TestDeleteUser_Error_GetUserFilesError(t *testing.T) {
 	adminClaims := &auth.Claims{Username: adminUsername}
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
-
 
 	mockDB.ExpectBegin()
 
@@ -357,7 +353,6 @@ func TestDeleteUser_Error_StorageRemoveObjectError(t *testing.T) {
 	adminClaims := &auth.Claims{Username: adminUsername}
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
-
 
 	mockDB.ExpectBegin()
 
@@ -397,7 +392,6 @@ func TestDeleteUser_Error_DeleteFileMetadataError(t *testing.T) {
 	adminClaims := &auth.Claims{Username: adminUsername}
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
-
 
 	mockDB.ExpectBegin()
 
@@ -440,7 +434,6 @@ func TestDeleteUser_Error_DeleteFileSharesError(t *testing.T) {
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
 
-
 	mockDB.ExpectBegin()
 
 	fileRows := sqlmock.NewRows([]string{"file_id", "storage_id"})
@@ -478,7 +471,6 @@ func TestDeleteUser_Error_DeleteUserRecordError(t *testing.T) {
 	adminClaims := &auth.Claims{Username: adminUsername}
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
-
 
 	mockDB.ExpectBegin()
 
@@ -559,7 +551,6 @@ func TestUpdateUser_SetAdmin_Success_Admin(t *testing.T) {
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
 
-
 	mockDB.ExpectBegin()
 	mockDB.ExpectQuery("SELECT 1 FROM users WHERE username = ?").WithArgs(targetUsername).WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
 
@@ -605,7 +596,6 @@ func TestUpdateUser_SetStorageLimit_Success_Admin(t *testing.T) {
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
 
-
 	mockDB.ExpectBegin()
 	mockDB.ExpectQuery("SELECT 1 FROM users WHERE username = ?").WithArgs(targetUsername).WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
 
@@ -649,7 +639,6 @@ func TestUpdateUser_Error_TargetUserNotFound(t *testing.T) {
 	adminClaims := &auth.Claims{Username: adminUsername}
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
-
 
 	mockDB.ExpectBegin()
 	mockDB.ExpectQuery("SELECT 1 FROM users WHERE username = ?").
@@ -717,7 +706,6 @@ func TestUpdateUser_Error_InvalidJSON(t *testing.T) {
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
 
-
 	err := UpdateUser(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
@@ -741,7 +729,6 @@ func TestUpdateUser_Error_EmptyBody(t *testing.T) {
 	adminClaims := &auth.Claims{Username: adminUsername}
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
-
 
 	err := UpdateUser(c)
 	require.NoError(t, err)
@@ -770,7 +757,6 @@ func TestUpdateUser_Error_AdminDetailsFetchError(t *testing.T) {
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
 
-
 	err := UpdateUser(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
@@ -793,7 +779,6 @@ func TestUpdateUser_Error_InvalidTargetUsernameParam(t *testing.T) {
 	adminClaims := &auth.Claims{Username: adminUsername}
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
-
 
 	err := UpdateUser(c)
 	require.NoError(t, err)
@@ -896,7 +881,6 @@ func TestUpdateUser_RevokeAccess_AdminFetchError(t *testing.T) {
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
 
-
 	err := UpdateUser(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
@@ -919,7 +903,6 @@ func TestUpdateUser_RevokeAccess_MissingUsernameParam(t *testing.T) {
 	adminClaims := &auth.Claims{Username: adminUsername}
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
-
 
 	err := UpdateUser(c)
 	require.NoError(t, err)
@@ -1099,7 +1082,6 @@ func TestListUsers_AdminFetchError(t *testing.T) {
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
 
-
 	err := ListUsers(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
@@ -1118,7 +1100,6 @@ func TestListUsers_QueryError(t *testing.T) {
 	adminClaims := &auth.Claims{Username: adminUsername}
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
-
 
 	mockDB.ExpectQuery(`SELECT u.username, u.is_approved, u.is_admin`).WillReturnError(fmt.Errorf("DB query error"))
 
@@ -1140,7 +1121,6 @@ func TestListUsers_ScanError(t *testing.T) {
 	adminClaims := &auth.Claims{Username: adminUsername}
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
-
 
 	// Return fewer columns than the aggregated list query expects to trigger a scan error
 	userRows := sqlmock.NewRows([]string{"username", "is_approved", "is_admin", "storage_limit_bytes", "total_storage_bytes", "registration_date", "last_login"}).
@@ -1166,7 +1146,6 @@ func TestListUsers_NoUsers(t *testing.T) {
 	adminClaims := &auth.Claims{Username: adminUsername}
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
-
 
 	// Simulate sql.ErrNoRows for the user list query
 	mockDB.ExpectQuery(`SELECT u.username, u.is_approved, u.is_admin`).WillReturnError(sql.ErrNoRows)
@@ -1226,7 +1205,6 @@ func TestGetPendingUsers_GetUserError(t *testing.T) {
 	adminClaims := &auth.Claims{Username: adminUsername}
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
-
 
 	err := GetPendingUsers(c)
 	require.NoError(t, err)
@@ -1293,6 +1271,14 @@ func TestApproveUser_Success_Admin(t *testing.T) {
 		FROM users WHERE username = ?`).WithArgs(targetUsername).WillReturnRows(
 		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
 			AddRow(2, targetUsername, time.Now(), int64(0), models.DefaultStorageLimit, false, sql.NullString{}, sql.NullTime{}, false))
+
+	mockDB.ExpectQuery(`
+		SELECT id, username, created_at,
+		       total_storage_bytes, storage_limit_bytes,
+		       is_approved, approved_by, approved_at, is_admin
+		FROM users WHERE username = ?`).WithArgs(adminUsername).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+			AddRow(1, adminUsername, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
 
 	// 3. ApproveUser model call (UPDATE)
 	mockDB.ExpectExec(`UPDATE users SET is_approved = true, approved_by = \?, approved_at = \? WHERE id = \?`).
@@ -1469,7 +1455,6 @@ func TestUpdateUserStorageLimit_Success_Admin(t *testing.T) {
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
 
-
 	updateSQL := `UPDATE users SET storage_limit_bytes = \? WHERE username = \?`
 	mockDB.ExpectExec(updateSQL).
 		WithArgs(newLimit, targetUsername).
@@ -1544,7 +1529,6 @@ func TestUpdateUserStorageLimit_AdminFetchError(t *testing.T) {
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
 
-
 	err := UpdateUserStorageLimit(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
@@ -1567,7 +1551,6 @@ func TestUpdateUserStorageLimit_MissingUsernameParam(t *testing.T) {
 	adminClaims := &auth.Claims{Username: adminUsername}
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
-
 
 	err := UpdateUserStorageLimit(c)
 	require.NoError(t, err)
@@ -1592,7 +1575,6 @@ func TestUpdateUserStorageLimit_InvalidBody(t *testing.T) {
 	adminClaims := &auth.Claims{Username: adminUsername}
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
-
 
 	err := UpdateUserStorageLimit(c)
 	require.NoError(t, err)
@@ -1630,7 +1612,6 @@ func TestUpdateUserStorageLimit_NonPositiveLimit(t *testing.T) {
 			adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 			c.Set("user", adminToken)
 
-
 			err := UpdateUserStorageLimit(c)
 			require.NoError(t, err)
 			assert.Equal(t, http.StatusBadRequest, rec.Code)
@@ -1659,7 +1640,6 @@ func TestUpdateUserStorageLimit_DBUpdateError(t *testing.T) {
 	adminClaims := &auth.Claims{Username: adminUsername}
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
-
 
 	updateSQL := `UPDATE users SET storage_limit_bytes = \? WHERE username = \?`
 	mockDB.ExpectExec(updateSQL).

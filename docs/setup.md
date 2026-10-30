@@ -223,7 +223,8 @@ The following accounts are **DEVELOPMENT ONLY** and are automatically blocked in
 
 ### Production Deployment Checklist
 - [ ] Set `ENVIRONMENT=production`
-- [ ] Update `ADMIN_USERNAMES` with production admin accounts only
+- [ ] Update `ADMIN_USERNAMES` with production admin accounts only. This list does not grant admin access. The account's admin flag does
+- [ ] Sign in again with `arkfile-admin` on the server after deploying admin session confinement. Admin routes are not reachable through the public site
 - [ ] Remove all dev admin accounts from environment variables
 - [ ] Verify deployment scripts pass admin validation
 - [ ] Test admin functionality with production accounts

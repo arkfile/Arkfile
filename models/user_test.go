@@ -116,7 +116,7 @@ func TestCreateUser(t *testing.T) {
 	}{
 		{"Regular User, manual approval", "test.user.regular", false, false, false, false},
 		{"Regular User, auto approve", "test.user.autoapproved", true, false, true, false},
-		{"Admin User", "admin.superuser", false, true, true, false},
+		{"Username list does not grant admin", "admin.superuser", false, false, false, false},
 	}
 
 	for _, tc := range testCases {
@@ -234,7 +234,7 @@ func TestHasAdminPrivileges(t *testing.T) {
 		expectAdmin bool
 	}{
 		{"Admin by flag", User{Username: "test.user.admin", IsAdmin: true}, true},
-		{"Admin by username list", User{Username: "adminuser", IsAdmin: false}, true},
+		{"Username list does not grant admin", User{Username: "adminuser", IsAdmin: false}, false},
 		{"Regular user", User{Username: "regularuser", IsAdmin: false}, false},
 	}
 
@@ -254,6 +254,11 @@ func TestApproveUser(t *testing.T) {
 	adminUsername := "approveradmin"
 	os.Setenv("ADMIN_USERNAMES", adminUsername)
 	defer os.Setenv("ADMIN_USERNAMES", originalAdmins)
+
+	approver, err := createUserForTest(db, adminUsername, true)
+	require.NoError(t, err)
+	_, err = db.Exec(`UPDATE users SET is_admin = true WHERE id = ?`, approver.ID)
+	require.NoError(t, err)
 
 	// Create a user to approve
 	userToApprove, err := createUserForTest(db, "pending.user.test", false)
@@ -368,8 +373,12 @@ func TestGetPendingUsers(t *testing.T) {
 	// Manually approve this one
 	_, err = db.Exec("UPDATE users SET is_approved = TRUE WHERE username = ?", approvedUser.Username)
 	require.NoError(t, err)
-	// Admin username should be auto-approved
-	_, err = createUserForTest(db, "adminuser.test", false)
+	// A name in ADMIN_USERNAMES is not an admin until the flag is set.
+	adminUser, err := createUserForTest(db, "adminuser.test", false)
+	require.NoError(t, err)
+	require.False(t, adminUser.IsAdmin)
+	require.False(t, adminUser.IsApproved)
+	_, err = db.Exec("UPDATE users SET is_admin = TRUE, is_approved = TRUE WHERE username = ?", adminUser.Username)
 	require.NoError(t, err)
 
 	// Execute GetPendingUsers

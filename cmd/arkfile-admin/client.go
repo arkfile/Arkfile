@@ -22,9 +22,12 @@ type HTTPClient struct {
 
 // Response represents a generic API response.
 type Response struct {
-	Success bool                   `json:"success"`
-	Message string                 `json:"message"`
-	Data    map[string]interface{} `json:"data"`
+	Success      bool                   `json:"success"`
+	Message      string                 `json:"message"`
+	Error        string                 `json:"error"`
+	Data         map[string]interface{} `json:"data"`
+	Token        string                 `json:"token"`
+	RefreshToken string                 `json:"refresh_token"`
 }
 
 func newHTTPClient(baseURL string, tlsInsecure bool, tlsMinVersion uint16, verbose bool) *HTTPClient {

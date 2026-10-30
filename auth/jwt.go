@@ -27,6 +27,11 @@ const (
 	AudienceReset          = "arkfile-mfa-reset"
 	AudienceReregistration = "arkfile-reregistration"
 	Issuer                 = "arkfile-auth"
+	// LoginKindAdmin matches models.LoginKindAdmin. A temp-tier token carries it
+	// so the mark cannot be added by the client.
+	LoginKindAdmin = "admin"
+	// AdminSessionLimit is the absolute cap for a marked admin login.
+	AdminSessionLimit = 60 * time.Minute
 )
 
 // Echo is the Echo group with authentication middleware applied
@@ -72,12 +77,17 @@ func HashToken(token string) (string, error) {
 // Signed with the temp-tier key; carries aud=arkfile-mfa and requires_mfa=true.
 // Only valid at /api/mfa/{setup,verify,auth} via MFAJWTMiddleware.
 func GenerateTemporaryMFAToken(username string) (string, time.Time, error) {
+	return GenerateTemporaryMFATokenForLogin(username, "")
+}
+
+func GenerateTemporaryMFATokenForLogin(username, loginKind string) (string, time.Time, error) {
 	tokenID := uuid.New().String()
 	expirationTime := time.Now().Add(20 * time.Minute)
 
 	claims := &Claims{
 		Username:    username,
 		RequiresMFA: true,
+		LoginKind:   loginKind,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -96,12 +106,17 @@ func GenerateTemporaryMFAToken(username string) (string, time.Time, error) {
 // GenerateTemporaryResetToken creates a short-lived reset-authorized temporary JWT token.
 // Signed with the temp-tier key; carries aud=arkfile-mfa-reset.
 func GenerateTemporaryResetToken(username string) (string, time.Time, error) {
+	return GenerateTemporaryResetTokenForLogin(username, "")
+}
+
+func GenerateTemporaryResetTokenForLogin(username, loginKind string) (string, time.Time, error) {
 	tokenID := uuid.New().String()
 	expirationTime := time.Now().Add(15 * time.Minute)
 
 	claims := &Claims{
 		Username:    username,
 		RequiresMFA: true,
+		LoginKind:   loginKind,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -122,12 +137,17 @@ func GenerateTemporaryResetToken(username string) (string, time.Time, error) {
 // temp-tier key; carries aud=arkfile-reregistration. Issued when a login lands on
 // an account an operator has flagged for OPAQUE credential rotation.
 func GenerateReregistrationToken(username string) (string, time.Time, error) {
+	return GenerateReregistrationTokenForLogin(username, "")
+}
+
+func GenerateReregistrationTokenForLogin(username, loginKind string) (string, time.Time, error) {
 	tokenID := uuid.New().String()
 	expirationTime := time.Now().Add(15 * time.Minute)
 
 	claims := &Claims{
 		Username:    username,
 		RequiresMFA: true,
+		LoginKind:   loginKind,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -147,8 +167,25 @@ func GenerateReregistrationToken(username string) (string, time.Time, error) {
 // Signed with the full-tier key; carries aud=arkfile-api and requires_mfa=false.
 // Valid at every JWTMiddleware-protected route.
 func GenerateFullAccessToken(username, familyID, loginKind string) (string, time.Time, error) {
+	return GenerateFullAccessTokenForSession(username, familyID, loginKind, time.Time{})
+}
+
+func GenerateFullAccessTokenForSession(username, familyID, loginKind string, sessionStartedAt time.Time) (string, time.Time, error) {
 	tokenID := uuid.New().String()
-	expirationTime := time.Now().Add(utils.GetJWTTokenLifetime())
+	now := time.Now()
+	expirationTime := now.Add(utils.GetJWTTokenLifetime())
+	if loginKind == LoginKindAdmin {
+		mark := now.Add(AdminSessionLimit)
+		if !sessionStartedAt.IsZero() {
+			mark = sessionStartedAt.Add(AdminSessionLimit)
+		}
+		if expirationTime.After(mark) {
+			expirationTime = mark
+		}
+		if !expirationTime.After(now) {
+			expirationTime = now.Add(time.Second)
+		}
+	}
 
 	claims := &Claims{
 		Username:    username,

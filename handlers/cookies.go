@@ -8,6 +8,8 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/arkfile/Arkfile/auth"
+	"github.com/arkfile/Arkfile/models"
 	"github.com/arkfile/Arkfile/utils"
 )
 
@@ -20,10 +22,6 @@ const (
 	CookieRefresh   = "__Host-arkfile-refresh"
 	CookieCSRF      = "__Host-arkfile-csrf"
 )
-
-// refreshCookieMaxAge is the Max-Age for the refresh-token cookie.
-// 7 days gives ample time without indefinite sessions.
-const refreshCookieMaxAge = 7 * 24 * 60 * 60 // seconds
 
 // GenerateCSRFToken returns a 32-byte cryptographically random string encoded
 // as URL-safe base64 (44 chars). This is the value placed in the non-HttpOnly
@@ -43,11 +41,14 @@ func GenerateCSRFToken() (string, error) {
 // All cookies use __Host- prefix: Secure, SameSite=Strict, Path=/, no Domain.
 // Any leftover MFA handoff temp cookie is expired so it cannot linger beside
 // the full session.
-func issueSessionCookies(c echo.Context, fullToken, refreshToken, csrfToken string) {
+func issueSessionCookies(c echo.Context, fullToken, refreshToken, csrfToken string, refreshMaxAge int) {
 	expireCookie(c, CookieTempToken, true)
 
 	jwtLifetime := utils.GetJWTTokenLifetime()
 	jwtMaxAge := int(jwtLifetime.Seconds())
+	if refreshMaxAge < 0 {
+		refreshMaxAge = 0
+	}
 
 	// Full JWT -- HttpOnly, expires with the JWT itself.
 	c.SetCookie(&http.Cookie{
@@ -65,7 +66,7 @@ func issueSessionCookies(c echo.Context, fullToken, refreshToken, csrfToken stri
 		Name:     CookieRefresh,
 		Value:    refreshToken,
 		Path:     "/",
-		MaxAge:   refreshCookieMaxAge,
+		MaxAge:   refreshMaxAge,
 		Secure:   true,
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
@@ -114,6 +115,35 @@ func expireFullSessionCookies(c echo.Context) {
 // (setup, login challenge, post-reset enrollment). The cookie expires with
 // the temp token (20 minutes). Stale full-tier session cookies are expired
 // first so they cannot take precedence in CookieTokenMiddleware.
+func loginKindFromContext(c echo.Context) string {
+	claims, ok := auth.GetClaimsFromContext(c)
+	if !ok || claims.LoginKind != models.LoginKindAdmin {
+		return ""
+	}
+	return models.LoginKindAdmin
+}
+
+func issueLoginSession(c echo.Context, loginKind, fullToken, refreshToken string, sessionStarted time.Time) error {
+	if loginKind == models.LoginKindAdmin {
+		clearSessionCookies(c)
+		return nil
+	}
+	csrfToken, err := GenerateCSRFToken()
+	if err != nil {
+		return err
+	}
+	issueSessionCookies(c, fullToken, refreshToken, csrfToken, models.RefreshCookieMaxAge(sessionStarted, loginKind, time.Now()))
+	return nil
+}
+
+func issueTempCookieForLogin(c echo.Context, tempToken, loginKind string) {
+	if loginKind == models.LoginKindAdmin {
+		clearSessionCookies(c)
+		return
+	}
+	issueTempCookie(c, tempToken)
+}
+
 func issueTempCookie(c echo.Context, tempToken string) {
 	expireFullSessionCookies(c)
 	c.SetCookie(&http.Cookie{

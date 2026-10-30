@@ -43,28 +43,23 @@ func completeMFALogin(c echo.Context, username, authMethod string) error {
 		}
 	}
 
-	session, err := models.CreateRefreshSession(database.DB, username, "")
+	loginKind := loginKindFromContext(c)
+	session, err := models.CreateRefreshSession(database.DB, username, loginKind)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate refresh token for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to create session")
 	}
 
-	token, expirationTime, err := auth.GenerateFullAccessToken(username, session.FamilyID, session.LoginKind)
+	token, expirationTime, err := auth.GenerateFullAccessTokenForSession(username, session.FamilyID, session.LoginKind, session.SessionStartedAt)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate full access token for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to create session")
 	}
 
-	csrfToken, err := GenerateCSRFToken()
-	if err != nil {
+	if err := issueLoginSession(c, session.LoginKind, token, session.RefreshToken, session.SessionStartedAt); err != nil {
 		logging.ErrorLogger.Printf("Failed to generate CSRF token for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to create session")
 	}
-	issueSessionCookies(c, token, session.RefreshToken, csrfToken)
-	c.SetCookie(&http.Cookie{
-		Name: CookieTempToken, Value: "", Path: "/", MaxAge: -1,
-		Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode,
-	})
 
 	database.LogUserAction(username, "completed MFA authentication", "")
 	logging.InfoLogger.Printf("MFA authentication completed for user: %s", username)
@@ -80,10 +75,11 @@ func completeMFALogin(c echo.Context, username, authMethod string) error {
 	)
 
 	return JSONResponse(c, http.StatusOK, "MFA authentication completed", map[string]interface{}{
-		"token":         token,
-		"refresh_token": session.RefreshToken,
-		"expires_at":    expirationTime,
-		"auth_method":   authMethod,
+		"token":              token,
+		"refresh_token":      session.RefreshToken,
+		"expires_at":         expirationTime,
+		"session_expires_at": models.SessionAbsoluteExpiry(session.SessionStartedAt, session.LoginKind).UTC().Format(time.RFC3339),
+		"auth_method":        authMethod,
 		"user": map[string]interface{}{
 			"username":        user.Username,
 			"is_approved":     user.IsApproved,
@@ -97,13 +93,14 @@ func completeMFALogin(c echo.Context, username, authMethod string) error {
 
 // completeMFARegistrationSetup issues full session after enrollment during registration flow.
 func completeMFARegistrationSetup(c echo.Context, username, authMethod string) error {
-	session, err := models.CreateRefreshSession(database.DB, username, "")
+	loginKind := loginKindFromContext(c)
+	session, err := models.CreateRefreshSession(database.DB, username, loginKind)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate refresh token for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to create session")
 	}
 
-	token, expirationTime, err := auth.GenerateFullAccessToken(username, session.FamilyID, session.LoginKind)
+	token, expirationTime, err := auth.GenerateFullAccessTokenForSession(username, session.FamilyID, session.LoginKind, session.SessionStartedAt)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate full access token for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to create session")
@@ -115,26 +112,21 @@ func completeMFARegistrationSetup(c echo.Context, username, authMethod string) e
 		return JSONError(c, http.StatusInternalServerError, "Failed to get user details")
 	}
 
-	csrfToken, err := GenerateCSRFToken()
-	if err != nil {
+	if err := issueLoginSession(c, session.LoginKind, token, session.RefreshToken, session.SessionStartedAt); err != nil {
 		logging.ErrorLogger.Printf("Failed to generate CSRF token for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to create session")
 	}
-	issueSessionCookies(c, token, session.RefreshToken, csrfToken)
-	c.SetCookie(&http.Cookie{
-		Name: CookieTempToken, Value: "", Path: "/", MaxAge: -1,
-		Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode,
-	})
 
 	database.LogUserAction(username, "completed MFA setup", "")
 	logging.InfoLogger.Printf("Registration completed with MFA setup for user: %s", username)
 
 	return JSONResponse(c, http.StatusOK, "MFA setup and registration completed successfully", map[string]interface{}{
-		"enabled":       true,
-		"token":         token,
-		"refresh_token": session.RefreshToken,
-		"expires_at":    expirationTime,
-		"auth_method":   authMethod,
+		"enabled":            true,
+		"token":              token,
+		"refresh_token":      session.RefreshToken,
+		"expires_at":         expirationTime,
+		"session_expires_at": models.SessionAbsoluteExpiry(session.SessionStartedAt, session.LoginKind).UTC().Format(time.RFC3339),
+		"auth_method":        authMethod,
 		"user": map[string]interface{}{
 			"username":        user.Username,
 			"is_approved":     user.IsApproved,

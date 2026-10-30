@@ -44,7 +44,7 @@ The website encrypts, uploads, downloads, and manages your account in your brows
 
 ## How long can I leave Arkfile unused before I need to sign in again?
 
-A sign-in ends after six hours without activity. Using Arkfile, including transferring file chunks, keeps that login active, but automatic token refresh does not. Each browser or command-line login has its own activity clock, so using one device does not keep another device signed in. When the idle limit is reached, Arkfile ends that login and asks you to sign in again.
+A sign-in ends after six hours without activity, or 24 hours after you signed in, whichever comes first. Using Arkfile, including transferring file chunks, keeps that login active, but automatic token refresh does not. Leaving a tab open does not keep you signed in past those limits. Each browser or command-line login has its own clock, so using one device does not keep another device signed in. If a download, upload, or export is already underway when the 24 hours are up, that file can keep going for up to 12 more hours, and then the session ends even if the file has not finished. Any other files you had selected wait until you sign in again. The page or the command-line tool tells you that the session ended and, when some files were still queued, how many did not start.
 
 ## What are file tags?
 

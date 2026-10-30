@@ -33,6 +33,49 @@ const SESSION_MESSAGES: Record<SessionErrorCode, string> = {
   session_logged_out: 'You have been logged out.',
 };
 
+export function absoluteBatchNotice(
+  kind: 'download' | 'upload' | 'export',
+  finished: boolean,
+  remaining: number,
+  nativeExport = false,
+): string {
+  const base = 'Your session ended 24 hours after you signed in.';
+  if (nativeExport) {
+    if (remaining <= 0) {
+      return `${base} Please log in again.`;
+    }
+    const count = remaining === 1
+      ? '1 selected file was not started.'
+      : `${remaining} selected files were not started.`;
+    return `${base} ${count} Please log in again.`;
+  }
+  const verb = kind === 'download' ? 'downloaded' : kind === 'upload' ? 'uploaded' : 'exported';
+  const noun = kind === 'download' ? 'download' : kind === 'upload' ? 'upload' : 'export';
+  if (finished && remaining <= 0) {
+    return `${base} The ${noun} in progress finished. Please log in again.`;
+  }
+  if (finished) {
+    const queued = remaining === 1
+      ? `1 other file in the queue was not ${verb}.`
+      : `${remaining} other files in the queue were not ${verb}.`;
+    return `${base} The ${noun} in progress finished. ${queued} Please log in again.`;
+  }
+  const queued = remaining <= 0
+    ? ''
+    : remaining === 1
+      ? ' 1 other file in the queue was not started.'
+      : ` ${remaining} other files in the queue were not started.`;
+  return `${base} The file in progress did not finish.${queued} Please log in again.`;
+}
+
+export function replaceSessionNotice(message: string): void {
+  try {
+    sessionStorage.setItem(SESSION_NOTICE_KEY, message);
+  } catch {
+    // The visible notice still updates when storage is unavailable.
+  }
+}
+
 function isSessionErrorCode(value: unknown): value is SessionErrorCode {
   return value === 'session_idle' || value === 'session_absolute' || value === 'session_logged_out';
 }

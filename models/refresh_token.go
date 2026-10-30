@@ -88,7 +88,7 @@ func CreateRefreshSession(db *sql.DB, username, loginKind string) (*RefreshSessi
 	}
 
 	createdAt := time.Now()
-	expiresAt := createdAt.Add(30 * 24 * time.Hour)
+	expiresAt := SessionRefreshCeiling(createdAt, loginKind)
 	var storedLoginKind interface{}
 	if loginKind != "" {
 		storedLoginKind = loginKind
@@ -145,6 +145,17 @@ func CreateRefreshSession(db *sql.DB, username, loginKind string) (*RefreshSessi
 // before rotating the refresh token. The returned session preserves the family
 // identity and login kind across rotation.
 func ValidateRefreshSession(db *sql.DB, tokenString string) (*RefreshSession, error) {
+	return validateRefreshSession(db, tokenString, SessionUse{Refresh: true, DirectLocal: true})
+}
+
+// ValidateRefreshSessionUse rotates a refresh token after the lifetime checks.
+// Marked admin refreshes require DirectLocal and are refused when FromCookie is set.
+func ValidateRefreshSessionUse(db *sql.DB, tokenString string, use SessionUse) (*RefreshSession, error) {
+	use.Refresh = true
+	return validateRefreshSession(db, tokenString, use)
+}
+
+func validateRefreshSession(db *sql.DB, tokenString string, use SessionUse) (*RefreshSession, error) {
 	hash := hashRefreshToken(tokenString)
 
 	debugMode := strings.ToLower(os.Getenv("DEBUG_MODE"))
@@ -203,7 +214,7 @@ func ValidateRefreshSession(db *sql.DB, tokenString string) (*RefreshSession, er
 	}
 
 	now := time.Now()
-	family, familyErr := CheckSessionFamily(db, familyID, now)
+	family, familyErr := DecideSessionUse(db, familyID, now, use)
 	if familyErr != nil {
 		session := &RefreshSession{Username: username, FamilyID: familyID}
 		if family != nil {
@@ -235,7 +246,7 @@ func ValidateRefreshSession(db *sql.DB, tokenString string) (*RefreshSession, er
 		return nil, err
 	}
 
-	newExpiresAt := now.Add(14 * 24 * time.Hour)
+	newExpiresAt := SessionRefreshCeiling(family.SessionStartedAt, family.LoginKind)
 
 	tx, err := db.Begin()
 	if err != nil {
@@ -282,7 +293,7 @@ func ValidateRefreshSession(db *sql.DB, tokenString string) (*RefreshSession, er
 			return nil, err
 		}
 
-		if endedFamily, endedErr := CheckSessionFamily(db, familyID, time.Now()); SessionErrorCode(endedErr) != "" {
+		if endedFamily, endedErr := DecideSessionUse(db, familyID, time.Now(), use); SessionErrorCode(endedErr) != "" {
 			return &RefreshSession{
 				Username:         username,
 				FamilyID:         familyID,

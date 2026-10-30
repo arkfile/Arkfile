@@ -73,6 +73,7 @@ func setupRoutes(e *echo.Echo) {
 	auth.Echo.Use(auth.JWTMiddleware())
 	auth.Echo.Use(auth.TokenRevocationMiddleware(database.DB))
 	auth.Echo.Use(handlers.SessionLifetimeMiddleware(database.DB))
+	auth.Echo.Use(handlers.MarkedSessionMiddleware)
 	auth.Echo.Use(handlers.RequireApproved)
 
 	// Register all routes
@@ -154,6 +155,12 @@ func main() {
 		for range ticker.C {
 			if err := auth.CleanupExpiredSessions(database.DB); err != nil {
 				logging.ErrorLogger.Printf("Failed to cleanup expired sessions: %v", err)
+			}
+			if err := models.CleanupEndedSessionFamilies(database.DB, time.Now()); err != nil {
+				logging.ErrorLogger.Printf("Failed to cleanup ended session families: %v", err)
+			}
+			if err := auth.CleanupExpiredTokens(database.DB); err != nil {
+				logging.ErrorLogger.Printf("Failed to cleanup expired revoked tokens: %v", err)
 			}
 		}
 	}()
@@ -550,6 +557,9 @@ func runSchemaMigrations() {
 
 	if err := models.BackfillSessionFamilies(database.DB, time.Now()); err != nil {
 		log.Fatalf("Migration: Backfill session families failed: %v", err)
+	}
+	if err := models.ApplyAbsoluteSessionLimits(database.DB, time.Now()); err != nil {
+		log.Fatalf("Migration: Apply session lifetime limits failed: %v", err)
 	}
 	log.Printf("Migration: Backfill session families completed")
 

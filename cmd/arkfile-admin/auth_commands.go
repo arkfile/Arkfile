@@ -12,6 +12,7 @@ import (
 
 	"github.com/arkfile/Arkfile/auth"
 	"github.com/arkfile/Arkfile/cli/mfa"
+	"github.com/arkfile/Arkfile/cli/reregistration"
 	"github.com/arkfile/Arkfile/crypto"
 	"github.com/arkfile/Arkfile/utils"
 )
@@ -390,48 +391,73 @@ EXAMPLES:
 		"credential_request": base64.StdEncoding.EncodeToString(credentialRequest),
 	}
 
+	var loginResp *Response
+	var exportKey []byte
 	authStartResp, err := client.makeRequest("POST", "/api/admin/login/response", authStartReq, "")
-	if err != nil {
-		return fmt.Errorf("admin authentication start failed: %w", err)
-	}
+	if err != nil && authStartResp != nil && authStartResp.Error == reregistration.RequiredCode {
+		serverID, serr := client.fetchOpaqueServerID()
+		if serr != nil {
+			return fmt.Errorf("failed to fetch OPAQUE server identity: %w", serr)
+		}
+		fmt.Println("This admin account needs a one-time security re-registration on this server.")
+		finalData, rerr := reregistration.Perform(
+			func(method, path string, body map[string]string, token string) (map[string]interface{}, error) {
+				resp, reqErr := client.makeRequest(method, path, body, token)
+				if resp == nil {
+					return nil, reqErr
+				}
+				return resp.Data, reqErr
+			},
+			"/api/admin/reregister/response",
+			"/api/admin/reregister/finalize",
+			*usernameFlag,
+			[]byte(password),
+			authStartResp.Data,
+			serverID,
+		)
+		if rerr != nil {
+			return rerr
+		}
+		loginResp = &Response{Success: true, Data: finalData}
+	} else {
+		if err != nil {
+			return fmt.Errorf("admin authentication start failed: %w", err)
+		}
 
-	sessionID, ok := authStartResp.Data["session_id"].(string)
-	if !ok {
-		return fmt.Errorf("invalid session ID in response")
-	}
+		sessionID, ok := authStartResp.Data["session_id"].(string)
+		if !ok {
+			return fmt.Errorf("invalid session ID in response")
+		}
 
-	credentialResponseStr, ok := authStartResp.Data["credential_response"].(string)
-	if !ok {
-		return fmt.Errorf("invalid credential response")
-	}
+		credentialResponseStr, ok := authStartResp.Data["credential_response"].(string)
+		if !ok {
+			return fmt.Errorf("invalid credential response")
+		}
 
-	// Decode base64 credential response
-	credentialResponse, err := base64.StdEncoding.DecodeString(credentialResponseStr)
-	if err != nil {
-		return fmt.Errorf("failed to decode credential response: %w", err)
-	}
+		credentialResponse, decErr := base64.StdEncoding.DecodeString(credentialResponseStr)
+		if decErr != nil {
+			return fmt.Errorf("failed to decode credential response: %w", decErr)
+		}
 
-	// Step 3: Recover credentials and create auth token. idS is fetched from
-	// the server so all OPAQUE participants bind the same server identity.
-	serverID, err := client.fetchOpaqueServerID()
-	if err != nil {
-		return fmt.Errorf("failed to fetch OPAQUE server identity: %w", err)
-	}
-	_, authU, exportKey, err := auth.ClientRecoverCredentials(clientState, credentialResponse, *usernameFlag, serverID)
-	if err != nil {
-		return fmt.Errorf("incorrect password or account not found")
-	}
-
-	// Step 4: Finalize authentication
-	authFinishReq := map[string]string{
-		"session_id": sessionID,
-		"username":   *usernameFlag,
-		"auth_u":     base64.StdEncoding.EncodeToString(authU),
-	}
-
-	loginResp, err := client.makeRequest("POST", "/api/admin/login/finalize", authFinishReq, "")
-	if err != nil {
-		return fmt.Errorf("admin authentication finalization failed: %w", err)
+		serverID, serr := client.fetchOpaqueServerID()
+		if serr != nil {
+			return fmt.Errorf("failed to fetch OPAQUE server identity: %w", serr)
+		}
+		var authU []byte
+		var recErr error
+		_, authU, exportKey, recErr = auth.ClientRecoverCredentials(clientState, credentialResponse, *usernameFlag, serverID)
+		if recErr != nil {
+			return fmt.Errorf("incorrect password or account not found")
+		}
+		authFinishReq := map[string]string{
+			"session_id": sessionID,
+			"username":   *usernameFlag,
+			"auth_u":     base64.StdEncoding.EncodeToString(authU),
+		}
+		loginResp, err = client.makeRequest("POST", "/api/admin/login/finalize", authFinishReq, "")
+		if err != nil {
+			return fmt.Errorf("admin authentication finalization failed: %w", err)
+		}
 	}
 
 	// Extract data from login response
@@ -563,6 +589,13 @@ EXAMPLES:
 
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	if session, err := loadAdminSession(config.TokenFile); err == nil && session.AccessToken != "" {
+		client := newHTTPClient(config.ServerURL, config.TLSInsecure, config.TLSMinVersion, false)
+		_, _ = client.makeRequest("POST", "/api/logout", map[string]string{
+			"refresh_token": session.RefreshToken,
+		}, session.AccessToken)
 	}
 
 	if err := os.Remove(config.TokenFile); err != nil {

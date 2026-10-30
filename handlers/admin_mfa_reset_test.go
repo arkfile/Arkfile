@@ -221,7 +221,7 @@ func TestAdminResetUserMFA_Stack_RejectsWithoutConfirm(t *testing.T) {
 	insertAdminMFAResetUser(t, database.DB, adminUsername, true)
 	seedTargetMFA(t, adminUsername)
 
-	token, _, err := auth.GenerateFullAccessToken(adminUsername, "admin-reset-family-1", "")
+	token, _, err := auth.GenerateFullAccessToken(adminUsername, "admin-reset-family-1", auth.LoginKindAdmin)
 	require.NoError(t, err)
 
 	rec, err := invokeAdminMFAReset(t, "some-user", token, map[string]interface{}{})
@@ -244,7 +244,7 @@ func TestAdminResetUserMFA_Stack_ScopedResetByCredentialID(t *testing.T) {
 		targetUsername,
 	).Scan(&credentialID))
 
-	token, _, err := auth.GenerateFullAccessToken(adminUsername, "admin-reset-family-2", "")
+	token, _, err := auth.GenerateFullAccessToken(adminUsername, "admin-reset-family-2", auth.LoginKindAdmin)
 	require.NoError(t, err)
 
 	rec, err := invokeAdminMFAReset(t, targetUsername, token, map[string]interface{}{
@@ -270,7 +270,7 @@ func TestAdminResetUserMFA_Stack_AdminResetsTarget(t *testing.T) {
 	seedTargetMFA(t, adminUsername)
 	seedTargetMFA(t, targetUsername)
 
-	token, _, err := auth.GenerateFullAccessToken(adminUsername, "admin-reset-family-3", "")
+	token, _, err := auth.GenerateFullAccessToken(adminUsername, "admin-reset-family-3", auth.LoginKindAdmin)
 	require.NoError(t, err)
 
 	rec, err := invokeAdminMFAReset(t, targetUsername, token, map[string]interface{}{"confirm": true})
@@ -299,7 +299,7 @@ func TestAdminResetUserMFA_Stack_RejectsNonAdmin(t *testing.T) {
 	httpErr, ok := err.(*echo.HTTPError)
 	require.True(t, ok)
 	assert.Equal(t, http.StatusForbidden, httpErr.Code)
-	assert.Equal(t, "Admin privileges required", httpErr.Message)
+	assert.Equal(t, "Admin session required", httpErr.Message)
 }
 
 func TestAdminResetUserMFA_Handler_RequiresConfirm(t *testing.T) {

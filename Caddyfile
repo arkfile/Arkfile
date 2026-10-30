@@ -25,6 +25,11 @@ your.domain.example {
 		key_type p384
 	}
 
+	# Admin and bootstrap routes are reachable only from the server itself.
+	# /api/admin-contacts stays public and does not match these paths.
+	@local_only path /api/admin /api/admin/* /api/bootstrap/*
+	respond @local_only 404
+
 	header {
 		# HSTS: Caddy owns TLS termination so it is the right place for this header.
 		# All other security headers (CSP, X-Frame-Options, etc.) are set by the

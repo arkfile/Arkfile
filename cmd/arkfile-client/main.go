@@ -473,49 +473,20 @@ func (c *HTTPClient) makeRequest(method, endpoint string, payload interface{}, t
 	}
 	populateResponseData(responseData, &apiResp)
 
-	// Extract fields from Data map if present
-	if apiResp.Data != nil {
-		if val, ok := apiResp.Data["requires_mfa"].(bool); ok {
-			apiResp.RequiresMFA = val
-		}
-		if val, ok := apiResp.Data["temp_token"].(string); ok {
-			apiResp.TempToken = val
-		}
-		if val, ok := apiResp.Data["session_key"].(string); ok {
-			apiResp.SessionKey = val
-		}
-		if val, ok := apiResp.Data["token"].(string); ok {
-			apiResp.Token = val
-		}
-		if val, ok := apiResp.Data["refresh_token"].(string); ok {
-			apiResp.RefreshToken = val
-		}
-		if val, ok := apiResp.Data["session_id"].(string); ok {
-			apiResp.SessionID = val
-		}
-		if val, ok := apiResp.Data["file_id"].(string); ok {
-			apiResp.FileID = val
-		}
-		if val, ok := apiResp.Data["storage_id"].(string); ok {
-			apiResp.StorageID = val
-		}
-		if val, ok := apiResp.Data["encrypted_stream_sha256"].(string); ok {
-			apiResp.EncryptedStreamSHA256 = val
-		}
-		if val, ok := apiResp.Data["expires_at"].(string); ok {
-			if t, err := time.Parse(time.RFC3339, val); err == nil {
-				apiResp.ExpiresAt = t
-			} else if t, err := time.Parse(time.RFC3339Nano, val); err == nil {
-				apiResp.ExpiresAt = t
-			}
-		}
-	}
+	applyResponseDataFields(&apiResp)
 
 	if resp.StatusCode >= 400 {
 		if apiResp.Error == "session_idle" {
 			clearExpiredLocalSession(nil)
 			return &apiResp, fmt.Errorf(
 				"HTTP %d: session ended after 6 hours without activity. Please run: arkfile-client login --username <user>",
+				resp.StatusCode,
+			)
+		}
+		if apiResp.Error == "session_absolute" {
+			clearExpiredLocalSession(nil)
+			return &apiResp, fmt.Errorf(
+				"HTTP %d: session ended 24 hours after login. Please run: arkfile-client login --username <user>",
 				resp.StatusCode,
 			)
 		}
@@ -527,6 +498,48 @@ func (c *HTTPClient) makeRequest(method, endpoint string, payload interface{}, t
 	}
 
 	return &apiResp, nil
+}
+
+// applyResponseDataFields copies the login and MFA fields that handlers nest
+// under data onto the Response fields the rest of the client reads.
+func applyResponseDataFields(apiResp *Response) {
+	if apiResp == nil || apiResp.Data == nil {
+		return
+	}
+	if val, ok := apiResp.Data["requires_mfa"].(bool); ok {
+		apiResp.RequiresMFA = val
+	}
+	if val, ok := apiResp.Data["temp_token"].(string); ok {
+		apiResp.TempToken = val
+	}
+	if val, ok := apiResp.Data["session_key"].(string); ok {
+		apiResp.SessionKey = val
+	}
+	if val, ok := apiResp.Data["token"].(string); ok {
+		apiResp.Token = val
+	}
+	if val, ok := apiResp.Data["refresh_token"].(string); ok {
+		apiResp.RefreshToken = val
+	}
+	if val, ok := apiResp.Data["session_id"].(string); ok {
+		apiResp.SessionID = val
+	}
+	if val, ok := apiResp.Data["file_id"].(string); ok {
+		apiResp.FileID = val
+	}
+	if val, ok := apiResp.Data["storage_id"].(string); ok {
+		apiResp.StorageID = val
+	}
+	if val, ok := apiResp.Data["encrypted_stream_sha256"].(string); ok {
+		apiResp.EncryptedStreamSHA256 = val
+	}
+	if val, ok := apiResp.Data["expires_at"].(string); ok {
+		if t, err := time.Parse(time.RFC3339, val); err == nil {
+			apiResp.ExpiresAt = t
+		} else if t, err := time.Parse(time.RFC3339Nano, val); err == nil {
+			apiResp.ExpiresAt = t
+		}
+	}
 }
 
 // populateResponseData normalizes API payloads into Response.Data.
@@ -1510,6 +1523,18 @@ func (sessionIdleError) Unwrap() error {
 
 var errSessionIdle error = sessionIdleError{}
 
+type sessionAbsoluteError struct{}
+
+func (sessionAbsoluteError) Error() string {
+	return "session ended 24 hours after login. Please run: arkfile-client login --username <user>"
+}
+
+func (sessionAbsoluteError) Unwrap() error {
+	return errAuthExpired
+}
+
+var errSessionAbsolute error = sessionAbsoluteError{}
+
 // errTooManyInProgressUploads matches the server's stable error code
 // 'too_many_in_progress_uploads' (HTTP 429) introduced with the per-user
 // in-progress upload session cap. Fatal for the current batch loop.
@@ -1583,6 +1608,10 @@ func refreshSessionToken(client *HTTPClient, session *AuthSession) error {
 		if resp != nil && resp.Error == "session_idle" {
 			clearExpiredLocalSession(session)
 			return errSessionIdle
+		}
+		if resp != nil && resp.Error == "session_absolute" {
+			clearExpiredLocalSession(session)
+			return errSessionAbsolute
 		}
 		// makeRequest returns an error for any 4xx/5xx; treat all of
 		// these as terminal for the refresh flow.
@@ -1723,6 +1752,10 @@ func (c *HTTPClient) makeRequestWithSession(method, endpoint string, payload int
 	if resp != nil && resp.Error == "session_idle" {
 		clearExpiredLocalSession(session)
 		return resp, errSessionIdle
+	}
+	if resp != nil && resp.Error == "session_absolute" {
+		clearExpiredLocalSession(session)
+		return resp, errSessionAbsolute
 	}
 
 	// One refresh-and-retry attempt.

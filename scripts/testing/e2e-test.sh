@@ -3418,6 +3418,8 @@ run_shares() {
 run_admin_operations() {
     group "Admin operations"
 
+    admin_login_with_totp "Admin login before admin operations" >/dev/null
+
     scenario "Retrieving system status via admin CLI"
 
     local system_status_output
@@ -3779,6 +3781,7 @@ run_security_rate_limits() {
 # configured by dev-reset.sh (seaweedfs-primary + seaweedfs-secondary).
 # Requires active admin session.
 run_storage_replication() {
+    admin_login_with_totp "Admin login before storage replication" >/dev/null
     group "Storage replication"
 
     # Helper: poll task-status until completed/failed, timeout after 60s
@@ -3956,6 +3959,7 @@ run_storage_replication() {
 # The test user has ~6 uploaded files from earlier groups, well above the
 # MiB baseline, so a tick produces a non-zero accumulator immediately.
 run_billing() {
+    admin_login_with_totp "Admin login before billing" >/dev/null
     group "Billing"
 
     # Suppress the tick-now CLI pre-flight warning so safe_exec captures clean JSON.
@@ -5196,6 +5200,8 @@ run_registration_throttle() {
 run_enable_auto_approval() {
     group "Enable auto-approval (post-test setup)"
 
+    admin_login_with_totp "Admin login before approval policy" >/dev/null
+
     # Required setup for subsequent Playwright registration and manual testing
     # in the dev-reset environment: set require_approval=false so newly
     # registered users are auto-approved. Failure fails the suite via
@@ -5295,6 +5301,88 @@ run_session_idle_enforcement() {
         record_test "CLI removes idle session file" "FAIL"
     fi
     assert_agent_key_cleared "CLI clears agent key after idle expiry"
+}
+
+run_session_absolute_and_admin_scope() {
+    group "Session absolute cap and admin scope"
+
+    user_login_with_totp "User login for absolute session test" >/dev/null
+    admin_login_with_totp "Admin login for scope test" >/dev/null
+
+    local user_token admin_token
+    user_token=$(jq -r '.access_token // empty' "$HOME/.arkfile-session.json" 2>/dev/null)
+    admin_token=$(jq -r '.access_token // empty' "$HOME/.arkfile-admin-session.json" 2>/dev/null)
+    if [ -z "$user_token" ] || [ -z "$admin_token" ]; then
+        record_test "Absolute session test tokens available" "FAIL"
+        return
+    fi
+    record_test "Absolute session test tokens available" "PASS"
+
+    local scope_body scope_code
+    scope_body=$(curl -sk -w $'\n%{http_code}' \
+        -H "Authorization: Bearer $user_token" \
+        "$SERVER_URL/api/admin/users")
+    scope_code=$(printf '%s\n' "$scope_body" | tail -n 1)
+    if [ "$scope_code" = "403" ]; then
+        record_test "Unmarked login refused on admin route" "PASS"
+    else
+        error "Unmarked admin-route response was HTTP $scope_code: $scope_body"
+        record_test "Unmarked login refused on admin route" "FAIL"
+    fi
+
+    local files_body files_code
+    files_body=$(curl -sk -w $'\n%{http_code}' \
+        -H "Authorization: Bearer $admin_token" \
+        "$SERVER_URL/api/files")
+    files_code=$(printf '%s\n' "$files_body" | tail -n 1)
+    if [ "$files_code" = "403" ]; then
+        record_test "Marked admin login refused on files route" "PASS"
+    else
+        error "Marked files-route response was HTTP $files_code: $files_body"
+        record_test "Marked admin login refused on files route" "FAIL"
+    fi
+
+    local peer_body peer_code
+    peer_body=$(curl -sk -w $'\n%{http_code}' \
+        -H "Authorization: Bearer $admin_token" \
+        -H "X-Arkfile-Peer: 203.0.113.7" \
+        "$SERVER_URL/api/admin/users")
+    peer_code=$(printf '%s\n' "$peer_body" | tail -n 1)
+    if [ "$peer_code" = "403" ]; then
+        record_test "Admin request with proxy header refused" "PASS"
+    else
+        error "Proxy-header admin response was HTTP $peer_code: $peer_body"
+        record_test "Admin request with proxy header refused" "FAIL"
+    fi
+
+    local shift_body shift_code
+    shift_body=$(curl -sk -w $'\n%{http_code}' -X POST \
+        -H "Authorization: Bearer $admin_token" \
+        -H "Content-Type: application/json" \
+        -d "{\"username\":\"$TEST_USERNAME\",\"age_seconds\":90000}" \
+        "$SERVER_URL/api/admin/dev-test/sessions/shift")
+    shift_code=$(printf '%s\n' "$shift_body" | tail -n 1)
+    shift_body=$(printf '%s\n' "$shift_body" | sed '$d')
+    if [ "$shift_code" = "200" ] && echo "$shift_body" | grep -q '"families_shifted"'; then
+        record_test "Shift user session beyond 24 hours" "PASS"
+    else
+        error "Absolute clock shift failed: HTTP $shift_code"
+        echo "$shift_body"
+        record_test "Shift user session beyond 24 hours" "FAIL"
+    fi
+
+    local absolute_body absolute_code
+    absolute_body=$(curl -sk -w $'\n%{http_code}' \
+        -H "Authorization: Bearer $user_token" \
+        "$SERVER_URL/api/files")
+    absolute_code=$(printf '%s\n' "$absolute_body" | tail -n 1)
+    absolute_body=$(printf '%s\n' "$absolute_body" | sed '$d')
+    if [ "$absolute_code" = "401" ] && echo "$absolute_body" | grep -q '"error":"session_absolute"'; then
+        record_test "24-hour cap rejects still-valid access token" "PASS"
+    else
+        error "Absolute cap response was HTTP $absolute_code: $absolute_body"
+        record_test "24-hour cap rejects still-valid access token" "FAIL"
+    fi
 }
 
 run_teardown() {
@@ -5519,6 +5607,7 @@ main() {
         run_subscriptions
         run_registration_throttle
         run_session_idle_enforcement
+        run_session_absolute_and_admin_scope
         run_enable_auto_approval
         run_teardown
     )

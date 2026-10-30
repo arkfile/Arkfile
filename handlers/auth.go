@@ -39,8 +39,10 @@ func RefreshToken(c echo.Context) error {
 
 	// Browser clients send the refresh token via the __Host-arkfile-refresh cookie;
 	// CLI clients send it in the JSON body. Accept either, prefer cookie.
+	fromCookie := false
 	if cookieVal, err := c.Cookie(CookieRefresh); err == nil && cookieVal.Value != "" {
 		request.RefreshToken = cookieVal.Value
+		fromCookie = true
 	}
 
 	if request.RefreshToken == "" {
@@ -49,14 +51,24 @@ func RefreshToken(c echo.Context) error {
 
 	// Validate and rotate the refresh token atomically.
 	// On reuse detection, ValidateRefreshSession revokes the family and all user JWTs internally.
-	session, err := models.ValidateRefreshSession(database.DB, request.RefreshToken)
+	session, err := models.ValidateRefreshSessionUse(database.DB, request.RefreshToken, models.SessionUse{
+		DirectLocal: DirectLocalConnection(c),
+		FromCookie:  fromCookie,
+	})
 	if err != nil {
+		if errors.Is(err, models.ErrAdminSessionNotLocal) {
+			return JSONError(c, http.StatusForbidden, "Admin session is only valid on this server")
+		}
 		if code := models.SessionErrorCode(err); code != "" {
 			if session != nil && session.SessionEndedNow {
 				logging.InfoLogger.Printf("SECURITY: Session ended for user %s: %s", session.Username, strings.TrimPrefix(code, "session_"))
 			}
+			var ended *models.SessionFamily
+			if session != nil {
+				ended = &models.SessionFamily{LoginKind: session.LoginKind, EndedReason: strings.TrimPrefix(code, "session_")}
+			}
 			clearSessionCookies(c)
-			return JSONErrorCode(c, http.StatusUnauthorized, code, sessionErrorMessage(code))
+			return JSONErrorCode(c, http.StatusUnauthorized, code, sessionErrorMessage(code, ended))
 		}
 		if err == models.ErrRefreshTokenExpired {
 			return JSONError(c, http.StatusUnauthorized, "Refresh token expired")
@@ -76,32 +88,37 @@ func RefreshToken(c echo.Context) error {
 		logging.ErrorLogger.Printf("Failed to load user for refresh %s: %v", session.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to refresh token")
 	}
-	if !user.IsApproved && !user.HasAdminPrivileges() {
+	if !user.IsApproved && !user.IsAdmin {
 		return JSONError(c, http.StatusForbidden, "Account pending approval")
 	}
 
 	// Generate new full-tier JWT.
-	token, expirationTime, err := auth.GenerateFullAccessToken(session.Username, session.FamilyID, session.LoginKind)
+	token, expirationTime, err := auth.GenerateFullAccessTokenForSession(session.Username, session.FamilyID, session.LoginKind, session.SessionStartedAt)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate token for %s: %v", session.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to create new token")
 	}
 
-	// Issue updated cookies for browser clients; CLI clients use the JSON body.
-	csrfToken, err := GenerateCSRFToken()
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate CSRF token for %s: %v", session.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to create new token")
+	// Marked admin logins receive tokens only in the JSON body.
+	if session.LoginKind == models.LoginKindAdmin {
+		clearSessionCookies(c)
+	} else {
+		csrfToken, csrfErr := GenerateCSRFToken()
+		if csrfErr != nil {
+			logging.ErrorLogger.Printf("Failed to generate CSRF token for %s: %v", session.Username, csrfErr)
+			return JSONError(c, http.StatusInternalServerError, "Failed to create new token")
+		}
+		issueSessionCookies(c, token, session.RefreshToken, csrfToken, models.RefreshCookieMaxAge(session.SessionStartedAt, session.LoginKind, time.Now()))
 	}
-	issueSessionCookies(c, token, session.RefreshToken, csrfToken)
 
 	database.LogUserAction(session.Username, "refreshed token", "")
 	logging.InfoLogger.Printf("Token refreshed for user: %s", session.Username)
 
 	return JSONResponse(c, http.StatusOK, "Token refreshed successfully", map[string]interface{}{
-		"token":         token,
-		"refresh_token": session.RefreshToken,
-		"expires_at":    expirationTime,
+		"token":              token,
+		"refresh_token":      session.RefreshToken,
+		"expires_at":         expirationTime,
+		"session_expires_at": models.SessionAbsoluteExpiry(session.SessionStartedAt, session.LoginKind).UTC().Format(time.RFC3339),
 	})
 }
 
@@ -171,12 +188,15 @@ func Logout(c echo.Context) error {
 	return JSONResponse(c, http.StatusOK, "Logged out successfully.", nil)
 }
 
-func sessionErrorMessage(code string) string {
+func sessionErrorMessage(code string, family *models.SessionFamily) string {
 	switch code {
 	case models.SessionErrorIdle:
 		return "Your session ended after 6 hours without activity. Please log in again."
 	case models.SessionErrorAbsolute:
-		return "Your session reached its maximum lifetime. Please log in again."
+		if family != nil && family.LoginKind == models.LoginKindAdmin {
+			return "admin session ended 60 minutes after login, please login again"
+		}
+		return "Your session ended 24 hours after you signed in. Please log in again."
 	case models.SessionErrorLoggedOut:
 		return "This session has been logged out."
 	default:
@@ -564,7 +584,24 @@ func OpaqueAuthResponse(c echo.Context) error {
 				return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 			}
 			if flagged {
-				return respondAccountRequiresReregistration(c, request.Username)
+				user, userErr := models.GetUserByUsername(database.DB, request.Username)
+				if userErr != nil && userErr != sql.ErrNoRows {
+					logging.ErrorLogger.Printf("Failed to load flagged account %s: %v", request.Username, userErr)
+					return JSONError(c, http.StatusInternalServerError, "Authentication failed")
+				}
+				// A flagged admin gets the same generic failure as any other
+				// missing password record. The public login must not say which
+				// accounts are admins.
+				if userErr == nil && user.IsAdmin {
+					var fakeErr error
+					userRecord, fakeErr = auth.DeriveFakeUserRecord(request.Username)
+					if fakeErr != nil {
+						logging.ErrorLogger.Printf("Failed to derive fake user record for %s: %v", request.Username, fakeErr)
+						return JSONError(c, http.StatusInternalServerError, "Authentication failed")
+					}
+				} else {
+					return respondAccountRequiresReregistration(c, request.Username, "")
+				}
 			}
 			// Derive fake user record to prevent account enumeration
 			var fakeErr error
@@ -1026,24 +1063,14 @@ func RecoverWithBackupCode(c echo.Context) error {
 	}
 
 	// Success: Issue a short-lived Reset token with "arkfile-mfa-reset" audience.
-	resetToken, expiresAt, err := auth.GenerateTemporaryResetToken(username)
+	resetKind := loginKindFromContext(c)
+	resetToken, expiresAt, err := auth.GenerateTemporaryResetTokenForLogin(username, resetKind)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate reset token for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to create reset session")
 	}
 
-	// Browser client support: write temp cookie and drop any full-tier session
-	// that would shadow it in CookieTokenMiddleware.
-	expireFullSessionCookies(c)
-	c.SetCookie(&http.Cookie{
-		Name:     CookieTempToken,
-		Value:    resetToken,
-		Path:     "/",
-		Expires:  expiresAt,
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
-	})
+	issueTempCookieForLogin(c, resetToken, resetKind)
 
 	database.LogUserAction(username, "initiated recovery with backup code", "")
 	logging.InfoLogger.Printf("SECURITY: Backup code recovery session generated for user: %s", username)
@@ -1113,12 +1140,13 @@ func MFAReset(c echo.Context) error {
 	logging.InfoLogger.Printf("SECURITY: MFA %s reset complete for user: %s", methodType, username)
 
 	// Issue MFA-tier temp token so enrollment can complete after reset.
-	mfaToken, _, err := auth.GenerateTemporaryMFAToken(username)
+	resetKind := loginKindFromContext(c)
+	mfaToken, _, err := auth.GenerateTemporaryMFATokenForLogin(username, resetKind)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate MFA verify token after reset for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "MFA reset succeeded but verify session could not be created")
 	}
-	issueTempCookie(c, mfaToken)
+	issueTempCookieForLogin(c, mfaToken, resetKind)
 
 	if methodType == auth.MFAMethodWebAuthn {
 		msg := "Security key reset staged. Enroll your replacement key before your session expires."

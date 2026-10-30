@@ -102,10 +102,10 @@ func TestCreateRefreshToken(t *testing.T) {
 	assert.Equal(t, username, dbUsername)
 	assert.NotEmpty(t, familyID, "family_id must be populated")
 
-	// Expiry must be around 30 days from now.
+	// Expiry is the 36-hour refresh ceiling from sign-in.
 	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05"} {
 		if expiresAt, parseErr := time.Parse(layout, expiresAtStr); parseErr == nil {
-			expected := time.Now().Add(30 * 24 * time.Hour)
+			expected := time.Now().Add(SessionHardCeiling)
 			assert.WithinDuration(t, expected, expiresAt, 10*time.Second)
 			break
 		}

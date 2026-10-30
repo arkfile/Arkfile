@@ -58,6 +58,89 @@ func peerAddrIsLoopback(c echo.Context) bool {
 	return ip.IsLoopback()
 }
 
+// DirectLocalConnection is a loopback peer with none of the headers Caddy
+// adds or a client could use to look proxied. arkfile-admin talks to the
+// process directly and does not send those headers.
+func DirectLocalConnection(c echo.Context) bool {
+	if !peerAddrIsLoopback(c) {
+		return false
+	}
+	header := c.Request().Header
+	if header.Get("X-Arkfile-Peer") != "" ||
+		header.Get("X-Forwarded-For") != "" ||
+		header.Get("X-Real-IP") != "" ||
+		header.Get("Forwarded") != "" {
+		return false
+	}
+	return true
+}
+
+func DirectLocalMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		if !DirectLocalConnection(c) {
+			return JSONError(c, http.StatusForbidden, "Admin endpoints only available from localhost")
+		}
+		return next(c)
+	}
+}
+
+const contextKeyTokenFromCookie = "arkfile_token_from_cookie"
+
+func tokenArrivedFromCookie(c echo.Context) bool {
+	fromCookie, _ := c.Get(contextKeyTokenFromCookie).(bool)
+	return fromCookie
+}
+
+// markedSessionPaths are the non-admin routes a marked admin login may call
+// while it enrolls or manages its own second factor, refreshes, or logs out.
+var markedSessionPaths = map[string]struct{}{
+	"/api/mfa/setup":                                {},
+	"/api/mfa/verify":                               {},
+	"/api/mfa/auth":                                 {},
+	"/api/mfa/webauthn/register/begin":              {},
+	"/api/mfa/webauthn/register/finish":             {},
+	"/api/mfa/webauthn/auth/begin":                  {},
+	"/api/mfa/webauthn/auth/finish":                 {},
+	"/api/mfa/recover-with-backup-code":             {},
+	"/api/mfa/reset":                                {},
+	"/api/mfa/credentials":                          {},
+	"/api/mfa/credentials/:credential_id":           {},
+	"/api/mfa/credentials/:credential_id/label":     {},
+	"/api/mfa/credentials/totp/add":                 {},
+	"/api/mfa/credentials/webauthn/register/begin":  {},
+	"/api/mfa/credentials/webauthn/register/finish": {},
+	"/api/mfa/backup-codes/regenerate":              {},
+	"/api/refresh":                                  {},
+	"/api/logout":                                   {},
+	"/api/admin/reregister/response":                {},
+	"/api/admin/reregister/finalize":                {},
+}
+
+func markedSessionPathAllowed(path string) bool {
+	if _, ok := markedSessionPaths[path]; ok {
+		return true
+	}
+	return strings.HasPrefix(path, "/api/admin/")
+}
+
+// MarkedSessionMiddleware confines a login that carries login_kind=admin.
+// Unmarked logins are unchanged. It runs after JWT validation.
+func MarkedSessionMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		claims, ok := auth.GetClaimsFromContext(c)
+		if !ok || claims.LoginKind != models.LoginKindAdmin {
+			return next(c)
+		}
+		if tokenArrivedFromCookie(c) || !DirectLocalConnection(c) {
+			return JSONError(c, http.StatusForbidden, "Admin session is only valid on this server")
+		}
+		if !markedSessionPathAllowed(c.Path()) {
+			return JSONError(c, http.StatusForbidden, "Admin session cannot be used for this request")
+		}
+		return next(c)
+	}
+}
+
 // publicClientIP returns the public-facing client IP for non-authorization
 // purposes (EntityID HMAC binning, rate-limit keying, audit logging).
 //
@@ -492,6 +575,7 @@ func CookieTokenMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		if cookieJWT != "" {
 			// Browser path: inject token into Authorization header so existing
 			// JWTMiddleware/MFAJWTMiddleware validate it without any changes.
+			c.Set(contextKeyTokenFromCookie, true)
 			req.Header.Set("Authorization", "Bearer "+cookieJWT)
 		}
 		// CLI path (no cookie): Authorization header already set by client -- nothing to do.
@@ -516,6 +600,8 @@ var csrfExemptPaths = map[string]struct{}{
 	"/api/admin/login/finalize":        {},
 	"/api/bootstrap/register/response": {},
 	"/api/bootstrap/register/finalize": {},
+	"/api/admin/reregister/response":   {},
+	"/api/admin/reregister/finalize":   {},
 }
 
 func isCSRFExemptPath(path string) bool {
@@ -736,7 +822,7 @@ func AdminMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		// 1. Localhost validation. We MUST use the kernel-reported transport
 		// peer here, not c.RealIP(), so a remote attacker cannot pass
 		// X-Forwarded-For: 127.0.0.1 and slip past the gate.
-		if !peerAddrIsLoopback(c) {
+		if !DirectLocalConnection(c) {
 			return echo.NewHTTPError(http.StatusForbidden, "Admin endpoints only available from localhost")
 		}
 
@@ -775,15 +861,20 @@ func AdminMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 			}
 		}
 
-		// 4. Valid admin JWT
-		username := auth.GetUsernameFromToken(c)
-		if username == "" {
-			return echo.NewHTTPError(http.StatusUnauthorized, "Admin authentication required")
+		// 4. Valid admin JWT. The mark is set only for logins that started on
+		// the admin, bootstrap, or admin re-registration paths.
+		claims, ok := auth.GetClaimsFromContext(c)
+		if !ok || claims.Username == "" || claims.LoginKind != models.LoginKindAdmin {
+			return echo.NewHTTPError(http.StatusForbidden, "Admin session required")
 		}
+		if tokenArrivedFromCookie(c) {
+			return echo.NewHTTPError(http.StatusForbidden, "Admin session is only valid on this server")
+		}
+		username := claims.Username
 
-		// 5. Admin privileges
+		// 5. Admin privileges come from the account flag.
 		user, err := models.GetUserByUsername(database.DB, username)
-		if err != nil || !user.HasAdminPrivileges() {
+		if err != nil || !user.IsAdmin {
 			return echo.NewHTTPError(http.StatusForbidden, "Admin privileges required")
 		}
 

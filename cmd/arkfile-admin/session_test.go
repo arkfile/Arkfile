@@ -23,7 +23,7 @@ func TestRequireAdminSessionExpired(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected expired session error")
 	}
-	if err.Error() != adminSessionExpiredMsg {
+	if err.Error() != adminSessionEndedMsg {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

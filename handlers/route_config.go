@@ -114,31 +114,34 @@ func RegisterRoutes() {
 	Echo.POST("/api/opaque/reregister/finalize", RegisterRateLimitMiddleware(ReregisterFinalize), auth.ReregistrationJWTMiddleware())
 
 	// Admin OPAQUE Authentication (Multi-Step Protocol) - separate endpoints with admin verification
-	Echo.POST("/api/admin/login/response", LoginRateLimitMiddleware(AdminOpaqueAuthResponse))
-	Echo.POST("/api/admin/login/finalize", LoginRateLimitMiddleware(AdminOpaqueAuthFinalize))
+	Echo.POST("/api/admin/login/response", DirectLocalMiddleware(LoginRateLimitMiddleware(AdminOpaqueAuthResponse)))
+	Echo.POST("/api/admin/login/finalize", DirectLocalMiddleware(LoginRateLimitMiddleware(AdminOpaqueAuthFinalize)))
+	Echo.POST("/api/admin/reregister/response", DirectLocalMiddleware(RegisterRateLimitMiddleware(AdminReregisterResponse)), auth.ReregistrationJWTMiddleware(), MarkedSessionMiddleware)
+	Echo.POST("/api/admin/reregister/finalize", DirectLocalMiddleware(RegisterRateLimitMiddleware(AdminReregisterFinalize)), auth.ReregistrationJWTMiddleware(), MarkedSessionMiddleware)
 
 	// Bootstrap Registration (OPAQUE) - Initial Admin Setup
-	Echo.POST("/api/bootstrap/register/response", RegisterRateLimitMiddleware(BootstrapRegisterResponse))
-	Echo.POST("/api/bootstrap/register/finalize", RegisterRateLimitMiddleware(BootstrapRegisterFinalize))
+	Echo.POST("/api/bootstrap/register/response", DirectLocalMiddleware(RegisterRateLimitMiddleware(BootstrapRegisterResponse)))
+	Echo.POST("/api/bootstrap/register/finalize", DirectLocalMiddleware(RegisterRateLimitMiddleware(BootstrapRegisterFinalize)))
 
 	// MFA Status - requires full authentication (standard JWT)
 	auth.Echo.GET("/api/mfa/status", MFAStatus)
 
 	// MFA Setup/Verify/Auth/Recovery/Reset - temp or dual-tier JWT depending on route
 	mfaGroup := Echo.Group("/api/mfa")
-	mfaGroup.POST("/recover-with-backup-code", RecoverWithBackupCode, auth.MFAJWTMiddleware())
+	mfaGroup.POST("/recover-with-backup-code", RecoverWithBackupCode, auth.MFAJWTMiddleware(), MarkedSessionMiddleware)
 	mfaGroup.POST("/reset", MFAReset,
 		auth.MFAResetJWTMiddleware(),
 		auth.FullTokenRevocationMiddleware(database.DB),
 		SessionLifetimeMiddleware(database.DB),
+		MarkedSessionMiddleware,
 	)
-	mfaGroup.POST("/setup", MFASetup, auth.MFAJWTMiddleware())
-	mfaGroup.POST("/verify", MFARateLimitMiddleware("mfa_verify")(MFAVerify), auth.MFAJWTMiddleware())
-	mfaGroup.POST("/auth", MFARateLimitMiddleware("mfa_auth")(MFAAuth), auth.MFAJWTMiddleware())
-	mfaGroup.POST("/webauthn/register/begin", WebAuthnRegisterBegin, auth.MFAJWTMiddleware())
-	mfaGroup.POST("/webauthn/register/finish", MFARateLimitMiddleware("mfa_verify")(WebAuthnRegisterFinish), auth.MFAJWTMiddleware())
-	mfaGroup.POST("/webauthn/auth/begin", WebAuthnAuthBegin, auth.MFAJWTMiddleware())
-	mfaGroup.POST("/webauthn/auth/finish", MFARateLimitMiddleware("mfa_auth")(WebAuthnAuthFinish), auth.MFAJWTMiddleware())
+	mfaGroup.POST("/setup", MFASetup, auth.MFAJWTMiddleware(), MarkedSessionMiddleware)
+	mfaGroup.POST("/verify", MFARateLimitMiddleware("mfa_verify")(MFAVerify), auth.MFAJWTMiddleware(), MarkedSessionMiddleware)
+	mfaGroup.POST("/auth", MFARateLimitMiddleware("mfa_auth")(MFAAuth), auth.MFAJWTMiddleware(), MarkedSessionMiddleware)
+	mfaGroup.POST("/webauthn/register/begin", WebAuthnRegisterBegin, auth.MFAJWTMiddleware(), MarkedSessionMiddleware)
+	mfaGroup.POST("/webauthn/register/finish", MFARateLimitMiddleware("mfa_verify")(WebAuthnRegisterFinish), auth.MFAJWTMiddleware(), MarkedSessionMiddleware)
+	mfaGroup.POST("/webauthn/auth/begin", WebAuthnAuthBegin, auth.MFAJWTMiddleware(), MarkedSessionMiddleware)
+	mfaGroup.POST("/webauthn/auth/finish", MFARateLimitMiddleware("mfa_auth")(WebAuthnAuthFinish), auth.MFAJWTMiddleware(), MarkedSessionMiddleware)
 
 	// Admin contacts (public - no auth required)
 	Echo.GET("/api/admin-contacts", AdminContactsHandler)
@@ -221,6 +224,7 @@ func RegisterRoutes() {
 	pendingAllowedGroup.Use(auth.JWTMiddleware())
 	pendingAllowedGroup.Use(auth.TokenRevocationMiddleware(database.DB))
 	pendingAllowedGroup.Use(SessionLifetimeMiddleware(database.DB))
+	pendingAllowedGroup.Use(MarkedSessionMiddleware)
 	pendingAllowedGroup.Use(auth.RequireFullJWT)
 	pendingAllowedGroup.Use(RequireMFA)
 	pendingAllowedGroup.GET("/api/user/contact-info", GetContactInfo)
@@ -256,6 +260,9 @@ func RegisterRoutes() {
 	//      + AdminMiddleware (loopback gate, rate limit, admin-flag check, audit log).
 	adminGroup := Echo.Group("/api/admin")
 	adminGroup.Use(auth.JWTMiddleware())
+	adminGroup.Use(auth.TokenRevocationMiddleware(database.DB))
+	adminGroup.Use(SessionLifetimeMiddleware(database.DB))
+	adminGroup.Use(DirectLocalMiddleware)
 	adminGroup.Use(auth.RequireFullJWT)
 	adminGroup.Use(RequireMFA)
 	adminGroup.Use(AdminMiddleware)
@@ -362,6 +369,9 @@ func RegisterRoutes() {
 		// Same stack as adminGroup; dev-test endpoints must not skip any layer.
 		devTestAdminGroup := Echo.Group("/api/admin/dev-test")
 		devTestAdminGroup.Use(auth.JWTMiddleware())
+		devTestAdminGroup.Use(auth.TokenRevocationMiddleware(database.DB))
+		devTestAdminGroup.Use(SessionLifetimeMiddleware(database.DB))
+		devTestAdminGroup.Use(DirectLocalMiddleware)
 		devTestAdminGroup.Use(auth.RequireFullJWT)
 		devTestAdminGroup.Use(RequireMFA)
 		devTestAdminGroup.Use(AdminMiddleware)

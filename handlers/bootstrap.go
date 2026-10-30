@@ -37,7 +37,7 @@ func BootstrapRegisterResponse(c echo.Context) error {
 	// transport peer address. MUST NOT use c.RealIP(), which walks the
 	// client-controllable X-Forwarded-For chain under Echo's default
 	// extractor and is therefore spoofable from any internet host.
-	if !peerAddrIsLoopback(c) {
+	if !DirectLocalConnection(c) {
 		logging.ErrorLogger.Printf("SECURITY ALERT: Bootstrap attempt from non-local peer")
 		return JSONError(c, http.StatusForbidden, "Bootstrap endpoints only accessible from localhost")
 	}
@@ -109,7 +109,7 @@ func BootstrapRegisterFinalize(c echo.Context) error {
 	// transport peer address. MUST NOT use c.RealIP(), which walks the
 	// client-controllable X-Forwarded-For chain under Echo's default
 	// extractor and is therefore spoofable from any internet host.
-	if !peerAddrIsLoopback(c) {
+	if !DirectLocalConnection(c) {
 		logging.ErrorLogger.Printf("SECURITY ALERT: Bootstrap attempt from non-local peer")
 		return JSONError(c, http.StatusForbidden, "Bootstrap endpoints only accessible from localhost")
 	}
@@ -237,7 +237,7 @@ func BootstrapRegisterFinalize(c echo.Context) error {
 	// audit purposes; ValidateBootstrapToken rejects any future redemption
 	// because of the non-NULL consumed_at.
 
-	tempToken, _, err := auth.GenerateTemporaryMFAToken(request.Username)
+	tempToken, _, err := auth.GenerateTemporaryMFATokenForLogin(request.Username, models.LoginKindAdmin)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate temporary MFA token for %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Registration succeeded but setup token creation failed")

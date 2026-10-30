@@ -3,8 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/arkfile/Arkfile/auth"
-	"github.com/arkfile/Arkfile/crypto"
+	"github.com/arkfile/Arkfile/cli/reregistration"
 )
 
 // reregistrationRequiredCode is the stable error code the server returns (with
@@ -23,73 +22,37 @@ const reregistrationRequiredCode = "account_requires_reregistration"
 // of their own files. On success this returns the finalize response, which has
 // the same MFA-pending shape as a normal login finalize.
 func (c *HTTPClient) performReregistration(username string, password []byte, reregResp *Response) (*Response, error) {
-	handoffToken, _ := reregResp.Data["reregistration_token"].(string)
-	if handoffToken == "" {
-		return nil, fmt.Errorf("re-registration required but the server did not provide a handoff token")
-	}
-
-	fileCountF, _ := reregResp.Data["file_count"].(float64)
-	fileCount := int(fileCountF)
-
 	fmt.Println("This account needs a one-time security re-registration after an OPAQUE server key update.")
 	fmt.Println("Your files, shares, and settings are preserved. Reconnecting with your existing password...")
-
-	if fileCount > 0 {
-		if err := verifyReregistrationPassword(password, username, reregResp); err != nil {
-			return nil, err
-		}
-		logVerbose("Password confirmed against existing file metadata; proceeding with re-registration")
-	}
-
-	clientSecret, registrationRequest, err := auth.ClientCreateRegistrationRequest(password)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create re-registration request: %w", err)
-	}
-
-	respResp, err := c.makeRequest("POST", "/api/opaque/reregister/response", map[string]string{
-		"registration_request": encodeBase64(registrationRequest),
-	}, handoffToken)
-	if err != nil {
-		return nil, fmt.Errorf("re-registration response failed: %w", err)
-	}
-
-	registrationResponseB64, ok := respResp.Data["registration_response"].(string)
-	if !ok {
-		return nil, fmt.Errorf("invalid server response: missing registration_response")
-	}
-	sessionID, ok := respResp.Data["session_id"].(string)
-	if !ok || sessionID == "" {
-		sessionID = respResp.SessionID
-	}
-	if sessionID == "" {
-		return nil, fmt.Errorf("invalid server response: missing session_id")
-	}
-
-	registrationResponse, err := decodeBase64(registrationResponseB64)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode registration response: %w", err)
-	}
 
 	serverID, err := c.fetchOpaqueServerID()
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch OPAQUE server identity: %w", err)
 	}
-
-	registrationRecord, _, err := auth.ClientFinalizeRegistration(clientSecret, registrationResponse, username, serverID)
+	finalData, err := reregistration.Perform(
+		func(method, path string, body map[string]string, token string) (map[string]interface{}, error) {
+			resp, reqErr := c.makeRequest(method, path, body, token)
+			if resp == nil {
+				return nil, reqErr
+			}
+			return resp.Data, reqErr
+		},
+		"/api/opaque/reregister/response",
+		"/api/opaque/reregister/finalize",
+		username,
+		password,
+		reregResp.Data,
+		serverID,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to finalize re-registration: %w", err)
+		return nil, err
 	}
-
-	finalizeResp, err := c.makeRequest("POST", "/api/opaque/reregister/finalize", map[string]string{
-		"session_id":          sessionID,
-		"registration_record": encodeBase64(registrationRecord),
-	}, handoffToken)
-	if err != nil {
-		return nil, fmt.Errorf("re-registration finalization failed: %w", err)
-	}
-
 	fmt.Printf("Re-registration complete for %s.\n", username)
-	return finalizeResp, nil
+	loginResp := &Response{Success: true, Data: finalData}
+	// The ceremony returns the same nested MFA-pending payload as login
+	// finalize. Login reads RequiresMFA and TempToken, not only Data.
+	applyResponseDataFields(loginResp)
+	return loginResp, nil
 }
 
 // verifyReregistrationPassword confirms the entered password derives the Account
@@ -98,39 +61,5 @@ func (c *HTTPClient) performReregistration(username string, password []byte, rer
 // the password does not match the existing files; the ceremony is aborted with
 // no server-side change so the user is never locked out.
 func verifyReregistrationPassword(password []byte, username string, reregResp *Response) error {
-	verifierRaw, ok := reregResp.Data["verifier"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("the server reported existing files but provided no verifier sample; aborting re-registration to protect your files")
-	}
-
-	fileID, _ := verifierRaw["file_id"].(string)
-	owner, _ := verifierRaw["owner_username"].(string)
-	encFilename, _ := verifierRaw["encrypted_filename"].(string)
-	filenameNonce, _ := verifierRaw["filename_nonce"].(string)
-	if fileID == "" || encFilename == "" || filenameNonce == "" {
-		return fmt.Errorf("the server verifier sample is incomplete; aborting re-registration to protect your files")
-	}
-	if owner == "" {
-		owner = username
-	}
-
-	saltB64, _ := reregResp.Data["account_kdf_salt"].(string)
-	profile, _ := reregResp.Data["account_kdf_profile"].(float64)
-	if saltB64 == "" || int(profile) != int(crypto.OwnerEnvelopeKDFProfile()) {
-		return fmt.Errorf("the server did not provide valid Account Key metadata; aborting re-registration")
-	}
-	accountSalt, err := crypto.DecodeBase64(saltB64)
-	if err != nil {
-		return fmt.Errorf("the server provided an invalid Account Key salt; aborting re-registration")
-	}
-	accountKey, err := crypto.DeriveAccountPasswordKey(password, accountSalt)
-	if err != nil {
-		return fmt.Errorf("failed to derive Account Key: %w", err)
-	}
-	defer clearBytes(accountKey)
-
-	if _, err := decryptMetadataField(encFilename, filenameNonce, accountKey, fileID, crypto.AADFieldFilename, owner); err != nil {
-		return fmt.Errorf("the password you entered does not match this account's existing files; re-registration aborted (no changes were made)")
-	}
-	return nil
+	return reregistration.VerifyPassword(password, username, reregResp.Data)
 }

@@ -39,8 +39,8 @@ type reregistrationVerifier struct {
 // count of files the user owns (so the client knows whether the pre-finalize
 // password-match check is required), and, when the user owns files, one verifier
 // sample for that check.
-func respondAccountRequiresReregistration(c echo.Context, username string) error {
-	handoffToken, expiresAt, err := auth.GenerateReregistrationToken(username)
+func respondAccountRequiresReregistration(c echo.Context, username, loginKind string) error {
+	handoffToken, expiresAt, err := auth.GenerateReregistrationTokenForLogin(username, loginKind)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to issue re-registration handoff token for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
@@ -62,8 +62,7 @@ func respondAccountRequiresReregistration(c echo.Context, username string) error
 	// stale full/refresh cookies first so the full-tier cookie does not take
 	// precedence over the handoff token during the ceremony. CLI clients instead
 	// read reregistration_token from the body and send it as a Bearer token.
-	clearSessionCookies(c)
-	issueTempCookie(c, handoffToken)
+	issueTempCookieForLogin(c, handoffToken, loginKind)
 
 	data := map[string]interface{}{
 		"reregistration_token": handoffToken,
@@ -132,9 +131,20 @@ func reregistrationVerifierSample(db *sql.DB, username string) (*reregistrationV
 // registration response under the current server keys for an account that is
 // flagged for re-registration.
 func ReregisterResponse(c echo.Context) error {
+	return reregisterResponse(c, false)
+}
+
+func AdminReregisterResponse(c echo.Context) error {
+	return reregisterResponse(c, true)
+}
+
+func reregisterResponse(c echo.Context, adminCeremony bool) error {
 	username := auth.GetUsernameFromToken(c)
 	if username == "" {
 		return JSONErrorCode(c, http.StatusUnauthorized, CodeReregistrationTokenInvalid, "Re-registration token is missing or invalid")
+	}
+	if err := guardReregistrationCeremony(c, username, adminCeremony); err != nil {
+		return err
 	}
 
 	flagged, err := models.UserRequiresReregistration(database.DB, username)
@@ -181,9 +191,41 @@ func ReregisterResponse(c echo.Context) error {
 // clears the re-registration flag, and continues into the existing MFA flow,
 // since the user's second-factor enrollment is preserved.
 func ReregisterFinalize(c echo.Context) error {
+	return reregisterFinalize(c, false)
+}
+
+func AdminReregisterFinalize(c echo.Context) error {
+	return reregisterFinalize(c, true)
+}
+
+func guardReregistrationCeremony(c echo.Context, username string, adminCeremony bool) error {
+	user, err := models.GetUserByUsername(database.DB, username)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return JSONErrorCode(c, http.StatusUnauthorized, CodeReregistrationTokenInvalid, "Re-registration token is missing or invalid")
+		}
+		logging.ErrorLogger.Printf("Re-registration account lookup failed for %s: %v", username, err)
+		return JSONError(c, http.StatusInternalServerError, "Re-registration failed")
+	}
+	if adminCeremony {
+		if loginKindFromContext(c) != models.LoginKindAdmin || !user.IsAdmin {
+			return JSONErrorCode(c, http.StatusForbidden, CodeReregistrationTokenInvalid, "Re-registration token is missing or invalid")
+		}
+		return nil
+	}
+	if user.IsAdmin {
+		return JSONError(c, http.StatusForbidden, "Admin accounts must re-register on the server")
+	}
+	return nil
+}
+
+func reregisterFinalize(c echo.Context, adminCeremony bool) error {
 	username := auth.GetUsernameFromToken(c)
 	if username == "" {
 		return JSONErrorCode(c, http.StatusUnauthorized, CodeReregistrationTokenInvalid, "Re-registration token is missing or invalid")
+	}
+	if err := guardReregistrationCeremony(c, username, adminCeremony); err != nil {
+		return err
 	}
 
 	var request struct {
@@ -272,12 +314,16 @@ func ReregisterFinalize(c echo.Context) error {
 
 	// The user's MFA enrollment is preserved, so continue into the existing
 	// second-factor flow exactly as a normal login does.
-	tempToken, _, err := auth.GenerateTemporaryMFAToken(username)
+	nextKind := ""
+	if adminCeremony {
+		nextKind = models.LoginKindAdmin
+	}
+	tempToken, _, err := auth.GenerateTemporaryMFATokenForLogin(username, nextKind)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate MFA token after re-registration for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Re-registration succeeded but session setup failed")
 	}
-	issueTempCookie(c, tempToken)
+	issueTempCookieForLogin(c, tempToken, nextKind)
 
 	challenge, err := auth.BuildMFAChallenge(database.DB, username)
 	if err != nil {

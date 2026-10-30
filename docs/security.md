@@ -289,6 +289,8 @@ Arkfile issues short-lived JWT access tokens after OPAQUE plus MFA. Tokens shoul
 - **30-minute access tokens**: Short-lived tokens for API access
 - **Automatic refresh at 25 minutes**: Clients renew before expiration
 - **Six-hour idle limit**: A full login family ends after six hours without a user-started authenticated request. Refresh does not count as activity
+- **24-hour absolute limit**: A normal login also ends 24 hours after it started. A file already uploading or downloading at that point may continue until it finishes, goes 30 minutes quiet, or reaches 36 hours from sign-in. Other selected files do not start
+- **60-minute admin limit**: A login started with arkfile-admin on the server ends 60 minutes after login. It is not a browser session and cannot call file, share, or billing routes
 - **Per-login enforcement**: Browser and command-line logins have separate family clocks; activity on one login does not extend another
 - **Revocation on authenticated requests**: `TokenRevocationMiddleware` checks every authenticated request against the per-token (`revoked_tokens`) list and the per-user `user_jwt_revocations` row
 - **User-wide cache**: The per-user revocation timestamp may be cached in-process for up to 30 seconds to avoid a database read on every request. `InvalidateUserRevocationCache` clears that entry when a revocation is written on the same process. A second process could see a stale "not revoked" result for up to that cache TTL
@@ -297,7 +299,8 @@ Arkfile issues short-lived JWT access tokens after OPAQUE plus MFA. Tokens shoul
 **Session Security:**
 - Logout ends only the current login family. Other logins for the account remain usable
 - `revoke-all`, admin force-logout, and refresh-token reuse write `user_jwt_revocations` so existing access tokens for the account fail on the next checked request
-- A family ended by the idle limit is rejected even when its access JWT has not expired. Later refresh attempts return the stable `session_idle` reason
+- A family ended by the idle limit is rejected even when its access JWT has not expired. Later refresh attempts return the stable `session_idle` reason. The 24-hour cap returns `session_absolute`. Logout of that same login returns `session_logged_out`
+- Admin routes answer only on the server. The public proxy returns 404 for `/api/admin` and `/api/bootstrap`. A normal website login, including an admin account, cannot call admin routes. An arkfile-admin login works only from that machine and does not receive browser cookies
 - Per-JTI revocation is stored in `revoked_tokens` and consulted on each authenticated request
 - A stolen access token that is never revoked remains valid until it expires (up to 30 minutes)
 - Cryptographically independent from file encryption

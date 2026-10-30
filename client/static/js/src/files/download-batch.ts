@@ -10,7 +10,7 @@
  * supplies the browser implementation.
  */
 
-import { isAuthenticated, refreshToken } from '../utils/auth.js';
+import { absoluteBatchNotice, isAuthenticated, refreshToken, replaceSessionNotice } from '../utils/auth.js';
 import { showError, showSuccess, showWarning } from '../ui/messages.js';
 import { showProgress, updateProgress, hideProgress } from '../ui/progress.js';
 import { showPasswordPrompt, hidePasswordPrompt } from '../ui/password-modal.js';
@@ -136,7 +136,11 @@ export async function ensureFreshBatchAuth(): Promise<void> {
   }
   const refreshed = await refreshToken();
   if (!refreshed.ok && !isAuthenticated()) {
-    throw new Error('auth_expired');
+    const expired = new Error('auth_expired') as Error & { code?: string };
+    if (refreshed.error) {
+      expired.code = refreshed.error;
+    }
+    throw expired;
   }
 }
 
@@ -314,6 +318,10 @@ export async function runDownloadBatch(
         if (reason === 'auth_expired') {
           fatalAuth = true;
           aborting = true;
+          const queued = account.length - i - 1 + custom.length;
+          if ((err as { code?: string }).code === 'session_absolute') {
+            replaceSessionNotice(absoluteBatchNotice('download', false, queued));
+          }
           markSkippedRest(account.slice(i + 1), 'skipped');
           markSkippedRest(custom, 'skipped');
           break;

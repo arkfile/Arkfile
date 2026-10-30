@@ -6,11 +6,14 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
 	adminNotLoggedInMsg    = "not logged in as admin (use 'arkfile-admin login' first)"
 	adminSessionExpiredMsg = "admin session expired, please login again"
+	adminSessionEndedMsg   = "admin session ended 60 minutes after login, please login again"
 )
 
 // AdminConfig holds configuration for the admin client.
@@ -49,7 +52,45 @@ func saveAdminSession(session *AdminSession, filePath string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filePath, data, 0600)
+	dir := filepath.Dir(filePath)
+	tmp, err := os.CreateTemp(dir, ".arkfile-admin-session.*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, filePath)
+}
+
+func lockAdminSession(filePath string) (*os.File, error) {
+	lock, err := os.OpenFile(filePath+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
+		_ = lock.Close()
+		return nil, err
+	}
+	return lock, nil
+}
+
+func unlockAdminSession(lock *os.File) {
+	if lock == nil {
+		return
+	}
+	_ = unix.Flock(int(lock.Fd()), unix.LOCK_UN)
+	_ = lock.Close()
 }
 
 func loadAdminSession(filePath string) (*AdminSession, error) {
@@ -77,17 +118,68 @@ func loadConfigFile(config *AdminConfig, filePath string) error {
 
 // requireAdminSession loads the admin session and rejects expired sessions.
 func requireAdminSession(config *AdminConfig) (*AdminSession, error) {
+	lock, err := lockAdminSession(config.TokenFile)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockAdminSession(lock)
+
 	session, err := loadAdminSession(config.TokenFile)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", adminNotLoggedInMsg, err)
 	}
-	if session.AccessToken == "" {
+	if session.AccessToken == "" && session.TempToken == "" {
 		return nil, fmt.Errorf("%s: session has no access token", adminNotLoggedInMsg)
 	}
-	if !session.ExpiresAt.IsZero() && time.Now().After(session.ExpiresAt) {
-		return nil, fmt.Errorf(adminSessionExpiredMsg)
+	if session.AccessToken == "" {
+		return session, nil
+	}
+	if session.ExpiresAt.IsZero() || time.Until(session.ExpiresAt) < 5*time.Minute {
+		client := newHTTPClient(config.ServerURL, config.TLSInsecure, config.TLSMinVersion, false)
+		if err := refreshAdminSession(client, session, config.TokenFile); err != nil {
+			return nil, err
+		}
 	}
 	return session, nil
+}
+
+func refreshAdminSession(client *HTTPClient, session *AdminSession, filePath string) error {
+	if session.RefreshToken == "" {
+		_ = os.Remove(filePath)
+		return fmt.Errorf(adminSessionEndedMsg)
+	}
+	resp, err := client.makeRequest("POST", "/api/refresh", map[string]string{
+		"refresh_token": session.RefreshToken,
+	}, "")
+	if err != nil {
+		_ = os.Remove(filePath)
+		if resp != nil && (resp.Error == "session_absolute" || resp.Error == "session_idle") {
+			return fmt.Errorf(adminSessionEndedMsg)
+		}
+		return fmt.Errorf("%s: %v", adminSessionEndedMsg, err)
+	}
+	token, _ := resp.Data["token"].(string)
+	refresh, _ := resp.Data["refresh_token"].(string)
+	if token == "" {
+		token = resp.Token
+	}
+	if refresh == "" {
+		refresh = resp.RefreshToken
+	}
+	if token == "" {
+		_ = os.Remove(filePath)
+		return fmt.Errorf(adminSessionEndedMsg)
+	}
+	session.AccessToken = token
+	if refresh != "" {
+		session.RefreshToken = refresh
+	}
+	if expires, ok := resp.Data["expires_at"].(string); ok {
+		if parsed, perr := time.Parse(time.RFC3339, expires); perr == nil {
+			session.ExpiresAt = parsed
+		}
+	}
+	return saveAdminSession(session, filePath)
 }
 
 // requireAdminMFASession loads a session for MFA setup/recovery using temp or access token.

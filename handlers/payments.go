@@ -126,10 +126,6 @@ func CreateInvoiceHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Payment invoice association is pending recovery")
 	}
 
-	if err := ExtendAuthenticatedSession(c); err != nil {
-		logging.InfoLogger.Printf("Payment invoice %s session extension skipped", invoiceID)
-	}
-
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"success": true,
 		"data": map[string]interface{}{

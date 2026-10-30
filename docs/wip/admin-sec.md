@@ -1,33 +1,26 @@
 # Admin Access Tightening
 
+## Status
+
+The behavior in this document is implemented, including the 60-minute admin cap from `docs/wip/auto-logout.md`. Local `e2e-test.sh` passed the Go checks: an unmarked login is refused on admin routes, a marked admin token is refused on `/api/files`, and an admin request that carries `X-Arkfile-Peer` is refused. `dev-reset.sh` has no Caddy, so the public 404 is not proven until `test-update.sh`. After that update, an outside request to `/api/admin/system/health` should return 404, and `arkfile-admin login` on the box should still work. Sign in again on that machine; saved admin sessions from before the update are unmarked and stop working on admin routes. Do not run `arkfile-admin rotate-opaque-keys rotate` until that on-box login, including a flagged admin re-registration if one is needed, has been tried.
+
+A flagged admin who tries the website or `arkfile-client` gets the same generic failure as any other bad login. Admin access comes only from the account's `is_admin` flag. `ADMIN_USERNAMES` remains a deployment check, including blocking the dev admin name in production. Caddy answers 404 for `/api/admin`, `/api/admin/*`, and `/api/bootstrap/*`. The Go server answers 403 when a request is not a direct local connection. A shorter idle limit inside the 60 minutes, and a hard stop for an export already streaming past that mark, are still open.
+
 ## Goal
 
-Admin endpoints and admin functionality must be reachable only through `arkfile-admin`, run directly on the server it administers, talking to the Go server over a direct local connection (the default `--server-url https://localhost:8443`). A login made through the web app or `arkfile-client`, including a login of an admin account, must never be usable on admin routes, and an `arkfile-admin` login must never be usable as a web app session or from any other machine. The session-family foundation and six-hour idle enforcement in `docs/wip/auto-logout.md` ship first. This work then marks admin families and adds the direct-local and scope restrictions; the later absolute-lifetime work adds the 60-minute admin cap.
+Admin endpoints and admin functionality must be reachable only through `arkfile-admin`, run directly on the server it administers, talking to the Go server over a direct local connection (the default `--server-url https://localhost:8443`). A login made through the web app or `arkfile-client`, including a login of an admin account, must never be usable on admin routes, and an `arkfile-admin` login must never be usable as a web app session or from any other machine.
 
 ## Findings
 
-On every VPS deployment built by `prod-deploy.sh` or `test-deploy.sh`, the `/api/admin/*` routes are reachable from the public internet through Caddy. This was confirmed on `test.arkfile.net`: an unauthenticated `curl` from outside the box to `/api/admin/system/health` returned `401`, which comes from the Go JWT middleware inside the admin route group, meaning the request reached that group. Production uses the same Caddyfile template and is regenerated from it on every update, so it is almost certainly in the same state.
+Before this code is deployed, `/api/admin/*` is reachable from the public internet through Caddy. That was confirmed on `test.arkfile.net`: an unauthenticated `curl` from outside the box to `/api/admin/system/health` returned `401` from the Go JWT middleware, so the request reached the admin route group. `test-update.sh` and `prod-update.sh` replace that Caddyfile from the templates in this tree. Until `test-update.sh` runs, the test instance is still in the old state.
 
-The localhost gate in `AdminMiddleware` checks the kernel-reported peer address of the connection. On a VPS the Go server listens on `127.0.0.1:8443` (`HOST=127.0.0.1` in `scripts/setup/vps-first-deploy.sh`) and Caddy on the same host reverse-proxies every public request to it over loopback, so every request arriving through Caddy passes the gate. None of the four Caddyfile templates (`Caddyfile`, `Caddyfile.prod`, `Caddyfile.test`, `Caddyfile.local`) restricts any path. The bootstrap registration endpoints (`/api/bootstrap/register/*`) use the same peer check and are therefore also reachable from the internet on a VPS, protected only by the bootstrap token. The gate does work as intended on `local-deploy.sh` and `dev-reset.sh`, where no proxy sits in front of the Go server.
+The localhost gate in `AdminMiddleware` used to check only the kernel-reported peer address. On a VPS the Go server listens on `127.0.0.1:8443` and Caddy reverse-proxies every public request over loopback, so that check alone let public traffic through. The four Caddyfile templates now refuse `/api/admin`, `/api/admin/*`, and `/api/bootstrap/*` with 404, and the Go server also requires a direct local connection with no proxy headers. `dev-reset.sh` still has no Caddy, so its tests talk to the Go server directly.
 
-There is no admin-specific session today. `AdminOpaqueAuthFinalize` and the normal `OpaqueAuthFinalize` both issue the same temporary MFA token, both continue through the shared `completeMFALogin`, and both produce an identical full access token (`aud=arkfile-api`) plus refresh token. The normal login has no admin check, so an admin account signed in through the web app holds a token that admin routes accept. `completeMFALogin` also sets the browser session cookies on every login, including `arkfile-admin` logins, which ignore them.
+Admin logins are a separate kind of session. Only a login that starts at `/api/admin/login/*`, bootstrap, or the on-box admin re-registration is marked. A website or `arkfile-client` login of an admin account is unmarked and is refused on admin routes. A marked login receives no browser cookies.
 
 On the client side the intent already holds. All admin functionality lives under `/api/admin/*` (plus the public admin login endpoints, the bootstrap endpoints, and the public read-only `/api/admin-contacts`). The web frontend never calls `/api/admin/*`, and `arkfile-client` never calls it either; the shared `ListUserCredentialsAdmin` helper in `cli/mfa/manage.go` is only used by `arkfile-admin`. The gap is entirely server and proxy side.
 
-Three further problems surfaced during review. First, `arkfile-admin logout` only deletes the local session file and never tells the server, so the admin refresh token stays valid in the database for up to 30 days after logout. Second, the admin login endpoints check `user.IsAdmin` while `AdminMiddleware`, `RequireApproved`, and the refresh handler use `HasAdminPrivileges()`, which also counts names in `ADMIN_USERNAMES`; current deployments put only the bootstrap admin there, who also has the flag set, but the checks should agree. Third, `arkfile-admin rotate-opaque-keys rotate` flags every account for re-registration, admins included (`UPDATE users SET requires_reregistration = true WHERE deleted_at IS NULL`), and deletes the password records. The normal login detects the flag and runs the re-registration ceremony, but `AdminOpaqueAuthResponse` falls back to a fake record when the real one is missing, so `arkfile-admin login` fails with "Invalid credentials" indefinitely. The only way back in today is to re-register through the web app or `arkfile-client`.
-
-## Interim operator step
-
-Until the code changes ship, the Caddy layer can be applied by hand on test and production. It has no effect on the `arkfile-admin` on-box workflow, since that path never goes through Caddy. Inside the site block of `/etc/caddy/Caddyfile`, add:
-
-```
-	@local_only path /api/admin /api/admin/* /api/bootstrap/*
-	respond @local_only 404
-```
-
-Caddy orders `respond` ahead of `reverse_proxy` regardless of position in the block, and `/api/admin-contacts` does not match either pattern. Validate with the same environment file `caddy.service` loads (the deSEC token is needed for validation), reload Caddy, then repeat the outside `curl`, which should now return `404`, and confirm `arkfile-admin` on the box still works. The next `test-update.sh` or `prod-update.sh` regenerates the Caddyfile from the template and drops this hand edit, so it must be re-applied after any update until the template change below is part of the deployed code.
-
-Do not run `arkfile-admin rotate-opaque-keys rotate` on test or production until the admin re-registration ceremony below has shipped and passed e2e. Once the normal login refuses re-registration for admin accounts, the web app is no longer a way back in.
+Three further problems from review are handled in this tree. `arkfile-admin logout` calls `/api/logout` before deleting the local session file. Admin access is the `is_admin` flag only, so the login check and `HasAdminPrivileges()` agree. A flagged admin re-registers only through `arkfile-admin` on the server. The website and `arkfile-client` do not get a special message, and they cannot replace an admin password record.
 
 ## Layer one: Caddy refuses admin and bootstrap paths
 
@@ -67,7 +60,7 @@ A consequence of this decision, accepted: an admin who loses SSH access to the s
 
 All changes are additive. `session_families.login_kind` already exists from the initial idle-lifetime work. A missing value means an unmarked login. Existing access tokens carry no mark, so at the upgrade every saved `arkfile-admin` session stops working on admin routes and each admin runs `arkfile-admin login` once on each box. Existing unmarked family rows stay unmarked. No account, MFA, file, share, credit, or billing row is rewritten, and web app and `arkfile-client` sessions keep working on their normal routes.
 
-Rollout is `test-update.sh` on the test VPS, the outside `curl` check (expect `404`), an on-box `arkfile-admin login` and a few read-only admin commands, then the same on production with `prod-update.sh`. Rolling back to the previous code is safe for data, since the old binary ignores the new column, but it reopens the gap: a rollback through `prod-update.sh` from an older checkout also regenerates the Caddyfile from the older template, so both layers are gone until the hand edit from the interim operator step is re-applied.
+Rollout is `test-update.sh` on the test VPS, the outside `curl` check (expect `404`), an on-box `arkfile-admin login` and a few read-only admin commands, then the same on production with `prod-update.sh`. Both update scripts regenerate `/etc/caddy/Caddyfile` from the template, which now contains the 404, then validate it and start Caddy. Rolling back through an update from an older checkout regenerates the older Caddyfile and restores the old binary, which ignores `login_kind`. That reopens admin routes on the public proxy until this code is deployed again.
 
 ## Testing
 
@@ -114,14 +107,16 @@ The other amendments agreed for `docs/wip/auto-logout.md` during the same review
 - `docs/setup.md` (admin access only on the box through `arkfile-admin`; one re-login after this update)
 - `docs/wip/auto-logout.md` (fold in the admin 60-minute cap and the other agreed amendments)
 
+## Decisions
+
+A flagged admin who uses the website or `arkfile-client` gets the generic invalid-credentials failure. Those endpoints are public, and a message that names `arkfile-admin` would identify admin usernames. An admin who forgets and tries the website after a key rotation gets that same generic failure, then has to sign in on the server.
+
+Admin access comes only from `is_admin`. Bootstrap sets that flag when it creates the admin account. `ADMIN_USERNAMES` does not grant admin access. It stays a deployment check, including blocking the dev admin name in production.
+
+Caddy answers 404. The Go server answers 403. The Go refusal is only reachable from something already on the box or already past Caddy.
+
 ## Remaining open questions
-
-What should the normal web app or `arkfile-client` login return when a flagged admin account tries it? The recommendation is the generic "Invalid credentials" result, the same result `AdminOpaqueAuthResponse` already gives non-admin accounts, because those endpoints are public and a specific message ("this account must re-register with arkfile-admin on the server") would tell anyone probing usernames which accounts are admins. The cost is that an admin who forgets and tries the web app after a rotation gets an unhelpful failure.
-
-What should the single admin-privilege helper count? Today the admin login uses only the `is_admin` flag, while other checks also accept names in `ADMIN_USERNAMES`. The recommendation is to make the `is_admin` flag the only source of truth for granting admin access and keep `ADMIN_USERNAMES` for deployment-time checks such as blocking dev admin names in production, but this needs a look at how bootstrap and `local-deploy.sh` set the flag before deciding.
 
 Should a marked admin login also have an idle limit inside the 60-minute cap, for example 15 or 30 minutes without an admin request? With only the absolute cap, a forgotten SSH session keeps a usable admin login for up to an hour.
 
 Should an admin request that is already streaming past the 60-minute mark have any hard bound? The current decision is that an accepted request runs to completion, which for a multi-gigabyte `export-file` over a slow link could be hours. A server-side write deadline would bound it but could cut off a legitimate export.
-
-Should the Go layer refuse with 403 (matching today's "Admin endpoints only available from localhost" message) while Caddy answers 404, or should both answer 404 so the server does not confirm the routes exist? The current proposal is Caddy 404 and Go 403, since the Go refusal is only reachable by something already on the box or already past Caddy.

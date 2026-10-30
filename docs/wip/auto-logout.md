@@ -1,12 +1,12 @@
 # Auto Logout
 
-## Delivery sequence
+## Status
 
-The session-family foundation and six-hour idle enforcement ship first. This initial delivery creates the final `session_families` schema, adds `family_id` and `login_kind` to the JWT plumbing, backfills existing refresh-token families, enforces the idle clock on normal full sessions, ends one family on logout, adds the browser and basic `arkfile-client` idle-expiry behavior, and adds deterministic unit and end-to-end clock controls. Normal logins use an empty `login_kind`.
+The behavior in this document is implemented in the tree, together with the admin confinement in `docs/wip/admin-sec.md`. Local `dev-reset.sh` followed by `e2e-test.sh` passed, including six-hour idle expiry, the 24-hour cap, admin scope checks, and the user re-registration login. The next check is `test-update.sh` on the test VPS. After it, an outside request to `/api/admin/system/health` should return 404, `arkfile-admin login` on the box should still work, and a normal sign-in should still reach the file list. Use `prod-update.sh` only after that. The first start of the new binary ends families already older than their cap. Each admin signs in again with `arkfile-admin` on that machine. No account, file, share, or billing row is rewritten.
 
-`docs/wip/admin-sec.md` builds on that foundation. It begins marking logins that start through `arkfile-admin`, stores the mark on the existing family row, confines marked logins to admin work over a direct local connection, and never gives them cookies. There is no transitional `refresh_tokens.login_kind` column.
+Normal logins store an empty `login_kind`. Logins that start through `arkfile-admin`, bootstrap, or the on-box admin re-registration store `admin` on the existing family row. There is no `refresh_tokens.login_kind` column. A marked admin login lasts 60 minutes, is confined to admin work over a direct local connection, and receives no cookies. A normal login is also ended 24 hours after it starts, with one-file grace up to 36 hours from sign-in. Refresh-token expiry is that same ceiling, and the browser refresh cookie shrinks toward it.
 
-The 24-hour absolute cap, one-file transfer grace, 36-hour hard ceiling, shrinking refresh-cookie lifetime, detailed queued-file notices, and 60-minute marked-admin cap land after admin confinement. Their schema fields and stable claim/function shapes are established by the initial delivery, but their behavior is not enabled early. Each delivery remains independently testable and deployable without weakening existing file, account, MFA, share, or billing data.
+These were not adopted: a shorter idle limit inside the 60-minute admin cap, a hard stop for an admin export already streaming past that cap, and a special success result for a repeated upload complete during grace. Those stay open at the end of this document.
 
 ## Reasoning
 
@@ -18,7 +18,7 @@ The idle and absolute checks do not assume the access token has already expired.
 
 Two clocks apply to every full session, meaning every refresh-token family created at the end of MFA. Idle time is 6 hours since the last user action on that login. Total time is 24 hours from the moment that login was created. Either limit ends that login. Both numbers are locked. The access-token cookie stays at the configured JWT lifetime. The 25-minute browser refresh and the Account Key cache stay as they are. Temporary MFA and re-registration handoff tokens are unchanged and are not these sessions.
 
-The initial delivery enforces the six-hour idle clock only. It records `session_started_at` from the beginning so the later absolute-cap delivery extends the same family rather than replacing or resetting it.
+Both clocks are enforced. `session_started_at` is recorded when the login is created, and the 24-hour cap uses that same timestamp.
 
 The clocks are per login, not per account. A browser, an `arkfile-client` session file, and an `arkfile-admin` session file are separate families when each one signed in on its own. Activity on one does not extend the others. Two tabs that share the browser refresh cookie are one login.
 
@@ -42,7 +42,7 @@ The server is the authority. Client clocks in `SessionCreated` are hints for a l
 
 One API process serves these checks. The activity-write throttle is in memory in that process. Family state itself is read from the database on each check. Claiming the grace target and ending a family use conditional updates (`WHERE grace_target IS NULL` and `WHERE ended_at IS NULL`), checked by rows affected and a re-read, because concurrent requests can race even within one process. The first `ended_reason` written wins. Running more than one API process would need the throttle moved out of memory or accepted as per-process, and an upgrade that switches every process at once because of the missing-`family_id` startup rule below.
 
-Session state lives in a new `session_families` table, one row per login, keyed by `family_id`. The row holds `username`, `login_kind`, `session_started_at`, `last_user_activity`, `last_transfer_request_at`, the grace target and its kind (`upload_session` or `file`), `grace_last_request_at`, `ended_at`, and `ended_reason`. Refresh-token rotation does not copy these fields. The middleware loads the family by primary key. The initial delivery writes an empty `login_kind` and leaves the transfer and grace fields null. Admin confinement later writes `admin`; the absolute-cap delivery begins using the transfer and grace fields. `ended_reason` is `idle`, `absolute`, or `logout`. Those map to the error codes `session_idle`, `session_absolute`, and `session_logged_out`.
+Session state lives in a new `session_families` table, one row per login, keyed by `family_id`. The row holds `username`, `login_kind`, `session_started_at`, `last_user_activity`, `last_transfer_request_at`, the grace target and its kind (`upload_session` or `file`), `grace_last_request_at`, `ended_at`, and `ended_reason`. Refresh-token rotation does not copy these fields. The middleware loads the family by primary key. Normal logins write an empty `login_kind`. Admin logins write `admin`. Transfer and grace fields are written when a transfer is in progress. `ended_reason` is `idle`, `absolute`, or `logout`. Those map to the error codes `session_idle`, `session_absolute`, and `session_logged_out`.
 
 `last_transfer_request_at` is set on any upload chunk, complete, status, or cancel request and on any download chunk request, before or after the 24-hour mark. It is a timestamp only. It records neither the route nor the target.
 
@@ -116,7 +116,7 @@ Native export, the path without a directory picker, fires one anchor download ab
 
 Refresh writes the session file with the existing atomic rename. A file lock covers the read-refresh-write so two `arkfile-client` processes cannot present the same refresh token. Reuse detection revokes every device for the account.
 
-`arkfile-admin` stores a refresh token and `SessionCreated`, but `requireAdminSession` never calls `/api/refresh`. It treats a locally expired access token as logged out. Admin refreshes the way `arkfile-client` does, before a command, when the access token is inside a few minutes of expiry, and once on HTTP 401. `saveAdminSession` today is a plain `os.WriteFile`. Admin session writes become an atomic rename plus a file lock around refresh, same as the client. A rejected refresh removes the saved session and prints the 60-minute notice (or the admin idle notice, if the open question on an admin idle limit is decided that way). With the default 30-minute access token and the expiry clamped to the 60-minute mark, a marked admin login refreshes at most once. There is no admin grace notice and no remaining-file count. Storage copy commands return after scheduling a server task, and `verify-storage` is a short server-side round trip, so neither is a client transfer that outlives the cap. Admin API calls count as activity only for the admin login's family.
+`arkfile-admin` refreshes the way `arkfile-client` does, before a command, when the access token is inside a few minutes of expiry. Session writes are an atomic rename, with a file lock around refresh. A rejected refresh removes the saved session and prints the 60-minute notice (or the admin idle notice, if the open question on an admin idle limit is decided that way). With the default 30-minute access token and the expiry clamped to the 60-minute mark, a marked admin login refreshes at most once. There is no admin grace notice and no remaining-file count. Storage copy commands return after scheduling a server task, and `verify-storage` is a short server-side round trip, so neither is a client transfer that outlives the cap. Admin API calls count as activity only for the admin login's family.
 
 The CLI agent does not hold a refresh token. Offline `.arkbackup` operations do not create one of these sessions.
 
@@ -274,9 +274,11 @@ A sign-in lasts until you have gone 6 hours without using Arkfile, or until 24 h
 - The browser, `arkfile-client`, and `arkfile-admin` show a distinct notice for each cap. A browser or `arkfile-client` batch notice includes how many files were still queued and does not include filenames. Native browser export only reports files not started. The browser notice survives one reload of the same tab in `sessionStorage`, then is deleted. The admin notice is the 60-minute line, plus an idle line only if an admin idle limit is adopted.
 - Admin routes get `TokenRevocationMiddleware` as well as the lifetime check, the same stack the other full sessions already use. A marked `arkfile-admin` login lasts at most 60 minutes from login, with no extension and no grace; a request the server accepted before the mark runs to completion, and any request that starts after it is rejected.
 - Logout ends that login's family and still succeeds after either cap. It does not log out other devices. A later refresh of a logged-out family returns `session_logged_out`.
-- The user FAQ and `client/static/faq.html` both gain the "How long can I stay signed in?" question, in prose.
+- The user FAQ and `client/static/faq.html` answer "How long can I leave Arkfile unused before I need to sign in again?" in prose, covering both the six-hour idle limit and the 24-hour cap.
 
 ## Open questions
+
+These were left open on purpose. The shipped admin cap is 60 minutes from login, with no shorter idle limit.
 
 Should a marked admin login also have an idle limit inside the 60-minute cap? Without one, an SSH window left open on the server keeps a working admin login for up to an hour after the last command. A 15-minute idle limit would end it sooner, at the cost of logging in again after a short break. The recommendation is 15 minutes, since admin work tends to come in short bursts.
 

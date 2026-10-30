@@ -208,7 +208,7 @@ func TestRespondAccountRequiresReregistration_WithFiles_IncludesVerifier(t *test
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	require.NoError(t, respondAccountRequiresReregistration(c, target))
+	require.NoError(t, respondAccountRequiresReregistration(c, target, ""))
 	assert.Equal(t, http.StatusConflict, rec.Code)
 
 	var resp map[string]interface{}
@@ -239,7 +239,7 @@ func TestRespondAccountRequiresReregistration_NoFiles_OmitsVerifier(t *testing.T
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	require.NoError(t, respondAccountRequiresReregistration(c, target))
+	require.NoError(t, respondAccountRequiresReregistration(c, target, ""))
 	assert.Equal(t, http.StatusConflict, rec.Code)
 
 	var resp map[string]interface{}
