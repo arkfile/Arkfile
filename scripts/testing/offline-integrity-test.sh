@@ -171,14 +171,14 @@ run_short_fuzzing() {
 
 run_state_invariants() {
     go test ./handlers \
-        -run '^(TestClaimUploadCompletionIsSingleWinner|TestReleaseUploadCompletionClaimOnlyReopensCompletingState|TestDownloadShareChunk_AtomicDoubleSpendBlocked|TestDownloadShareChunk_AtomicConditionalFailure|TestBTCPayWebhookHandler_ConcurrentDeliveryCreditsOnce)$' \
+        -run '^(TestClaimUploadCompletionIsSingleWinner|TestReleaseUploadCompletionClaimOnlyReopensCompletingState|TestDownloadShareChunk_AtomicDoubleSpendBlocked|TestDownloadShareChunk_AtomicConditionalFailure)$' \
         -count=1 || return 1
     go test ./logging -run '^TestSecurityEventSensitiveDataExclusion$' -count=1
 }
 
 run_race_invariants() {
     go test -race ./handlers ./billing \
-        -run '^(TestClaimUploadCompletionIsSingleWinner|TestReleaseUploadCompletionClaimOnlyReopensCompletingState|TestDownloadShareChunk_AtomicDoubleSpendBlocked|TestDownloadShareChunk_AtomicConditionalFailure|TestBTCPayWebhookHandler_ConcurrentDeliveryCreditsOnce|TestProcessSubscriptionBridgeCallback_ConcurrentIdempotency)$' \
+        -run '^(TestClaimUploadCompletionIsSingleWinner|TestReleaseUploadCompletionClaimOnlyReopensCompletingState|TestDownloadShareChunk_AtomicDoubleSpendBlocked|TestDownloadShareChunk_AtomicConditionalFailure|TestProcessSubscriptionBridgeCallback_ConcurrentIdempotency)$' \
         -count=1
 }
 

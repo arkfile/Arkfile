@@ -664,7 +664,7 @@ Scaffolding only. Not designed here.
 - Whether `storage_limit_bytes` is replaced by a credit-balance-derived cap or kept independent.
 - Per-user free-baseline overrides (grandfathered users, etc.).
 - Bandwidth/egress billing.
-- BTCPay (Lightning, on-chain BTC, Monero, stablecoins) and Stripe webhook handler shapes; idempotent invoice table; PII-scrubbing posture for Stripe `Customer` objects (`email=null`, `name=null`).
+- A future one-time top-up provider behind `payments.PaymentProvider`, and the Subscription Bridge card path. The invoice table is already generic. Stripe customer objects, if used, stay on the bridge (`email=null`, `name=null`).
 - Stripe.js gating: default off; loaded only after explicit user opt-in click ("click here to confirm you want to pay with a credit card instead of more private options such as Bitcoin, stablecoins, or Monero"); CSP exception only on the opt-in path.
 - Auto-top-up policy and operator-configured monthly cap.
 - Refund / pull-payment flow.

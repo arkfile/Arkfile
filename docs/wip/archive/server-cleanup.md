@@ -333,7 +333,7 @@ CLI `formatFileSize` and section divider cleanup in `cmd/arkfile-client`. Full t
 | Shares | `/api/shares`, `/api/public/shares/:id/{envelope,ticket,metadata,chunks}`, `/shared/:id` via `GetSharedFile` |
 | Admin | list/approve/update users, force-logout, MFA reset, security-events, storage ops, billing, payments, subscriptions |
 | Dev/test only | `/api/admin/dev-test/billing/tick-now`, `/api/admin/dev-test/registration-throttle/reset` |
-| Billing/payments | credits, invoice create, BTCPay and subscription-bridge webhooks |
+| Billing/payments | credits, invoice create, subscription-bridge webhook |
 | Probes | `main.go` inline `/healthz` and `/readyz` |
 
 ## Not exercised by E2E (safe to remove or must add coverage)

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -491,32 +490,12 @@ func RateLimitMiddleware(endpointConfig config.EndpointConfig) echo.MiddlewareFu
 	}
 }
 
-// paymentProviderFrameOrigin returns scheme://host for BTCPay checkout iframe embedding.
-func paymentProviderFrameOrigin(serverURL string) string {
-	serverURL = strings.TrimSpace(serverURL)
-	if serverURL == "" {
-		return ""
-	}
-	u, err := url.Parse(strings.TrimSuffix(serverURL, "/"))
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return ""
-	}
-	return u.Scheme + "://" + u.Host
-}
-
-// buildContentSecurityPolicy assembles the CSP header, optionally allowing the
-// configured BTCPay Server origin for checkout iframe embedding.
+// buildContentSecurityPolicy assembles the CSP header.
+// Checkout iframes stay same-origin until a payment provider is configured.
 func buildContentSecurityPolicy() string {
 	frameSrc := "'self'"
-	if cfg := config.GetConfig(); cfg.Payments.Enabled {
-		if origin := paymentProviderFrameOrigin(cfg.Payments.BTCPayServerURL); origin != "" {
-			frameSrc += " " + origin
-		}
-	}
 
 	// Note: 'wasm-unsafe-eval' is required for OPAQUE WebAssembly authentication.
-	// frame-src includes the BTCPay Server origin when payments are enabled so
-	// the billing top-up modal can embed the provider checkout page.
 	return "default-src 'self'; " +
 		"script-src 'self' 'wasm-unsafe-eval'; " +
 		"style-src 'self' 'unsafe-inline'; " +

@@ -79,7 +79,7 @@ BILLING COMMANDS (storage credits / usage metering):
 PAYMENTS COMMANDS:
     payments list                         List invoice payments
     payments show ID                      Show one invoice payment
-    payments sync-invoice ID              Sync invoice status from BTCPay
+    payments sync-invoice ID              Sync invoice status from the provider
     payments reconcile                    Reconcile payments ledger
 
     See 'arkfile-admin payments --help' for full subcommand documentation.

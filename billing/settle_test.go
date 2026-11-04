@@ -28,8 +28,7 @@ func TestSettlePaymentInvoice_CreditsThenMarksPaid(t *testing.T) {
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY(username) REFERENCES users(username) ON DELETE RESTRICT,
-			CHECK(status IN ('creating', 'pending', 'paid', 'expired', 'failed')),
-			CHECK(provider IN ('btcpay'))
+			CHECK(status IN ('creating', 'pending', 'paid', 'expired', 'failed'))
 		);
 	`); err != nil {
 		t.Fatalf("create payment_invoices: %v", err)
@@ -37,7 +36,7 @@ func TestSettlePaymentInvoice_CreditsThenMarksPaid(t *testing.T) {
 	if _, err := db.Exec(`
 		INSERT INTO payment_invoices
 		  (invoice_id, username, amount_usd_microcents, status, provider, provider_invoice_id)
-		VALUES ('inv_settle1', 'alice', 250000000, 'pending', 'btcpay', 'prov_settle1')
+		VALUES ('inv_settle1', 'alice', 250000000, 'pending', 'testprov', 'prov_settle1')
 	`); err != nil {
 		t.Fatalf("seed invoice: %v", err)
 	}
@@ -47,11 +46,11 @@ func TestSettlePaymentInvoice_CreditsThenMarksPaid(t *testing.T) {
 		Username:            "alice",
 		AmountUSDMicrocents: 250000000,
 		Status:              "pending",
-		Provider:            "btcpay",
+		Provider:            "testprov",
 		ProviderInvoiceID:   "prov_settle1",
 	}
 
-	tx, err := SettlePaymentInvoice(db, invoice, "btcpay")
+	tx, err := SettlePaymentInvoice(db, invoice, "testprov")
 	if err != nil {
 		t.Fatalf("SettlePaymentInvoice: %v", err)
 	}
@@ -83,8 +82,7 @@ func TestSettlePaymentInvoice_RepairPaidWithoutCredit(t *testing.T) {
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY(username) REFERENCES users(username) ON DELETE RESTRICT,
-			CHECK(status IN ('creating', 'pending', 'paid', 'expired', 'failed')),
-			CHECK(provider IN ('btcpay'))
+			CHECK(status IN ('creating', 'pending', 'paid', 'expired', 'failed'))
 		);
 	`); err != nil {
 		t.Fatalf("create payment_invoices: %v", err)
@@ -92,7 +90,7 @@ func TestSettlePaymentInvoice_RepairPaidWithoutCredit(t *testing.T) {
 	if _, err := db.Exec(`
 		INSERT INTO payment_invoices
 		  (invoice_id, username, amount_usd_microcents, status, provider, provider_invoice_id)
-		VALUES ('inv_orphan1', 'alice', 100000000, 'paid', 'btcpay', 'prov_orphan1')
+		VALUES ('inv_orphan1', 'alice', 100000000, 'paid', 'testprov', 'prov_orphan1')
 	`); err != nil {
 		t.Fatalf("seed invoice: %v", err)
 	}
@@ -102,11 +100,11 @@ func TestSettlePaymentInvoice_RepairPaidWithoutCredit(t *testing.T) {
 		Username:            "alice",
 		AmountUSDMicrocents: 100000000,
 		Status:              "paid",
-		Provider:            "btcpay",
+		Provider:            "testprov",
 		ProviderInvoiceID:   "prov_orphan1",
 	}
 
-	if _, err := SettlePaymentInvoice(db, invoice, "btcpay"); err != nil {
+	if _, err := SettlePaymentInvoice(db, invoice, "testprov"); err != nil {
 		t.Fatalf("SettlePaymentInvoice repair: %v", err)
 	}
 

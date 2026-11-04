@@ -564,6 +564,7 @@ func runSchemaMigrations() {
 	log.Printf("Migration: Backfill session families completed")
 
 	migrateCreditTransactionsPaymentType()
+	migratePaymentInvoicesDropProviderCheck()
 }
 
 // migrateCreditTransactionsPaymentType rebuilds credit_transactions when the CHECK
@@ -612,6 +613,54 @@ func migrateCreditTransactionsPaymentType() {
 		CREATE INDEX IF NOT EXISTS idx_credit_transactions_admin ON credit_transactions(admin_username);
 	`
 
+	if _, err := database.DB.Exec(rebuildSQL); err != nil {
+		log.Printf("Migration: %s failed: %v", desc, err)
+		return
+	}
+	log.Printf("Migration: %s applied successfully", desc)
+}
+
+// migratePaymentInvoicesDropProviderCheck rebuilds an empty or populated
+// payment_invoices table that still constrains provider to a single name.
+// Existing rows are copied. Fresh databases created from unified_schema.sql
+// do not have that constraint.
+func migratePaymentInvoicesDropProviderCheck() {
+	const desc = "Drop payment_invoices provider name check"
+	var createSQL string
+	err := database.DB.QueryRow(
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'payment_invoices'`,
+	).Scan(&createSQL)
+	if err != nil {
+		log.Printf("Migration: %s skipped (table missing): %v", desc, err)
+		return
+	}
+	if !strings.Contains(createSQL, "CHECK(provider") {
+		log.Printf("Migration: %s (already applied)", desc)
+		return
+	}
+
+	rebuildSQL := `
+		CREATE TABLE payment_invoices_new (
+			invoice_id TEXT PRIMARY KEY,
+			username TEXT NOT NULL,
+			amount_usd_microcents BIGINT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'creating',
+			provider TEXT NOT NULL,
+			provider_invoice_id TEXT UNIQUE,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY(username) REFERENCES users(username) ON DELETE RESTRICT,
+			CHECK(status IN ('creating', 'pending', 'paid', 'expired', 'failed'))
+		);
+		INSERT INTO payment_invoices_new
+			(invoice_id, username, amount_usd_microcents, status, provider, provider_invoice_id, created_at, updated_at)
+		SELECT invoice_id, username, amount_usd_microcents, status, provider, provider_invoice_id, created_at, updated_at
+		FROM payment_invoices;
+		DROP TABLE payment_invoices;
+		ALTER TABLE payment_invoices_new RENAME TO payment_invoices;
+		CREATE INDEX IF NOT EXISTS idx_payment_invoices_username ON payment_invoices(username);
+		CREATE INDEX IF NOT EXISTS idx_payment_invoices_provider_invoice_id ON payment_invoices(provider_invoice_id);
+	`
 	if _, err := database.DB.Exec(rebuildSQL); err != nil {
 		log.Printf("Migration: %s failed: %v", desc, err)
 		return

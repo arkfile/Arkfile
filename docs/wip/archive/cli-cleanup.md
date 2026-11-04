@@ -536,7 +536,7 @@ Classify each `|| true` into: **teardown** (keep), **best-effort setup** (replac
 
 **Auth/session/agent (verified 2026-07-17):** removes cached MFA enrollment shortcuts; redacts credential logging; refresh rotation and MFA-reset JWT revocation; agent digest privacy and expired-session rejection; prerequisite IDs fail closed instead of SKIP.
 
-**Broader billing/subscriptions/storage/throttle (verified 2026-07-18):** removes `|| true` from subscription gift/bridge CLI steps, registration-throttle register loops, and post-test `set-approval-policy`; tightens billing drain and PAYG cap loops to fail on non-zero admin exits; requires exact `copy-all` skip count; requires exit 0 for post-cancel top-up; secondary empty check uses `storage-status --json`; BTCPay mock returns unique `btcpay_mock_<invoice_id>` provider IDs.
+**Broader billing/subscriptions/storage/throttle (verified 2026-07-18):** removes `|| true` from subscription gift/bridge CLI steps, registration-throttle register loops, and post-test `set-approval-policy`; tightens billing drain and PAYG cap loops to fail on non-zero admin exits; requires exact `copy-all` skip count; requires exit 0 for post-cancel top-up; secondary empty check uses `storage-status --json`.
 
 **Preflight regressions:** preflight now exercises `arkfile-client version`, `arkfile-admin version`, `billing set-price --json 19.99`, and trailing `billing set-price 19.99 --json`.
 
@@ -574,7 +574,7 @@ Work in an order that fixes silent correctness bugs before cosmetic cleanup:
 
 | Gate | Command | Result |
 |------|---------|--------|
-| Shell E2E | `bash scripts/testing/e2e-test.sh` (after `dev-reset.sh`) | **227/227 PASS** -- includes auth/session/agent hardening, broader hedging removal, `version`/`--json` regressions, JSON secondary storage check, unique BTCPay mock provider IDs |
+| Shell E2E | `bash scripts/testing/e2e-test.sh` (after `dev-reset.sh`) | **227/227 PASS** -- includes auth/session/agent hardening, broader hedging removal, `version`/`--json` regressions, JSON secondary storage check |
 | Go unit/integration | `source scripts/setup/build-config.sh && export CGO_ENABLED=1 CGO_CFLAGS="$(cli_fido_cgo_cflags)" CGO_LDFLAGS="$(cli_fido_cgo_ldflags "$PWD")" && go test ./... -count=1` | **All packages PASS** (~87s) -- `auth`, `handlers`, `storage`, `cmd/arkfile-admin`, `cmd/arkfile-client`, `cli/mfa`, `cli/flags`, `clictap`, and the rest; packages without `_test.go` report `[no test files]` as expected |
 | Playwright E2E | `sudo bash scripts/testing/e2e-playwright.sh` | Not run in this verification pass |
 

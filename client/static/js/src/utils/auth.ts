@@ -363,7 +363,7 @@ export class AuthManager {
     }, this.AUTO_REFRESH_INTERVAL);
   }
 
-  /** Refresh the session when the user returns to this tab (e.g. from BTCPay checkout). */
+  /** Refresh the session when the user returns to this tab (for example from checkout). */
   public static attachVisibilityRefresh(): void {
     if (this.visibilityRefreshAttached || typeof document === 'undefined') {
       return;

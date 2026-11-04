@@ -36,8 +36,7 @@ func openPaymentInvoicesTestDB(t *testing.T) *sql.DB {
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY(username) REFERENCES users(username) ON DELETE RESTRICT,
-			CHECK(status IN ('creating', 'pending', 'paid', 'expired', 'failed')),
-			CHECK(provider IN ('btcpay'))
+			CHECK(status IN ('creating', 'pending', 'paid', 'expired', 'failed'))
 		);
 	`
 	if _, err := db.Exec(schema); err != nil {
@@ -58,7 +57,7 @@ func TestPaymentInvoiceCRUD(t *testing.T) {
 		Username:            "alice",
 		AmountUSDMicrocents: 500_000_000,
 		Status:              "pending",
-		Provider:            "btcpay",
+		Provider:            "testprov",
 		ProviderInvoiceID:   "prov_001",
 	}
 	if err := CreatePaymentInvoice(db, inv); err != nil {
@@ -98,9 +97,9 @@ func TestListPaymentInvoices_Filters(t *testing.T) {
 	defer db.Close()
 
 	seed := []PaymentInvoice{
-		{InvoiceID: "inv_a1", Username: "alice", AmountUSDMicrocents: 100, Status: "pending", Provider: "btcpay", ProviderInvoiceID: "p1"},
-		{InvoiceID: "inv_a2", Username: "alice", AmountUSDMicrocents: 200, Status: "paid", Provider: "btcpay", ProviderInvoiceID: "p2"},
-		{InvoiceID: "inv_b1", Username: "bob", AmountUSDMicrocents: 300, Status: "pending", Provider: "btcpay", ProviderInvoiceID: "p3"},
+		{InvoiceID: "inv_a1", Username: "alice", AmountUSDMicrocents: 100, Status: "pending", Provider: "testprov", ProviderInvoiceID: "p1"},
+		{InvoiceID: "inv_a2", Username: "alice", AmountUSDMicrocents: 200, Status: "paid", Provider: "testprov", ProviderInvoiceID: "p2"},
+		{InvoiceID: "inv_b1", Username: "bob", AmountUSDMicrocents: 300, Status: "pending", Provider: "testprov", ProviderInvoiceID: "p3"},
 	}
 	for i := range seed {
 		if err := CreatePaymentInvoice(db, &seed[i]); err != nil {

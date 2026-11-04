@@ -2,10 +2,7 @@ package handlers
 
 import (
 	"context"
-	"database/sql"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -39,13 +36,13 @@ func CreateInvoiceHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal configuration error")
 	}
 
-	if !cfg.Payments.Enabled {
-		return echo.NewHTTPError(http.StatusForbidden, "Payments integration is disabled")
-	}
-
 	if !billing.ShouldAllowTopUp(database.DB, username) {
 		return echo.NewHTTPError(http.StatusConflict,
 			"Top-ups are not available while you have an active subscription. Manage your plan from billing or use `arkfile-client subscription portal`.")
+	}
+
+	if !cfg.Payments.Enabled {
+		return echo.NewHTTPError(http.StatusForbidden, "Payments integration is disabled")
 	}
 
 	var req CreateInvoiceRequest
@@ -92,7 +89,7 @@ func CreateInvoiceHandler(c echo.Context) error {
 		Username:            username,
 		AmountUSDMicrocents: amountMicrocents,
 		Status:              "creating",
-		Provider:            "btcpay",
+		Provider:            provider.Name(),
 	}
 	if err := models.CreatePaymentInvoice(database.DB, invoice); err != nil {
 		existing, getErr := models.GetPaymentInvoice(database.DB, invoiceID)
@@ -131,7 +128,7 @@ func CreateInvoiceHandler(c echo.Context) error {
 		"data": map[string]interface{}{
 			"invoice_id":   invoiceID,
 			"checkout_url": provInv.CheckoutURL,
-			"provider":     "btcpay",
+			"provider":     provider.Name(),
 		},
 	})
 }
@@ -159,125 +156,6 @@ func GetInvoiceStatusHandler(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"success": true,
 		"data":    invoice,
-	})
-}
-
-func BTCPayWebhookHandler(c echo.Context) error {
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		logging.ErrorLogger.Printf("Webhook: failed to load config: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Internal configuration error")
-	}
-
-	if !cfg.Payments.Enabled {
-		return echo.NewHTTPError(http.StatusForbidden, "Payments integration is disabled")
-	}
-
-	sigHeader := c.Request().Header.Get("BTCPay-Sig")
-	if sigHeader == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "Missing BTCPay-Sig header")
-	}
-
-	const maxWebhookBodyBytes = 64 << 10
-	c.Request().Body = http.MaxBytesReader(c.Response(), c.Request().Body, maxWebhookBodyBytes)
-	body, err := io.ReadAll(c.Request().Body)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusRequestEntityTooLarge, "Webhook body is invalid or too large")
-	}
-
-	if !payments.VerifyBTCPaySignature(body, sigHeader, cfg.Payments.BTCPayWebhookSecret) {
-		logging.ErrorLogger.Printf("Webhook signature verification failed")
-		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid signature")
-	}
-
-	var payload struct {
-		Type      string `json:"type"`
-		InvoiceID string `json:"invoiceId"`
-		StoreID   string `json:"storeId"`
-		Metadata  struct {
-			InvoiceID string `json:"invoice_id"`
-		} `json:"metadata"`
-	}
-
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid JSON payload")
-	}
-
-	if payload.StoreID != cfg.Payments.BTCPayStoreID {
-		return echo.NewHTTPError(http.StatusForbidden, "Webhook store does not match")
-	}
-	if payload.Type != "InvoiceSettled" {
-		return c.JSON(http.StatusOK, map[string]interface{}{"success": true, "message": "Ignored event type"})
-	}
-
-	localInvoiceID := payload.Metadata.InvoiceID
-	providerInvoiceID := payload.InvoiceID
-
-	if localInvoiceID == "" && providerInvoiceID == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "Webhook invoice identifier is required")
-	}
-
-	var invoice *models.PaymentInvoice
-	if localInvoiceID != "" {
-		invoice, err = models.GetPaymentInvoice(database.DB, localInvoiceID)
-		if err != nil {
-			logging.ErrorLogger.Printf("Webhook local payment invoice was not found")
-			return echo.NewHTTPError(http.StatusServiceUnavailable, "Invoice association is not available yet")
-		}
-		if providerInvoiceID != "" {
-			providerBound, providerErr := models.GetPaymentInvoiceByProviderID(database.DB, providerInvoiceID)
-			if providerErr == nil && providerBound.InvoiceID != invoice.InvoiceID {
-				logging.ErrorLogger.Printf("Webhook invoice %s has conflicting identifiers", invoice.InvoiceID)
-				return echo.NewHTTPError(http.StatusConflict, "Webhook invoice identifiers conflict")
-			}
-			if providerErr != nil && providerErr != sql.ErrNoRows {
-				return echo.NewHTTPError(http.StatusServiceUnavailable, "Invoice association is not available yet")
-			}
-			if invoice.ProviderInvoiceID == "" && invoice.Status == "creating" {
-				if err := models.AttachPaymentProviderInvoice(database.DB, invoice.InvoiceID, providerInvoiceID); err != nil {
-					return echo.NewHTTPError(http.StatusServiceUnavailable, "Invoice association is not available yet")
-				}
-				invoice.ProviderInvoiceID = providerInvoiceID
-				invoice.Status = "pending"
-			} else if invoice.ProviderInvoiceID != providerInvoiceID {
-				logging.ErrorLogger.Printf("Webhook invoice %s has conflicting identifiers", invoice.InvoiceID)
-				return echo.NewHTTPError(http.StatusConflict, "Webhook invoice identifiers conflict")
-			}
-		}
-	} else {
-		invoice, err = models.GetPaymentInvoiceByProviderID(database.DB, providerInvoiceID)
-		if err != nil {
-			logging.ErrorLogger.Printf("Webhook provider payment invoice was not found")
-			return echo.NewHTTPError(http.StatusServiceUnavailable, "Invoice association is not available yet")
-		}
-	}
-
-	if invoice.Status == "paid" {
-		hasCredit, chkErr := models.CreditTransactionExistsForProviderID(database.DB, invoice.ProviderInvoiceID)
-		if chkErr != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
-		}
-		if hasCredit {
-			return c.JSON(http.StatusOK, map[string]interface{}{"success": true, "message": "Invoice already paid"})
-		}
-	}
-
-	if SettlePaymentInvoiceFunc == nil {
-		logging.ErrorLogger.Printf("Webhook CRITICAL: SettlePaymentInvoiceFunc is not wired")
-		return echo.NewHTTPError(http.StatusInternalServerError, "System integration error")
-	}
-
-	_, err = SettlePaymentInvoiceFunc(database.DB, invoice, "btcpay")
-	if err != nil {
-		logging.ErrorLogger.Printf("Webhook failed to settle payment invoice %s: %v", invoice.InvoiceID, err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to credit payment balance")
-	}
-
-	logging.InfoLogger.Printf("Webhook settled payment invoice %s", invoice.InvoiceID)
-
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"success": true,
-		"message": "Payment processed successfully",
 	})
 }
 
@@ -343,7 +221,7 @@ func AdminSyncInvoiceHandler(c echo.Context) error {
 		if SettlePaymentInvoiceFunc == nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "SettlePaymentInvoiceFunc is not wired")
 		}
-		_, err = SettlePaymentInvoiceFunc(database.DB, invoice, "btcpay")
+		_, err = SettlePaymentInvoiceFunc(database.DB, invoice, invoice.Provider)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to credit user balance")
 		}
@@ -368,14 +246,15 @@ func AdminSyncInvoiceHandler(c echo.Context) error {
 
 	remoteStatus, err := provider.GetInvoiceStatus(context.Background(), invoice.ProviderInvoiceID)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to query BTCPay Server: %v", err))
+		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to query payment provider: %v", err))
 	}
 
-	if remoteStatus == "Settled" {
+	switch remoteStatus {
+	case "paid":
 		if SettlePaymentInvoiceFunc == nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "SettlePaymentInvoiceFunc is not wired")
 		}
-		_, err = SettlePaymentInvoiceFunc(database.DB, invoice, "btcpay")
+		_, err = SettlePaymentInvoiceFunc(database.DB, invoice, invoice.Provider)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to credit user balance")
 		}
@@ -385,28 +264,22 @@ func AdminSyncInvoiceHandler(c echo.Context) error {
 			"data":    invoice,
 			"message": "Invoice successfully synchronized and settled",
 		})
-	}
-
-	if remoteStatus == "Expired" || remoteStatus == "Invalid" {
-		status := "expired"
-		if remoteStatus == "Invalid" {
-			status = "failed"
-		}
-		if err := models.UpdatePaymentInvoiceStatus(database.DB, invoice.InvoiceID, status); err != nil {
+	case "expired", "failed":
+		if err := models.UpdatePaymentInvoiceStatus(database.DB, invoice.InvoiceID, remoteStatus); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Database update error")
 		}
-		invoice.Status = status
+		invoice.Status = remoteStatus
 		return c.JSON(http.StatusOK, map[string]interface{}{
 			"success": true,
 			"data":    invoice,
-			"message": fmt.Sprintf("Invoice synced and updated to status: %s", status),
+			"message": fmt.Sprintf("Invoice synced and updated to status: %s", remoteStatus),
 		})
 	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"success": true,
 		"data":    invoice,
-		"message": fmt.Sprintf("Invoice checked. Current BTCPay state is %s", remoteStatus),
+		"message": fmt.Sprintf("Invoice checked. Current provider state is %s", remoteStatus),
 	})
 }
 
@@ -423,12 +296,12 @@ func AdminReconcilePaymentsHandler(c echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Payments provider is not configured")
 	}
-	report, err := billing.ReconcilePendingInvoices(c.Request().Context(), database.DB, provider, "btcpay", 50, 10*time.Second)
+	report, err := billing.ReconcilePendingInvoices(c.Request().Context(), database.DB, provider, provider.Name(), 50, 10*time.Second)
 	if err != nil {
 		logging.ErrorLogger.Printf("Admin pending payment reconciliation failed")
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to reconcile pending payment invoices")
 	}
-	repaired, err := billing.ReconcilePaidInvoices(database.DB, "btcpay")
+	repaired, err := billing.ReconcilePaidInvoices(database.DB)
 	if err != nil {
 		logging.ErrorLogger.Printf("Admin paid payment reconciliation failed")
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to reconcile payment invoices")

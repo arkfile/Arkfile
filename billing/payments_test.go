@@ -66,7 +66,7 @@ func TestProcessPayment_CreditsBalanceAndLedger(t *testing.T) {
 		t.Fatalf("seed balance: %v", err)
 	}
 
-	tx, err := ProcessPayment(db, "alice", 1_000_000_000, "btcpay_prov_abc", "btcpay")
+	tx, err := ProcessPayment(db, "alice", 1_000_000_000, "testprov_prov_abc", "testprov")
 	if err != nil {
 		t.Fatalf("ProcessPayment: %v", err)
 	}
@@ -76,15 +76,15 @@ func TestProcessPayment_CreditsBalanceAndLedger(t *testing.T) {
 	if tx.BalanceAfterUSDMicrocents != 999_995_000 {
 		t.Errorf("balance_after = %d, want 999995000", tx.BalanceAfterUSDMicrocents)
 	}
-	if tx.Reason == nil || *tx.Reason != "Payment top-up via btcpay" {
-		t.Errorf("reason = %v, want Payment top-up via btcpay", tx.Reason)
+	if tx.Reason == nil || *tx.Reason != "Payment top-up via testprov" {
+		t.Errorf("reason = %v, want Payment top-up via testprov", tx.Reason)
 	}
 	if tx.TransactionType != "payment" {
 		t.Errorf("transaction_type = %q, want payment", tx.TransactionType)
 	}
 
 	var txType string
-	if err := db.QueryRow(`SELECT transaction_type FROM credit_transactions WHERE transaction_id = 'btcpay_prov_abc'`).Scan(&txType); err != nil {
+	if err := db.QueryRow(`SELECT transaction_type FROM credit_transactions WHERE transaction_id = 'testprov_prov_abc'`).Scan(&txType); err != nil {
 		t.Fatalf("read transaction type: %v", err)
 	}
 	if txType != "payment" {
@@ -100,10 +100,10 @@ func TestProcessPayment_CreditsBalanceAndLedger(t *testing.T) {
 	}
 
 	var reason string
-	if err := db.QueryRow(`SELECT reason FROM credit_transactions WHERE transaction_id = 'btcpay_prov_abc'`).Scan(&reason); err != nil {
+	if err := db.QueryRow(`SELECT reason FROM credit_transactions WHERE transaction_id = 'testprov_prov_abc'`).Scan(&reason); err != nil {
 		t.Fatalf("read transaction: %v", err)
 	}
-	if reason != "Payment top-up via btcpay" {
+	if reason != "Payment top-up via testprov" {
 		t.Errorf("stored reason = %q", reason)
 	}
 }
@@ -112,7 +112,7 @@ func TestProcessPayment_CreatesUserCreditsWhenMissing(t *testing.T) {
 	db := openPaymentsTestDB(t)
 	defer db.Close()
 
-	tx, err := ProcessPayment(db, "alice", 500_000_000, "btcpay_prov_new", "btcpay")
+	tx, err := ProcessPayment(db, "alice", 500_000_000, "testprov_prov_new", "testprov")
 	if err != nil {
 		t.Fatalf("ProcessPayment: %v", err)
 	}
@@ -125,10 +125,10 @@ func TestProcessPayment_RejectsDuplicateProviderTxID(t *testing.T) {
 	db := openPaymentsTestDB(t)
 	defer db.Close()
 
-	if _, err := ProcessPayment(db, "alice", 100_000_000, "btcpay_dup", "btcpay"); err != nil {
+	if _, err := ProcessPayment(db, "alice", 100_000_000, "testprov_dup", "testprov"); err != nil {
 		t.Fatalf("first ProcessPayment: %v", err)
 	}
-	_, err := ProcessPayment(db, "alice", 100_000_000, "btcpay_dup", "btcpay")
+	_, err := ProcessPayment(db, "alice", 100_000_000, "testprov_dup", "testprov")
 	if err == nil {
 		t.Fatal("expected duplicate transaction_id error")
 	}
@@ -155,7 +155,7 @@ func TestProcessPayment_ValidationErrors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := ProcessPayment(db, tc.username, tc.amount, tc.providerID, "btcpay")
+			_, err := ProcessPayment(db, tc.username, tc.amount, tc.providerID, "testprov")
 			if err == nil {
 				t.Fatal("expected error")
 			}

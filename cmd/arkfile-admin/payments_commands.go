@@ -38,12 +38,12 @@ func handlePaymentsCommand(client *HTTPClient, config *AdminConfig, args []strin
 func printPaymentsUsage() {
 	fmt.Print(`Usage: arkfile-admin payments SUBCOMMAND [FLAGS]
 
-BTCPay Server / invoice payments admin operations.
+Invoice payments admin operations. Automated top-ups stay disabled until a payment provider is configured.
 
 SUBCOMMANDS:
     show <invoice_id>                     Show details for a specific payment invoice.
     list [--user NAME] [--status STATUS]  List payment invoices with optional filters.
-    sync-invoice <invoice_id>             Sync local invoice state with BTCPay Server.
+    sync-invoice <invoice_id>             Sync local invoice state with the payment provider.
     reconcile                             Credit paid invoices missing ledger rows.
 
 GLOBAL FLAGS:
@@ -178,7 +178,7 @@ func handlePaymentsSyncInvoiceCommand(client *HTTPClient, config *AdminConfig, a
 	fs.Usage = func() {
 		fmt.Print(`Usage: arkfile-admin payments sync-invoice <invoice_id> [--json]
 
-Query BTCPay Server to synchronize the state of a pending invoice.
+Query the payment provider to synchronize the state of a pending invoice.
 `)
 	}
 	if err := fs.Parse(args); err != nil {

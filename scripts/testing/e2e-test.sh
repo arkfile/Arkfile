@@ -681,68 +681,6 @@ stop_agent() {
     warning "Agent may still be running after stop attempt"
 }
 
-# Mock BTCPay server for payments group
-
-stop_mock_btcpay_server() {
-    local mock_pid="${1:-}"
-    if [ -n "$mock_pid" ]; then
-        kill "$mock_pid" 2>/dev/null || true
-        wait "$mock_pid" 2>/dev/null || true
-    fi
-}
-
-wait_for_mock_btcpay_port() {
-    local mock_pid="$1"
-    local mock_log="$2"
-    local i
-
-    for i in $(seq 1 60); do
-        if curl -s --connect-timeout 1 http://127.0.0.1:3000/ >/dev/null 2>&1; then
-            info "Mock BTCPay server is listening on :3000"
-            return 0
-        fi
-        if [ -n "$mock_pid" ] && ! kill -0 "$mock_pid" 2>/dev/null; then
-            error "Mock BTCPay process exited before becoming ready"
-            [ -f "$mock_log" ] && cat "$mock_log"
-            return 1
-        fi
-        sleep 1
-    done
-
-    error "Mock BTCPay did not become ready within 60s"
-    [ -f "$mock_log" ] && cat "$mock_log"
-    return 1
-}
-
-start_mock_btcpay_server() {
-    local e2e_script_dir="$1"
-    local go_bin="$2"
-    local mock_bin="$TEST_DATA_DIR/btcpay-mock"
-    local mock_log="$TEST_DATA_DIR/btcpay-mock.log"
-    local mock_src="$e2e_script_dir/btcpay-mock.go"
-    local mock_pid
-
-    : > "$mock_log"
-
-    info "Building mock BTCPay server..."
-    if ! "$go_bin" build -o "$mock_bin" "$mock_src" >>"$mock_log" 2>&1; then
-        error "Failed to build mock BTCPay server"
-        cat "$mock_log"
-        return 1
-    fi
-
-    info "Starting mock BTCPay server..."
-    "$mock_bin" >>"$mock_log" 2>&1 &
-    mock_pid=$!
-
-    if ! wait_for_mock_btcpay_port "$mock_pid" "$mock_log"; then
-        stop_mock_btcpay_server "$mock_pid"
-        return 1
-    fi
-
-    echo "$mock_pid"
-}
-
 # TEST PHASES
 
 run_preflight() {
@@ -4272,35 +4210,6 @@ run_billing() {
 run_payments() {
     group "Payments"
 
-    local e2e_script_dir mock_pid go_bin
-
-    e2e_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-    go_bin="go"
-    if ! command -v go >/dev/null 2>&1; then
-        for path in "/usr/local/go/bin/go" "/usr/local/bin/go" "/usr/bin/go"; do
-            if [ -x "$path" ]; then
-                go_bin="$path"
-                break
-            fi
-        done
-    fi
-
-    info "Using Go binary: $go_bin"
-    mock_pid=$(start_mock_btcpay_server "$e2e_script_dir" "$go_bin") || {
-        record_test "Start mock BTCPay server" "FAIL"
-    }
-    record_test "Start mock BTCPay server" "PASS"
-
-    # Temporarily enable payments configuration in process environment for testing
-    export ARKFILE_PAYMENTS_ENABLED=true
-    export ARKFILE_BTCPAY_SERVER_URL="http://localhost:3000"
-    export ARKFILE_BTCPAY_STORE_ID="test_store_id"
-    export ARKFILE_BTCPAY_API_KEY="test_api_key"
-    export ARKFILE_BTCPAY_WEBHOOK_SECRET="test_webhook_secret"
-    export ARKFILE_MIN_TOP_UP_USD="0.50"
-    export ARKFILE_MAX_TOP_UP_USD="1000.00"
-
     scenario "Retrieve user token and payments status"
 
     if [ -f "$MFA_ADMIN_RESET_DONE_FILE" ]; then
@@ -4319,8 +4228,9 @@ run_payments() {
 
     # Billing (admin-only) leaves the test user slightly negative.  User CLI
     # steps run here -- after post-admin-reset MFA re-enrollment -- so upload
-    # and download probes have a valid session.  Invoice top-up below restores
-    # balance afterward.
+    # and download probes have a valid session.  The drained balance stays
+    # until teardown, which gifts the account back to $10.00. Automated
+    # top-ups are disabled.
     local cap_microcents=1000000000   # $10.00 in microcents
     local cap_test_file="$TEST_DATA_DIR/payg_cap_probe.bin"
     head -c 2048 /dev/urandom > "$cap_test_file" 2>/dev/null || \
@@ -4465,145 +4375,33 @@ run_payments() {
     local user_token
     user_token=$(jq -r '.access_token // empty' "$HOME/.arkfile-session.json" 2>/dev/null)
 
-    # Check credits endpoint includes payments config
+    # Credits must not advertise an automated top-up provider.
     local credits_out credits_code
     safe_exec credits_out credits_code \
         curl -s -k -H "Authorization: Bearer $user_token" "$SERVER_URL/api/credits"
 
-    if [ $credits_code -eq 0 ] && echo "$credits_out" | grep -q '"payments"'; then
-        record_test "User credits endpoint includes payments config" "PASS"
-        info "Credits response: $credits_out"
+    if [ $credits_code -eq 0 ] && ! echo "$credits_out" | grep -q '"payments"'; then
+        record_test "User credits endpoint omits payments config" "PASS"
     else
-        error "Credits response missing payments block: $credits_out"
-        record_test "User credits endpoint includes payments config" "FAIL"
+        error "Credits response unexpectedly includes a payments block: $credits_out"
+        record_test "User credits endpoint omits payments config" "FAIL"
     fi
 
-    scenario "Create payment invoice and admin list"
+    scenario "Invoice API rejected while automated top-ups are disabled"
 
-    # Create invoice via API
-    local invoice_out invoice_code
-    safe_exec invoice_out invoice_code \
-        curl -s -k -X POST -H "Authorization: Bearer $user_token" \
+    local invoice_raw invoice_http
+    invoice_raw=$(curl -sk -w '\n%{http_code}' -X POST \
+        -H "Authorization: Bearer $user_token" \
         -H "Content-Type: application/json" \
         -d '{"amount_usd":"10.00"}' \
-        "$SERVER_URL/api/billing/invoice"
-
-    local invoice_id provider_invoice_id
-    invoice_id=$(echo "$invoice_out" | jq -r '.data.invoice_id' 2>/dev/null)
-    if [ $invoice_code -eq 0 ] && [ -n "$invoice_id" ] && [ "$invoice_id" != "null" ]; then
-        record_test "Create payment invoice API succeeds" "PASS"
-        info "Created Invoice ID: $invoice_id"
+        "$SERVER_URL/api/billing/invoice")
+    invoice_http=$(echo "$invoice_raw" | tail -n1)
+    if [ "$invoice_http" = "403" ]; then
+        record_test "Invoice API returns 403 while payments are disabled" "PASS"
     else
-        error "Failed to create invoice: $invoice_out"
-        record_test "Create payment invoice API succeeds" "FAIL"
+        error "Expected invoice API HTTP 403, got $invoice_http: $invoice_raw"
+        record_test "Invoice API returns 403 while payments are disabled" "FAIL"
     fi
-
-    # Verify that the invoice is listed in the admin CLI
-    local list_out list_code
-    safe_exec list_out list_code \
-        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        payments list --status pending --json
-
-    if [ $list_code -eq 0 ] && echo "$list_out" | grep -q "$invoice_id"; then
-        record_test "Admin CLI payments list includes pending invoice" "PASS"
-    else
-        error "Pending invoice not found in admin payments list: $list_out"
-        record_test "Admin CLI payments list includes pending invoice" "FAIL"
-    fi
-
-    scenario "Simulate BTCPay webhook and verify credit"
-
-    # Settle the invoice by sending a signed webhook payload to /api/webhooks/btcpay
-    local provider_invoice_id="btcpay_mock_${invoice_id}"
-    local webhook_payload
-    webhook_payload='{"type":"InvoiceSettled","storeId":"test_store_id","invoiceId":"'"$provider_invoice_id"'","metadata":{"invoice_id":"'"$invoice_id"'"}}'
-    
-    # Compute signature: hmac sha256 of payload with secret "test_webhook_secret"
-    local signature
-    signature=$(echo -n "$webhook_payload" | openssl dgst -sha256 -hmac "test_webhook_secret" | sed 's/^.* //')
-    
-    local webhook_out webhook_code
-    safe_exec webhook_out webhook_code \
-        curl -s -k -X POST -H "BTCPay-Sig: sha256=$signature" \
-        -H "Content-Type: application/json" \
-        -d "$webhook_payload" \
-        "$SERVER_URL/api/webhooks/btcpay"
-
-    if [ $webhook_code -eq 0 ] && echo "$webhook_out" | grep -q '"success"'; then
-        record_test "Settle invoice via signed BTCPay webhook" "PASS"
-        info "Webhook response: $webhook_out"
-    else
-        error "Settle webhook failed: $webhook_out"
-        record_test "Settle invoice via signed BTCPay webhook" "FAIL"
-    fi
-
-    # Verify that the invoice status changed to paid and credit was applied
-    local show_out show_code
-    safe_exec show_out show_code \
-        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        payments show --json "$invoice_id"
-
-    local status
-    status=$(echo "$show_out" | jq -r '.status' 2>/dev/null)
-    if [ $show_code -eq 0 ] && [ "$status" = "paid" ]; then
-        record_test "Payment invoice transitions to paid status" "PASS"
-    else
-        error "Invoice status is not paid: $show_out"
-        record_test "Payment invoice transitions to paid status" "FAIL"
-    fi
-
-    # Verify that user balance is updated in the credits summary
-    local credits_after_out credits_after_code
-    safe_exec credits_after_out credits_after_code \
-        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        billing show --user "$TEST_USERNAME" --json
-
-    if [ $credits_after_code -eq 0 ] && echo "$credits_after_out" | grep -q "Payment top-up via btcpay"; then
-        record_test "User ledger includes payment transaction row" "PASS"
-    else
-        error "Credits transactions missing payment record: $credits_after_out"
-        record_test "User ledger includes payment transaction row" "FAIL"
-    fi
-
-    if [ $credits_after_code -eq 0 ] && echo "$credits_after_out" | jq -e '.transactions[] | select(.transaction_type == "payment")' >/dev/null 2>&1; then
-        record_test "User ledger payment row uses transaction_type payment" "PASS"
-    else
-        error "Credits transactions missing payment transaction_type: $credits_after_out"
-        record_test "User ledger payment row uses transaction_type payment" "FAIL"
-    fi
-
-    scenario "Duplicate BTCPay webhook replay is idempotent"
-
-    local balance_before_dup balance_after_dup
-    balance_before_dup=$(echo "$credits_after_out" | jq -r '.balance_usd_microcents // 0' 2>/dev/null)
-
-    safe_exec webhook_out webhook_code \
-        curl -s -k -X POST -H "BTCPay-Sig: sha256=$signature" \
-        -H "Content-Type: application/json" \
-        -d "$webhook_payload" \
-        "$SERVER_URL/api/webhooks/btcpay"
-
-    if [ $webhook_code -eq 0 ] && echo "$webhook_out" | grep -q "Invoice already paid"; then
-        record_test "Duplicate BTCPay webhook replay is idempotent" "PASS"
-    else
-        error "Duplicate webhook response unexpected: $webhook_out"
-        record_test "Duplicate BTCPay webhook replay is idempotent" "FAIL"
-    fi
-
-    safe_exec credits_after_out credits_after_code \
-        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        billing show --user "$TEST_USERNAME" --json
-    balance_after_dup=$(echo "$credits_after_out" | jq -r '.balance_usd_microcents // 0' 2>/dev/null)
-    if [ "$balance_before_dup" = "$balance_after_dup" ]; then
-        record_test "Duplicate webhook does not double-credit balance" "PASS"
-    else
-        error "Balance changed after duplicate webhook: before=$balance_before_dup after=$balance_after_dup"
-        record_test "Duplicate webhook does not double-credit balance" "FAIL"
-    fi
-
-    # Clean up mock server
-    info "Stopping mock BTCPay server..."
-    stop_mock_btcpay_server "$mock_pid"
 
     info "Payments complete"
 }
@@ -4706,7 +4504,7 @@ mock_bridge_replay() {
 run_subscriptions() {
     group "Subscriptions"
 
-    local e2e_script_dir go_bin mock_pid btcpay_mock_pid
+    local e2e_script_dir go_bin mock_pid
     local dev_plan_storage_bytes=268435456000
     local user_token credits_json billing_mode effective_limit sub_source
     local tx_count_before tx_count_after checkout_id checkout_out checkout_http
@@ -4905,43 +4703,31 @@ run_subscriptions() {
         record_test "Credits API not subscribed after gift cancel" "FAIL"
     fi
 
-    scenario "Start mock BTCPay for post-cancel top-up checks"
-    btcpay_mock_pid=$(start_mock_btcpay_server "$e2e_script_dir" "$go_bin") || {
-        record_test "Start mock BTCPay for subscription top-up checks" "FAIL"
-        btcpay_mock_pid=""
-    }
-    if [ -n "$btcpay_mock_pid" ]; then
-        record_test "Start mock BTCPay for subscription top-up checks" "PASS"
-    fi
-
-    scenario "Invoice API allowed after gift cancel"
+    scenario "Invoice API rejected after gift cancel while payments are disabled"
     user_token=$(user_access_token)
-    local post_cancel_invoice_raw post_cancel_invoice_out post_cancel_invoice_http post_cancel_invoice_id
+    local post_cancel_invoice_raw post_cancel_invoice_http
     post_cancel_invoice_raw=$(curl -sk -w '\n%{http_code}' -X POST \
         -H "Authorization: Bearer $user_token" \
         -H "Content-Type: application/json" \
         -d '{"amount_usd":"1.00"}' \
         "$SERVER_URL/api/billing/invoice")
     post_cancel_invoice_http=$(echo "$post_cancel_invoice_raw" | tail -n1)
-    post_cancel_invoice_out=$(echo "$post_cancel_invoice_raw" | sed '$d')
-    post_cancel_invoice_id=$(echo "$post_cancel_invoice_out" | jq -r '.data.invoice_id // empty' 2>/dev/null)
-    if [ "$post_cancel_invoice_http" = "200" ] && [ -n "$post_cancel_invoice_id" ]; then
-        record_test "Invoice API allowed after gift cancel" "PASS"
-        info "Post-cancel invoice id: $post_cancel_invoice_id"
+    if [ "$post_cancel_invoice_http" = "403" ]; then
+        record_test "Invoice API 403 after gift cancel while payments disabled" "PASS"
     else
-        error "Expected invoice API HTTP 200 after gift cancel (http=$post_cancel_invoice_http): $post_cancel_invoice_out"
-        record_test "Invoice API allowed after gift cancel" "FAIL"
+        error "Expected invoice API HTTP 403 after gift cancel (http=$post_cancel_invoice_http): $post_cancel_invoice_raw"
+        record_test "Invoice API 403 after gift cancel while payments disabled" "FAIL"
     fi
 
-    scenario "CLI top-up allowed after gift cancel"
+    scenario "CLI top-up rejected after gift cancel while payments are disabled"
     safe_exec topup_out topup_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure \
         billing top-up --amount 1.00
-    if [ $topup_code -eq 0 ]; then
-        record_test "CLI top-up allowed after gift cancel" "PASS"
+    if [ $topup_code -ne 0 ] && echo "$topup_out" | grep -qi "disabled"; then
+        record_test "CLI top-up rejected while payments disabled" "PASS"
     else
-        error "CLI top-up failed after gift cancel (expected exit 0): $topup_out"
-        record_test "CLI top-up allowed after gift cancel" "FAIL"
+        error "CLI top-up should fail while payments are disabled: $topup_out"
+        record_test "CLI top-up rejected while payments disabled" "FAIL"
     fi
 
     scenario "Subscription checkout returns checkout id"
@@ -5088,23 +4874,19 @@ run_subscriptions() {
         record_test "Bridge expire webhook ends subscription" "FAIL"
     fi
 
-    scenario "Invoice API allowed after bridge expire"
+    scenario "Invoice API rejected after bridge expire while payments are disabled"
     user_token=$(user_access_token)
     invoice_http=$(curl -sk -o /dev/null -w '%{http_code}' -X POST \
         -H "Authorization: Bearer $user_token" \
         -H "Content-Type: application/json" \
         -d '{"amount_usd":"1.00"}' \
         "$SERVER_URL/api/billing/invoice")
-    if [ "$invoice_http" != "409" ]; then
-        record_test "Invoice API allowed after bridge expire" "PASS"
+    if [ "$invoice_http" = "403" ]; then
+        record_test "Invoice API 403 after bridge expire while payments disabled" "PASS"
     else
-        record_test "Invoice API allowed after bridge expire" "FAIL"
+        record_test "Invoice API 403 after bridge expire while payments disabled" "FAIL"
     fi
 
-    if [ -n "$btcpay_mock_pid" ]; then
-        info "Stopping mock BTCPay server..."
-        stop_mock_btcpay_server "$btcpay_mock_pid"
-    fi
     stop_mock_subscription_bridge "$mock_pid"
     info "Subscriptions complete"
 }
@@ -5387,6 +5169,55 @@ run_session_absolute_and_admin_scope() {
 
 run_teardown() {
     group "Teardown"
+
+    # The PAYG cap test leaves the user below -$10. Gift only the difference
+    # needed to land on $10.00. Amounts use at most four decimal places, so
+    # round a non-aligned remainder up by less than $0.0001.
+    scenario "Restore test user balance to \$10"
+    local bal_out bal_code balance target gift_microcents
+    target=1000000000
+    safe_exec bal_out bal_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing show --user "$TEST_USERNAME" --json
+    balance=$(echo "$bal_out" | jq -r '.balance_usd_microcents // empty' 2>/dev/null)
+    if [ $bal_code -ne 0 ] || [ -z "$balance" ]; then
+        error "Could not read balance before restore: $bal_out"
+        record_test "Restore test user balance to \$10" "FAIL"
+    elif [ "$balance" -ge "$target" ]; then
+        info "Balance already $balance microcents, at or above \$10"
+        record_test "Restore test user balance to \$10" "PASS"
+    else
+        gift_microcents=$((target - balance))
+        local rem=$((gift_microcents % 10000))
+        if [ "$rem" -ne 0 ]; then
+            gift_microcents=$((gift_microcents + 10000 - rem))
+        fi
+        local whole=$((gift_microcents / 100000000))
+        local frac4=$(((gift_microcents % 100000000) / 10000))
+        local amount restore_out restore_code
+        printf -v amount '%d.%04d' "$whole" "$frac4"
+        safe_exec restore_out restore_code \
+            $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+            billing gift \
+            --user "$TEST_USERNAME" \
+            --amount "$amount" \
+            --reason "e2e restore balance to 10.00" \
+            --json
+        safe_exec bal_out bal_code \
+            $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+            billing show --user "$TEST_USERNAME" --json
+        balance=$(echo "$bal_out" | jq -r '.balance_usd_microcents // empty' 2>/dev/null)
+        if [ $restore_code -eq 0 ] && [ $bal_code -eq 0 ] \
+            && [ -n "$balance" ] \
+            && [ "$balance" -ge "$target" ] \
+            && [ "$balance" -lt $((target + 10000)) ]; then
+            info "Restored balance to $balance microcents with gift $amount"
+            record_test "Restore test user balance to \$10" "PASS"
+        else
+            error "Balance restore failed (gift=$amount, balance=$balance): $restore_out"
+            record_test "Restore test user balance to \$10" "FAIL"
+        fi
+    fi
 
     scenario "Cleaning up test data"
 

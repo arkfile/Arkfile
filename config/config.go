@@ -3,7 +3,6 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -190,15 +189,12 @@ type SubscriptionsConfig struct {
 	SeedDevPlan       bool   `json:"seed_dev_plan"`
 }
 
-// PaymentsConfig is the BTCPay Server one-time top-up configuration.
+// PaymentsConfig is the one-time top-up configuration.
+// Enabled must stay false until a PaymentProvider implementation exists.
 type PaymentsConfig struct {
-	Enabled             bool   `json:"enabled"`
-	BTCPayServerURL     string `json:"btcpay_server_url"`
-	BTCPayStoreID       string `json:"btcpay_store_id"`
-	BTCPayAPIKey        string `json:"btcpay_api_key"`
-	BTCPayWebhookSecret string `json:"btcpay_webhook_secret"`
-	MinTopUpUSD         string `json:"min_top_up_usd"`
-	MaxTopUpUSD         string `json:"max_top_up_usd"`
+	Enabled     bool   `json:"enabled"`
+	MinTopUpUSD string `json:"min_top_up_usd"`
+	MaxTopUpUSD string `json:"max_top_up_usd"`
 }
 
 // OobPaymentsConfig holds optional out-of-band payment addresses (PayNym / BIP47
@@ -390,7 +386,7 @@ func loadDefaultConfig(cfg *Config) error {
 	cfg.Subscriptions.PastDueGraceDays = 7
 	cfg.Subscriptions.SeedDevPlan = false
 
-	// Payments defaults (BTCPay Server integration)
+	// Payments defaults. Automated top-ups stay off until a provider is added.
 	cfg.Payments.Enabled = false
 	cfg.Payments.MinTopUpUSD = "0.50"
 	cfg.Payments.MaxTopUpUSD = "1000.00"
@@ -601,23 +597,11 @@ func loadEnvConfig(cfg *Config) error {
 		}
 	}
 
-	// Payments (BTCPay Server integration) envs
+	// Payments envs. Automated top-ups stay disabled until a provider is added.
 	if v := os.Getenv("ARKFILE_PAYMENTS_ENABLED"); v != "" {
 		if parsed, err := strconv.ParseBool(v); err == nil {
 			cfg.Payments.Enabled = parsed
 		}
-	}
-	if v := os.Getenv("ARKFILE_BTCPAY_SERVER_URL"); v != "" {
-		cfg.Payments.BTCPayServerURL = v
-	}
-	if v := os.Getenv("ARKFILE_BTCPAY_STORE_ID"); v != "" {
-		cfg.Payments.BTCPayStoreID = v
-	}
-	if v := os.Getenv("ARKFILE_BTCPAY_API_KEY"); v != "" {
-		cfg.Payments.BTCPayAPIKey = v
-	}
-	if v := os.Getenv("ARKFILE_BTCPAY_WEBHOOK_SECRET"); v != "" {
-		cfg.Payments.BTCPayWebhookSecret = v
 	}
 	if v := os.Getenv("ARKFILE_MIN_TOP_UP_USD"); v != "" {
 		cfg.Payments.MinTopUpUSD = v
@@ -789,30 +773,6 @@ func validatePaymentsConfig(cfg *Config) error {
 	if !cfg.Payments.Enabled {
 		return nil
 	}
-	if strings.TrimSpace(cfg.Payments.BTCPayServerURL) == "" {
-		return fmt.Errorf("ARKFILE_BTCPAY_SERVER_URL is required when ARKFILE_PAYMENTS_ENABLED=true")
-	}
-	if strings.TrimSpace(cfg.Payments.BTCPayStoreID) == "" {
-		return fmt.Errorf("ARKFILE_BTCPAY_STORE_ID is required when ARKFILE_PAYMENTS_ENABLED=true")
-	}
-	if strings.TrimSpace(cfg.Payments.BTCPayAPIKey) == "" {
-		return fmt.Errorf("ARKFILE_BTCPAY_API_KEY is required when ARKFILE_PAYMENTS_ENABLED=true")
-	}
-	if strings.TrimSpace(cfg.Payments.BTCPayWebhookSecret) == "" {
-		return fmt.Errorf("ARKFILE_BTCPAY_WEBHOOK_SECRET is required when ARKFILE_PAYMENTS_ENABLED=true")
-	}
-	production := strings.EqualFold(strings.TrimSpace(cfg.Deployment.Environment), "production") || utils.IsProductionEnvironment()
-	allowLoopbackHTTP := !production && isExplicitDevelopmentOrTest(cfg.Deployment.Environment)
-	if _, err := validatePaymentOrigin(cfg.Payments.BTCPayServerURL, production, allowLoopbackHTTP); err != nil {
-		return fmt.Errorf("ARKFILE_BTCPAY_SERVER_URL: %w", err)
-	}
-	if strings.TrimSpace(cfg.Server.BaseURL) == "" {
-		return fmt.Errorf("BASE_URL is required when ARKFILE_PAYMENTS_ENABLED=true")
-	}
-	if _, err := validatePaymentOrigin(cfg.Server.BaseURL, production, allowLoopbackHTTP); err != nil {
-		return fmt.Errorf("BASE_URL: %w", err)
-	}
-
 	minMicrocents, err := parsePositiveTopUpUSD(cfg.Payments.MinTopUpUSD, "ARKFILE_MIN_TOP_UP_USD")
 	if err != nil {
 		return err
@@ -824,16 +784,7 @@ func validatePaymentsConfig(cfg *Config) error {
 	if minMicrocents >= maxMicrocents {
 		return fmt.Errorf("ARKFILE_MIN_TOP_UP_USD must be less than ARKFILE_MAX_TOP_UP_USD")
 	}
-	return nil
-}
-
-func isExplicitDevelopmentOrTest(environment string) bool {
-	switch strings.ToLower(strings.TrimSpace(environment)) {
-	case "development", "dev", "test", "testing":
-		return true
-	default:
-		return false
-	}
+	return fmt.Errorf("no payment provider is configured")
 }
 
 func parsePositiveTopUpUSD(value, name string) (int64, error) {
@@ -845,57 +796,6 @@ func parsePositiveTopUpUSD(value, name string) (int64, error) {
 		return 0, fmt.Errorf("%s must be a positive USD amount", name)
 	}
 	return total, nil
-}
-
-func validatePaymentOrigin(raw string, production, allowLoopbackHTTP bool) (*url.URL, error) {
-	if raw != strings.TrimSpace(raw) || raw == "" {
-		return nil, fmt.Errorf("must be a normalized origin")
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Host == "" || parsed.Scheme == "" {
-		return nil, fmt.Errorf("must be an absolute HTTP(S) origin")
-	}
-	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "" || parsed.RawPath != "" {
-		return nil, fmt.Errorf("must not contain credentials, query, fragment, or path")
-	}
-	if parsed.Scheme != "https" && parsed.Scheme != "http" {
-		return nil, fmt.Errorf("must use HTTPS")
-	}
-	if parsed.Scheme != strings.ToLower(parsed.Scheme) || parsed.Host != strings.ToLower(parsed.Host) {
-		return nil, fmt.Errorf("must use a lowercase normalized origin")
-	}
-	if (parsed.Scheme == "https" && parsed.Port() == "443") || (parsed.Scheme == "http" && parsed.Port() == "80") {
-		return nil, fmt.Errorf("must omit the default port")
-	}
-	hostname := strings.ToLower(parsed.Hostname())
-	if hostname == "" {
-		return nil, fmt.Errorf("must include a hostname")
-	}
-	loopback := hostname == "localhost" || strings.HasSuffix(hostname, ".localhost")
-	ip := net.ParseIP(hostname)
-	if ip != nil {
-		loopback = ip.IsLoopback()
-		if production && (loopback || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()) {
-			return nil, fmt.Errorf("must use a public network origin in production")
-		}
-	}
-	if production {
-		if parsed.Scheme != "https" {
-			return nil, fmt.Errorf("must use HTTPS in production")
-		}
-		if loopback {
-			return nil, fmt.Errorf("must not use a loopback origin in production")
-		}
-		if ip == nil && (!strings.Contains(hostname, ".") || strings.HasSuffix(hostname, ".local") || strings.HasSuffix(hostname, ".internal")) {
-			return nil, fmt.Errorf("must use a public hostname in production")
-		}
-	} else if parsed.Scheme == "http" && !(allowLoopbackHTTP && loopback) {
-		return nil, fmt.Errorf("HTTP is allowed only for loopback development and test origins")
-	}
-	if parsed.String() != raw {
-		return nil, fmt.Errorf("must be a normalized origin")
-	}
-	return parsed, nil
 }
 
 // ValidateProductionConfig validates that the configuration is safe for production

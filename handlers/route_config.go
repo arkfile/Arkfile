@@ -250,7 +250,6 @@ func RegisterRoutes() {
 	mfaProtectedGroup.POST("/api/subscriptions/portal", CreateSubscriptionPortalHandler)
 
 	// Webhook endpoints (public, unauthenticated)
-	Echo.POST("/api/webhooks/btcpay", BTCPayWebhookHandler)
 	Echo.POST("/api/webhooks/subscription-bridge", SubscriptionBridgeWebhookHandler)
 
 	// Admin API endpoints - structured for future expansion.

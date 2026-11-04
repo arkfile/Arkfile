@@ -21,7 +21,7 @@ type PendingReconcileReport struct {
 }
 
 // ReconcilePendingInvoices queries a bounded batch of associated pending
-// invoices and settles only provider-authoritative Settled states.
+// invoices and settles only when the provider reports status "paid".
 func ReconcilePendingInvoices(ctx context.Context, db *sql.DB, provider InvoiceStatusProvider, paymentType string, batchSize int, requestTimeout time.Duration) (PendingReconcileReport, error) {
 	var report PendingReconcileReport
 	if provider == nil {
@@ -49,7 +49,7 @@ func ReconcilePendingInvoices(ctx context.Context, db *sql.DB, provider InvoiceS
 			report.Errors++
 			continue
 		}
-		if status != "Settled" {
+		if status != "paid" {
 			report.Skipped++
 			continue
 		}
@@ -68,7 +68,7 @@ func ReconcilePendingInvoices(ctx context.Context, db *sql.DB, provider InvoiceS
 
 // ReconcilePaidInvoices finds paid invoices missing a matching credit_transactions row
 // and applies the ledger credit for each orphan.
-func ReconcilePaidInvoices(db *sql.DB, paymentType string) (int, error) {
+func ReconcilePaidInvoices(db *sql.DB) (int, error) {
 	invoices, err := models.ListPaidInvoicesWithoutCredit(db)
 	if err != nil {
 		return 0, fmt.Errorf("billing.ReconcilePaidInvoices: list orphans: %w", err)
@@ -76,7 +76,7 @@ func ReconcilePaidInvoices(db *sql.DB, paymentType string) (int, error) {
 
 	repaired := 0
 	for _, invoice := range invoices {
-		_, err := ProcessPayment(db, invoice.Username, invoice.AmountUSDMicrocents, invoice.ProviderInvoiceID, paymentType)
+		_, err := ProcessPayment(db, invoice.Username, invoice.AmountUSDMicrocents, invoice.ProviderInvoiceID, invoice.Provider)
 		if err != nil {
 			if isDuplicateTransactionIDError(err) {
 				continue

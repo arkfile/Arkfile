@@ -9,9 +9,7 @@ import (
 )
 
 func TestBuildSubscriptionProjection_SubscribedUser(t *testing.T) {
-	mock := startMockBTCPayServer(t, nil)
-	defer mock.Close()
-	db, cleanup := withSubscriptionsTestEnv(t, mock.URL)
+	db, cleanup := withSubscriptionsTestEnv(t)
 	defer cleanup()
 
 	seedHandlerGiftSubscription(t, db, paymentsTestUser)
@@ -30,9 +28,7 @@ func TestBuildSubscriptionProjection_SubscribedUser(t *testing.T) {
 }
 
 func TestBuildBillingProjection_SubscribedUserZeroCost(t *testing.T) {
-	mock := startMockBTCPayServer(t, nil)
-	defer mock.Close()
-	db, cleanup := withSubscriptionsTestEnv(t, mock.URL)
+	db, cleanup := withSubscriptionsTestEnv(t)
 	defer cleanup()
 
 	if _, err := db.Exec(`UPDATE users SET total_storage_bytes = ? WHERE username = ?`, 300<<30, paymentsTestUser); err != nil {
@@ -54,9 +50,7 @@ func TestBuildBillingProjection_SubscribedUserZeroCost(t *testing.T) {
 }
 
 func TestGetUserCredits_IncludesSubscriptionBlock(t *testing.T) {
-	mock := startMockBTCPayServer(t, nil)
-	defer mock.Close()
-	db, cleanup := withSubscriptionsTestEnv(t, mock.URL)
+	db, cleanup := withSubscriptionsTestEnv(t)
 	defer cleanup()
 
 	seedHandlerGiftSubscription(t, db, paymentsTestUser)

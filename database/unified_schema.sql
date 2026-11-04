@@ -440,7 +440,7 @@ CREATE TABLE IF NOT EXISTS user_credits (
 );
 
 -- Credit transactions audit log. Amounts denominated in microcents; both fields signed.
--- transaction_type values: 'usage' (daily storage sweep), 'gift' (admin gift), 'payment' (BTCPay top-up).
+-- transaction_type values: 'usage' (daily storage sweep), 'gift' (admin gift), 'payment' (provider top-up).
 CREATE TABLE IF NOT EXISTS credit_transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     transaction_id TEXT UNIQUE DEFAULT NULL,          -- External transaction ID MUST be unique to prevent double-spend gifts / duplicate charges
@@ -497,7 +497,7 @@ CREATE TABLE IF NOT EXISTS billing_sweeps (
     negative_balance_users INTEGER NOT NULL
 );
 
--- Payment invoices tracking. Integrates with self-hosted BTCPay Server.
+-- Payment invoices tracking. provider names the processor that settles the invoice.
 CREATE TABLE IF NOT EXISTS payment_invoices (
     invoice_id TEXT PRIMARY KEY,
     username TEXT NOT NULL,
@@ -508,8 +508,7 @@ CREATE TABLE IF NOT EXISTS payment_invoices (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(username) REFERENCES users(username) ON DELETE RESTRICT,
-    CHECK(status IN ('creating', 'pending', 'paid', 'expired', 'failed')),
-    CHECK(provider IN ('btcpay'))
+    CHECK(status IN ('creating', 'pending', 'paid', 'expired', 'failed'))
 );
 
 -- =====================================================

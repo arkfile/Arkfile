@@ -509,7 +509,7 @@ const CHECKOUT_RETURN_POLL_ATTEMPTS = 90;
 const CHECKOUT_RETURN_POLL_INTERVAL_MS = 2000;
 
 /**
- * True when the current URL carries BTCPay external-tab checkout return params.
+ * True when the current URL carries external-tab checkout return params.
  */
 export function hasBillingCheckoutReturnParams(): boolean {
   const url = new URL(window.location.href);
@@ -552,7 +552,7 @@ async function ensureSessionForBillingPoll(): Promise<boolean> {
 }
 
 /**
- * Resume a pending top-up after login or on return from an external BTCPay tab.
+ * Resume a pending top-up after login or on return from an external checkout tab.
  * Opens the billing panel, polls invoice status, and shows an honest outcome message.
  */
 export async function resumePendingBillingCheckout(): Promise<boolean> {
@@ -594,7 +594,7 @@ export async function resumePendingBillingCheckout(): Promise<boolean> {
   }
 
   showSuccess(
-    'Payment submitted. Your balance updates automatically once BTCPay confirms settlement. Check Billing again in a few minutes.',
+    'Payment submitted. Your balance updates automatically once the payment provider confirms settlement. Check Billing again in a few minutes.',
   );
   return true;
 }
@@ -757,7 +757,7 @@ function showTopUpModal(cfg: PaymentsConfig): void {
   const desc = document.createElement('p');
   desc.style.color = 'var(--foam-1)';
   desc.style.marginBottom = '1rem';
-  desc.textContent = `Enter an amount in USD to generate a BTCPay Server invoice. Payments can be made with Bitcoin, Lightning, Monero, or credit cards if enabled.`;
+  desc.textContent = 'Enter an amount in USD to generate a payment invoice.';
   body.appendChild(desc);
 
   const form = document.createElement('form');

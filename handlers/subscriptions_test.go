@@ -50,9 +50,7 @@ func handlerSubscriptionBridgePayload(eventType, eventID, checkoutID, entRef str
 }
 
 func TestSubscriptionBridgeWebhookHandler_ValidSignature(t *testing.T) {
-	mock := startMockBTCPayServer(t, nil)
-	defer mock.Close()
-	db, cleanup := withSubscriptionsTestEnv(t, mock.URL)
+	db, cleanup := withSubscriptionsTestEnv(t)
 	defer cleanup()
 
 	checkoutID := "subchk_webhook_ok"
@@ -80,9 +78,7 @@ func TestSubscriptionBridgeWebhookHandler_ValidSignature(t *testing.T) {
 }
 
 func TestSubscriptionBridgeWebhookHandler_RejectsBadSignature(t *testing.T) {
-	mock := startMockBTCPayServer(t, nil)
-	defer mock.Close()
-	_, cleanup := withSubscriptionsTestEnv(t, mock.URL)
+	_, cleanup := withSubscriptionsTestEnv(t)
 	defer cleanup()
 
 	payload := handlerSubscriptionBridgePayload("subscription.activated", "evt_bad", "subchk_bad", "sub_bad")
@@ -103,9 +99,7 @@ func TestSubscriptionBridgeWebhookHandler_RejectsBadSignature(t *testing.T) {
 }
 
 func TestSubscriptionBridgeWebhookHandler_RejectsSemanticDefectWith4xx(t *testing.T) {
-	mock := startMockBTCPayServer(t, nil)
-	defer mock.Close()
-	db, cleanup := withSubscriptionsTestEnv(t, mock.URL)
+	db, cleanup := withSubscriptionsTestEnv(t)
 	defer cleanup()
 
 	checkoutID := "subchk_invalid_semantics"
@@ -127,9 +121,7 @@ func TestSubscriptionBridgeWebhookHandler_RejectsSemanticDefectWith4xx(t *testin
 }
 
 func TestSubscriptionBridgeWebhookHandler_Idempotent(t *testing.T) {
-	mock := startMockBTCPayServer(t, nil)
-	defer mock.Close()
-	db, cleanup := withSubscriptionsTestEnv(t, mock.URL)
+	db, cleanup := withSubscriptionsTestEnv(t)
 	defer cleanup()
 
 	checkoutID := "subchk_webhook_idem"
@@ -158,9 +150,7 @@ func TestSubscriptionBridgeWebhookHandler_Idempotent(t *testing.T) {
 }
 
 func TestCreateInvoiceHandler_ConflictWhenSubscribed(t *testing.T) {
-	mock := startMockBTCPayServer(t, nil)
-	defer mock.Close()
-	db, cleanup := withSubscriptionsTestEnv(t, mock.URL)
+	db, cleanup := withSubscriptionsTestEnv(t)
 	defer cleanup()
 
 	seedHandlerGiftSubscription(t, db, paymentsTestUser)
@@ -177,9 +167,7 @@ func TestCreateInvoiceHandler_ConflictWhenSubscribed(t *testing.T) {
 }
 
 func TestCreateSubscriptionCheckoutHandler_ConflictWhenEntitled(t *testing.T) {
-	mock := startMockBTCPayServer(t, nil)
-	defer mock.Close()
-	db, cleanup := withSubscriptionsTestEnv(t, mock.URL)
+	db, cleanup := withSubscriptionsTestEnv(t)
 	defer cleanup()
 
 	seedHandlerGiftSubscription(t, db, paymentsTestUser)
@@ -196,9 +184,7 @@ func TestCreateSubscriptionCheckoutHandler_ConflictWhenEntitled(t *testing.T) {
 }
 
 func TestCreateSubscriptionCheckoutHandler_Success(t *testing.T) {
-	mock := startMockBTCPayServer(t, nil)
-	defer mock.Close()
-	_, cleanup := withSubscriptionsTestEnv(t, mock.URL)
+	_, cleanup := withSubscriptionsTestEnv(t)
 	defer cleanup()
 
 	body, _ := json.Marshal(map[string]string{"plan_id": subscriptionsTestPlanID})
@@ -215,9 +201,7 @@ func TestCreateSubscriptionCheckoutHandler_Success(t *testing.T) {
 }
 
 func TestCreateUploadSession_SubscribedSkipsPaygCap(t *testing.T) {
-	mock := startMockBTCPayServer(t, nil)
-	defer mock.Close()
-	db, cleanup := withSubscriptionsTestEnv(t, mock.URL)
+	db, cleanup := withSubscriptionsTestEnv(t)
 	defer cleanup()
 
 	seedHandlerGiftSubscription(t, db, paymentsTestUser)
@@ -243,9 +227,7 @@ func TestCreateUploadSession_SubscribedSkipsPaygCap(t *testing.T) {
 }
 
 func TestCreateUploadSession_BlocksPastDueBeyondGrace(t *testing.T) {
-	mock := startMockBTCPayServer(t, nil)
-	defer mock.Close()
-	db, cleanup := withSubscriptionsTestEnv(t, mock.URL)
+	db, cleanup := withSubscriptionsTestEnv(t)
 	defer cleanup()
 
 	checkoutID := "subchk_pastdue_upload"
@@ -282,9 +264,7 @@ func TestCreateUploadSession_BlocksPastDueBeyondGrace(t *testing.T) {
 }
 
 func TestListSubscriptionPlansHandler_ReturnsPublicPlans(t *testing.T) {
-	mock := startMockBTCPayServer(t, nil)
-	defer mock.Close()
-	_, cleanup := withSubscriptionsTestEnv(t, mock.URL)
+	_, cleanup := withSubscriptionsTestEnv(t)
 	defer cleanup()
 
 	c, rec := newPaymentsEchoContext(t, http.MethodGet, "/api/subscriptions/plans", nil, paymentsTestUser)

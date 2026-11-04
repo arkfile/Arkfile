@@ -29,8 +29,7 @@ func TestReconcilePaidInvoices_RepairsOrphans(t *testing.T) {
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY(username) REFERENCES users(username) ON DELETE RESTRICT,
-			CHECK(status IN ('creating', 'pending', 'paid', 'expired', 'failed')),
-			CHECK(provider IN ('btcpay'))
+			CHECK(status IN ('creating', 'pending', 'paid', 'expired', 'failed'))
 		);
 	`); err != nil {
 		t.Fatalf("create payment_invoices: %v", err)
@@ -38,12 +37,12 @@ func TestReconcilePaidInvoices_RepairsOrphans(t *testing.T) {
 	if _, err := db.Exec(`
 		INSERT INTO payment_invoices
 		  (invoice_id, username, amount_usd_microcents, status, provider, provider_invoice_id)
-		VALUES ('inv_rec1', 'alice', 50000000, 'paid', 'btcpay', 'prov_rec1')
+		VALUES ('inv_rec1', 'alice', 50000000, 'paid', 'testprov', 'prov_rec1')
 	`); err != nil {
 		t.Fatalf("seed invoice: %v", err)
 	}
 
-	repaired, err := ReconcilePaidInvoices(db, "btcpay")
+	repaired, err := ReconcilePaidInvoices(db)
 	if err != nil {
 		t.Fatalf("ReconcilePaidInvoices: %v", err)
 	}
@@ -76,19 +75,19 @@ func TestReconcilePendingInvoices_SettlesOnce(t *testing.T) {
 		);
 		INSERT INTO payment_invoices
 		  (invoice_id, username, amount_usd_microcents, status, provider, provider_invoice_id)
-		VALUES ('inv_pending', 'alice', 123000000, 'pending', 'btcpay', 'prov_pending');
+		VALUES ('inv_pending', 'alice', 123000000, 'pending', 'testprov', 'prov_pending');
 	`); err != nil {
 		t.Fatalf("create pending invoice: %v", err)
 	}
-	provider := reconcileStatusProvider{"prov_pending": "Settled"}
-	report, err := ReconcilePendingInvoices(context.Background(), db, provider, "btcpay", 10, time.Second)
+	provider := reconcileStatusProvider{"prov_pending": "paid"}
+	report, err := ReconcilePendingInvoices(context.Background(), db, provider, "testprov", 10, time.Second)
 	if err != nil {
 		t.Fatalf("ReconcilePendingInvoices: %v", err)
 	}
 	if report.Settled != 1 {
 		t.Fatalf("settled = %d, want 1", report.Settled)
 	}
-	report, err = ReconcilePendingInvoices(context.Background(), db, provider, "btcpay", 10, time.Second)
+	report, err = ReconcilePendingInvoices(context.Background(), db, provider, "testprov", 10, time.Second)
 	if err != nil {
 		t.Fatalf("replay reconciliation: %v", err)
 	}

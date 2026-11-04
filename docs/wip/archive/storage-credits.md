@@ -1231,9 +1231,9 @@ This section is scaffolding for a future document, not a design itself. It lists
 
 A separate WIP document, tentatively at `docs/wip/payments.md`, will design the actual payment integration. The previous design discussion (see this conversation's history) settled several decisions that the future document should incorporate:
 
-- Payment surface: BTC on-chain, BTC Lightning (via Boltz, no self-run LN node), Monero (via the BTCPay `btcpay-monero` plugin), USDT, USDC, USD/EUR via Stripe (cards, Apple/Google Pay, SEPA, ACH).
-- Payment routing: BTCPay Server for everything except cards/USDC/SEPA/ACH; direct Stripe integration for those.
-- Stripe gating: behind an operator-config flag (`STRIPE_ENABLED=false` by default) so privacy-maximalist deployments can ship BTCPay-only.
+- Payment surface: manual Bitcoin via PayNym/BIP47 and manual Monero are in production. Card subscriptions go through the Subscription Bridge. Automated one-time top-ups are not wired to a processor.
+- Payment routing: out-of-band crypto is credited with `arkfile-admin billing gift`. Card lifecycle stays on the Subscription Bridge. Arkfile does not embed a processor client.
+- Stripe gating: card processing stays off the Arkfile host. The bridge owns processor credentials.
 - Stripe loading behavior: dynamic ES module import, separate JS chunk, no `js.stripe.com` requests until the user explicitly clicks "pay with card." CSP gated behind the same flag.
 - Stripe identity posture: `Customer` object created with `email=null`, `name=null`, `description=null`. PII fields scrubbed from webhook payloads before storing `raw_payload`. No `receipt_email`.
 - Saved-card pattern: SetupIntent + PaymentIntent off-session for top-ups, modeled on PayPerQ's UI.
@@ -1271,7 +1271,7 @@ Things this document does NOT pre-decide and that the future document should:
 - Whether the existing `storage_limit_bytes` hard cap is replaced by a credit-balance-derived cap, or kept as an independent hard ceiling.
 - Whether per-user free-baseline overrides should exist (e.g., grandfathered users get more free space).
 - Whether bandwidth/egress should be billed in addition to storage.
-- The exact shape of the BTCPay and Stripe webhook handlers.
+- The exact shape of a future top-up provider webhook. The Subscription Bridge webhook is specified separately.
 - The exact set of payment-method strings exposed in the UI.
 - The refund / pull-payment flow design.
 - The auto-top-up implementation details.

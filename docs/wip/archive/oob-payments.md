@@ -1,6 +1,6 @@
 # Out-of-Band Crypto Top-Ups (PayNym and Monero)
 
-Status: Implemented. Optional display-only payment destinations for manual PAYG credit. Not a replacement for AlmaPay/BTCPay or the Subscription Bridge; a straightforward interim and ongoing convenience rail.
+Status: Implemented. Optional display-only payment destinations for manual PAYG credit. This is the production top-up rail. It stands beside the Subscription Bridge and does not create payment invoices.
 
 ## Purpose
 
@@ -67,4 +67,4 @@ Billing panel (logged-in web UI) shows a Manual Crypto Top-Up section when confi
 
 ## Explicit non-goals
 
-No `payment_invoices` provider entry, no chain watcher, no FX service, no webhook, no automatic `payment` ledger type for these rails (manual credits use existing `gift`). Automated BTC/LN/card top-ups remain AlmaPay/BTCPay and Subscription Bridge.
+No `payment_invoices` provider entry, no chain watcher, no FX service, no webhook, no automatic `payment` ledger type for these rails (manual credits use existing `gift`). Card subscriptions remain on the Subscription Bridge. Automated one-time top-ups stay disabled until a provider is added.

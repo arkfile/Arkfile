@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"io"
-	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -23,8 +22,6 @@ import (
 const (
 	paymentsTestUser        = "pay-test-user"
 	paymentsTestOtherUser   = "pay-other-user"
-	paymentsWebhookSecret   = "test_webhook_secret"
-	paymentsStoreID         = "test_store_id"
 	subscriptionsTestSecret = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 	subscriptionsTestPlanID = "plan_dev_250gb"
 )
@@ -129,8 +126,7 @@ func setupPaymentsSQLiteDB(t *testing.T) *sql.DB {
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY(username) REFERENCES users(username) ON DELETE RESTRICT,
-			CHECK(status IN ('creating', 'pending', 'paid', 'expired', 'failed')),
-			CHECK(provider IN ('btcpay'))
+			CHECK(status IN ('creating', 'pending', 'paid', 'expired', 'failed'))
 		);
 		CREATE TABLE subscription_plans (
 			plan_id TEXT PRIMARY KEY,
@@ -210,7 +206,7 @@ func setupPaymentsSQLiteDB(t *testing.T) *sql.DB {
 	return db
 }
 
-func withPaymentsTestEnv(t *testing.T, btcpayURL string, paymentsEnabled bool) (*sql.DB, func()) {
+func withPaymentsTestEnv(t *testing.T, paymentsEnabled bool) (*sql.DB, func()) {
 	t.Helper()
 	logging.InitFallbackConsoleLogging()
 	crypto.SetUserSecretMasterForTest(make([]byte, 32))
@@ -235,10 +231,6 @@ func withPaymentsTestEnv(t *testing.T, btcpayURL string, paymentsEnabled bool) (
 	t.Setenv("ARKFILE_BILLING_ENABLED", "true")
 	t.Setenv("ARKFILE_BILLING_PAYG_ENABLED", "true")
 	t.Setenv("ARKFILE_PAYG_NEGATIVE_BALANCE_LIMIT_USD", "10.00")
-	t.Setenv("ARKFILE_BTCPAY_SERVER_URL", btcpayURL)
-	t.Setenv("ARKFILE_BTCPAY_STORE_ID", paymentsStoreID)
-	t.Setenv("ARKFILE_BTCPAY_API_KEY", "test_api_key")
-	t.Setenv("ARKFILE_BTCPAY_WEBHOOK_SECRET", paymentsWebhookSecret)
 	t.Setenv("ARKFILE_MIN_TOP_UP_USD", "0.50")
 	t.Setenv("ARKFILE_MAX_TOP_UP_USD", "1000.00")
 	t.Setenv("BASE_URL", "https://arkfile.test")
@@ -257,9 +249,9 @@ func withPaymentsTestEnv(t *testing.T, btcpayURL string, paymentsEnabled bool) (
 	return db, cleanup
 }
 
-func withSubscriptionsTestEnv(t *testing.T, btcpayURL string) (*sql.DB, func()) {
+func withSubscriptionsTestEnv(t *testing.T) (*sql.DB, func()) {
 	t.Helper()
-	db, cleanup := withPaymentsTestEnv(t, btcpayURL, true)
+	db, cleanup := withPaymentsTestEnv(t, false)
 
 	t.Setenv("ARKFILE_SUBSCRIPTIONS_ENABLED", "true")
 	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_ENABLED", "true")
@@ -275,14 +267,10 @@ func withSubscriptionsTestEnv(t *testing.T, btcpayURL string) (*sql.DB, func()) 
 	t.Setenv("STORAGE_1_SECRET_KEY", "test")
 	t.Setenv("STORAGE_1_BUCKET", "test-bucket")
 	config.ResetConfigForTest()
-	t.Setenv("ARKFILE_PAYMENTS_ENABLED", "true")
+	t.Setenv("ARKFILE_PAYMENTS_ENABLED", "false")
 	t.Setenv("ARKFILE_BILLING_ENABLED", "true")
 	t.Setenv("ARKFILE_BILLING_PAYG_ENABLED", "true")
 	t.Setenv("ARKFILE_PAYG_NEGATIVE_BALANCE_LIMIT_USD", "10.00")
-	t.Setenv("ARKFILE_BTCPAY_SERVER_URL", btcpayURL)
-	t.Setenv("ARKFILE_BTCPAY_STORE_ID", paymentsStoreID)
-	t.Setenv("ARKFILE_BTCPAY_API_KEY", "test_api_key")
-	t.Setenv("ARKFILE_BTCPAY_WEBHOOK_SECRET", paymentsWebhookSecret)
 	t.Setenv("ARKFILE_MIN_TOP_UP_USD", "0.50")
 	t.Setenv("ARKFILE_MAX_TOP_UP_USD", "1000.00")
 	t.Setenv("BASE_URL", "https://arkfile.test")
@@ -356,74 +344,6 @@ func parseJSONResponse(t *testing.T, rec *httptest.ResponseRecorder) map[string]
 	return resp
 }
 
-// startMockBTCPayServer returns a server that handles invoice create (POST) and
-// optional per-provider-ID GET status lookups.
-func startMockBTCPayServer(t *testing.T, getStatus map[string]string) *httptest.Server {
-	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/stores/"+paymentsStoreID+"/invoices":
-			if r.Header.Get("Authorization") != "token test_api_key" {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
-			var payload struct {
-				Metadata map[string]string `json:"metadata"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-				http.Error(w, "bad body", http.StatusBadRequest)
-				return
-			}
-			w.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(w).Encode(map[string]string{
-				"id":           "btcpay_mock_" + payload.Metadata["invoice_id"],
-				"checkoutLink": "http://" + r.Host + "/checkout/" + payload.Metadata["invoice_id"],
-			})
-		case r.Method == http.MethodGet:
-			// /api/v1/stores/{store}/invoices/{providerID}
-			parts := splitPath(r.URL.Path)
-			if len(parts) >= 6 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "stores" && parts[4] == "invoices" {
-				providerID := parts[5]
-				status := getStatus[providerID]
-				if status == "" {
-					status = "Processing"
-				}
-				w.WriteHeader(http.StatusOK)
-				_ = json.NewEncoder(w).Encode(map[string]string{"status": status})
-				return
-			}
-			http.NotFound(w, r)
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
-	}))
-}
-
-func splitPath(p string) []string {
-	if p == "" || p == "/" {
-		return nil
-	}
-	if p[0] == '/' {
-		p = p[1:]
-	}
-	out := []string{}
-	cur := ""
-	for _, ch := range p {
-		if ch == '/' {
-			if cur != "" {
-				out = append(out, cur)
-				cur = ""
-			}
-			continue
-		}
-		cur += string(ch)
-	}
-	if cur != "" {
-		out = append(out, cur)
-	}
-	return out
-}
-
 func seedPendingInvoice(t *testing.T, db *sql.DB, invoiceID, username, providerID string, amount int64) {
 	t.Helper()
 	inv := &models.PaymentInvoice{
@@ -431,7 +351,7 @@ func seedPendingInvoice(t *testing.T, db *sql.DB, invoiceID, username, providerI
 		Username:            username,
 		AmountUSDMicrocents: amount,
 		Status:              "pending",
-		Provider:            "btcpay",
+		Provider:            "testprov",
 		ProviderInvoiceID:   providerID,
 	}
 	if err := models.CreatePaymentInvoice(db, inv); err != nil {

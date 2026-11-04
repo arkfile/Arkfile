@@ -2,18 +2,15 @@ package payments
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/arkfile/Arkfile/config"
 )
 
 // NewProvider returns the configured payment provider implementation.
+// No provider is built in. Enabling payments without one fails closed.
 func NewProvider(cfg config.PaymentsConfig) (PaymentProvider, error) {
 	if !cfg.Enabled {
 		return nil, errors.New("payments integration is disabled")
 	}
-	if cfg.BTCPayServerURL == "" || cfg.BTCPayStoreID == "" || cfg.BTCPayAPIKey == "" {
-		return nil, fmt.Errorf("BTCPay Server URL, store ID, and API key are required when payments are enabled")
-	}
-	return NewBTCPayClient(cfg.BTCPayServerURL, cfg.BTCPayStoreID, cfg.BTCPayAPIKey), nil
+	return nil, errors.New("no payment provider is configured")
 }

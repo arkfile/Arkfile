@@ -212,4 +212,4 @@ The prod deployment system should allow for and encourage other types of setups.
 
 This may be a good time to review our old plan around podman containers/podman compose. And perhaps consider kubernetes, to the extent that it would make the "2+ node cluster mode" easier to approach.
 
-We also need to prepare for BTCPayServer integration and potentially further fleshing out of the payments system before we go live fully. Ideal target is to launch with support for Bitcoin and Monero and Credit Card payments.
+We also need to flesh out the payments system before a full public launch. Manual Bitcoin (PayNym) and Monero credit is the current production rail. Credit card payments continue through the Subscription Bridge. Automated one-time top-ups stay disabled until a provider is chosen.

@@ -42,7 +42,7 @@ type CreditTransaction struct {
 //
 //   - usage:   written by the daily storage settlement sweep (system).
 //   - gift:    written by an admin via billing.GiftCredits.
-//   - payment: written by billing.ProcessPayment for BTCPay top-ups.
+//   - payment: written by billing.ProcessPayment for provider top-ups.
 const (
 	TransactionTypeUsage   = "usage"
 	TransactionTypeGift    = "gift"
