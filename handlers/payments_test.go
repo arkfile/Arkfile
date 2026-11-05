@@ -13,7 +13,7 @@ import (
 )
 
 func TestCreateInvoiceHandler_RequiresAuth(t *testing.T) {
-	_, cleanup := withPaymentsTestEnv(t, false)
+	_, cleanup := withPaymentsTestEnv(t)
 	defer cleanup()
 
 	body, _ := json.Marshal(map[string]string{"amount_usd": "10.00"})
@@ -28,7 +28,7 @@ func TestCreateInvoiceHandler_RequiresAuth(t *testing.T) {
 }
 
 func TestCreateInvoiceHandler_PaymentsDisabled(t *testing.T) {
-	_, cleanup := withPaymentsTestEnv(t, false)
+	_, cleanup := withPaymentsTestEnv(t)
 	defer cleanup()
 
 	body, _ := json.Marshal(map[string]string{"amount_usd": "10.00"})
@@ -44,7 +44,7 @@ func TestCreateInvoiceHandler_PaymentsDisabled(t *testing.T) {
 }
 
 func TestGetInvoiceStatusHandler_EnforcesOwnership(t *testing.T) {
-	db, cleanup := withPaymentsTestEnv(t, false)
+	db, cleanup := withPaymentsTestEnv(t)
 	defer cleanup()
 
 	seedPendingInvoice(t, db, "inv_own1", paymentsTestOtherUser, "prov_own1", 100_000_000)
@@ -62,7 +62,7 @@ func TestGetInvoiceStatusHandler_EnforcesOwnership(t *testing.T) {
 }
 
 func TestGetInvoiceStatusHandler_ReturnsOwnInvoice(t *testing.T) {
-	db, cleanup := withPaymentsTestEnv(t, false)
+	db, cleanup := withPaymentsTestEnv(t)
 	defer cleanup()
 
 	seedPendingInvoice(t, db, "inv_own2", paymentsTestUser, "prov_own2", 100_000_000)
@@ -82,7 +82,7 @@ func TestGetInvoiceStatusHandler_ReturnsOwnInvoice(t *testing.T) {
 }
 
 func TestGetUserCredits_OmitsPaymentsWhenDisabled(t *testing.T) {
-	_, cleanup := withPaymentsTestEnv(t, false)
+	_, cleanup := withPaymentsTestEnv(t)
 	defer cleanup()
 
 	c, rec := newPaymentsEchoContext(t, http.MethodGet, "/api/credits", nil, paymentsTestUser)
@@ -97,7 +97,7 @@ func TestGetUserCredits_OmitsPaymentsWhenDisabled(t *testing.T) {
 }
 
 func TestAdminReconcilePaymentsHandler_Disabled(t *testing.T) {
-	_, cleanup := withPaymentsTestEnv(t, false)
+	_, cleanup := withPaymentsTestEnv(t)
 	defer cleanup()
 
 	e := echo.New()
@@ -110,8 +110,29 @@ func TestAdminReconcilePaymentsHandler_Disabled(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, he.Code)
 }
 
+func TestAdminSyncInvoiceHandler_Disabled(t *testing.T) {
+	db, cleanup := withPaymentsTestEnv(t)
+	defer cleanup()
+
+	seedPendingInvoice(t, db, "inv_sync_disabled", paymentsTestUser, "prov_sync_disabled", 100_000_000)
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/payments/invoice/inv_sync_disabled/sync", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("invoice_id")
+	c.SetParamValues("inv_sync_disabled")
+
+	err := AdminSyncInvoiceHandler(c)
+	require.Error(t, err)
+	he, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusForbidden, he.Code)
+	assert.Equal(t, "Payments integration is disabled", he.Message)
+}
+
 func TestCreateUploadSession_SoftBlockNegativeBalance(t *testing.T) {
-	db, cleanup := withPaymentsTestEnv(t, false)
+	db, cleanup := withPaymentsTestEnv(t)
 	defer cleanup()
 
 	// Balance of -$11.00 is beyond the $10.00 PAYG negative-balance cap, so
@@ -145,7 +166,7 @@ func TestCreateUploadSession_SoftBlockNegativeBalance(t *testing.T) {
 // upload_sessions table); the assertion is only that the payment_required gate
 // did not fire.
 func TestCreateUploadSession_AllowsWithinNegativeCap(t *testing.T) {
-	db, cleanup := withPaymentsTestEnv(t, false)
+	db, cleanup := withPaymentsTestEnv(t)
 	defer cleanup()
 
 	// -$0.001 is negative but well within the $10.00 cap.

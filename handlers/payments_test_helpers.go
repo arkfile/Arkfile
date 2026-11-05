@@ -206,7 +206,7 @@ func setupPaymentsSQLiteDB(t *testing.T) *sql.DB {
 	return db
 }
 
-func withPaymentsTestEnv(t *testing.T, paymentsEnabled bool) (*sql.DB, func()) {
+func withPaymentsTestEnv(t *testing.T) (*sql.DB, func()) {
 	t.Helper()
 	logging.InitFallbackConsoleLogging()
 	crypto.SetUserSecretMasterForTest(make([]byte, 32))
@@ -222,9 +222,6 @@ func withPaymentsTestEnv(t *testing.T, paymentsEnabled bool) (*sql.DB, func()) {
 
 	config.ResetConfigForTest()
 	t.Setenv("ARKFILE_PAYMENTS_ENABLED", "false")
-	if paymentsEnabled {
-		t.Setenv("ARKFILE_PAYMENTS_ENABLED", "true")
-	}
 	// The upload soft-block now gates on Billing.Enabled with a configurable
 	// PAYG negative-balance cap. Enable billing for the payments/billing test
 	// suite so the gate is exercised; the cap defaults to $10.00.
@@ -251,7 +248,7 @@ func withPaymentsTestEnv(t *testing.T, paymentsEnabled bool) (*sql.DB, func()) {
 
 func withSubscriptionsTestEnv(t *testing.T) (*sql.DB, func()) {
 	t.Helper()
-	db, cleanup := withPaymentsTestEnv(t, false)
+	db, cleanup := withPaymentsTestEnv(t)
 
 	t.Setenv("ARKFILE_SUBSCRIPTIONS_ENABLED", "true")
 	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_ENABLED", "true")

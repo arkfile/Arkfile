@@ -684,7 +684,7 @@ Playwright: mock plans and checkout APIs; assert effective storage in billing pa
 | Gift expiry | Scheduler or daily reconcile sets `expired` at `current_period_end`; meter resumes |
 | `cancel-gift-subscription` on paid sub | **409** with message to use portal or Stripe/bridge |
 
-Playwright: billing top-up modal is covered in `e2e-playwright.ts`; dedicated subscription plan cards and return-URL polling tests remain TODO.
+Playwright: the billing panel hides the top-up button while payments are disabled (`e2e-playwright.ts`); dedicated subscription plan cards and return-URL polling tests remain TODO.
 
 ## Testing
 
@@ -697,7 +697,7 @@ Implemented and passing in CI/dev:
 - `billing/meter_subscription_test.go`, `billing/sweep_subscription_test.go` -- meter and sweep skip for subscribed users
 - `subbridge/hmac_test.go` -- webhook signature verification and replay window
 - `handlers/subscriptions_test.go`, `handlers/billing_projection_test.go` -- user/admin HTTP handlers, `/api/credits` projection, top-up 409, `past_due` upload gate after grace
-- `handlers/payments_test.go` -- top-up 409 when subscribed (with subscription test helpers)
+- `handlers/payments_test.go` -- credits omit the payments block and invoice creation returns 403 while payments are disabled
 - `config/config_test.go` -- subscription env validation
 - `models/scan_test.go`, `models/subscription_plan_scan_test.go` -- rqlite-safe boolean and BIGINT scan helpers for plan reads
 
@@ -711,13 +711,12 @@ Implemented and passing in CI/dev:
 - CLI: `billing show`, `subscription status`, `subscription plans` while subscribed
 - Invoice API **409** and `arkfile-client billing top-up` rejected while gift subscribed
 - `billing tick-now` does not add usage transactions while gift subscribed
-- Gift cancel; credits not subscribed; invoice API returns 403 while automated payments are disabled
-- Invoice allowed and CLI top-up passes subscription gate after gift cancel
+- Gift cancel; credits not subscribed; invoice API returns 403 and CLI top-up is rejected while payments are disabled
 - Bridge checkout → mock `/v1/mock/activate` webhook → subscribed (`source: bridge`)
 - Grant gift **409** and cancel-gift **409** while bridge subscription active
 - Invoice/CLI top-up blocked while bridge subscribed
 - Duplicate subscription bridge webhook idempotent (replay snapshot from mock `GET /v1/subscriptions/{ref}`)
-- Mock `/v1/mock/expire` → not subscribed; invoice allowed again
+- Mock `/v1/mock/expire` → not subscribed; invoice API returns 403 while payments are disabled
 
 Session reuse: `run_subscriptions` reuses the test-user session from `run_payments` when still valid (`ensure_user_session`), avoiding extra TOTP login cycles.
 
@@ -735,7 +734,7 @@ Foundation prerequisites remain e2e-verified in earlier groups: billing meter/sw
 3. **Web billing panel + arkfile-client billing/subscription commands** -- **Done.** `billing.ts` subscription UI; `cmd/arkfile-client/billing_commands.go` and `subscription_commands.go`.
 4. **Subscription bridge consumer on Arkfile** -- **Done on vault host.** Ordered transactional callbacks and snapshots, exact-field decoding, raw-byte audit hashes, gift atomicity, hex-decoded pairing root and HKDF-derived keys, authenticated reconcile, canonical fixture tests, user/admin APIs, mock bridge, and `run_subscriptions` e2e.
 5. **Subscription Bridge service + Stripe and Adyen adapters** -- **Not started.** Separate repository/deployment per `docs/wip/subscription-bridge.md`.
-6. **Playwright subscription coverage + user/docs polish** -- **Partial.** Playwright top-up exists; subscription-specific browser tests, `docs/user-faq.md`, `docs/api.md`, and `docs/scripts-guide.md` client billing section remain open.
+6. **Playwright subscription coverage + user/docs polish** -- **Partial.** The billing panel hides automated top-up while payments are disabled. Subscription-specific browser tests, `docs/user-faq.md`, `docs/api.md`, and `docs/scripts-guide.md` client billing section remain open.
 
 ## Documentation updates (when implemented)
 

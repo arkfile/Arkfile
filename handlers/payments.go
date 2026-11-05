@@ -238,6 +238,9 @@ func AdminSyncInvoiceHandler(c echo.Context) error {
 		logging.ErrorLogger.Printf("Admin sync: failed to load config: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Internal configuration error")
 	}
+	if !cfg.Payments.Enabled {
+		return echo.NewHTTPError(http.StatusForbidden, "Payments integration is disabled")
+	}
 
 	provider, err := payments.NewProvider(cfg.Payments)
 	if err != nil {

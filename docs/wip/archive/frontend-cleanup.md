@@ -769,7 +769,7 @@ Work silent correctness and privacy before cosmetic cleanup. Tranche numbers mat
 | Shares | `share.ts`, `share-list.ts`, `share-access.ts`; create A/B/C, list, revoke |
 | Anonymous share | `shared.html` + `share-access.ts`; anonymous share and share-control E2E; completion digest + optional Verify File on share page |
 | Contact info | `contact-info.ts`; revoke/contact-info E2E embedded tests |
-| Billing | `billing.ts`; balance, usage grid, transactions, top-up modal (may SKIP) |
+| Billing | `billing.ts`; balance, usage grid, transactions; top-up button hidden while payments are disabled |
 | Logout | `login.ts` logout; logout E2E sessionStorage/CSRF checks |
 | API privacy | Raw API privacy E2E checks encrypted filename/hash only; it does not assert hint absence or re-check intentional server-visible size/key type |
 
@@ -904,7 +904,7 @@ Use test titles in `scripts/testing/e2e-playwright.ts` when referring to coverag
 | Share access controls (max downloads, expiry, non-existent) | share control paths | **OR hedges**; 65s wait |
 | Share revocation (revoke Share A, verify access denied) | revoke + user contact CRUD | OR hedges on revoke/deny |
 | Billing panel renders balance, usage grid, and transaction history | billing UI | No |
-| Billing top-up modal creates invoice and embeds checkout iframe | billing top-up modal | Top-up **SKIP-pass** |
+| Billing panel hides automated top-up while payments are disabled | billing panel | No |
 | External-tab checkout return opens billing panel and confirms paid invoice | billing checkout return | No |
 | Logout and post-logout security checks | cookies/sessionStorage | Soft re-login skip |
 | Register, TOTP, 25 MB custom upload, verify, revoke-all | `register.ts`, `totp-setup.ts`, `upload.ts`, `download.ts`, `auth.ts` | No -- isolated describe; TOTP uses normalized manual-entry secret; revoke waits for toast/integrity panel clear |
