@@ -24,6 +24,7 @@ import (
 	"github.com/arkfile/Arkfile/logging"
 	"github.com/arkfile/Arkfile/models"
 	"github.com/arkfile/Arkfile/monitoring"
+	"github.com/arkfile/Arkfile/payments"
 	"github.com/arkfile/Arkfile/storage"
 	"github.com/arkfile/Arkfile/utils"
 )
@@ -241,6 +242,7 @@ func main() {
 	billingCtx, cancelBilling := context.WithCancel(context.Background())
 	defer cancelBilling()
 	startBillingScheduler(billingCtx, cfg)
+	startPaymentsReconciler(billingCtx, cfg)
 
 	// Load the persisted auto-approval policy from system_settings (seeding it
 	// from REQUIRE_APPROVAL on first startup) and apply it to the live config
@@ -474,6 +476,43 @@ func startBillingScheduler(ctx context.Context, cfg *config.Config) {
 	}()
 }
 
+// paymentsReconcileInterval is how often open invoices are re-checked with the
+// payment provider, covering missed or delayed provider notifications.
+const paymentsReconcileInterval = time.Minute
+
+// startPaymentsReconciler periodically applies provider status to open
+// (pending or confirming) invoices. It does nothing while payments are disabled.
+func startPaymentsReconciler(ctx context.Context, cfg *config.Config) {
+	if !cfg.Payments.Enabled {
+		return
+	}
+	provider, err := payments.NewProvider(cfg)
+	if err != nil {
+		logging.ErrorLogger.Printf("payments reconciler not started: %v", err)
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(paymentsReconcileInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				report, err := billing.ReconcilePendingInvoices(ctx, database.DB, provider, provider.Name(), 50, 10*time.Second)
+				if err != nil {
+					logging.ErrorLogger.Printf("payments reconciler: %v", err)
+					continue
+				}
+				if report.Settled > 0 || report.Updated > 0 || report.Errors > 0 {
+					logging.InfoLogger.Printf("payments reconciler: checked=%d settled=%d updated=%d errors=%d",
+						report.Checked, report.Settled, report.Updated, report.Errors)
+				}
+			}
+		}
+	}()
+}
+
 // runSchemaMigrations applies one-shot schema migrations that cannot be expressed in
 // the unified_schema.sql file (because ALTER TABLE statements fail if the column
 // already exists or is already renamed, and rqlite treats that as a fatal error
@@ -564,7 +603,7 @@ func runSchemaMigrations() {
 	log.Printf("Migration: Backfill session families completed")
 
 	migrateCreditTransactionsPaymentType()
-	migratePaymentInvoicesDropProviderCheck()
+	migratePaymentInvoicesChecks()
 }
 
 // migrateCreditTransactionsPaymentType rebuilds credit_transactions when the CHECK
@@ -620,12 +659,12 @@ func migrateCreditTransactionsPaymentType() {
 	log.Printf("Migration: %s applied successfully", desc)
 }
 
-// migratePaymentInvoicesDropProviderCheck rebuilds an empty or populated
-// payment_invoices table that still constrains provider to a single name.
-// Existing rows are copied. Fresh databases created from unified_schema.sql
-// do not have that constraint.
-func migratePaymentInvoicesDropProviderCheck() {
-	const desc = "Drop payment_invoices provider name check"
+// migratePaymentInvoicesChecks rebuilds payment_invoices when it still
+// constrains provider to a single name or its status CHECK does not allow
+// 'confirming'. Existing rows are copied unchanged. Fresh databases created
+// from unified_schema.sql already have the current definition.
+func migratePaymentInvoicesChecks() {
+	const desc = "Update payment_invoices provider and status checks"
 	var createSQL string
 	err := database.DB.QueryRow(
 		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'payment_invoices'`,
@@ -634,7 +673,7 @@ func migratePaymentInvoicesDropProviderCheck() {
 		log.Printf("Migration: %s skipped (table missing): %v", desc, err)
 		return
 	}
-	if !strings.Contains(createSQL, "CHECK(provider") {
+	if !strings.Contains(createSQL, "CHECK(provider") && strings.Contains(createSQL, "'confirming'") {
 		log.Printf("Migration: %s (already applied)", desc)
 		return
 	}
@@ -650,7 +689,7 @@ func migratePaymentInvoicesDropProviderCheck() {
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY(username) REFERENCES users(username) ON DELETE RESTRICT,
-			CHECK(status IN ('creating', 'pending', 'paid', 'expired', 'failed'))
+			CHECK(status IN ('creating', 'pending', 'confirming', 'paid', 'expired', 'failed'))
 		);
 		INSERT INTO payment_invoices_new
 			(invoice_id, username, amount_usd_microcents, status, provider, provider_invoice_id, created_at, updated_at)

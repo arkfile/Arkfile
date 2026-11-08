@@ -2,8 +2,26 @@ package models
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 )
+
+// Local payment invoice statuses. Providers report the same normalized values.
+// confirming means the provider has seen the payment but it has not reached
+// the required confirmations; only paid credits the user.
+const (
+	PaymentStatusCreating   = "creating"
+	PaymentStatusPending    = "pending"
+	PaymentStatusConfirming = "confirming"
+	PaymentStatusPaid       = "paid"
+	PaymentStatusExpired    = "expired"
+	PaymentStatusFailed     = "failed"
+)
+
+// IsOpenPaymentStatus reports whether an invoice is still waiting on the provider.
+func IsOpenPaymentStatus(status string) bool {
+	return status == PaymentStatusPending || status == PaymentStatusConfirming
+}
 
 type PaymentInvoice struct {
 	InvoiceID           string    `json:"invoice_id"`
@@ -91,6 +109,29 @@ func UpdatePaymentInvoiceStatus(db DBTX, invoiceID, status string) error {
 	return err
 }
 
+// AdvancePaymentInvoiceStatus moves an invoice to status only when its current
+// status is one of from. Returns false when the guard did not match.
+func AdvancePaymentInvoiceStatus(db DBTX, invoiceID string, from []string, status string) (bool, error) {
+	if len(from) == 0 {
+		return false, nil
+	}
+	query := `UPDATE payment_invoices SET status = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE invoice_id = ? AND status IN (?` + strings.Repeat(", ?", len(from)-1) + `)`
+	args := []interface{}{status, invoiceID}
+	for _, s := range from {
+		args = append(args, s)
+	}
+	result, err := db.Exec(query, args...)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return rows == 1, nil
+}
+
 // AttachPaymentProviderInvoice completes the local-before-remote creation
 // transition. It is safe to repeat with the same provider invoice ID.
 func AttachPaymentProviderInvoice(db DBTX, invoiceID, providerInvoiceID string) error {
@@ -117,7 +158,8 @@ func AttachPaymentProviderInvoice(db DBTX, invoiceID, providerInvoiceID string) 
 	return nil
 }
 
-// ListPendingPaymentInvoices returns a bounded oldest-first reconciliation batch.
+// ListPendingPaymentInvoices returns a bounded oldest-first reconciliation
+// batch of open (pending or confirming) invoices.
 func ListPendingPaymentInvoices(db *sql.DB, provider string, limit int) ([]*PaymentInvoice, error) {
 	if limit < 1 || limit > 500 {
 		return nil, sql.ErrNoRows
@@ -126,7 +168,7 @@ func ListPendingPaymentInvoices(db *sql.DB, provider string, limit int) ([]*Paym
 		SELECT invoice_id, username, amount_usd_microcents, status, provider,
 		       COALESCE(provider_invoice_id, ''), created_at, updated_at
 		FROM payment_invoices
-		WHERE status = 'pending' AND provider = ?
+		WHERE status IN ('pending', 'confirming') AND provider = ?
 		  AND provider_invoice_id IS NOT NULL AND provider_invoice_id != ''
 		ORDER BY created_at ASC
 		LIMIT ?

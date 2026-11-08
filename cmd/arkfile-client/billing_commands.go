@@ -2,11 +2,15 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/arkfile/Arkfile/cli/format"
@@ -42,8 +46,19 @@ func printClientBillingUsage() {
 SUBCOMMANDS:
     show [--json]                         Balance, usage, billing_mode from /api/credits;
                                           also prints optional PayNym/Monero OOB top-up info
-    top-up --amount USD [--open-browser] [--wait]
-    invoice status --id INV [--json]
+    top-up --amount USD [--open-browser] [--wait] [--timeout 2h] [--poll-interval 15s]
+                                          Create a Bitcoin/Monero payment invoice and print
+                                          the payment page URL. --wait prints status changes
+                                          (pending, confirming, paid) and exits 0 only when
+                                          paid; expired or failed exits non-zero.
+    invoice status --id INV [--json]      Show invoice status and, while open, the payment page
+
+INVOICE STATUSES:
+    pending      Waiting for payment
+    confirming   Payment detected, waiting for network confirmation (not yet credited)
+    paid         Payment confirmed, balance credited
+    expired      Invoice expired before a payment was confirmed
+    failed       Invoice failed or was refunded
 
 `)
 }
@@ -186,16 +201,26 @@ func printClientBillingShow(data map[string]interface{}) {
 	}
 }
 
+const (
+	defaultInvoiceWaitTimeout  = 2 * time.Hour
+	defaultInvoicePollInterval = 15 * time.Second
+)
+
 func handleBillingTopUpCommand(client *HTTPClient, config *ClientConfig, args []string) error {
 	fs := flag.NewFlagSet("billing top-up", flag.ExitOnError)
 	amount := fs.String("amount", "", "Top-up amount in USD")
-	openBrowser := fs.Bool("open-browser", false, "Open checkout URL in browser")
-	wait := fs.Bool("wait", false, "Poll until invoice is paid")
+	openBrowser := fs.Bool("open-browser", false, "Open the payment page in a browser (https only)")
+	wait := fs.Bool("wait", false, "Wait until the invoice is paid, expired, or failed")
+	timeout := fs.Duration("timeout", defaultInvoiceWaitTimeout, "Maximum time to wait with --wait")
+	pollInterval := fs.Duration("poll-interval", defaultInvoicePollInterval, "Status check interval with --wait")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *amount == "" {
 		return fmt.Errorf("--amount is required")
+	}
+	if *pollInterval < time.Second {
+		return fmt.Errorf("--poll-interval must be at least 1s")
 	}
 	session, err := requireSession(config)
 	if err != nil {
@@ -217,25 +242,121 @@ func handleBillingTopUpCommand(client *HTTPClient, config *ClientConfig, args []
 	checkoutURL := stringField(resp.Data, "checkout_url")
 	invoiceID := stringField(resp.Data, "invoice_id")
 	fmt.Printf("Invoice: %s\n", invoiceID)
-	fmt.Printf("Checkout URL: %s\n", checkoutURL)
+	fmt.Printf("Payment page: %s\n", checkoutURL)
+	fmt.Printf("Open the payment page to pay with Bitcoin or Monero. Your balance is credited automatically once the payment is confirmed.\n")
 	if *openBrowser && checkoutURL != "" {
-		openBrowserURL(checkoutURL)
-	}
-	if *wait && invoiceID != "" {
-		for i := 0; i < 60; i++ {
-			time.Sleep(2 * time.Second)
-			st, err := client.makeRequestWithSession("GET", "/api/billing/invoice/"+invoiceID, nil, session)
-			if err != nil {
-				continue
-			}
-			if stringField(st.Data, "status") == "paid" {
-				fmt.Println("Payment confirmed.")
-				return nil
-			}
+		if err := checkBrowserCheckoutURL(checkoutURL); err != nil {
+			fmt.Fprintf(os.Stderr, "Not opening browser: %v\n", err)
+		} else {
+			openBrowserURL(checkoutURL)
 		}
-		return fmt.Errorf("timed out waiting for payment")
 	}
-	return nil
+	if !*wait || invoiceID == "" {
+		return nil
+	}
+	_, err = waitForInvoiceSettlement(client, session, invoiceID, invoiceWaitOptions{
+		Timeout:  *timeout,
+		Interval: *pollInterval,
+		Out:      os.Stdout,
+	})
+	return err
+}
+
+type invoiceWaitOptions struct {
+	Timeout  time.Duration
+	Interval time.Duration
+	Out      io.Writer
+	Sleep    func(time.Duration)
+	Now      func() time.Time
+}
+
+// invoiceStatusDescription is the user-facing explanation of a local invoice status.
+func invoiceStatusDescription(status string) string {
+	switch status {
+	case "creating":
+		return "Creating invoice"
+	case "pending":
+		return "Waiting for payment"
+	case "confirming":
+		return "Payment detected, waiting for network confirmation (not yet credited)"
+	case "paid":
+		return "Payment confirmed, balance credited"
+	case "expired":
+		return "Invoice expired before a payment was confirmed, no balance was credited"
+	case "failed":
+		return "Invoice failed or was refunded, no balance was credited"
+	default:
+		return status
+	}
+}
+
+// waitForInvoiceSettlement polls the invoice until it reaches paid, expired, or
+// failed. Prints each status change. Returns nil only when paid. Transient
+// network and server errors are retried; an ended session or unknown invoice stops.
+func waitForInvoiceSettlement(client *HTTPClient, session *AuthSession, invoiceID string, opts invoiceWaitOptions) (string, error) {
+	if opts.Timeout <= 0 {
+		opts.Timeout = defaultInvoiceWaitTimeout
+	}
+	if opts.Interval <= 0 {
+		opts.Interval = defaultInvoicePollInterval
+	}
+	if opts.Out == nil {
+		opts.Out = io.Discard
+	}
+	if opts.Sleep == nil {
+		opts.Sleep = time.Sleep
+	}
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+	deadline := opts.Now().Add(opts.Timeout)
+	lastStatus := ""
+	for {
+		resp, err := client.makeRequestWithSession("GET", "/api/billing/invoice/"+url.PathEscape(invoiceID), nil, session)
+		switch {
+		case err == nil:
+			status := stringField(resp.Data, "status")
+			if status != lastStatus {
+				lastStatus = status
+				fmt.Fprintf(opts.Out, "Status: %s -- %s\n", status, invoiceStatusDescription(status))
+			}
+			switch status {
+			case "paid":
+				return status, nil
+			case "expired", "failed":
+				return status, fmt.Errorf("invoice %s %s: no balance was credited", invoiceID, status)
+			}
+		case errors.Is(err, errAuthExpired):
+			return lastStatus, fmt.Errorf("stopped waiting for invoice %s: %w", invoiceID, err)
+		case strings.Contains(err.Error(), "HTTP 404"):
+			return lastStatus, fmt.Errorf("invoice %s not found", invoiceID)
+		default:
+			logVerbose("Invoice status check failed, retrying: %v", err)
+		}
+		if !opts.Now().Before(deadline) {
+			return lastStatus, fmt.Errorf("timed out after %s waiting for invoice %s (last status: %s); your balance is credited automatically if the payment confirms later. Check with: arkfile-client billing invoice status --id %s",
+				opts.Timeout, invoiceID, lastStatus, invoiceID)
+		}
+		opts.Sleep(opts.Interval)
+	}
+}
+
+// checkBrowserCheckoutURL permits https, and http only on loopback (local development).
+func checkBrowserCheckoutURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("invalid payment page URL")
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		host := u.Hostname()
+		if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+			return nil
+		}
+	}
+	return fmt.Errorf("payment page URL must use https")
 }
 
 func handleBillingInvoiceStatusCommand(client *HTTPClient, config *ClientConfig, args []string) error {
@@ -252,7 +373,7 @@ func handleBillingInvoiceStatusCommand(client *HTTPClient, config *ClientConfig,
 	if err != nil {
 		return err
 	}
-	resp, err := client.makeRequestWithSession("GET", "/api/billing/invoice/"+*id, nil, session)
+	resp, err := client.makeRequestWithSession("GET", "/api/billing/invoice/"+url.PathEscape(*id), nil, session)
 	if err != nil {
 		return err
 	}
@@ -262,7 +383,15 @@ func handleBillingInvoiceStatusCommand(client *HTTPClient, config *ClientConfig,
 		return enc.Encode(resp.Data)
 	}
 	inv := resp.Data
-	fmt.Printf("Status: %s\n", stringField(inv, "status"))
+	status := stringField(inv, "status")
+	fmt.Printf("Invoice: %s\n", stringField(inv, "invoice_id"))
+	fmt.Printf("Status:  %s -- %s\n", status, invoiceStatusDescription(status))
+	if micro := numberField(inv, "amount_usd_microcents"); micro > 0 {
+		fmt.Printf("Amount:  $%d.%02d USD\n", micro/100_000_000, (micro%100_000_000)/1_000_000)
+	}
+	if checkout := stringField(inv, "checkout_url"); checkout != "" {
+		fmt.Printf("Payment page: %s\n", checkout)
+	}
 	return nil
 }
 

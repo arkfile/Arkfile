@@ -36,7 +36,7 @@ func openPaymentInvoicesTestDB(t *testing.T) *sql.DB {
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY(username) REFERENCES users(username) ON DELETE RESTRICT,
-			CHECK(status IN ('creating', 'pending', 'paid', 'expired', 'failed'))
+			CHECK(status IN ('creating', 'pending', 'confirming', 'paid', 'expired', 'failed'))
 		);
 	`
 	if _, err := db.Exec(schema); err != nil {
@@ -121,5 +121,55 @@ func TestListPaymentInvoices_Filters(t *testing.T) {
 	}
 	if len(allPending) != 2 {
 		t.Errorf("pending count = %d, want 2", len(allPending))
+	}
+}
+
+func TestAdvancePaymentInvoiceStatus_Guarded(t *testing.T) {
+	db := openPaymentInvoicesTestDB(t)
+	defer db.Close()
+
+	inv := &PaymentInvoice{InvoiceID: "inv_adv", Username: "alice", AmountUSDMicrocents: 100, Status: PaymentStatusPending, Provider: "testprov", ProviderInvoiceID: "p_adv"}
+	if err := CreatePaymentInvoice(db, inv); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	moved, err := AdvancePaymentInvoiceStatus(db, "inv_adv", []string{PaymentStatusPending}, PaymentStatusConfirming)
+	if err != nil || !moved {
+		t.Fatalf("pending to confirming: moved=%v err=%v", moved, err)
+	}
+	moved, err = AdvancePaymentInvoiceStatus(db, "inv_adv", []string{PaymentStatusPending}, PaymentStatusExpired)
+	if err != nil || moved {
+		t.Fatalf("guard should block confirming to expired: moved=%v err=%v", moved, err)
+	}
+	got, err := GetPaymentInvoice(db, "inv_adv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != PaymentStatusConfirming {
+		t.Errorf("status = %q, want confirming", got.Status)
+	}
+}
+
+func TestListPendingPaymentInvoices_IncludesConfirming(t *testing.T) {
+	db := openPaymentInvoicesTestDB(t)
+	defer db.Close()
+
+	seed := []PaymentInvoice{
+		{InvoiceID: "inv_p", Username: "alice", AmountUSDMicrocents: 100, Status: PaymentStatusPending, Provider: "testprov", ProviderInvoiceID: "pp"},
+		{InvoiceID: "inv_c", Username: "alice", AmountUSDMicrocents: 100, Status: PaymentStatusConfirming, Provider: "testprov", ProviderInvoiceID: "pc"},
+		{InvoiceID: "inv_d", Username: "alice", AmountUSDMicrocents: 100, Status: PaymentStatusPaid, Provider: "testprov", ProviderInvoiceID: "pd"},
+		{InvoiceID: "inv_o", Username: "alice", AmountUSDMicrocents: 100, Status: PaymentStatusPending, Provider: "other", ProviderInvoiceID: "po"},
+	}
+	for i := range seed {
+		if err := CreatePaymentInvoice(db, &seed[i]); err != nil {
+			t.Fatalf("seed %d: %v", i, err)
+		}
+	}
+	open, err := ListPendingPaymentInvoices(db, "testprov", 10)
+	if err != nil {
+		t.Fatalf("ListPendingPaymentInvoices: %v", err)
+	}
+	if len(open) != 2 {
+		t.Fatalf("open invoices = %d, want 2 (pending and confirming)", len(open))
 	}
 }

@@ -10,18 +10,62 @@ import (
 )
 
 type InvoiceStatusProvider interface {
-	GetInvoiceStatus(context.Context, string) (string, error)
+	GetInvoiceStatus(context.Context, *models.PaymentInvoice) (string, error)
 }
 
 type PendingReconcileReport struct {
 	Checked int `json:"checked"`
 	Settled int `json:"settled"`
+	Updated int `json:"updated"`
 	Skipped int `json:"skipped"`
 	Errors  int `json:"errors"`
 }
 
-// ReconcilePendingInvoices queries a bounded batch of associated pending
-// invoices and settles only when the provider reports status "paid".
+// ApplyProviderInvoiceStatus records a normalized provider status on a local
+// invoice and returns the resulting local status. Status only moves forward:
+// pending to confirming, pending or confirming to expired or failed, and any
+// unpaid status to paid. Only "paid" credits the user, via SettlePaymentInvoice.
+func ApplyProviderInvoiceStatus(db *sql.DB, invoice *models.PaymentInvoice, status, paymentType string) (string, error) {
+	switch status {
+	case models.PaymentStatusPaid:
+		if _, err := SettlePaymentInvoice(db, invoice, paymentType); err != nil {
+			return invoice.Status, err
+		}
+		invoice.Status = models.PaymentStatusPaid
+		return invoice.Status, nil
+	case models.PaymentStatusConfirming:
+		return advanceInvoiceStatus(db, invoice, []string{models.PaymentStatusPending}, status)
+	case models.PaymentStatusExpired:
+		return advanceInvoiceStatus(db, invoice, []string{models.PaymentStatusPending}, status)
+	case models.PaymentStatusFailed:
+		return advanceInvoiceStatus(db, invoice, []string{models.PaymentStatusPending, models.PaymentStatusConfirming}, status)
+	case models.PaymentStatusPending:
+		return invoice.Status, nil
+	default:
+		return invoice.Status, fmt.Errorf("billing.ApplyProviderInvoiceStatus: unknown provider status %q", status)
+	}
+}
+
+func advanceInvoiceStatus(db *sql.DB, invoice *models.PaymentInvoice, from []string, to string) (string, error) {
+	moved, err := models.AdvancePaymentInvoiceStatus(db, invoice.InvoiceID, from, to)
+	if err != nil {
+		return invoice.Status, fmt.Errorf("billing.ApplyProviderInvoiceStatus: %w", err)
+	}
+	if moved {
+		invoice.Status = to
+		return to, nil
+	}
+	latest, err := models.GetPaymentInvoice(db, invoice.InvoiceID)
+	if err != nil {
+		return invoice.Status, fmt.Errorf("billing.ApplyProviderInvoiceStatus: reload: %w", err)
+	}
+	invoice.Status = latest.Status
+	return latest.Status, nil
+}
+
+// ReconcilePendingInvoices queries a bounded batch of open (pending or
+// confirming) invoices and applies each provider status. Only a provider
+// status of "paid" settles an invoice.
 func ReconcilePendingInvoices(ctx context.Context, db *sql.DB, provider InvoiceStatusProvider, paymentType string, batchSize int, requestTimeout time.Duration) (PendingReconcileReport, error) {
 	var report PendingReconcileReport
 	if provider == nil {
@@ -43,25 +87,26 @@ func ReconcilePendingInvoices(ctx context.Context, db *sql.DB, provider InvoiceS
 		}
 		report.Checked++
 		requestCtx, cancel := context.WithTimeout(ctx, requestTimeout)
-		status, statusErr := provider.GetInvoiceStatus(requestCtx, invoice.ProviderInvoiceID)
+		status, statusErr := provider.GetInvoiceStatus(requestCtx, invoice)
 		cancel()
 		if statusErr != nil {
 			report.Errors++
 			continue
 		}
-		if status != "paid" {
+		previous := invoice.Status
+		result, err := ApplyProviderInvoiceStatus(db, invoice, status, paymentType)
+		switch {
+		case err != nil && isDuplicateTransactionIDError(err):
 			report.Skipped++
-			continue
-		}
-		if _, err := SettlePaymentInvoice(db, invoice, paymentType); err != nil {
-			if isDuplicateTransactionIDError(err) {
-				report.Skipped++
-				continue
-			}
+		case err != nil:
 			report.Errors++
-			continue
+		case result == previous:
+			report.Skipped++
+		case result == models.PaymentStatusPaid:
+			report.Settled++
+		default:
+			report.Updated++
 		}
-		report.Settled++
 	}
 	return report, nil
 }

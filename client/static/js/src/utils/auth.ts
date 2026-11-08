@@ -18,6 +18,7 @@ import { cleanupAccountKeyCache } from '../crypto/file-encryption.js';
 // Cookie names (must match handlers/cookies.go constants)
 const CSRF_COOKIE_NAME = '__Host-arkfile-csrf';
 const SESSION_NOTICE_KEY = 'arkfile_session_notice';
+const REFRESH_LOCK_NAME = 'arkfile-refresh';
 export const SESSION_ENDED_EVENT = 'arkfile:session-ended';
 
 export type SessionErrorCode = 'session_idle' | 'session_absolute' | 'session_logged_out';
@@ -158,7 +159,32 @@ export class AuthManager {
   }
 
   // Token refresh: sends cookie automatically; no body needed for browser clients.
-  public static async refreshToken(): Promise<RefreshResult> {
+  // Refresh tokens rotate and reuse revokes the whole login, so refreshes are
+  // serialized: one in-flight call per tab, and a Web Lock across tabs.
+  public static refreshToken(): Promise<RefreshResult> {
+    if (this.refreshInFlight) {
+      return this.refreshInFlight;
+    }
+    const run = async (): Promise<RefreshResult> => {
+      const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+      if (locks && typeof locks.request === 'function') {
+        try {
+          return await locks.request(REFRESH_LOCK_NAME, () => this.refreshTokenUnlocked());
+        } catch (error) {
+          console.warn('Refresh lock unavailable:', error);
+        }
+      }
+      return this.refreshTokenUnlocked();
+    };
+    this.refreshInFlight = run().finally(() => {
+      this.refreshInFlight = null;
+    });
+    return this.refreshInFlight;
+  }
+
+  private static refreshInFlight: Promise<RefreshResult> | null = null;
+
+  private static async refreshTokenUnlocked(): Promise<RefreshResult> {
     try {
       const response = await fetch('/api/refresh', {
         method: 'POST',

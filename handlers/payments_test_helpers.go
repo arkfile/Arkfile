@@ -126,7 +126,7 @@ func setupPaymentsSQLiteDB(t *testing.T) *sql.DB {
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY(username) REFERENCES users(username) ON DELETE RESTRICT,
-			CHECK(status IN ('creating', 'pending', 'paid', 'expired', 'failed'))
+			CHECK(status IN ('creating', 'pending', 'confirming', 'paid', 'expired', 'failed'))
 		);
 		CREATE TABLE subscription_plans (
 			plan_id TEXT PRIMARY KEY,

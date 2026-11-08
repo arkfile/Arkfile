@@ -4229,8 +4229,8 @@ run_payments() {
     # Billing (admin-only) leaves the test user slightly negative.  User CLI
     # steps run here -- after post-admin-reset MFA re-enrollment -- so upload
     # and download probes have a valid session.  The drained balance stays
-    # until teardown, which gifts the account back to $10.00. Automated
-    # top-ups are disabled.
+    # until the Bitcart top-up tests below credit $11.00; teardown then gifts
+    # the account back to $10.00.
     local cap_microcents=1000000000   # $10.00 in microcents
     local cap_test_file="$TEST_DATA_DIR/payg_cap_probe.bin"
     head -c 2048 /dev/urandom > "$cap_test_file" 2>/dev/null || \
@@ -4371,39 +4371,351 @@ run_payments() {
         record_test "Restore price after PAYG cap test" "FAIL"
     fi
 
-    # Extract the token directly from the user's active session file
-    local user_token
-    user_token=$(jq -r '.access_token // empty' "$HOME/.arkfile-session.json" 2>/dev/null)
-
-    # Credits must not advertise an automated top-up provider.
-    local credits_out credits_code
-    safe_exec credits_out credits_code \
-        curl -s -k -H "Authorization: Bearer $user_token" "$SERVER_URL/api/credits"
-
-    if [ $credits_code -eq 0 ] && ! echo "$credits_out" | grep -q '"payments"'; then
-        record_test "User credits endpoint omits payments config" "PASS"
-    else
-        error "Credits response unexpectedly includes a payments block: $credits_out"
-        record_test "User credits endpoint omits payments config" "FAIL"
-    fi
-
-    scenario "Invoice API rejected while automated top-ups are disabled"
-
-    local invoice_raw invoice_http
-    invoice_raw=$(curl -sk -w '\n%{http_code}' -X POST \
-        -H "Authorization: Bearer $user_token" \
-        -H "Content-Type: application/json" \
-        -d '{"amount_usd":"10.00"}' \
-        "$SERVER_URL/api/billing/invoice")
-    invoice_http=$(echo "$invoice_raw" | tail -n1)
-    if [ "$invoice_http" = "403" ]; then
-        record_test "Invoice API returns 403 while payments are disabled" "PASS"
-    else
-        error "Expected invoice API HTTP 403, got $invoice_http: $invoice_raw"
-        record_test "Invoice API returns 403 while payments are disabled" "FAIL"
-    fi
+    run_bitcart_payments
 
     info "Payments complete"
+}
+
+# Bitcart mock (scripts/testing/bitcart-mock.go). dev-reset.sh points the
+# server at it. It stays up through run_subscriptions, which also creates
+# invoices, and is stopped (after closing every open invoice) at the end.
+BITCART_MOCK_URL="http://127.0.0.1:8082"
+BITCART_MOCK_PID=""
+
+find_go_bin() {
+    if command -v go >/dev/null 2>&1; then
+        command -v go
+        return 0
+    fi
+    local path
+    for path in "/usr/local/go/bin/go" "/usr/local/bin/go" "/usr/bin/go"; do
+        if [ -x "$path" ]; then
+            echo "$path"
+            return 0
+        fi
+    done
+    return 1
+}
+
+start_mock_bitcart() {
+    local e2e_script_dir go_bin
+    e2e_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    go_bin=$(find_go_bin) || { error "Go toolchain not found for the Bitcart mock"; return 1; }
+    local mock_bin="$TEST_DATA_DIR/bitcart-mock"
+    local mock_log="$TEST_DATA_DIR/bitcart-mock.log"
+    : > "$mock_log"
+
+    if curl -s --connect-timeout 1 "$BITCART_MOCK_URL/health" >/dev/null 2>&1; then
+        error "Something is already listening on $BITCART_MOCK_URL"
+        return 1
+    fi
+
+    info "Building Bitcart mock..."
+    if ! CGO_ENABLED=0 "$go_bin" build -o "$mock_bin" "$e2e_script_dir/bitcart-mock.go" >>"$mock_log" 2>&1; then
+        error "Failed to build Bitcart mock"
+        cat "$mock_log"
+        return 1
+    fi
+
+    "$mock_bin" >>"$mock_log" 2>&1 &
+    BITCART_MOCK_PID=$!
+    local i
+    for i in $(seq 1 30); do
+        if curl -s --connect-timeout 1 "$BITCART_MOCK_URL/health" >/dev/null 2>&1; then
+            info "Bitcart mock is listening on $BITCART_MOCK_URL"
+            return 0
+        fi
+        if ! kill -0 "$BITCART_MOCK_PID" 2>/dev/null; then
+            error "Bitcart mock exited early"
+            cat "$mock_log"
+            BITCART_MOCK_PID=""
+            return 1
+        fi
+        sleep 1
+    done
+    error "Bitcart mock did not become ready"
+    kill "$BITCART_MOCK_PID" 2>/dev/null || true
+    BITCART_MOCK_PID=""
+    return 1
+}
+
+stop_mock_bitcart() {
+    if [ -z "$BITCART_MOCK_PID" ]; then
+        return 0
+    fi
+    # Close open invoices first so the server reconciler has nothing left to poll.
+    curl -s -X POST "$BITCART_MOCK_URL/mock/close-all" >/dev/null 2>&1 || true
+    if kill -0 "$BITCART_MOCK_PID" 2>/dev/null; then
+        kill "$BITCART_MOCK_PID" 2>/dev/null || true
+        wait "$BITCART_MOCK_PID" 2>/dev/null || true
+    fi
+    BITCART_MOCK_PID=""
+}
+
+# bitcart_mock_control PATH JSON: POST to a /mock/ control endpoint. Waits
+# 2.5s first so each notification clears the server's per-invoice throttle.
+bitcart_mock_control() {
+    sleep 2.5
+    curl -s -X POST "$BITCART_MOCK_URL$1" -H "Content-Type: application/json" -d "$2"
+}
+
+bitcart_mock_last_invoice() {
+    curl -s "$BITCART_MOCK_URL/mock/last-invoice"
+}
+
+# user_invoice_status INVOICE_ID: local Arkfile status as seen by the owner.
+user_invoice_status() {
+    curl -sk -H "Authorization: Bearer $(user_access_token)" \
+        "$SERVER_URL/api/billing/invoice/$1" | jq -r '.data.status // empty' 2>/dev/null
+}
+
+# wait_invoice_status INVOICE_ID EXPECTED [SECONDS]: polls until the status matches.
+wait_invoice_status() {
+    local invoice_id="$1" expected="$2" limit="${3:-20}" i st=""
+    for i in $(seq 1 "$limit"); do
+        st=$(user_invoice_status "$invoice_id")
+        if [ "$st" = "$expected" ]; then
+            echo "$st"
+            return 0
+        fi
+        sleep 1
+    done
+    echo "$st"
+    return 1
+}
+
+# payment_credit_count PROVIDER_INVOICE_ID: credit rows for one Bitcart invoice.
+payment_credit_count() {
+    curl -sk -H "Authorization: Bearer $(user_access_token)" "$SERVER_URL/api/credits?limit=100" \
+        | jq --arg pid "$1" '[(.data.transactions // .transactions // [])[] | select(.transaction_id == $pid)] | length' 2>/dev/null
+}
+
+# create_user_invoice AMOUNT: prints the response body followed by the HTTP code.
+create_user_invoice() {
+    curl -sk -w '\n%{http_code}' -X POST \
+        -H "Authorization: Bearer $(user_access_token)" \
+        -H "Content-Type: application/json" \
+        -d "{\"amount_usd\":\"$1\"}" \
+        "$SERVER_URL/api/billing/invoice"
+}
+
+run_bitcart_payments() {
+    scenario "Start Bitcart mock"
+    if start_mock_bitcart; then
+        record_test "Start Bitcart mock" "PASS"
+    else
+        record_test "Start Bitcart mock" "FAIL"
+        return 0
+    fi
+
+    scenario "Credits advertise Bitcart top-ups"
+    local credits_out
+    credits_out=$(curl -sk -H "Authorization: Bearer $(user_access_token)" "$SERVER_URL/api/credits")
+    if [ "$(echo "$credits_out" | jq -r '(.data.payments // .payments).enabled // false' 2>/dev/null)" = "true" ]; then
+        record_test "Credits payments block shows top-ups enabled" "PASS"
+    else
+        error "Credits response does not advertise enabled top-ups: $credits_out"
+        record_test "Credits payments block shows top-ups enabled" "FAIL"
+    fi
+
+    scenario "Bitcart top-up moves pending, confirming, paid and credits once"
+    local raw http body invoice_id checkout_url remote provider_id st count
+    raw=$(create_user_invoice "10.00")
+    http=$(echo "$raw" | tail -n1)
+    body=$(echo "$raw" | sed '$d')
+    invoice_id=$(echo "$body" | jq -r '.data.invoice_id // empty' 2>/dev/null)
+    checkout_url=$(echo "$body" | jq -r '.data.checkout_url // empty' 2>/dev/null)
+    if [ "$http" = "200" ] && [ -n "$invoice_id" ] && [[ "$checkout_url" == "$BITCART_MOCK_URL/i/"* ]]; then
+        record_test "Create Bitcart invoice" "PASS"
+    else
+        error "Invoice creation failed (http=$http): $body"
+        record_test "Create Bitcart invoice" "FAIL"
+        return 0
+    fi
+
+    remote=$(bitcart_mock_last_invoice)
+    provider_id=$(echo "$remote" | jq -r '.id // empty')
+    if [ "$(echo "$remote" | jq -r '.order_id')" = "$invoice_id" ] \
+        && [ "$(echo "$remote" | jq -r '.price')" = "10.00" ] \
+        && [ "$(echo "$remote" | jq -r '.currency')" = "USD" ] \
+        && [ "$(echo "$remote" | jq -r '.store_id')" = "dev-store" ] \
+        && [ "$(echo "$remote" | jq -r '.redirect_url')" = "" ] \
+        && ! echo "$remote" | grep -q "$TEST_USERNAME"; then
+        record_test "Bitcart receives only order id, USD price, and store (no username)" "PASS"
+    else
+        error "Unexpected invoice data sent to Bitcart: $remote"
+        record_test "Bitcart receives only order id, USD price, and store (no username)" "FAIL"
+    fi
+
+    st=$(user_invoice_status "$invoice_id")
+    if [ "$st" = "pending" ]; then
+        record_test "New invoice is pending" "PASS"
+    else
+        error "Expected pending, got '$st'"
+        record_test "New invoice is pending" "FAIL"
+    fi
+
+    bitcart_mock_control /mock/set-status "{\"id\":\"$provider_id\",\"status\":\"paid\"}" >/dev/null
+    st=$(wait_invoice_status "$invoice_id" confirming)
+    count=$(payment_credit_count "$provider_id")
+    if [ "$st" = "confirming" ] && [ "$count" = "0" ]; then
+        record_test "Detected payment shows confirming without credit" "PASS"
+    else
+        error "Expected confirming with no credit, got status='$st' credits=$count"
+        record_test "Detected payment shows confirming without credit" "FAIL"
+    fi
+
+    bitcart_mock_control /mock/set-status "{\"id\":\"$provider_id\",\"status\":\"confirmed\"}" >/dev/null
+    sleep 1
+    st=$(user_invoice_status "$invoice_id")
+    count=$(payment_credit_count "$provider_id")
+    if [ "$st" = "confirming" ] && [ "$count" = "0" ]; then
+        record_test "Bitcart confirmed (before complete) does not credit" "PASS"
+    else
+        error "Expected confirming with no credit after Bitcart confirmed, got status='$st' credits=$count"
+        record_test "Bitcart confirmed (before complete) does not credit" "FAIL"
+    fi
+
+    bitcart_mock_control /mock/set-status "{\"id\":\"$provider_id\",\"status\":\"complete\"}" >/dev/null
+    st=$(wait_invoice_status "$invoice_id" paid)
+    count=$(payment_credit_count "$provider_id")
+    local credit_amount
+    credit_amount=$(curl -sk -H "Authorization: Bearer $(user_access_token)" "$SERVER_URL/api/credits?limit=100" \
+        | jq -r --arg pid "$provider_id" '[(.data.transactions // .transactions // [])[] | select(.transaction_id == $pid)][0].amount_usd_microcents // empty')
+    if [ "$st" = "paid" ] && [ "$count" = "1" ] && [ "$credit_amount" = "1000000000" ]; then
+        record_test "Bitcart complete marks paid and credits exactly \$10.00 once" "PASS"
+    else
+        error "Expected paid with one \$10.00 credit, got status='$st' credits=$count amount=$credit_amount"
+        record_test "Bitcart complete marks paid and credits exactly \$10.00 once" "FAIL"
+    fi
+
+    local replay
+    replay=$(bitcart_mock_control /mock/send-notification "{\"id\":\"$provider_id\",\"status\":\"complete\"}")
+    sleep 1
+    count=$(payment_credit_count "$provider_id")
+    if [ "$(echo "$replay" | jq -r '.notify_http')" = "200" ] && [ "$count" = "1" ]; then
+        record_test "Replayed notification does not credit twice" "PASS"
+    else
+        error "Replay check failed: notify=$replay credits=$count"
+        record_test "Replayed notification does not credit twice" "FAIL"
+    fi
+
+    scenario "Forged and tampered notifications do not credit"
+    local forged_http
+    forged_http=$(curl -sk -o /dev/null -w '%{http_code}' -X POST \
+        -H "Content-Type: application/json" \
+        -d '{"id":"forged-unknown-invoice","status":"complete"}' \
+        "$SERVER_URL/api/webhooks/bitcart")
+    if [ "$forged_http" = "200" ]; then
+        record_test "Notification for an unknown invoice is acknowledged and ignored" "PASS"
+    else
+        error "Expected 200 ack for unknown invoice, got $forged_http"
+        record_test "Notification for an unknown invoice is acknowledged and ignored" "FAIL"
+    fi
+
+    local inv2 pid2
+    raw=$(create_user_invoice "5.00")
+    inv2=$(echo "$raw" | sed '$d' | jq -r '.data.invoice_id // empty' 2>/dev/null)
+    pid2=$(bitcart_mock_last_invoice | jq -r '.id // empty')
+
+    bitcart_mock_control /mock/send-notification "{\"id\":\"$pid2\",\"status\":\"complete\"}" >/dev/null
+    sleep 1
+    st=$(user_invoice_status "$inv2")
+    count=$(payment_credit_count "$pid2")
+    if [ -n "$inv2" ] && [ "$st" = "pending" ] && [ "$count" = "0" ]; then
+        record_test "Notification body claiming complete is not trusted" "PASS"
+    else
+        error "Body-status check failed: invoice=$inv2 status='$st' credits=$count"
+        record_test "Notification body claiming complete is not trusted" "FAIL"
+    fi
+
+    bitcart_mock_control /mock/tamper "{\"id\":\"$pid2\",\"price\":\"0.50\"}" >/dev/null
+    local tamper_notify
+    tamper_notify=$(bitcart_mock_control /mock/set-status "{\"id\":\"$pid2\",\"status\":\"complete\"}")
+    sleep 1
+    st=$(user_invoice_status "$inv2")
+    count=$(payment_credit_count "$pid2")
+    if [ "$(echo "$tamper_notify" | jq -r '.notify_http')" = "502" ] && [ "$st" = "pending" ] && [ "$count" = "0" ]; then
+        record_test "Bitcart invoice with a different USD price is rejected" "PASS"
+    else
+        error "Tamper check failed: notify=$tamper_notify status='$st' credits=$count"
+        record_test "Bitcart invoice with a different USD price is rejected" "FAIL"
+    fi
+
+    scenario "Expired invoice is marked expired without credit"
+    bitcart_mock_control /mock/tamper "{\"id\":\"$pid2\",\"price\":\"5.00\"}" >/dev/null
+    bitcart_mock_control /mock/set-status "{\"id\":\"$pid2\",\"status\":\"expired\"}" >/dev/null
+    st=$(wait_invoice_status "$inv2" expired)
+    count=$(payment_credit_count "$pid2")
+    if [ "$st" = "expired" ] && [ "$count" = "0" ]; then
+        record_test "Bitcart expired marks the invoice expired" "PASS"
+    else
+        error "Expected expired with no credit, got status='$st' credits=$count"
+        record_test "Bitcart expired marks the invoice expired" "FAIL"
+    fi
+
+    scenario "CLI top-up --wait follows the invoice to paid"
+    run_cli_topup_wait "1.00" "complete" 0 "paid"
+
+    scenario "CLI top-up --wait exits non-zero when the invoice expires"
+    run_cli_topup_wait "1.00" "expired" 1 "no balance was credited"
+}
+
+# run_cli_topup_wait AMOUNT FINAL_BITCART_STATUS EXPECTED_EXIT EXPECTED_TEXT
+run_cli_topup_wait() {
+    local amount="$1" final="$2" want_exit="$3" want_text="$4"
+    local out_file="$TEST_DATA_DIR/cli-topup-wait.out"
+    local before_id cli_pid pid i cli_code
+    before_id=$(bitcart_mock_last_invoice | jq -r '.id // empty')
+
+    $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+        billing top-up --amount "$amount" --wait --poll-interval 2s --timeout 90s \
+        >"$out_file" 2>&1 &
+    cli_pid=$!
+
+    pid=""
+    for i in $(seq 1 20); do
+        pid=$(bitcart_mock_last_invoice | jq -r '.id // empty')
+        if [ -n "$pid" ] && [ "$pid" != "$before_id" ]; then
+            break
+        fi
+        pid=""
+        sleep 1
+    done
+    if [ -z "$pid" ]; then
+        kill "$cli_pid" 2>/dev/null || true
+        wait "$cli_pid" 2>/dev/null || true
+        error "CLI top-up did not create a Bitcart invoice: $(cat "$out_file")"
+        record_test "CLI top-up --wait ($final)" "FAIL"
+        return 0
+    fi
+
+    if [ "$final" = "complete" ]; then
+        bitcart_mock_control /mock/set-status "{\"id\":\"$pid\",\"status\":\"paid\"}" >/dev/null
+        sleep 4
+    fi
+    bitcart_mock_control /mock/set-status "{\"id\":\"$pid\",\"status\":\"$final\"}" >/dev/null
+
+    wait "$cli_pid"
+    cli_code=$?
+    local out
+    out=$(cat "$out_file")
+    rm -f "$out_file"
+
+    local exit_ok=false
+    if [ "$want_exit" = "0" ] && [ "$cli_code" -eq 0 ]; then
+        exit_ok=true
+    elif [ "$want_exit" != "0" ] && [ "$cli_code" -ne 0 ]; then
+        exit_ok=true
+    fi
+    if $exit_ok && echo "$out" | grep -qi "$want_text" \
+        && { [ "$final" != "complete" ] || echo "$out" | grep -q "confirming"; }; then
+        record_test "CLI top-up --wait ($final)" "PASS"
+    else
+        error "CLI top-up --wait ($final) exit=$cli_code output:"
+        echo "$out"
+        record_test "CLI top-up --wait ($final)" "FAIL"
+    fi
 }
 
 start_mock_subscription_bridge() {
@@ -4703,7 +5015,7 @@ run_subscriptions() {
         record_test "Credits API not subscribed after gift cancel" "FAIL"
     fi
 
-    scenario "Invoice API rejected after gift cancel while payments are disabled"
+    scenario "Invoice API available again after gift cancel"
     user_token=$(user_access_token)
     local post_cancel_invoice_raw post_cancel_invoice_http
     post_cancel_invoice_raw=$(curl -sk -w '\n%{http_code}' -X POST \
@@ -4712,22 +5024,23 @@ run_subscriptions() {
         -d '{"amount_usd":"1.00"}' \
         "$SERVER_URL/api/billing/invoice")
     post_cancel_invoice_http=$(echo "$post_cancel_invoice_raw" | tail -n1)
-    if [ "$post_cancel_invoice_http" = "403" ]; then
-        record_test "Invoice API 403 after gift cancel while payments disabled" "PASS"
+    if [ "$post_cancel_invoice_http" = "200" ] \
+        && echo "$post_cancel_invoice_raw" | grep -q "$BITCART_MOCK_URL/i/"; then
+        record_test "Invoice API creates a Bitcart invoice after gift cancel" "PASS"
     else
-        error "Expected invoice API HTTP 403 after gift cancel (http=$post_cancel_invoice_http): $post_cancel_invoice_raw"
-        record_test "Invoice API 403 after gift cancel while payments disabled" "FAIL"
+        error "Expected invoice API HTTP 200 after gift cancel (http=$post_cancel_invoice_http): $post_cancel_invoice_raw"
+        record_test "Invoice API creates a Bitcart invoice after gift cancel" "FAIL"
     fi
 
-    scenario "CLI top-up rejected after gift cancel while payments are disabled"
+    scenario "CLI top-up available again after gift cancel"
     safe_exec topup_out topup_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure \
         billing top-up --amount 1.00
-    if [ $topup_code -ne 0 ] && echo "$topup_out" | grep -qi "disabled"; then
-        record_test "CLI top-up rejected while payments disabled" "PASS"
+    if [ $topup_code -eq 0 ] && echo "$topup_out" | grep -q "Payment page: $BITCART_MOCK_URL/i/"; then
+        record_test "CLI top-up creates a Bitcart invoice after gift cancel" "PASS"
     else
-        error "CLI top-up should fail while payments are disabled: $topup_out"
-        record_test "CLI top-up rejected while payments disabled" "FAIL"
+        error "CLI top-up should succeed after gift cancel: $topup_out"
+        record_test "CLI top-up creates a Bitcart invoice after gift cancel" "FAIL"
     fi
 
     scenario "Subscription checkout returns checkout id"
@@ -4874,20 +5187,22 @@ run_subscriptions() {
         record_test "Bridge expire webhook ends subscription" "FAIL"
     fi
 
-    scenario "Invoice API rejected after bridge expire while payments are disabled"
+    scenario "Invoice API available again after bridge expire"
     user_token=$(user_access_token)
     invoice_http=$(curl -sk -o /dev/null -w '%{http_code}' -X POST \
         -H "Authorization: Bearer $user_token" \
         -H "Content-Type: application/json" \
         -d '{"amount_usd":"1.00"}' \
         "$SERVER_URL/api/billing/invoice")
-    if [ "$invoice_http" = "403" ]; then
-        record_test "Invoice API 403 after bridge expire while payments disabled" "PASS"
+    if [ "$invoice_http" = "200" ]; then
+        record_test "Invoice API creates a Bitcart invoice after bridge expire" "PASS"
     else
-        record_test "Invoice API 403 after bridge expire while payments disabled" "FAIL"
+        error "Expected invoice API HTTP 200 after bridge expire, got $invoice_http"
+        record_test "Invoice API creates a Bitcart invoice after bridge expire" "FAIL"
     fi
 
     stop_mock_subscription_bridge "$mock_pid"
+    stop_mock_bitcart
     info "Subscriptions complete"
 }
 
@@ -5284,8 +5599,8 @@ run_report() {
 
 # MAIN EXECUTION
 
-# Ensure agent is stopped on exit (covers error paths too)
-trap stop_agent EXIT
+# Ensure agent and Bitcart mock are stopped on exit (covers error paths too)
+trap 'stop_mock_bitcart; stop_agent' EXIT
 
 # OPAQUE re-registration: an operator flags the existing user for a one-time
 # OPAQUE credential rotation, then the user re-registers transparently within a

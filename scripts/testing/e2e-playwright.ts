@@ -1717,23 +1717,15 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     console.log('[OK] Billing panel test complete');
   });
 
-  test('Billing panel hides automated top-up while payments are disabled', async () => {
-    await sharedPage.click('#billing-toggle');
-    await sharedPage.waitForSelector('#billing-panel:not(.hidden)', { timeout: 5000 });
-    await sharedPage.waitForSelector('.billing-panel-section', { timeout: 10000 });
+  // The Bitcart mock is stopped once e2e-test.sh finishes, so invoice create and
+  // status calls are fulfilled by Playwright routes here.
+  test('Top-up links to the payment page in a new tab and follows confirming to paid', async () => {
+    const invoiceID = 'inv_playwright_topup';
+    const checkoutURL = 'https://pay.example.invalid/i/mockplaywright';
+    let statusCalls = 0;
 
-    const topUpBtn = sharedPage.locator('button:has-text("Top Up Balance")');
-    await expect(topUpBtn, 'Top Up Balance stays hidden while automated payments are disabled').toHaveCount(0);
-
-    await sharedPage.click('#billing-toggle');
-    console.log('[OK] Billing panel hides automated top-up');
-  });
-
-  test('External-tab checkout return opens billing panel and confirms paid invoice', async () => {
-    const testInvoiceID = 'inv_playwright_return';
-
-    await sharedPage.route(`**/api/billing/invoice/${testInvoiceID}`, async (route) => {
-      if (route.request().method() !== 'GET') {
+    await sharedPage.route('**/api/billing/invoice', async (route) => {
+      if (route.request().method() !== 'POST') {
         await route.continue();
         return;
       }
@@ -1743,26 +1735,99 @@ test.describe.serial('Arkfile Playwright E2E', () => {
         body: JSON.stringify({
           success: true,
           data: {
-            invoice_id: testInvoiceID,
-            status: 'paid',
+            invoice_id: invoiceID,
+            status: 'pending',
             amount_usd_microcents: 1000000000,
-            provider: 'testprov',
+            checkout_url: checkoutURL,
+            provider: 'bitcart',
+          },
+        }),
+      });
+    });
+    await sharedPage.route(`**/api/billing/invoice/${invoiceID}`, async (route) => {
+      statusCalls++;
+      const status = statusCalls <= 1 ? 'pending' : statusCalls <= 3 ? 'confirming' : 'paid';
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: {
+            invoice_id: invoiceID,
+            status,
+            amount_usd_microcents: 1000000000,
+            ...(status === 'paid' ? {} : { checkout_url: checkoutURL }),
           },
         }),
       });
     });
 
-    await sharedPage.goto(`/?success=true&invoice=${testInvoiceID}`, { waitUntil: 'networkidle' });
+    await sharedPage.click('#billing-toggle');
+    await sharedPage.waitForSelector('#billing-panel:not(.hidden)', { timeout: 5000 });
+    await sharedPage.waitForSelector('.billing-panel-section', { timeout: 10000 });
 
-    await sharedPage.waitForSelector('#billing-panel:not(.hidden)', { timeout: 15000 });
-    await sharedPage.waitForSelector('.billing-panel-section', { timeout: 15000 });
+    const topUpBtn = sharedPage.locator('button:has-text("Top Up Balance")');
+    await expect(topUpBtn, 'Top Up Balance is shown while Bitcart top-ups are enabled').toHaveCount(1);
+    await topUpBtn.click();
+    await sharedPage.fill('#topup-amount-input', '10.00');
+    await sharedPage.click('#topup-form button[type="submit"]');
 
-    const urlAfter = sharedPage.url();
-    expect(urlAfter).not.toContain('success=true');
-    expect(urlAfter).not.toContain(`invoice=${testInvoiceID}`);
+    const link = sharedPage.locator('#topup-checkout-link');
+    await expect(link).toHaveAttribute('href', checkoutURL, { timeout: 10000 });
+    await expect(link).toHaveAttribute('target', '_blank');
+    await expect(link).toHaveAttribute('rel', /noopener/);
+    expect(await sharedPage.locator('iframe').count(), 'checkout is not embedded in an iframe').toBe(0);
 
-    await sharedPage.unroute(`**/api/billing/invoice/${testInvoiceID}`);
-    console.log('[OK] Billing checkout return test complete');
+    const status = sharedPage.locator('#topup-status');
+    await expect(status).toHaveAttribute('data-status', 'confirming', { timeout: 20000 });
+    await expect(status).toContainText('Payment detected');
+    await expect(status).toHaveAttribute('data-status', 'paid', { timeout: 30000 });
+    await expect(status).toContainText('balance has been credited');
+    await expect(link).toHaveCount(0);
+
+    const pending = await sharedPage.evaluate(() => sessionStorage.getItem('arkfile_pending_invoice'));
+    expect(pending, 'pending invoice marker is cleared once paid').toBeNull();
+
+    await sharedPage.keyboard.press('Escape');
+    await expect(sharedPage.locator('#arkfile-topup-modal-overlay')).toHaveCount(0);
+    await sharedPage.unroute('**/api/billing/invoice');
+    await sharedPage.unroute(`**/api/billing/invoice/${invoiceID}`);
+    await sharedPage.click('#billing-toggle');
+    console.log('[OK] Top-up checkout progress test complete');
+  });
+
+  test('Top-up in progress reopens after a page reload', async () => {
+    const invoiceID = 'inv_playwright_resume';
+    await sharedPage.route(`**/api/billing/invoice/${invoiceID}`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: {
+            invoice_id: invoiceID,
+            status: 'confirming',
+            amount_usd_microcents: 500000000,
+            checkout_url: 'https://pay.example.invalid/i/mockresume',
+          },
+        }),
+      });
+    });
+
+    await sharedPage.evaluate((id) => sessionStorage.setItem('arkfile_pending_invoice', id), invoiceID);
+    await sharedPage.reload({ waitUntil: 'networkidle' });
+
+    const status = sharedPage.locator('#topup-status');
+    await expect(status).toHaveAttribute('data-status', 'confirming', { timeout: 20000 });
+    await expect(sharedPage.locator('#topup-checkout-link')).toHaveAttribute('href', 'https://pay.example.invalid/i/mockresume');
+
+    await sharedPage.keyboard.press('Escape');
+    await expect(sharedPage.locator('#arkfile-topup-modal-overlay')).toHaveCount(0);
+    const pending = await sharedPage.evaluate(() => sessionStorage.getItem('arkfile_pending_invoice'));
+    expect(pending, 'closing the progress view clears the pending marker').toBeNull();
+
+    await sharedPage.unroute(`**/api/billing/invoice/${invoiceID}`);
+    console.log('[OK] Top-up resume after reload test complete');
   });
 
   // --------------------------------------------------------------------------

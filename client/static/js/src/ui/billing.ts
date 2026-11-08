@@ -501,40 +501,116 @@ function formatTransactionType(type: string): string {
   return type;
 }
 
-/** sessionStorage key for an in-progress top-up awaiting settlement. */
+/** sessionStorage key for a top-up whose checkout page is open in another tab. */
 export const PENDING_INVOICE_STORAGE_KEY = 'arkfile_pending_invoice';
 
-/** Poll attempts and interval after external-tab checkout return (~3 minutes). */
-const CHECKOUT_RETURN_POLL_ATTEMPTS = 90;
-const CHECKOUT_RETURN_POLL_INTERVAL_MS = 2000;
+/** Invoice status polling while the top-up progress view is open. */
+const CHECKOUT_POLL_INTERVAL_MS = 5000;
+const CHECKOUT_POLL_MAX_MS = 2 * 60 * 60 * 1000;
+
+export interface InvoiceStatusData {
+  invoice_id: string;
+  status: string;
+  amount_usd_microcents?: number;
+  checkout_url?: string;
+}
+
+export type InvoiceWatchOutcome =
+  | 'paid'
+  | 'expired'
+  | 'failed'
+  | 'not_found'
+  | 'session_ended'
+  | 'timeout'
+  | 'cancelled';
+
+export function isFinalInvoiceStatus(status: string): boolean {
+  return status === 'paid' || status === 'expired' || status === 'failed';
+}
+
+/** User-facing text for each local invoice status. */
+export function describeInvoiceStatus(status: string): string {
+  switch (status) {
+    case 'pending':
+      return 'Waiting for payment. Complete the payment on the payment page. This window updates automatically.';
+    case 'confirming':
+      return 'Payment detected. Waiting for network confirmation. This can take from a few minutes to about an hour. Your balance is credited automatically once the payment is confirmed.';
+    case 'paid':
+      return 'Payment confirmed. Your balance has been credited.';
+    case 'expired':
+      return 'This invoice expired before a payment was confirmed. No balance was credited. If you sent a payment after the invoice expired, contact the administrator.';
+    case 'failed':
+      return 'This invoice failed or was refunded. No balance was credited.';
+    default:
+      return 'Checking payment status...';
+  }
+}
+
+/** Only http(s) checkout links are rendered. */
+export function safeCheckoutURL(raw: string | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'https:' || u.protocol === 'http:' ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface InvoiceWatchOptions {
+  intervalMs?: number;
+  maxMs?: number;
+  onStatus?: (data: InvoiceStatusData) => void;
+  isCancelled?: () => boolean;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+}
 
 /**
- * True when the current URL carries external-tab checkout return params.
+ * Polls GET /api/billing/invoice/{id} until the invoice reaches a final status,
+ * the session ends, the caller cancels, or maxMs elapses. The server refreshes
+ * open invoices from the payment provider on each poll (throttled server-side).
  */
-export function hasBillingCheckoutReturnParams(): boolean {
-  const url = new URL(window.location.href);
-  return url.searchParams.get('success') === 'true' && !!url.searchParams.get('invoice');
-}
+export async function watchInvoiceStatus(
+  invoiceID: string,
+  opts: InvoiceWatchOptions = {},
+): Promise<InvoiceWatchOutcome> {
+  const intervalMs = opts.intervalMs ?? CHECKOUT_POLL_INTERVAL_MS;
+  const maxMs = opts.maxMs ?? CHECKOUT_POLL_MAX_MS;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const now = opts.now ?? Date.now;
+  const deadline = now() + maxMs;
+  let lastStatus = '';
 
-/** Persist invoice id from checkout return URL and strip query parameters. */
-export function captureBillingCheckoutParams(): string | null {
-  const url = new URL(window.location.href);
-  const success = url.searchParams.get('success') === 'true';
-  const invoiceID = url.searchParams.get('invoice');
-  if (success && invoiceID) {
-    sessionStorage.setItem(PENDING_INVOICE_STORAGE_KEY, invoiceID);
-    window.history.replaceState({}, '', url.pathname + url.hash);
-    return invoiceID;
+  while (true) {
+    if (opts.isCancelled?.()) return 'cancelled';
+    try {
+      const response = await authenticatedFetch(
+        `/api/billing/invoice/${encodeURIComponent(invoiceID)}`,
+        { method: 'GET' },
+      );
+      if (response.ok) {
+        const result = await response.json();
+        const data = (result.data || result) as InvoiceStatusData;
+        if (opts.isCancelled?.()) return 'cancelled';
+        if (data.status !== lastStatus) {
+          lastStatus = data.status;
+          opts.onStatus?.(data);
+        }
+        if (isFinalInvoiceStatus(data.status)) {
+          return data.status as InvoiceWatchOutcome;
+        }
+      } else if (response.status === 401) {
+        return 'session_ended';
+      } else if (response.status === 404) {
+        return 'not_found';
+      }
+    } catch (err) {
+      console.warn('Invoice status poll failed:', err);
+    }
+    if (now() >= deadline) return 'timeout';
+    await sleep(intervalMs);
   }
-  return sessionStorage.getItem(PENDING_INVOICE_STORAGE_KEY);
-}
-
-function clearPendingInvoiceStorage(): void {
-  sessionStorage.removeItem(PENDING_INVOICE_STORAGE_KEY);
-}
-
-function resolvePendingInvoiceID(): string | null {
-  return captureBillingCheckoutParams();
 }
 
 async function ensureSessionForBillingPoll(): Promise<boolean> {
@@ -552,16 +628,35 @@ async function ensureSessionForBillingPoll(): Promise<boolean> {
 }
 
 /**
- * Resume a pending top-up after login or on return from an external checkout tab.
- * Opens the billing panel, polls invoice status, and shows an honest outcome message.
+ * Reopens the top-up progress view after a reload or login when a checkout was
+ * in progress in this tab. Does not wait for the payment to settle.
  */
 export async function resumePendingBillingCheckout(): Promise<boolean> {
-  const invoiceID = resolvePendingInvoiceID();
+  const invoiceID = sessionStorage.getItem(PENDING_INVOICE_STORAGE_KEY);
   if (!invoiceID) {
     return false;
   }
-
   if (!(await ensureSessionForBillingPoll())) {
+    return false;
+  }
+
+  let data: InvoiceStatusData | null = null;
+  try {
+    const response = await authenticatedFetch(
+      `/api/billing/invoice/${encodeURIComponent(invoiceID)}`,
+      { method: 'GET' },
+    );
+    if (response.ok) {
+      const result = await response.json();
+      data = (result.data || result) as InvoiceStatusData;
+    } else if (response.status === 404) {
+      sessionStorage.removeItem(PENDING_INVOICE_STORAGE_KEY);
+      return false;
+    }
+  } catch (err) {
+    console.warn('Failed to load pending invoice:', err);
+  }
+  if (!data) {
     return false;
   }
 
@@ -570,32 +665,10 @@ export async function resumePendingBillingCheckout(): Promise<boolean> {
     panel.classList.remove('hidden');
     closeNavInlinePanelsExcept('billing-panel');
   }
+  void loadBilling();
 
-  const content = document.getElementById('billing-panel-content');
-  if (content) {
-    content.innerHTML = '<p>Confirming payment...</p>';
-  }
-
-  const outcome = await pollInvoiceStatus(invoiceID, CHECKOUT_RETURN_POLL_ATTEMPTS, CHECKOUT_RETURN_POLL_INTERVAL_MS);
-  await loadBilling();
-
-  const { showSuccess, showError } = await import('./messages');
-
-  if (outcome === 'paid') {
-    clearPendingInvoiceStorage();
-    showSuccess('Payment received. Your balance has been updated.');
-    return true;
-  }
-
-  if (outcome === 'expired' || outcome === 'failed') {
-    clearPendingInvoiceStorage();
-    showError(`Payment invoice ${outcome}. No balance was credited.`);
-    return true;
-  }
-
-  showSuccess(
-    'Payment submitted. Your balance updates automatically once the payment provider confirms settlement. Check Billing again in a few minutes.',
-  );
+  const shell = createTopUpShell();
+  renderCheckoutProgress(shell, data);
   return true;
 }
 
@@ -640,60 +713,29 @@ export async function resumePendingSubscriptionCheckout(): Promise<boolean> {
   return true;
 }
 
-type InvoicePollOutcome = 'paid' | 'pending' | 'expired' | 'failed';
-
-async function pollInvoiceStatus(
-  invoiceID: string,
-  maxAttempts: number,
-  intervalMs: number,
-): Promise<InvoicePollOutcome> {
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    try {
-      const response = await authenticatedFetch(
-        `/api/billing/invoice/${encodeURIComponent(invoiceID)}`,
-        { method: 'GET' },
-      );
-      if (response.ok) {
-        const result = await response.json();
-        const data = (result.data || result) as { status?: string };
-        if (data.status === 'paid') {
-          return 'paid';
-        }
-        if (data.status === 'expired') {
-          return 'expired';
-        }
-        if (data.status === 'failed') {
-          return 'failed';
-        }
-      } else if (response.status === 401) {
-        const refreshed = await refreshToken();
-        if (refreshed.ok) {
-          continue;
-        }
-        return 'pending';
-      }
-    } catch (err) {
-      console.warn('Invoice status poll failed:', err);
-    }
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
-  }
-  return 'pending';
+interface TopUpShell {
+  overlay: HTMLElement;
+  body: HTMLElement;
+  /** Registers cleanup to run when the modal closes. */
+  onClose: (fn: () => void) => void;
+  close: () => void;
+  isOpen: () => boolean;
 }
 
-/** Show the Top Up payment modal and handle invoice generation + iframe embedding. */
-function showTopUpModal(cfg: PaymentsConfig): void {
-  const overlayId = 'arkfile-topup-modal-overlay';
-  
-  // Remove any existing topup modals
-  const existing = document.getElementById(overlayId);
+const TOP_UP_OVERLAY_ID = 'arkfile-topup-modal-overlay';
+
+/** Builds the empty top-up modal (header + body) and attaches it to the page. */
+function createTopUpShell(): TopUpShell {
+  const existing = document.getElementById(TOP_UP_OVERLAY_ID);
   if (existing) {
+    existing.dispatchEvent(new CustomEvent('arkfile-topup-close'));
     existing.remove();
   }
 
   ensurePasswordModalStyles();
 
   const overlay = document.createElement('div');
-  overlay.id = overlayId;
+  overlay.id = TOP_UP_OVERLAY_ID;
   overlay.className = 'password-modal-overlay';
   overlay.style.zIndex = '2000';
 
@@ -729,23 +771,30 @@ function showTopUpModal(cfg: PaymentsConfig): void {
   closeBtn.setAttribute('aria-label', 'Close');
   closeBtn.textContent = 'x';
 
-  const closeTopUp = () => {
-    document.removeEventListener('keydown', onTopUpKey);
+  const cleanups: Array<() => void> = [];
+  let open = true;
+  const close = () => {
+    if (!open) return;
+    open = false;
+    document.removeEventListener('keydown', onKey);
+    for (const fn of cleanups) {
+      try {
+        fn();
+      } catch (err) {
+        console.warn('Top-up cleanup failed:', err);
+      }
+    }
     if (document.body.contains(overlay)) {
       overlay.remove();
     }
-    loadBilling().catch(err => console.error(err));
+    loadBilling().catch((err) => console.error(err));
   };
-  const onTopUpKey = (e: KeyboardEvent) => {
-    if (e.key !== 'Escape') return;
-    if (!document.body.contains(overlay)) {
-      document.removeEventListener('keydown', onTopUpKey);
-      return;
-    }
-    closeTopUp();
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') close();
   };
-  document.addEventListener('keydown', onTopUpKey);
-  closeBtn.onclick = closeTopUp;
+  document.addEventListener('keydown', onKey);
+  closeBtn.onclick = close;
+  overlay.addEventListener('arkfile-topup-close', close);
 
   header.appendChild(title);
   header.appendChild(closeBtn);
@@ -753,11 +802,28 @@ function showTopUpModal(cfg: PaymentsConfig): void {
 
   const body = document.createElement('div');
   body.className = 'password-modal-body';
+  modal.appendChild(body);
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+
+  return {
+    overlay,
+    body,
+    onClose: (fn) => cleanups.push(fn),
+    close,
+    isOpen: () => open,
+  };
+}
+
+/** Show the Top Up modal: amount form, then the checkout progress view. */
+function showTopUpModal(cfg: PaymentsConfig): void {
+  const shell = createTopUpShell();
+  const body = shell.body;
 
   const desc = document.createElement('p');
   desc.style.color = 'var(--foam-1)';
   desc.style.marginBottom = '1rem';
-  desc.textContent = 'Enter an amount in USD to generate a payment invoice.';
+  desc.textContent = 'Enter an amount in USD to generate a payment invoice. You can pay with Bitcoin or Monero on the payment page.';
   body.appendChild(desc);
 
   const form = document.createElement('form');
@@ -814,25 +880,18 @@ function showTopUpModal(cfg: PaymentsConfig): void {
   cancelBtn.className = 'password-modal-btn password-modal-btn-cancel';
   cancelBtn.textContent = 'Cancel';
   cancelBtn.style.cursor = 'pointer';
-  cancelBtn.onclick = () => {
-    document.removeEventListener('keydown', onTopUpKey);
-    overlay.remove();
-  };
+  cancelBtn.onclick = shell.close;
 
   const submitBtn = document.createElement('button');
   submitBtn.type = 'submit';
   submitBtn.className = 'password-modal-btn password-modal-btn-submit';
   submitBtn.textContent = 'Generate Invoice';
   submitBtn.style.cursor = 'pointer';
-  submitBtn.style.cursor = 'pointer';
 
   footer.appendChild(cancelBtn);
   footer.appendChild(submitBtn);
   form.appendChild(footer);
   body.appendChild(form);
-  modal.appendChild(body);
-  overlay.appendChild(modal);
-  document.body.appendChild(overlay);
 
   const paymentRequestID = crypto.randomUUID();
   form.onsubmit = async (e) => {
@@ -842,13 +901,11 @@ function showTopUpModal(cfg: PaymentsConfig): void {
     cancelBtn.disabled = true;
     submitBtn.textContent = 'Creating Invoice...';
 
-    const amountStr = input.value;
-
     try {
       const response = await authenticatedFetch('/api/billing/invoice', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount_usd: amountStr, request_id: paymentRequestID }),
+        body: JSON.stringify({ amount_usd: input.value, request_id: paymentRequestID }),
       });
 
       if (!response.ok) {
@@ -857,37 +914,152 @@ function showTopUpModal(cfg: PaymentsConfig): void {
       }
 
       const res = await response.json();
-      const invoiceData = res.data;
-
-      if (invoiceData?.invoice_id) {
-        sessionStorage.setItem(PENDING_INVOICE_STORAGE_KEY, String(invoiceData.invoice_id));
+      const invoiceData = res.data as InvoiceStatusData;
+      if (!invoiceData?.invoice_id) {
+        throw new Error('Server did not return an invoice');
       }
-
-      // Replace form/body content with an iframe
-      body.innerHTML = '';
-      
-      const iframeContainer = document.createElement('div');
-      iframeContainer.style.width = '100%';
-      iframeContainer.style.height = 'min(460px, 70vh)';
-      iframeContainer.style.position = 'relative';
-
-      const iframe = document.createElement('iframe');
-      iframe.src = invoiceData.checkout_url;
-      iframe.style.width = '100%';
-      iframe.style.height = '100%';
-      iframe.style.border = 'none';
-      iframe.style.borderRadius = '8px';
-      iframe.style.backgroundColor = 'var(--depth-4)';
-
-      iframeContainer.appendChild(iframe);
-      body.appendChild(iframeContainer);
+      if (!shell.isOpen()) return;
+      renderCheckoutProgress(shell, {
+        ...invoiceData,
+        invoice_id: String(invoiceData.invoice_id),
+        status: invoiceData.status || 'pending',
+      });
     } catch (err) {
       console.error('Invoice creation failed:', err);
-      errorEl.textContent = `Invoice generation failed: ${escapeHtml(String(err))}`;
+      errorEl.textContent = `Invoice generation failed: ${String(err)}`;
       errorEl.style.display = 'block';
       submitBtn.disabled = false;
       cancelBtn.disabled = false;
       submitBtn.textContent = 'Generate Invoice';
     }
   };
+}
+
+/**
+ * Replaces the modal body with the checkout link and live status. While this
+ * view is open the Account Key idle lock is held, so paying in another tab
+ * does not lock the user out of their files.
+ */
+function renderCheckoutProgress(shell: TopUpShell, invoice: InvoiceStatusData): void {
+  const body = shell.body;
+  body.innerHTML = '';
+  sessionStorage.setItem(PENDING_INVOICE_STORAGE_KEY, invoice.invoice_id);
+
+  if (typeof invoice.amount_usd_microcents === 'number') {
+    const amount = document.createElement('p');
+    amount.style.color = 'var(--foam-1)';
+    amount.textContent = `Invoice amount: $${(invoice.amount_usd_microcents / 100_000_000).toFixed(2)} USD`;
+    body.appendChild(amount);
+  }
+
+  const linkWrap = document.createElement('p');
+  const checkoutURL = safeCheckoutURL(invoice.checkout_url);
+  const link = document.createElement('a');
+  link.id = 'topup-checkout-link';
+  link.className = 'btn';
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = 'Open payment page';
+  if (checkoutURL) {
+    link.href = checkoutURL;
+  }
+  linkWrap.appendChild(link);
+  body.appendChild(linkWrap);
+
+  const hint = document.createElement('p');
+  hint.style.color = 'var(--foam-2)';
+  hint.style.fontSize = '0.9rem';
+  hint.textContent = 'The payment page opens in a new tab. Keep this window open; it updates when your payment is detected and confirmed.';
+  body.appendChild(hint);
+
+  const statusEl = document.createElement('p');
+  statusEl.id = 'topup-status';
+  statusEl.setAttribute('role', 'status');
+  statusEl.setAttribute('aria-live', 'polite');
+  statusEl.dataset.status = invoice.status;
+  statusEl.style.color = 'var(--salt)';
+  statusEl.textContent = describeInvoiceStatus(invoice.status);
+  body.appendChild(statusEl);
+
+  const footer = document.createElement('div');
+  footer.className = 'password-modal-footer';
+  footer.style.display = 'flex';
+  footer.style.justifyContent = 'flex-end';
+  footer.style.marginTop = '1.5rem';
+  const doneBtn = document.createElement('button');
+  doneBtn.type = 'button';
+  doneBtn.className = 'password-modal-btn password-modal-btn-cancel';
+  doneBtn.textContent = 'Close';
+  doneBtn.onclick = shell.close;
+  footer.appendChild(doneBtn);
+  body.appendChild(footer);
+
+  const setStatus = (status: string) => {
+    statusEl.dataset.status = status;
+    statusEl.textContent = describeInvoiceStatus(status);
+    if (isFinalInvoiceStatus(status)) {
+      linkWrap.remove();
+      hint.remove();
+    }
+  };
+
+  if (isFinalInvoiceStatus(invoice.status)) {
+    setStatus(invoice.status);
+    sessionStorage.removeItem(PENDING_INVOICE_STORAGE_KEY);
+    return;
+  }
+
+  let cancelled = false;
+  let wake: (() => void) | null = null;
+  const onVisible = () => {
+    if (document.visibilityState === 'visible' && wake) wake();
+  };
+  document.addEventListener('visibilitychange', onVisible);
+
+  const holdKey = async (active: boolean) => {
+    const { setAccountKeyIdleLockHold } = await import('../crypto/account-key-cache.js');
+    setAccountKeyIdleLockHold(active);
+  };
+  void holdKey(true);
+
+  const release = () => {
+    cancelled = true;
+    if (wake) wake();
+    document.removeEventListener('visibilitychange', onVisible);
+    void holdKey(false);
+  };
+  shell.onClose(() => {
+    release();
+    sessionStorage.removeItem(PENDING_INVOICE_STORAGE_KEY);
+  });
+
+  void watchInvoiceStatus(invoice.invoice_id, {
+    isCancelled: () => cancelled,
+    onStatus: (data) => setStatus(data.status),
+    sleep: (ms) => new Promise<void>((resolve) => {
+      const timer = setTimeout(done, ms);
+      function done() {
+        clearTimeout(timer);
+        wake = null;
+        resolve();
+      }
+      wake = done;
+    }),
+  }).then((outcome) => {
+    if (outcome === 'cancelled') return;
+    release();
+    if (outcome === 'paid' || outcome === 'expired' || outcome === 'failed' || outcome === 'not_found') {
+      sessionStorage.removeItem(PENDING_INVOICE_STORAGE_KEY);
+    }
+    if (outcome === 'not_found') {
+      statusEl.textContent = 'This invoice could not be found. No balance was credited.';
+    } else if (outcome === 'timeout') {
+      statusEl.textContent = 'Still waiting for confirmation. Your balance is credited automatically once the payment is confirmed. Check Billing again later.';
+    } else if (outcome === 'session_ended') {
+      statusEl.textContent = 'Your session ended. Log in again to check this payment.';
+    }
+    if (outcome === 'paid') {
+      loadBilling().catch((err) => console.error(err));
+    }
+  });
 }

@@ -682,10 +682,15 @@ ARKFILE_BILLING_SWEEP_AT_UTC=00:15
 ARKFILE_BILLING_INCLUDE_ADMINS=false
 ARKFILE_PAYG_NEGATIVE_BALANCE_LIMIT_USD=10.00
 
-# Payments integration. Automated top-ups stay off until a provider is added.
+# Bitcoin/Monero invoice top-ups through a Bitcart instance. To enable, set
+# ARKFILE_PAYMENTS_ENABLED=true and fill in the Bitcart settings (see docs/setup.md).
 ARKFILE_PAYMENTS_ENABLED=false
 ARKFILE_MIN_TOP_UP_USD=0.50
 ARKFILE_MAX_TOP_UP_USD=1000.00
+# ARKFILE_BITCART_API_URL=https://pay.example.com/api
+# ARKFILE_BITCART_CHECKOUT_URL=https://pay.example.com
+# ARKFILE_BITCART_API_TOKEN=
+# ARKFILE_BITCART_STORE_ID=
 
 # Local Deployment Settings (NOT development)
 REQUIRE_APPROVAL=false

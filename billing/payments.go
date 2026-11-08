@@ -100,8 +100,28 @@ func processPaymentInTx(tx *sql.Tx, username string, amountMicrocents int64, pro
 	}, nil
 }
 
+// settleableStatuses lists local statuses that may move to paid when the
+// provider reports the invoice complete. expired and failed are included
+// because a provider operator can complete an invoice after a late payment.
+var settleableStatuses = []string{
+	models.PaymentStatusPending,
+	models.PaymentStatusConfirming,
+	models.PaymentStatusExpired,
+	models.PaymentStatusFailed,
+}
+
+func isSettleableStatus(status string) bool {
+	for _, s := range settleableStatuses {
+		if s == status {
+			return true
+		}
+	}
+	return false
+}
+
 // SettlePaymentInvoice credits the user and marks the local invoice paid in one transaction.
 // If the invoice is already paid but lacks a matching credit row, only the credit is applied.
+// Callers must only invoke it after the provider reports the invoice paid.
 func SettlePaymentInvoice(db *sql.DB, invoice *models.PaymentInvoice, paymentType string) (*models.CreditTransaction, error) {
 	if invoice == nil {
 		return nil, errors.New("billing.SettlePaymentInvoice: nil invoice")
@@ -126,7 +146,7 @@ func SettlePaymentInvoice(db *sql.DB, invoice *models.PaymentInvoice, paymentTyp
 	if invoice.Status == "paid" {
 		return ProcessPayment(db, invoice.Username, invoice.AmountUSDMicrocents, invoice.ProviderInvoiceID, paymentType)
 	}
-	if invoice.Status != "pending" {
+	if !isSettleableStatus(invoice.Status) {
 		return nil, fmt.Errorf("billing.SettlePaymentInvoice: cannot settle invoice in status %s", invoice.Status)
 	}
 
@@ -151,16 +171,11 @@ func SettlePaymentInvoice(db *sql.DB, invoice *models.PaymentInvoice, paymentTyp
 		creditTx = nil
 	}
 
-	res, err := tx.Exec(
-		`UPDATE payment_invoices SET status = 'paid', updated_at = CURRENT_TIMESTAMP
-		 WHERE invoice_id = ? AND status = 'pending'`,
-		invoice.InvoiceID,
-	)
+	marked, err := models.AdvancePaymentInvoiceStatus(tx, invoice.InvoiceID, settleableStatuses, models.PaymentStatusPaid)
 	if err != nil {
 		return nil, fmt.Errorf("billing.SettlePaymentInvoice: update invoice status: %w", err)
 	}
-	rows, _ := res.RowsAffected()
-	if rows == 0 {
+	if !marked {
 		_ = tx.Rollback()
 		latest, getErr := models.GetPaymentInvoice(db, invoice.InvoiceID)
 		if getErr == nil && latest.Status == "paid" {
@@ -169,7 +184,7 @@ func SettlePaymentInvoice(db *sql.DB, invoice *models.PaymentInvoice, paymentTyp
 				return nil, nil
 			}
 		}
-		return nil, fmt.Errorf("billing.SettlePaymentInvoice: invoice %s is no longer pending", invoice.InvoiceID)
+		return nil, fmt.Errorf("billing.SettlePaymentInvoice: invoice %s is no longer settleable", invoice.InvoiceID)
 	}
 
 	if err := tx.Commit(); err != nil {

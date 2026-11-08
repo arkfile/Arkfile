@@ -251,6 +251,7 @@ func RegisterRoutes() {
 
 	// Webhook endpoints (public, unauthenticated)
 	Echo.POST("/api/webhooks/subscription-bridge", SubscriptionBridgeWebhookHandler)
+	Echo.POST("/api/webhooks/bitcart", BitcartWebhookHandler)
 
 	// Admin API endpoints - structured for future expansion.
 	// Stack: JWTMiddleware (validates aud=arkfile-api, rejects temp tokens at signature/audience)

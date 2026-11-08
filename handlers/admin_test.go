@@ -1402,6 +1402,15 @@ func TestApproveUser_ApproveModelError(t *testing.T) {
 		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
 			AddRow(2, targetUsername, time.Now(), int64(0), models.DefaultStorageLimit, false, sql.NullString{}, sql.NullTime{}, false))
 
+	// The model verifies the approving account is an admin before updating.
+	mockDB.ExpectQuery(`
+		SELECT id, username, created_at,
+		       total_storage_bytes, storage_limit_bytes,
+		       is_approved, approved_by, approved_at, is_admin
+		FROM users WHERE username = ?`).WithArgs(adminUsername).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+			AddRow(1, adminUsername, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
+
 	mockDB.ExpectExec(`UPDATE users SET is_approved = true, approved_by = \?, approved_at = \? WHERE id = \?`).
 		WithArgs(adminUsername, sqlmock.AnyArg(), 2).
 		WillReturnError(fmt.Errorf("DB error approving user"))

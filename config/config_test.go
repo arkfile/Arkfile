@@ -563,39 +563,78 @@ func TestPaymentsConfigFromEnv(t *testing.T) {
 	assert.Equal(t, "500.00", cfg.Payments.MaxTopUpUSD)
 }
 
-func TestPaymentsConfigRejectsEnabledWithoutProvider(t *testing.T) {
-	baseEnv := map[string]string{
-		"JWT_SECRET":               "test-jwt-secret",
-		"STORAGE_PROVIDER_1":       "generic-s3",
-		"STORAGE_1_ENDPOINT":       "http://localhost:9332",
-		"STORAGE_1_ACCESS_KEY":     "test",
-		"STORAGE_1_SECRET_KEY":     "test",
-		"STORAGE_1_BUCKET":         "test-bucket",
-		"ARKFILE_PAYMENTS_ENABLED": "true",
+func bitcartPaymentsEnv() map[string]string {
+	return map[string]string{
+		"JWT_SECRET":                   "test-jwt-secret",
+		"STORAGE_PROVIDER_1":           "generic-s3",
+		"STORAGE_1_ENDPOINT":           "http://localhost:9332",
+		"STORAGE_1_ACCESS_KEY":         "test",
+		"STORAGE_1_SECRET_KEY":         "test",
+		"STORAGE_1_BUCKET":             "test-bucket",
+		"BASE_URL":                     "https://arkfile.example.com",
+		"ARKFILE_PAYMENTS_ENABLED":     "true",
+		"ARKFILE_BITCART_API_URL":      "https://bitcart.example.com/api/",
+		"ARKFILE_BITCART_CHECKOUT_URL": "https://bitcart.example.com",
+		"ARKFILE_BITCART_API_TOKEN":    "token-value",
+		"ARKFILE_BITCART_STORE_ID":     "store123",
 	}
-	originalEnv := map[string]string{}
-	for key := range baseEnv {
-		originalEnv[key] = os.Getenv(key)
-	}
-	defer func() {
-		for key, val := range originalEnv {
-			if val == "" {
-				os.Unsetenv(key)
-			} else {
-				os.Setenv(key, val)
-			}
-		}
-		ResetConfigForTest()
-	}()
+}
 
+func loadConfigWithEnv(t *testing.T, env map[string]string) (*Config, error) {
+	t.Helper()
+	for _, key := range []string{
+		"ARKFILE_BITCART_API_URL", "ARKFILE_BITCART_CHECKOUT_URL",
+		"ARKFILE_BITCART_API_TOKEN", "ARKFILE_BITCART_STORE_ID",
+	} {
+		t.Setenv(key, "")
+		os.Unsetenv(key)
+	}
+	for key, val := range env {
+		t.Setenv(key, val)
+	}
 	ResetConfigForTest()
-	for key, val := range baseEnv {
-		os.Setenv(key, val)
+	t.Cleanup(ResetConfigForTest)
+	return LoadConfig()
+}
+
+func TestPaymentsConfigAcceptsBitcart(t *testing.T) {
+	cfg, err := loadConfigWithEnv(t, bitcartPaymentsEnv())
+	assert.NoError(t, err)
+	assert.True(t, cfg.Payments.Enabled)
+	assert.Equal(t, "https://bitcart.example.com/api", cfg.Payments.BitcartAPIURL)
+	assert.Equal(t, "store123", cfg.Payments.BitcartStoreID)
+}
+
+func TestPaymentsConfigRequiresBitcartSettings(t *testing.T) {
+	cases := map[string]string{
+		"ARKFILE_BITCART_API_URL":      "ARKFILE_BITCART_API_URL",
+		"ARKFILE_BITCART_CHECKOUT_URL": "ARKFILE_BITCART_CHECKOUT_URL",
+		"ARKFILE_BITCART_API_TOKEN":    "ARKFILE_BITCART_API_TOKEN",
+		"ARKFILE_BITCART_STORE_ID":     "ARKFILE_BITCART_STORE_ID",
+	}
+	for missing, wantMsg := range cases {
+		env := bitcartPaymentsEnv()
+		delete(env, missing)
+		_, err := loadConfigWithEnv(t, env)
+		if assert.Error(t, err, "missing %s", missing) {
+			assert.Contains(t, err.Error(), wantMsg)
+		}
+	}
+}
+
+func TestPaymentsConfigRejectsPlainHTTPBitcartOffLoopback(t *testing.T) {
+	env := bitcartPaymentsEnv()
+	env["ARKFILE_BITCART_API_URL"] = "http://bitcart.example.com/api"
+	_, err := loadConfigWithEnv(t, env)
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "HTTPS")
 	}
 
-	_, err := LoadConfig()
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no payment provider is configured")
+	env = bitcartPaymentsEnv()
+	env["ARKFILE_BITCART_API_URL"] = "http://127.0.0.1:8082/api"
+	env["ARKFILE_BITCART_CHECKOUT_URL"] = "http://127.0.0.1:8082"
+	_, err = loadConfigWithEnv(t, env)
+	assert.NoError(t, err)
 }
 
 func TestPaymentsConfigValidationRejectsInvalidTopUpRange(t *testing.T) {

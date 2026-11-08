@@ -139,6 +139,15 @@ let wrappingKey: Uint8Array | null = null;
 let lastActivityTimestamp: number = Date.now();
 
 /**
+ * While Date.now() is before this value, the inactivity check does not lock.
+ * Set while the user pays an invoice in another tab; the fixed expiry still applies.
+ */
+let idleLockHoldUntil = 0;
+
+/** Upper bound on one idle-lock hold. */
+const MAX_IDLE_LOCK_HOLD_MS = 2 * MS_PER_HOUR;
+
+/**
  * Interval ID for the inactivity checker.
  */
 let inactivityIntervalId: ReturnType<typeof setInterval> | null = null;
@@ -627,14 +636,35 @@ function recordActivity(): void {
 }
 
 /**
- * Checks if the inactivity timeout has been exceeded and auto-locks if so.
+ * Pauses (or resumes) the inactivity auto-lock while a payment checkout is open
+ * in another tab. A hold lasts at most two hours. Releasing the hold restarts
+ * the idle window so the user gets the full timeout after returning.
  */
-function checkInactivityTimeout(): void {
+export function setAccountKeyIdleLockHold(active: boolean): void {
+  idleLockHoldUntil = active ? Date.now() + MAX_IDLE_LOCK_HOLD_MS : 0;
+  lastActivityTimestamp = Date.now();
+}
+
+/** True while an idle-lock hold is in effect. */
+export function isAccountKeyIdleLockHeld(): boolean {
+  return Date.now() < idleLockHoldUntil;
+}
+
+/**
+ * Checks if the inactivity timeout has been exceeded and auto-locks if so.
+ * Exported for unit tests; the monitor interval is the only runtime caller.
+ */
+export function checkInactivityTimeout(): void {
   const config = getAccountKeyCacheConfig();
   const timeoutMinutes = config.inactivityTimeoutMinutes;
   
   // 0 = disabled
   if (timeoutMinutes <= 0) {
+    return;
+  }
+
+  if (isAccountKeyIdleLockHeld()) {
+    lastActivityTimestamp = Date.now();
     return;
   }
   
@@ -714,6 +744,7 @@ export function cleanupAccountKeyCache(): void {
     sessionStorage.removeItem(ACCOUNT_KEY_CONFIG);
     sessionStorage.removeItem(ACCOUNT_KEY_LOCKED);
 
+    idleLockHoldUntil = 0;
     stopInactivityMonitor();
   } catch (error) {
     console.warn('Failed to cleanup Account Key cache:', error);

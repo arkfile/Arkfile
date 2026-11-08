@@ -284,6 +284,16 @@ The Download Token is cryptographically bound to the share via AAD (Additional A
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
 | GET | `/api/credits` | Get current user's credit balance | MFA |
+| POST | `/api/billing/invoice` | Create a Bitcoin/Monero top-up invoice through Bitcart | MFA |
+| GET | `/api/billing/invoice/:invoice_id` | Get the status of one of the user's invoices | MFA |
+
+#### Bitcoin and Monero Invoice Top-Ups (Bitcart)
+
+When `ARKFILE_PAYMENTS_ENABLED=true`, `/api/credits` includes `payments: { enabled, min_top_up, max_top_up }`. `POST /api/billing/invoice` takes `{ "amount_usd": "12.50", "request_id": "<optional UUID>" }` and returns `{ invoice_id, status: "pending", amount_usd_microcents, checkout_url, provider: "bitcart" }`. The amount must be whole cents within the configured range. The request returns 403 when payments are disabled, 409 while the user has an active or trialing subscription, and 502 when Bitcart cannot create the invoice. Arkfile sends Bitcart only the USD price, the currency, the store id, the notification URL, and `order_id` set to the opaque Arkfile `invoice_id`; it sends no username, email, or redirect URL. Clients open `checkout_url` in a new tab or browser and keep polling the status endpoint.
+
+`GET /api/billing/invoice/:invoice_id` returns the stored invoice. While the invoice is open it also returns `checkout_url`, and the server refreshes the status from Bitcart at most once every 10 seconds per invoice. Local statuses are: `creating` (Arkfile row written, Bitcart call in progress), `pending` (waiting for payment), `confirming` (Bitcart has seen a payment, reported as `paid`, `unconfirmed`, or `confirmed`, but has not marked it `complete`; no balance is credited yet), `paid` (Bitcart `complete`; the balance was credited exactly once), `expired` (Bitcart `expired`), and `failed` (Bitcart `invalid` or `refunded`, or invoice creation failed). Status only moves forward. `paid` never changes. A late Bitcart `complete` on an `expired` or `failed` invoice still credits, because the Bitcart operator can manually mark an expired invoice complete.
+
+`POST /api/webhooks/bitcart` (public) receives Bitcart instant payment notifications. Bitcart does not sign them, so the body is treated only as a hint: the handler reads `id`, looks up the matching local invoice, then fetches that invoice from the Bitcart API and checks that its id, `order_id`, store id, currency (USD), and USD price all match the stored invoice before applying the status. The status in the notification body is ignored. Unknown invoice ids, already paid invoices, and repeats within 2 seconds get a 200 acknowledgement with no lookup. A Bitcart lookup failure or a field mismatch returns 502 and changes nothing. The server also runs a reconciler every minute for open invoices, so a lost notification only delays the credit.
 
 #### Admin Endpoints (Require Admin Token)
 

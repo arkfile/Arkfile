@@ -108,7 +108,7 @@ export async function handleInitialAuth(shell: AppShell): Promise<void> {
 }
 
 /**
- * Full application bootstrap: readiness, SW, billing return params, home vs app routing.
+ * Full application bootstrap: readiness, SW, home vs app routing.
  * Returns true when initialization completed (listeners/routing done); false if aborted early.
  */
 export async function bootstrapApplication(shell: AppShell): Promise<boolean> {
@@ -139,15 +139,6 @@ export async function bootstrapApplication(shell: AppShell): Promise<boolean> {
       console.warn('[arkfile] SW registration error:', err);
     });
 
-    const {
-      hasBillingCheckoutReturnParams,
-      captureBillingCheckoutParams,
-    } = await import('../ui/billing');
-
-    if (hasBillingCheckoutReturnParams()) {
-      captureBillingCheckoutParams();
-    }
-
     if (shell.isHomePage()) {
       setupHomePageListeners(shell);
 
@@ -160,11 +151,6 @@ export async function bootstrapApplication(shell: AppShell): Promise<boolean> {
           if (await validateToken()) {
             await enterAuthenticatedApp(shell);
           }
-        }
-      } else if (captureBillingCheckoutParams()) {
-        await refreshToken();
-        if (await validateToken()) {
-          await enterAuthenticatedApp(shell);
         }
       }
     } else {

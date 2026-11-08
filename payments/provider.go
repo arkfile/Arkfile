@@ -2,15 +2,20 @@ package payments
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/arkfile/Arkfile/config"
 )
 
-// NewProvider returns the configured payment provider implementation.
-// No provider is built in. Enabling payments without one fails closed.
-func NewProvider(cfg config.PaymentsConfig) (PaymentProvider, error) {
-	if !cfg.Enabled {
+// BitcartNotificationPath is the Arkfile route that receives Bitcart invoice notifications.
+const BitcartNotificationPath = "/api/webhooks/bitcart"
+
+// NewProvider returns the configured payment provider. Bitcart is the only
+// implementation; config validation guarantees its settings when enabled.
+func NewProvider(cfg *config.Config) (PaymentProvider, error) {
+	if cfg == nil || !cfg.Payments.Enabled {
 		return nil, errors.New("payments integration is disabled")
 	}
-	return nil, errors.New("no payment provider is configured")
+	notificationURL := strings.TrimRight(cfg.Server.BaseURL, "/") + BitcartNotificationPath
+	return NewBitcartProvider(cfg.Payments, notificationURL)
 }

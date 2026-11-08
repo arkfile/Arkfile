@@ -48,6 +48,16 @@ Arkfile's zero-knowledge posture covers passwords, file contents, and encrypted 
 | Billable / storage accounting | upload `total_size`, `size_bytes`, `padded_size`, chunk count | User quota and projected billing use pre-padding encrypted `size_bytes`; provider stats and replication also use `padded_size` |
 | Protocol / ownership | `owner_username`, plaintext `chunk_size_bytes`, `password_type`, FEK envelope key-type byte | Ownership, metadata AAD reconstruction, encrypted byte-range math, and account-vs-custom routing |
 
+#### Bitcoin and Monero Top-Ups (Bitcart)
+
+When Bitcart top-ups are enabled, Arkfile creates invoices on an operator-run Bitcart instance. Bitcart receives the USD price, the currency, the store id, the Arkfile notification URL, and an `order_id` equal to the random Arkfile `invoice_id`. Arkfile sends no username, email, or other account identifier. Arkfile stores only the invoice id, the user it belongs to, the USD amount, the local status, and the Bitcart invoice id; it does not store transaction ids, payment addresses, confirmation counts, or exchange rates.
+
+The checkout page is served by Bitcart, not by Arkfile, and opens in a new tab. Bitcart therefore sees the IP address and browser of whoever opens it, and the blockchain shows the payment. Bitcart and its operator can link a payment to the Arkfile `invoice_id`; only the Arkfile server can link that id to a username. Operators who run Bitcart and Arkfile on the same host hold both halves. Users who want to separate the two can open the payment page over Tor or another network path.
+
+Bitcart notifications are unsigned. Arkfile never trusts the notification body: it re-fetches the invoice from the Bitcart API and credits only when Bitcart reports `complete` and the invoice id, order id, store id, currency, and USD price all match the stored invoice. A forged notification can at most trigger a throttled lookup of an existing invoice. The credit is written in the same database transaction that marks the invoice paid, and the credit row is keyed by the Bitcart invoice id, so replays cannot double-credit. The Bitcart API token is held only in `secrets.env` and is never returned by any endpoint.
+
+While the browser top-up window is open, the Account Key inactivity lock is paused (for at most two hours) so that paying in another tab does not lock the user out. The fixed cache expiry and the lock on tab close still apply.
+
 For a non-empty file, the canonical chunk count is `ceil(size_bytes / (chunk_size_bytes + 28))`, where 28 is the per-chunk AES-GCM overhead (nonce + tag). Plaintext length is then `size_bytes - (28 × chunk_count)`. Empty files use one chunk by convention. `size_bytes` is the pre-padding encrypted stream length, not the original plaintext file size. Server-generated padding obscures exact size from storage backends and outside observers of S3 objects; it does not hide size from the Arkfile server that received the pre-padding length at upload init.
 
 #### Compromise Scenarios and Impact Bounds

@@ -2,9 +2,12 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -68,7 +71,7 @@ func CreateInvoiceHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Amount is outside the configured top-up range")
 	}
 
-	provider, err := payments.NewProvider(cfg.Payments)
+	provider, err := payments.NewProvider(cfg)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to initialize payment provider: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Payments provider is not configured")
@@ -82,13 +85,12 @@ func CreateInvoiceHandler(c echo.Context) error {
 		}
 	}
 	invoiceID := "inv_" + strings.ReplaceAll(requestUUID.String(), "-", "")
-	redirectURL := fmt.Sprintf("%s/?success=true&invoice=%s", cfg.Server.BaseURL, invoiceID)
 
 	invoice := &models.PaymentInvoice{
 		InvoiceID:           invoiceID,
 		Username:            username,
 		AmountUSDMicrocents: amountMicrocents,
-		Status:              "creating",
+		Status:              models.PaymentStatusCreating,
 		Provider:            provider.Name(),
 	}
 	if err := models.CreatePaymentInvoice(database.DB, invoice); err != nil {
@@ -102,10 +104,10 @@ func CreateInvoiceHandler(c echo.Context) error {
 
 	ctx, cancel := context.WithTimeout(c.Request().Context(), 15*time.Second)
 	defer cancel()
-	provInv, err := provider.CreateInvoice(ctx, invoiceID, amountMicrocents, redirectURL)
+	provInv, err := provider.CreateInvoice(ctx, invoiceID, amountMicrocents)
 	if err != nil {
-		_ = models.UpdatePaymentInvoiceStatus(database.DB, invoiceID, "failed")
-		logging.ErrorLogger.Printf("Payment invoice %s provider creation failed", invoiceID)
+		_ = models.UpdatePaymentInvoiceStatus(database.DB, invoiceID, models.PaymentStatusFailed)
+		logging.ErrorLogger.Printf("Payment invoice %s provider creation failed: %v", invoiceID, err)
 		return echo.NewHTTPError(http.StatusBadGateway, "Payment provider could not create the invoice")
 	}
 	var attachErr error
@@ -126,11 +128,20 @@ func CreateInvoiceHandler(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"success": true,
 		"data": map[string]interface{}{
-			"invoice_id":   invoiceID,
-			"checkout_url": provInv.CheckoutURL,
-			"provider":     provider.Name(),
+			"invoice_id":            invoiceID,
+			"status":                models.PaymentStatusPending,
+			"amount_usd_microcents": amountMicrocents,
+			"checkout_url":          provInv.CheckoutURL,
+			"provider":              provider.Name(),
 		},
 	})
+}
+
+// invoiceStatusResponse is the owner-facing invoice view. checkout_url is
+// present only while the invoice is open.
+type invoiceStatusResponse struct {
+	*models.PaymentInvoice
+	CheckoutURL string `json:"checkout_url,omitempty"`
 }
 
 func GetInvoiceStatusHandler(c echo.Context) error {
@@ -153,10 +164,130 @@ func GetInvoiceStatusHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
 	}
 
+	resp := invoiceStatusResponse{PaymentInvoice: invoice}
+	if models.IsOpenPaymentStatus(invoice.Status) && invoice.ProviderInvoiceID != "" {
+		if provider := configuredPaymentProvider(invoice.Provider); provider != nil {
+			if paymentRefreshThrottle.allow(invoice.InvoiceID, time.Now()) {
+				if err := refreshInvoiceFromProvider(c.Request().Context(), provider, invoice); err != nil {
+					logging.ErrorLogger.Printf("Payment invoice %s status refresh failed: %v", invoice.InvoiceID, err)
+				}
+			}
+			if models.IsOpenPaymentStatus(invoice.Status) {
+				resp.CheckoutURL = provider.CheckoutURL(invoice.ProviderInvoiceID)
+			}
+		}
+	}
+
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"success": true,
-		"data":    invoice,
+		"data":    resp,
 	})
+}
+
+// BitcartWebhookHandler receives Bitcart invoice notifications. The body is
+// unsigned, so only the invoice id is read from it: the invoice must already
+// be attached to a local invoice, and its status is fetched from Bitcart and
+// verified before anything is recorded.
+func BitcartWebhookHandler(c echo.Context) error {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Internal configuration error")
+	}
+	if !cfg.Payments.Enabled {
+		return echo.NewHTTPError(http.StatusNotFound, "Not found")
+	}
+
+	const maxNotificationBody = 4 << 10
+	body, err := io.ReadAll(io.LimitReader(c.Request().Body, maxNotificationBody+1))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Failed to read body")
+	}
+	if len(body) > maxNotificationBody {
+		return echo.NewHTTPError(http.StatusRequestEntityTooLarge, "Request body too large")
+	}
+	var notification struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(body, &notification); err != nil || notification.ID == "" || len(notification.ID) > 128 {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid notification")
+	}
+
+	ack := map[string]interface{}{"success": true}
+	invoice, err := models.GetPaymentInvoiceByProviderID(database.DB, notification.ID)
+	if err != nil {
+		return c.JSON(http.StatusOK, ack)
+	}
+	provider, err := payments.NewProvider(cfg)
+	if err != nil || invoice.Provider != provider.Name() {
+		return c.JSON(http.StatusOK, ack)
+	}
+	if invoice.Status == models.PaymentStatusPaid {
+		return c.JSON(http.StatusOK, ack)
+	}
+	if !paymentNotificationThrottle.allow(invoice.InvoiceID, time.Now()) {
+		return c.JSON(http.StatusOK, ack)
+	}
+	if err := refreshInvoiceFromProvider(c.Request().Context(), provider, invoice); err != nil {
+		logging.ErrorLogger.Printf("Payment invoice %s notification processing failed: %v", invoice.InvoiceID, err)
+		return echo.NewHTTPError(http.StatusBadGateway, "Failed to verify invoice with payment provider")
+	}
+	return c.JSON(http.StatusOK, ack)
+}
+
+// configuredPaymentProvider returns the live provider when payments are
+// enabled and it matches providerName, or nil otherwise.
+func configuredPaymentProvider(providerName string) payments.PaymentProvider {
+	cfg, err := config.LoadConfig()
+	if err != nil || !cfg.Payments.Enabled {
+		return nil
+	}
+	provider, err := payments.NewProvider(cfg)
+	if err != nil || provider.Name() != providerName {
+		return nil
+	}
+	return provider
+}
+
+// refreshInvoiceFromProvider fetches and applies the provider status of one invoice.
+func refreshInvoiceFromProvider(ctx context.Context, provider payments.PaymentProvider, invoice *models.PaymentInvoice) error {
+	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	status, err := provider.GetInvoiceStatus(reqCtx, invoice)
+	if err != nil {
+		return err
+	}
+	_, err = billing.ApplyProviderInvoiceStatus(database.DB, invoice, status, provider.Name())
+	return err
+}
+
+// invoiceThrottle limits provider lookups per invoice so status polling and
+// unauthenticated notifications cannot be used to flood the provider.
+type invoiceThrottle struct {
+	mu       sync.Mutex
+	interval time.Duration
+	last     map[string]time.Time
+}
+
+var (
+	paymentRefreshThrottle      = &invoiceThrottle{interval: 10 * time.Second, last: map[string]time.Time{}}
+	paymentNotificationThrottle = &invoiceThrottle{interval: 2 * time.Second, last: map[string]time.Time{}}
+)
+
+func (t *invoiceThrottle) allow(invoiceID string, now time.Time) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if prev, ok := t.last[invoiceID]; ok && now.Sub(prev) < t.interval {
+		return false
+	}
+	if len(t.last) > 10000 {
+		for id, ts := range t.last {
+			if now.Sub(ts) >= t.interval {
+				delete(t.last, id)
+			}
+		}
+	}
+	t.last[invoiceID] = now
+	return true
 }
 
 func AdminGetInvoiceHandler(c echo.Context) error {
@@ -242,47 +373,36 @@ func AdminSyncInvoiceHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Payments integration is disabled")
 	}
 
-	provider, err := payments.NewProvider(cfg.Payments)
+	provider, err := payments.NewProvider(cfg)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Payments provider is not configured")
 	}
+	if invoice.ProviderInvoiceID == "" || invoice.Provider != provider.Name() {
+		return echo.NewHTTPError(http.StatusConflict, "Invoice is not attached to the configured payment provider")
+	}
 
-	remoteStatus, err := provider.GetInvoiceStatus(context.Background(), invoice.ProviderInvoiceID)
+	ctx, cancel := context.WithTimeout(c.Request().Context(), 15*time.Second)
+	defer cancel()
+	remoteStatus, err := provider.GetInvoiceStatus(ctx, invoice)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to query payment provider: %v", err))
+		return echo.NewHTTPError(http.StatusBadGateway, fmt.Sprintf("Failed to query payment provider: %v", err))
 	}
 
-	switch remoteStatus {
-	case "paid":
-		if SettlePaymentInvoiceFunc == nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "SettlePaymentInvoiceFunc is not wired")
-		}
-		_, err = SettlePaymentInvoiceFunc(database.DB, invoice, invoice.Provider)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to credit user balance")
-		}
-		invoice.Status = "paid"
-		return c.JSON(http.StatusOK, map[string]interface{}{
-			"success": true,
-			"data":    invoice,
-			"message": "Invoice successfully synchronized and settled",
-		})
-	case "expired", "failed":
-		if err := models.UpdatePaymentInvoiceStatus(database.DB, invoice.InvoiceID, remoteStatus); err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "Database update error")
-		}
-		invoice.Status = remoteStatus
-		return c.JSON(http.StatusOK, map[string]interface{}{
-			"success": true,
-			"data":    invoice,
-			"message": fmt.Sprintf("Invoice synced and updated to status: %s", remoteStatus),
-		})
+	previous := invoice.Status
+	result, err := billing.ApplyProviderInvoiceStatus(database.DB, invoice, remoteStatus, provider.Name())
+	if err != nil {
+		logging.ErrorLogger.Printf("Admin sync: invoice %s apply status failed: %v", invoice.InvoiceID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to apply provider status")
 	}
 
+	message := fmt.Sprintf("Invoice checked. Provider status is %s; local status is %s", remoteStatus, result)
+	if result == models.PaymentStatusPaid && previous != models.PaymentStatusPaid {
+		message = "Invoice successfully synchronized and settled"
+	}
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"success": true,
 		"data":    invoice,
-		"message": fmt.Sprintf("Invoice checked. Current provider state is %s", remoteStatus),
+		"message": message,
 	})
 }
 
@@ -295,7 +415,7 @@ func AdminReconcilePaymentsHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Payments integration is disabled")
 	}
 
-	provider, err := payments.NewProvider(cfg.Payments)
+	provider, err := payments.NewProvider(cfg)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Payments provider is not configured")
 	}

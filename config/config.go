@@ -189,12 +189,19 @@ type SubscriptionsConfig struct {
 	SeedDevPlan       bool   `json:"seed_dev_plan"`
 }
 
-// PaymentsConfig is the one-time top-up configuration.
-// Enabled must stay false until a PaymentProvider implementation exists.
+// PaymentsConfig is the one-time top-up configuration. Bitcart is the only
+// provider; enabling payments requires all Bitcart fields.
 type PaymentsConfig struct {
 	Enabled     bool   `json:"enabled"`
 	MinTopUpUSD string `json:"min_top_up_usd"`
 	MaxTopUpUSD string `json:"max_top_up_usd"`
+
+	// BitcartAPIURL is the Merchants API base, e.g. https://bitcart.example.com/api.
+	BitcartAPIURL string `json:"bitcart_api_url"`
+	// BitcartCheckoutURL is the origin serving /i/<invoice id> checkout pages.
+	BitcartCheckoutURL string `json:"bitcart_checkout_url"`
+	BitcartAPIToken    string `json:"-"`
+	BitcartStoreID     string `json:"bitcart_store_id"`
 }
 
 // OobPaymentsConfig holds optional out-of-band payment addresses (PayNym / BIP47
@@ -386,7 +393,7 @@ func loadDefaultConfig(cfg *Config) error {
 	cfg.Subscriptions.PastDueGraceDays = 7
 	cfg.Subscriptions.SeedDevPlan = false
 
-	// Payments defaults. Automated top-ups stay off until a provider is added.
+	// Payments defaults. Bitcart invoice top-ups stay off until Bitcart is configured.
 	cfg.Payments.Enabled = false
 	cfg.Payments.MinTopUpUSD = "0.50"
 	cfg.Payments.MaxTopUpUSD = "1000.00"
@@ -597,7 +604,7 @@ func loadEnvConfig(cfg *Config) error {
 		}
 	}
 
-	// Payments envs. Automated top-ups stay disabled until a provider is added.
+	// Payments envs. Bitcart invoice top-ups stay disabled until Bitcart is configured.
 	if v := os.Getenv("ARKFILE_PAYMENTS_ENABLED"); v != "" {
 		if parsed, err := strconv.ParseBool(v); err == nil {
 			cfg.Payments.Enabled = parsed
@@ -608,6 +615,18 @@ func loadEnvConfig(cfg *Config) error {
 	}
 	if v := os.Getenv("ARKFILE_MAX_TOP_UP_USD"); v != "" {
 		cfg.Payments.MaxTopUpUSD = v
+	}
+	if v := os.Getenv("ARKFILE_BITCART_API_URL"); v != "" {
+		cfg.Payments.BitcartAPIURL = strings.TrimRight(strings.TrimSpace(v), "/")
+	}
+	if v := os.Getenv("ARKFILE_BITCART_CHECKOUT_URL"); v != "" {
+		cfg.Payments.BitcartCheckoutURL = strings.TrimRight(strings.TrimSpace(v), "/")
+	}
+	if v := os.Getenv("ARKFILE_BITCART_API_TOKEN"); v != "" {
+		cfg.Payments.BitcartAPIToken = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("ARKFILE_BITCART_STORE_ID"); v != "" {
+		cfg.Payments.BitcartStoreID = strings.TrimSpace(v)
 	}
 
 	// Out-of-band PayNym / Monero receive addresses (display-only; optional).
@@ -784,7 +803,46 @@ func validatePaymentsConfig(cfg *Config) error {
 	if minMicrocents >= maxMicrocents {
 		return fmt.Errorf("ARKFILE_MIN_TOP_UP_USD must be less than ARKFILE_MAX_TOP_UP_USD")
 	}
-	return fmt.Errorf("no payment provider is configured")
+	if err := validatePaymentsURL(cfg.Server.BaseURL, "BASE_URL"); err != nil {
+		return err
+	}
+	if err := validatePaymentsURL(cfg.Payments.BitcartAPIURL, "ARKFILE_BITCART_API_URL"); err != nil {
+		return err
+	}
+	if err := validatePaymentsURL(cfg.Payments.BitcartCheckoutURL, "ARKFILE_BITCART_CHECKOUT_URL"); err != nil {
+		return err
+	}
+	if cfg.Payments.BitcartAPIToken == "" {
+		return fmt.Errorf("ARKFILE_BITCART_API_TOKEN is required when ARKFILE_PAYMENTS_ENABLED=true")
+	}
+	storeID := cfg.Payments.BitcartStoreID
+	if storeID == "" {
+		return fmt.Errorf("ARKFILE_BITCART_STORE_ID is required when ARKFILE_PAYMENTS_ENABLED=true")
+	}
+	if strings.ContainsAny(storeID, "/?#% \t") {
+		return fmt.Errorf("ARKFILE_BITCART_STORE_ID contains invalid characters")
+	}
+	return nil
+}
+
+// validatePaymentsURL requires an absolute URL without userinfo, query, or
+// fragment. HTTPS is required except on loopback hosts.
+func validatePaymentsURL(raw, name string) error {
+	if strings.TrimSpace(raw) == "" {
+		return fmt.Errorf("%s is required when ARKFILE_PAYMENTS_ENABLED=true", name)
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
+		return fmt.Errorf("%s must be an absolute HTTP(S) URL", name)
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("%s must not contain userinfo, query, or fragment", name)
+	}
+	host := parsed.Hostname()
+	if parsed.Scheme != "https" && host != "127.0.0.1" && host != "localhost" && host != "::1" {
+		return fmt.Errorf("%s must use HTTPS except on loopback", name)
+	}
+	return nil
 }
 
 func parsePositiveTopUpUSD(value, name string) (int64, error) {

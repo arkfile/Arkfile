@@ -1,5 +1,7 @@
 # Payments
 
+Superseded: Bitcoin/Monero invoice top-ups now go through Bitcart (`payments/bitcart.go`); see `docs/api.md`, `docs/setup.md`, and `docs/security.md`. The text below describes the earlier provider-less state.
+
 Automated one-time top-ups are disabled. Arkfile keeps the generic invoice and credit-ledger seam so a payment provider can be added later. No processor client is built in. `ARKFILE_PAYMENTS_ENABLED` must stay false; startup rejects the flag while no provider exists.
 
 Out-of-band PayNym / BIP47 and Monero credit stays in use. Those addresses are display-only. After the operator verifies a payment, `arkfile-admin billing gift` writes a `gift` ledger row. See `docs/wip/archive/oob-payments.md`.

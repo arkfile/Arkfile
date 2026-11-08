@@ -50,7 +50,7 @@ func SubscriptionMeterPaused(sub *models.UserSubscription) bool {
 	}
 }
 
-// SubscriptionBlocksTopUp reports whether automated top-ups must be rejected.
+// SubscriptionBlocksTopUp reports whether invoice top-ups must be rejected.
 func SubscriptionBlocksTopUp(sub *models.UserSubscription) bool {
 	if sub == nil {
 		return false

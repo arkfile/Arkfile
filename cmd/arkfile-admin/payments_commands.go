@@ -38,7 +38,7 @@ func handlePaymentsCommand(client *HTTPClient, config *AdminConfig, args []strin
 func printPaymentsUsage() {
 	fmt.Print(`Usage: arkfile-admin payments SUBCOMMAND [FLAGS]
 
-Invoice payments admin operations. Automated top-ups stay disabled until a payment provider is configured.
+Bitcart invoice top-up admin operations. Top-ups are available when ARKFILE_PAYMENTS_ENABLED=true and Bitcart is configured.
 
 SUBCOMMANDS:
     show <invoice_id>                     Show details for a specific payment invoice.
@@ -105,7 +105,7 @@ Show detailed database information for a specific payment invoice.
 func handlePaymentsListCommand(client *HTTPClient, config *AdminConfig, args []string) error {
 	fs := flag.NewFlagSet("payments list", flag.ExitOnError)
 	user := fs.String("user", "", "Filter by username")
-	status := fs.String("status", "", "Filter by status (pending, paid, expired, failed)")
+	status := fs.String("status", "", "Filter by status (creating, pending, confirming, paid, expired, failed)")
 	jsonOut := fs.Bool("json", false, "Emit JSON instead of formatted text")
 	fs.Usage = func() {
 		fmt.Print(`Usage: arkfile-admin payments list [--user NAME] [--status STATUS] [--json]

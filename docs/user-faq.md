@@ -98,6 +98,22 @@ Yes. Each account may enroll up to two second-factor methods: one authenticator 
 
 That depends on your key and how it is configured. Arkfile requests user verification as discouraged for both enrollment and login, so a single touch on your YubiKey or Nitrokey is usually enough after you have entered your password, similar to Proton Mail or Bitwarden. Some keys or browsers may still prompt for a PIN in edge cases. Your PIN never leaves the device and is not sent to Arkfile or the server.
 
+## How do I top up my balance with Bitcoin or Monero through the Billing panel?
+
+If your Arkfile instance offers invoice top-ups, the Billing panel shows a Top Up Balance button. Enter an amount in US dollars and generate an invoice, then open the payment page, which opens in a new browser tab, and pay with Bitcoin or Monero there. Keep the Arkfile tab open. It shows when your payment has been detected and when it has been confirmed, and your balance is credited automatically once the payment is confirmed. The invoice is priced in US dollars, so you are credited the dollar amount you asked for, and the payment page shows the matching amount of Bitcoin or Monero at the current exchange rate. From the command line, arkfile-client billing top-up does the same thing and can wait for the payment with the wait option.
+
+## What do the waiting for payment, payment detected, and payment confirmed messages mean?
+
+Waiting for payment means no payment has been seen yet. Payment detected, waiting for network confirmation means the payment server has seen your transaction but the network has not yet confirmed it, so your balance has not been credited yet. This usually takes from a few minutes to about an hour, depending on the coin and how busy the network is. Payment confirmed means the payment is final and your balance has been credited. If an invoice expires before a payment is confirmed, nothing is credited. If you sent a payment after the invoice expired, contact the administrator with your invoice number.
+
+## Will my files lock while I pay in another tab?
+
+No. If you chose to keep your account key unlocked for a while, Arkfile normally locks it after a period with no mouse or keyboard activity on the Arkfile tab. While the top-up window is open, that inactivity lock is paused for up to two hours, so switching to the payment tab does not lock you out of your files. The overall unlock period you chose still applies, and closing or reloading the Arkfile tab still locks the key as usual.
+
+## What does the payment server learn about me?
+
+The payment page is run by the operator of your Arkfile instance using separate payment software. It receives the invoice amount in US dollars and a random invoice number, but not your Arkfile username. Like any website, it can see the network address and browser you use to open the payment page, and the payment itself is recorded on the Bitcoin or Monero network. Only the Arkfile server knows which account an invoice number belongs to. If you want to keep your network address away from the payment page, you can open it through Tor.
+
 ## Can I top up my balance with a PayNym or Monero?
 
 Arkfile may list optional out-of-band payment destinations in the Billing panel and in arkfile-client billing show. If a PayNym or BIP47 payment code is listed, you can open a payment channel in a compatible wallet such as Sparrow or Ashigaru, send Bitcoin, wait for 2 confirmations, then contact the administrator with your Arkfile username and the payment transaction ID. If a Monero address is listed, send XMR to that address, wait for 2 confirmations, and likewise message the admin with your username and transaction ID. Credit is applied manually and is not instant.

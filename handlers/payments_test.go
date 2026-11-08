@@ -93,7 +93,7 @@ func TestGetUserCredits_OmitsPaymentsWhenDisabled(t *testing.T) {
 
 	resp := parseJSONResponse(t, rec)
 	_, ok := resp["payments"]
-	assert.False(t, ok, "payments block must be absent while automated top-ups are disabled")
+	assert.False(t, ok, "payments block must be absent while top-ups are disabled")
 }
 
 func TestAdminReconcilePaymentsHandler_Disabled(t *testing.T) {
