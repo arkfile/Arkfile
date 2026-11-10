@@ -8,6 +8,8 @@ Normal logins store an empty `login_kind`. Logins that start through `arkfile-ad
 
 These were not adopted: a shorter idle limit inside the 60-minute admin cap, a hard stop for an admin export already streaming past that cap, and a special success result for a repeated upload complete during grace. Those stay open at the end of this document.
 
+Remaining client, test, and doc work, the open questions, and the suggested order are tracked in `docs/wip/finish-logout-admin-sec.md`.
+
 ## Reasoning
 
 A browser login left open overnight stays signed in. The access token lasts 30 minutes by default (`JWT_TOKEN_LIFETIME_MINUTES`; handler tests set 1440), and the page renews it every 25 minutes and again whenever the tab becomes visible. Each renewal reissues the refresh cookie for 7 days and inserts a new database refresh token that expires 14 days later (30 days on the original login). Nothing ends the login at the Account Key lock, which only wipes the in-browser key after 15 idle minutes or after the 1 to 4 hour cache the user picked. Filenames lock again, but the session can still delete files, revoke shares, and change MFA or account settings. The same refresh-token family is what `arkfile-client` and `arkfile-admin` receive after OPAQUE and MFA, so a cap that lived only in the browser would leave the other two logins, and any copied refresh token, unbounded.

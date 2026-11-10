@@ -6,6 +6,8 @@ The behavior in this document is implemented, including the 60-minute admin cap 
 
 A flagged admin who tries the website or `arkfile-client` gets the same generic failure as any other bad login. Admin access comes only from the account's `is_admin` flag. `ADMIN_USERNAMES` remains a deployment check, including blocking the dev admin name in production. Caddy answers 404 for `/api/admin`, `/api/admin/*`, and `/api/bootstrap/*`. The Go server answers 403 when a request is not a direct local connection. A shorter idle limit inside the 60 minutes, and a hard stop for an export already streaming past that mark, are still open.
 
+Remaining test and doc work for this plan, including coverage of the admin re-registration ceremony before any OPAQUE key rotation, is tracked in `docs/wip/finish-logout-admin-sec.md`.
+
 ## Goal
 
 Admin endpoints and admin functionality must be reachable only through `arkfile-admin`, run directly on the server it administers, talking to the Go server over a direct local connection (the default `--server-url https://localhost:8443`). A login made through the web app or `arkfile-client`, including a login of an admin account, must never be usable on admin routes, and an `arkfile-admin` login must never be usable as a web app session or from any other machine.
