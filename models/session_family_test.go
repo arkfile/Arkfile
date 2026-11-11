@@ -48,7 +48,7 @@ func TestSessionFamilyUserActionInsideIdleWindow(t *testing.T) {
 		0,
 	))
 
-	_, err = CheckSessionFamily(db, session.FamilyID, now)
+	_, err = DecideSessionUse(db, session.FamilyID, now, SessionUse{})
 	require.NoError(t, err)
 	require.NoError(t, RecordSessionActivity(db, session.FamilyID, now))
 
@@ -87,7 +87,7 @@ func TestSessionActivityThrottleStillCountsAcceptedRequest(t *testing.T) {
 	require.NoError(t, err)
 	assert.WithinDuration(t, session.SessionStartedAt, persisted.LastUserActivity, time.Millisecond)
 
-	_, err = CheckSessionFamily(db, session.FamilyID, session.SessionStartedAt.Add(SessionIdleLimit+5*time.Second))
+	_, err = DecideSessionUse(db, session.FamilyID, session.SessionStartedAt.Add(SessionIdleLimit+5*time.Second), SessionUse{})
 	require.NoError(t, err)
 
 	later := session.SessionStartedAt.Add(70 * time.Second)

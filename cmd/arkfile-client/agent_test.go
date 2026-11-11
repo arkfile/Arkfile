@@ -392,6 +392,86 @@ func TestAgent_StoreAndRetrieveDigestCache(t *testing.T) {
 	}
 }
 
+// TestAgent_RebindSessionFollowsRefresh verifies that a rebind keeps the key
+// and digests usable under the rotated token and refuses the old one.
+func TestAgent_RebindSessionFollowsRefresh(t *testing.T) {
+	agent := createTestAgent(t)
+	if err := agent.Start(); err != nil {
+		t.Fatalf("agent start failed: %v", err)
+	}
+	defer agent.Stop()
+
+	oldHash := storeTestAccountKey(t, agent, "access-before-refresh")
+	newHash := hashToken("access-after-refresh")
+	sendAgentRequest(t, agent.socketPath, AgentRequest{
+		Method: "add_digest",
+		Params: map[string]interface{}{"file_id": "file-1", "sha256hex": "aabb", "token_hash": oldHash},
+	})
+
+	rebind := sendAgentRequest(t, agent.socketPath, AgentRequest{
+		Method: "rebind_session",
+		Params: map[string]interface{}{"token_hash": oldHash, "new_token_hash": newHash},
+	})
+	if !rebind.Success {
+		t.Fatalf("rebind failed: %s", rebind.Error)
+	}
+
+	getResp := sendAgentRequest(t, agent.socketPath, AgentRequest{
+		Method: "get_digest_cache",
+		Params: map[string]interface{}{"token_hash": newHash},
+	})
+	if !getResp.Success {
+		t.Fatalf("digest cache should survive rebind: %s", getResp.Error)
+	}
+	if cache, _ := getResp.Result["digest_cache"].(map[string]interface{}); cache["file-1"] != "aabb" {
+		t.Fatalf("digest lost across rebind: %v", getResp.Result)
+	}
+	keyResp := sendAgentRequest(t, agent.socketPath, AgentRequest{
+		Method: "get_account_key",
+		Params: map[string]interface{}{"token_hash": newHash},
+	})
+	if !keyResp.Success {
+		t.Fatalf("account key should be available under the new token: %s", keyResp.Error)
+	}
+
+	stale := sendAgentRequest(t, agent.socketPath, AgentRequest{
+		Method: "get_account_key",
+		Params: map[string]interface{}{"token_hash": oldHash},
+	})
+	if stale.Success {
+		t.Fatal("the pre-refresh token must no longer unlock the key")
+	}
+}
+
+// TestAgent_RebindSessionRejectsWrongToken verifies a rebind with the wrong
+// current token wipes the key instead of moving the binding.
+func TestAgent_RebindSessionRejectsWrongToken(t *testing.T) {
+	agent := createTestAgent(t)
+	if err := agent.Start(); err != nil {
+		t.Fatalf("agent start failed: %v", err)
+	}
+	defer agent.Stop()
+
+	realHash := storeTestAccountKey(t, agent, "real-token")
+	rebind := sendAgentRequest(t, agent.socketPath, AgentRequest{
+		Method: "rebind_session",
+		Params: map[string]interface{}{
+			"token_hash":     hashToken("someone-else"),
+			"new_token_hash": hashToken("attacker-token"),
+		},
+	})
+	if rebind.Success {
+		t.Fatal("rebind with the wrong current token must fail")
+	}
+	keyResp := sendAgentRequest(t, agent.socketPath, AgentRequest{
+		Method: "get_account_key",
+		Params: map[string]interface{}{"token_hash": realHash},
+	})
+	if keyResp.Success {
+		t.Fatal("a failed rebind must wipe the key")
+	}
+}
+
 // TestAgent_AddRemoveDigest tests adding and removing individual digests
 func TestAgent_AddRemoveDigest(t *testing.T) {
 	agent := createTestAgent(t)

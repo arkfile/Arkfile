@@ -11,6 +11,7 @@
  * picker cancels the export and starts nothing.
  */
 
+import { noteAbsoluteBatchEnd, refreshToken } from '../utils/auth.js';
 import { showError, showSuccess, showWarning } from '../ui/messages.js';
 import { showProgress, updateProgress, hideProgress } from '../ui/progress.js';
 import { ensureFreshBatchAuth } from './download-batch.js';
@@ -105,7 +106,19 @@ async function exportOneToDirectory(
 ): Promise<string> {
   const response = await env.fetchExport(target.file_id, env.abortController.signal);
   if (response.status === 401) {
-    throw new Error('auth_expired');
+    const expired = new Error('auth_expired') as Error & { code?: string };
+    try {
+      const body = (await response.json()) as { error?: unknown };
+      if (typeof body.error === 'string' && body.error) {
+        expired.code = body.error;
+      }
+    } catch {
+      // A 401 without a JSON body still ends the export.
+    }
+    // A plain fetch does not end the browser session; one refresh settles it
+    // and shows the session notice.
+    await refreshToken();
+    throw expired;
   }
   if (!response.ok || !response.body) {
     throw new Error(`http_${response.status}`);
@@ -176,7 +189,10 @@ export async function runExportBatch(
       env.onProgress(`Starting download ${i + 1} of ${targets.length}: ${labelFor(t)}`);
       try {
         await env.ensureAuth();
-      } catch {
+      } catch (err) {
+        // Native downloads cannot report completion, so only the count of
+        // files not handed to the browser is known.
+        noteAbsoluteBatchEnd(err, 'export', 'none', targets.length - i, true);
         skipRest(targets.slice(i), 'auth_expired');
         break;
       }
@@ -232,6 +248,10 @@ export async function runExportBatch(
         result.succeeded.push({ fileId: t.file_id, filename: labelFor(t), bundleName: name });
       } catch (err) {
         const reason = signal.aborted ? 'cancelled' : classifyExportError(err);
+        if (reason === 'auth_expired') {
+          // A session refusal arrives before the bundle starts streaming.
+          noteAbsoluteBatchEnd(err, 'export', result.succeeded.length > 0 ? 'finished' : 'none', work.length - i);
+        }
         if (reason === 'auth_expired' || reason === 'cancelled') {
           skipRest(work.slice(i), reason);
           break;

@@ -97,36 +97,31 @@ func TestSessionLifetimeMiddlewareRejectsIdleUnexpiredToken(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), models.SessionErrorIdle)
 }
 
-func TestSessionLifetimeMiddlewareAllowsPreUpgradeTokenOnly(t *testing.T) {
+func TestSessionLifetimeMiddlewareRejectsTokenWithoutFamily(t *testing.T) {
 	db := setupSessionLifetimeDB(t)
 	defer db.Close()
 	e := echo.New()
 
-	oldContext, oldRecorder := sessionLifetimeContext(e, http.MethodGet, "/api/files", &auth.Claims{
-		Username: "legacy-user",
-		RegisteredClaims: jwt.RegisteredClaims{
-			IssuedAt: jwt.NewNumericDate(auth.ProcessStartedAt().Add(-time.Minute)),
-			Audience: jwt.ClaimStrings{auth.AudienceAPI},
-		},
-	})
-	err := SessionLifetimeMiddleware(db)(func(c echo.Context) error {
-		return c.NoContent(http.StatusOK)
-	})(oldContext)
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusOK, oldRecorder.Code)
-
-	newContext, newRecorder := sessionLifetimeContext(e, http.MethodGet, "/api/files", &auth.Claims{
-		Username: "missing-family-user",
-		RegisteredClaims: jwt.RegisteredClaims{
-			IssuedAt: jwt.NewNumericDate(time.Now().Add(time.Minute)),
-			Audience: jwt.ClaimStrings{auth.AudienceAPI},
-		},
-	})
-	err = SessionLifetimeMiddleware(db)(func(c echo.Context) error {
-		return c.NoContent(http.StatusOK)
-	})(newContext)
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusUnauthorized, newRecorder.Code)
+	for _, issuedAt := range []time.Time{
+		time.Now().Add(-24 * time.Hour),
+		time.Now(),
+	} {
+		c, rec := sessionLifetimeContext(e, http.MethodGet, "/api/files", &auth.Claims{
+			Username: "missing-family-user",
+			RegisteredClaims: jwt.RegisteredClaims{
+				IssuedAt: jwt.NewNumericDate(issuedAt),
+				Audience: jwt.ClaimStrings{auth.AudienceAPI},
+			},
+		})
+		called := false
+		err := SessionLifetimeMiddleware(db)(func(c echo.Context) error {
+			called = true
+			return c.NoContent(http.StatusOK)
+		})(c)
+		require.NoError(t, err)
+		assert.False(t, called)
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	}
 }
 
 func TestSessionLifetimeMiddlewareRecordsAcceptedActivity(t *testing.T) {
@@ -241,6 +236,6 @@ func TestShiftOwnSessionClocksSurvivesMiddlewareCompletion(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	_, err = models.CheckSessionFamily(db, session.FamilyID, time.Now())
+	_, err = models.DecideSessionUse(db, session.FamilyID, time.Now(), models.SessionUse{})
 	require.ErrorIs(t, err, models.ErrSessionIdle)
 }

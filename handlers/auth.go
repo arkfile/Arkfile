@@ -191,6 +191,9 @@ func Logout(c echo.Context) error {
 func sessionErrorMessage(code string, family *models.SessionFamily) string {
 	switch code {
 	case models.SessionErrorIdle:
+		if family != nil && family.LoginKind == models.LoginKindAdmin {
+			return "admin session ended after 15 minutes without activity, please login again"
+		}
 		return "Your session ended after 6 hours without activity. Please log in again."
 	case models.SessionErrorAbsolute:
 		if family != nil && family.LoginKind == models.LoginKindAdmin {

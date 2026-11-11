@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	jwt "github.com/golang-jwt/jwt/v5"
+	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -537,6 +539,100 @@ func TestClaimUploadCompletionIsSingleWinner(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, first)
 	assert.False(t, second)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func expectCompleteUploadSession(mock sqlmock.Sqlmock, sessionID, owner, fileID, status string) {
+	mock.ExpectQuery(`SELECT owner_username, file_id, storage_id, storage_upload_id, status, total_chunks,`).
+		WithArgs(sessionID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"owner_username", "file_id", "storage_id", "storage_upload_id", "status", "total_chunks",
+			"total_size", "chunk_size", "padded_size", "encrypted_password_hint", "password_hint_nonce",
+			"encrypted_tags", "tags_nonce", "password_type", "encrypted_filename", "filename_nonce",
+			"encrypted_sha256sum", "sha256sum_nonce", "encrypted_fek",
+		}).AddRow(
+			owner, fileID, "storage-id", "upload-id", status, 1,
+			int64(100), int64(100), int64(128), nil, nil,
+			nil, nil, "account", []byte("enc-name"), []byte("name-nonce"),
+			[]byte("enc-sha"), []byte("sha-nonce"), []byte("enc-fek"),
+		))
+}
+
+func completeUploadContext(t *testing.T, sessionID, username string) (echo.Context, *httptest.ResponseRecorder, sqlmock.Sqlmock) {
+	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/uploads/"+sessionID+"/complete", bytes.NewReader([]byte(`{}`)))
+	c.SetParamNames("sessionId")
+	c.SetParamValues(sessionID)
+	c.Set("user", jwt.NewWithClaims(jwt.SigningMethodHS256, &auth.Claims{Username: username}))
+	return c, rec, mock
+}
+
+func TestCompleteUpload_ReplayOfCompletedUploadSucceeds(t *testing.T) {
+	const username = "complete-replay-user"
+	const sessionID = "session-complete-replay"
+	c, rec, mock := completeUploadContext(t, sessionID, username)
+
+	expectCompleteUploadSession(mock, sessionID, username, validTestFileID, "completed")
+	mock.ExpectQuery(`SELECT storage_id, encrypted_stream_sha256sum FROM file_metadata WHERE file_id = \? AND owner_username = \?`).
+		WithArgs(validTestFileID, username).
+		WillReturnRows(sqlmock.NewRows([]string{"storage_id", "encrypted_stream_sha256sum"}).AddRow("storage-id", "abc123"))
+	mock.ExpectQuery(`SELECT id, username, created_at, total_storage_bytes, storage_limit_bytes,`).
+		WithArgs(username).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes",
+			"is_approved", "approved_by", "approved_at", "is_admin",
+		}).AddRow(int64(1), username, "2024-01-01 00:00:00", int64(128), int64(1<<30), true, nil, nil, false))
+
+	require.NoError(t, CompleteUpload(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, validTestFileID, resp["file_id"])
+	assert.Equal(t, "storage-id", resp["storage_id"])
+	assert.Equal(t, "abc123", resp["encrypted_stream_sha256"])
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCompleteUpload_ReplayRefusedForOtherOwner(t *testing.T) {
+	const sessionID = "session-complete-other-owner"
+	c, _, mock := completeUploadContext(t, sessionID, "intruder-user")
+
+	expectCompleteUploadSession(mock, sessionID, "owner-user", validTestFileID, "completed")
+
+	err := CompleteUpload(c)
+	var httpErr *echo.HTTPError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusForbidden, httpErr.Code)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCompleteUpload_FailedSessionStillRejected(t *testing.T) {
+	const username = "complete-failed-user"
+	const sessionID = "session-complete-failed"
+	c, _, mock := completeUploadContext(t, sessionID, username)
+
+	expectCompleteUploadSession(mock, sessionID, username, validTestFileID, "failed")
+
+	err := CompleteUpload(c)
+	var httpErr *echo.HTTPError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCompleteUpload_CompletedWithoutStoredFileStillRejected(t *testing.T) {
+	const username = "complete-missing-user"
+	const sessionID = "session-complete-missing"
+	c, _, mock := completeUploadContext(t, sessionID, username)
+
+	expectCompleteUploadSession(mock, sessionID, username, validTestFileID, "completed")
+	mock.ExpectQuery(`SELECT storage_id, encrypted_stream_sha256sum FROM file_metadata WHERE file_id = \? AND owner_username = \?`).
+		WithArgs(validTestFileID, username).
+		WillReturnError(sql.ErrNoRows)
+
+	err := CompleteUpload(c)
+	var httpErr *echo.HTTPError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

@@ -34,9 +34,28 @@ const SESSION_MESSAGES: Record<SessionErrorCode, string> = {
   session_logged_out: 'You have been logged out.',
 };
 
+/**
+ * How the 24-hour cap met a batch: the previous file finished and the next was
+ * refused ('finished'), the file in progress was cut off ('interrupted'), or
+ * the first file was refused before anything finished ('none').
+ */
+export type BatchEndOutcome = 'finished' | 'interrupted' | 'none';
+
+function queuedSentence(count: number, verb: string, other: boolean): string {
+  const prefix = other ? 'other ' : '';
+  return count === 1
+    ? `1 ${prefix}file in the queue was not ${verb}.`
+    : `${count} ${prefix}files in the queue were not ${verb}.`;
+}
+
+/**
+ * Notice text for a batch stopped by the 24-hour cap. remaining counts the
+ * files that never started, including one refused before it began. The text
+ * never contains filenames.
+ */
 export function absoluteBatchNotice(
   kind: 'download' | 'upload' | 'export',
-  finished: boolean,
+  outcome: BatchEndOutcome,
   remaining: number,
   nativeExport = false,
 ): string {
@@ -51,29 +70,54 @@ export function absoluteBatchNotice(
     return `${base} ${count} Please log in again.`;
   }
   const verb = kind === 'download' ? 'downloaded' : kind === 'upload' ? 'uploaded' : 'exported';
-  const noun = kind === 'download' ? 'download' : kind === 'upload' ? 'upload' : 'export';
-  if (finished && remaining <= 0) {
-    return `${base} The ${noun} in progress finished. Please log in again.`;
+  const parts = [base];
+  if (outcome === 'finished') {
+    parts.push(`The ${kind} in progress finished.`);
+    if (remaining > 0) parts.push(queuedSentence(remaining, verb, true));
+  } else if (outcome === 'interrupted') {
+    parts.push('The file in progress did not finish.');
+    if (remaining > 0) parts.push(queuedSentence(remaining, 'started', true));
+  } else if (remaining > 0) {
+    parts.push(queuedSentence(remaining, verb, false));
   }
-  if (finished) {
-    const queued = remaining === 1
-      ? `1 other file in the queue was not ${verb}.`
-      : `${remaining} other files in the queue were not ${verb}.`;
-    return `${base} The ${noun} in progress finished. ${queued} Please log in again.`;
-  }
-  const queued = remaining <= 0
-    ? ''
-    : remaining === 1
-      ? ' 1 other file in the queue was not started.'
-      : ` ${remaining} other files in the queue were not started.`;
-  return `${base} The file in progress did not finish.${queued} Please log in again.`;
+  parts.push('Please log in again.');
+  return parts.join(' ');
 }
 
+/** Replace the stored and visible session notice with a more specific one. */
 export function replaceSessionNotice(message: string): void {
   try {
     sessionStorage.setItem(SESSION_NOTICE_KEY, message);
   } catch {
     // The visible notice still updates when storage is unavailable.
+  }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(SESSION_ENDED_EVENT, {
+      detail: { code: 'session_absolute', message },
+    }));
+  }
+}
+
+/**
+ * The session code behind a batch failure: the code attached to err, or the
+ * code that ended this browser session. Null when the session did not end.
+ */
+export function batchSessionEndCode(err: unknown): SessionErrorCode | null {
+  const attached = (err as { code?: unknown } | null | undefined)?.code;
+  if (isSessionErrorCode(attached)) return attached;
+  return AuthManager.endedSessionCode();
+}
+
+/** Show the batch summary when the 24-hour cap ended the login. */
+export function noteAbsoluteBatchEnd(
+  err: unknown,
+  kind: 'download' | 'upload' | 'export',
+  outcome: BatchEndOutcome,
+  remaining: number,
+  nativeExport = false,
+): void {
+  if (batchSessionEndCode(err) === 'session_absolute') {
+    replaceSessionNotice(absoluteBatchNotice(kind, outcome, remaining, nativeExport));
   }
 }
 
@@ -147,6 +191,7 @@ export class AuthManager {
   private static visibilityRefreshAttached = false;
   private static visibilityRefreshEnabled = false;
   private static sessionEnded = false;
+  private static sessionEndedCode: SessionErrorCode | null = null;
   // 25 minutes -- fires with 5 minutes to spare before the 30-minute JWT TTL.
   private static readonly AUTO_REFRESH_INTERVAL = 25 * 60 * 1000;
 
@@ -221,11 +266,17 @@ export class AuthManager {
     }
   }
 
+  /** The server code that ended this browser session, if one did. */
+  public static endedSessionCode(): SessionErrorCode | null {
+    return this.sessionEndedCode;
+  }
+
   private static endBrowserSession(code: SessionErrorCode): void {
     if (this.sessionEnded) return;
     this.sessionEnded = true;
     const message = SESSION_MESSAGES[code];
     this.clearAllSessionData();
+    this.sessionEndedCode = code;
     document.cookie = `${CSRF_COOKIE_NAME}=; Path=/; Max-Age=0; Secure; SameSite=Strict`;
     try {
       sessionStorage.setItem(SESSION_NOTICE_KEY, message);
@@ -372,6 +423,7 @@ export class AuthManager {
   public static startAutoRefresh(): void {
     this.stopAutoRefresh();
     this.sessionEnded = false;
+    this.sessionEndedCode = null;
     this.visibilityRefreshEnabled = true;
     try {
       sessionStorage.removeItem(SESSION_NOTICE_KEY);
@@ -465,6 +517,7 @@ export class AuthManager {
   // Session state management. Wipes Account Key ciphertext and heap wrapping key.
   public static clearAllSessionData(): void {
     _cachedUser = null;
+    this.sessionEndedCode = null;
     this.stopAutoRefresh();
     this.visibilityRefreshEnabled = false;
 

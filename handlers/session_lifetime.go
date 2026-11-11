@@ -29,9 +29,6 @@ func SessionLifetimeMiddleware(db *sql.DB) echo.MiddlewareFunc {
 			}
 
 			if claims.FamilyID == "" {
-				if claims.IssuedAt != nil && claims.IssuedAt.Time.Before(auth.ProcessStartedAt()) {
-					return next(c)
-				}
 				clearSessionCookies(c)
 				return JSONError(c, http.StatusUnauthorized, "Session identity is missing")
 			}
@@ -67,7 +64,9 @@ func SessionLifetimeMiddleware(db *sql.DB) echo.MiddlewareFunc {
 			}
 
 			handlerErr := next(c)
-			if handlerErr == nil && c.Path() != "/api/dev-test/sessions/shift-self" {
+			// The clock-shift endpoints must not count as activity, or shifting
+			// the caller's own family would be undone by this request.
+			if handlerErr == nil && !sessionClockShiftPaths[c.Path()] {
 				if err := models.RecordSessionActivity(db, claims.FamilyID, time.Now()); err != nil && err != sql.ErrNoRows {
 					logging.ErrorLogger.Printf("Failed to record completed session activity: %v", err)
 				}
@@ -75,6 +74,11 @@ func SessionLifetimeMiddleware(db *sql.DB) echo.MiddlewareFunc {
 			return handlerErr
 		}
 	}
+}
+
+var sessionClockShiftPaths = map[string]bool{
+	"/api/dev-test/sessions/shift-self":  true,
+	"/api/admin/dev-test/sessions/shift": true,
 }
 
 func sessionUseForRequest(c echo.Context, db *sql.DB, username string) models.SessionUse {

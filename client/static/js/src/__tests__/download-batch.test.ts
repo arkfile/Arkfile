@@ -2,8 +2,9 @@
  * Unit Tests -- multi-file download state machine (download-batch.ts).
  */
 
-import './setup';
-import { describe, test, expect } from 'bun:test';
+import { resetMocks } from './setup';
+import { describe, test, expect, beforeEach } from 'bun:test';
+import { AuthManager } from '../utils/auth';
 import {
   MAX_PASSWORD_ATTEMPTS_PER_ROUND,
   MAX_ROUNDS,
@@ -91,6 +92,11 @@ function makeEnv(
 }
 
 const newLog = (): Log => ({ downloads: [], prompts: [], retries: 0, ensureAuth: 0, finished: false });
+
+beforeEach(() => {
+  resetMocks();
+  AuthManager.clearAllSessionData();
+});
 
 describe('runDownloadBatch', () => {
   test('downloads account files before custom files, refreshing auth before each file', async () => {
@@ -199,6 +205,41 @@ describe('runDownloadBatch', () => {
     expect(result.cancelled).toBe(true);
     expect(result.rounds[0]!.skipped.map((f) => f.fileId)).toEqual(['a2', 'c1']);
     expect(log.retries).toBe(0);
+  });
+
+  test('24-hour cap between files reports the previous download finished', async () => {
+    const log = newLog();
+    await runDownloadBatch(
+      [account('a1'), account('a2'), account('a3'), custom('c1')],
+      makeEnv({
+        retry: true,
+        download: async (target) => {
+          if (target.file_id === 'a2') {
+            throw Object.assign(new Error('auth_expired'), { code: 'session_absolute' });
+          }
+        },
+      }, log),
+    );
+    expect(log.downloads.map((d) => d.id)).toEqual(['a1', 'a2']);
+    expect(AuthManager.consumeSessionNotice()).toBe(
+      'Your session ended 24 hours after you signed in. The download in progress finished. '
+        + '3 other files in the queue were not downloaded. Please log in again.',
+    );
+  });
+
+  test('24-hour cap on the first file counts every selected file as not downloaded', async () => {
+    const log = newLog();
+    await runDownloadBatch(
+      [account('a1'), custom('c1')],
+      makeEnv({
+        download: async () => {
+          throw Object.assign(new Error('auth_expired'), { code: 'session_absolute' });
+        },
+      }, log),
+    );
+    expect(AuthManager.consumeSessionNotice()).toBe(
+      'Your session ended 24 hours after you signed in. 2 files in the queue were not downloaded. Please log in again.',
+    );
   });
 
   test('batch cancel during a download marks the rest cancelled and offers no retry', async () => {

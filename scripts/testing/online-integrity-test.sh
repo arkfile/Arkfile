@@ -65,13 +65,24 @@ cleanup_user() {
         return 0
     fi
     local failed=0
-    HOME="$TEST_ROOT/home" "$ADMIN" \
+    local delete_output
+    if ! delete_output="$(HOME="$TEST_ROOT/home" "$ADMIN" \
         --server-url "$SERVER_URL" \
         --tls-insecure \
-        delete-user --username "$INTEGRITY_USERNAME" --confirm >/dev/null 2>&1 || {
-        log_error "Could not remove dedicated integrity user $INTEGRITY_USERNAME"
-        failed=1
-    }
+        delete-user --username "$INTEGRITY_USERNAME" --confirm 2>&1)"; then
+        # After an early failure the admin login may have ended; sign in once more.
+        if printf '%s\n' "$delete_output" | grep -q "admin session ended" && HOME="$TEST_ROOT/home" admin_login; then
+            HOME="$TEST_ROOT/home" "$ADMIN" \
+                --server-url "$SERVER_URL" \
+                --tls-insecure \
+                delete-user --username "$INTEGRITY_USERNAME" --confirm >/dev/null 2>&1 || failed=1
+        else
+            failed=1
+        fi
+        if [ "$failed" -ne 0 ]; then
+            log_error "Could not remove dedicated integrity user $INTEGRITY_USERNAME"
+        fi
+    fi
 
     local admin_token
     admin_token="$(jq -r '.access_token // empty' "$TEST_ROOT/home/.arkfile-admin-session.json" 2>/dev/null)"
@@ -823,6 +834,9 @@ scan_changed_files() {
 }
 
 run_delta_inspection() {
+    # The admin login from the start of the run may have ended after 15 minutes
+    # without an admin request; the closing admin steps need a fresh one.
+    admin_login || return 1
     capture_post_test_deltas || return 1
     scan_text_surface service-journal "$TEST_ROOT/delta/journal.log" || return 1
     scan_text_surface security-events "$TEST_ROOT/delta/security-events.json" || return 1

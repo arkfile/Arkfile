@@ -17,6 +17,7 @@ import type { AppShell } from './shell';
 import { debugLog } from '../utils/debug-log.js';
 
 let sessionEndListenerAttached = false;
+let sessionNoticeToast: HTMLElement | null = null;
 
 async function checkServiceReady(): Promise<boolean> {
   try {
@@ -118,7 +119,9 @@ export async function bootstrapApplication(shell: AppShell): Promise<boolean> {
       window.addEventListener(SESSION_ENDED_EVENT, (event) => {
         const detail = (event as CustomEvent<{ message?: string }>).detail;
         showAuthSection();
-        showError(detail?.message ?? 'Your session has expired. Please log in again.');
+        // A batch may replace the plain notice with a more specific one.
+        sessionNoticeToast?.remove();
+        sessionNoticeToast = showError(detail?.message ?? 'Your session has expired. Please log in again.');
       });
       sessionEndListenerAttached = true;
     }

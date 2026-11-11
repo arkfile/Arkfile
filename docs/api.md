@@ -62,12 +62,20 @@ The finalize request also carries the client-generated `account_kdf_salt` as can
 
 When an operator has flagged an account for OPAQUE credential rotation, `/api/opaque/login/response` returns HTTP `409` with stable error code `account_requires_reregistration`. The response `data` carries a short-lived `reregistration_token` (audience `arkfile-reregistration`), the authoritative `file_count`, the preserved `account_kdf_salt` and `account_kdf_profile`, and, when the user owns files, a single Account-Key-encrypted `verifier` sample (`file_id`, `owner_username`, `encrypted_filename`, `filename_nonce`). The client confirms the entered password by test-decrypting the verifier with the derived Account Key before completing the ceremony, then re-binds `opaque_user_data` via the `reregister` endpoints and continues into the normal MFA flow. Files, shares, MFA enrollment, account KDF metadata, and settings are preserved.
 
+Admin accounts never receive this response from the public login. A flagged admin on `/api/opaque/login/response` gets the same generic authentication failure as any other bad login, so the public endpoint does not reveal which accounts are admins, and `/api/opaque/reregister/*` refuses admin accounts with HTTP 403. Admins re-register through the admin login below.
+
 #### Admin Login (Multi-Step OPAQUE)
+
+These routes are reachable only over a direct local connection on the server (see Session Management). `arkfile-admin` is the only client.
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| POST | `/api/admin/login/response` | Admin OPAQUE login step 1 | Public |
-| POST | `/api/admin/login/finalize` | Admin OPAQUE login step 2 | Public |
+| POST | `/api/admin/login/response` | Admin OPAQUE login step 1 | Direct local connection |
+| POST | `/api/admin/login/finalize` | Admin OPAQUE login step 2 | Direct local connection |
+| POST | `/api/admin/reregister/response` | Admin OPAQUE re-registration step 1 (flagged admin accounts) | Marked re-registration handoff token, direct local connection |
+| POST | `/api/admin/reregister/finalize` | Admin OPAQUE re-registration step 2 | Marked re-registration handoff token, direct local connection |
+
+When the admin account is flagged, `/api/admin/login/response` returns the same `409 account_requires_reregistration` shape as the user login, with a handoff token marked as an admin login and delivered only in the JSON body. The admin re-registration routes accept only that marked token and only for an account whose `is_admin` flag is set; anything else gets HTTP 403 `reregistration_token_invalid`. Finalize replaces the single OPAQUE record, clears the flag, and returns a marked temporary MFA token, so the second factor completes as a normal admin login.
 
 #### Bootstrap Registration (Initial Admin Setup)
 
@@ -84,7 +92,9 @@ When an operator has flagged an account for OPAQUE credential rotation, `/api/op
 | POST | `/api/logout` | End the current login family and clear browser cookies | Access |
 | GET | `/api/auth/crypto-metadata` | Get username, public Account Key salt, and KDF profile | Access (approval not required) |
 
-Every completed full login has a server-side family. A family ends after six hours without a user-started authenticated request, or 24 hours after sign-in, whichever comes first. `POST /api/refresh` does not count as activity and returns `session_expires_at`, which stays constant across rotations. Requests and refresh attempts return HTTP 401 with `error` set to `session_idle`, `session_absolute`, or `session_logged_out`. A file upload or download already in progress at 24 hours may continue until it finishes, goes quiet for 30 minutes, or reaches 36 hours from sign-in. `POST /api/logout` ends only the caller's family and clears browser session cookies. Other logins for the same account remain active. Logout remains idempotent when the presented JWT has already been revoked, provided it is still correctly signed and unexpired. A marked admin login lasts 60 minutes, is accepted only on the server itself, and is not given browser cookies. Admin and bootstrap paths are refused by the public proxy.
+Every completed full login has a server-side family. A family ends after six hours without a user-started authenticated request, or 24 hours after sign-in, whichever comes first. `POST /api/refresh` does not count as activity and returns `session_expires_at`, which stays constant across rotations. Requests and refresh attempts return HTTP 401 with `error` set to `session_idle`, `session_absolute`, or `session_logged_out`. A file upload or download already in progress at 24 hours may continue until it finishes, goes quiet for 30 minutes, or reaches 36 hours from sign-in. `POST /api/logout` ends only the caller's family and clears browser session cookies. Other logins for the same account remain active. Logout remains idempotent when the presented JWT has already been revoked, provided it is still correctly signed and unexpired. A full access token without a `family_id` claim is refused with HTTP 401.
+
+A marked admin login (one that started at `/api/admin/login/*`, bootstrap, or admin re-registration) ends 60 minutes after login or after 15 minutes without an admin request, whichever comes first. The idle end uses the same `session_idle` code; its message names the 15-minute admin limit. A marked token is accepted only over a direct local connection (a loopback peer with no `X-Arkfile-Peer`, `X-Forwarded-For`, `X-Real-IP`, or `Forwarded` header), only from the `Authorization` header, and only on admin routes, the MFA routes `arkfile-admin` uses, `/api/refresh`, and `/api/logout`; other routes refuse it with HTTP 403. Marked logins are never given browser cookies. An unmarked token, including a website or `arkfile-client` login of an admin account, gets HTTP 403 on admin routes. The public proxy answers 404 for `/api/admin`, `/api/admin/*`, and `/api/bootstrap/*`; the Go server answers 403 when one of those requests is not a direct local connection.
 
 #### Token Revocation (Require MFA)
 
@@ -199,6 +209,8 @@ Owner file tags are optional client-encrypted organization metadata. `POST /api/
 | DELETE | `/api/uploads/:sessionId` | Cancel and discard the upload session | MFA |
 
 Chunk PUT is idempotent for the same `(session, chunk_number, X-Chunk-Hash)`: a replay after a lost response returns HTTP 200 with the stored etag and does not re-append to the streaming hashes or re-upload to storage. A different hash for an already-recorded chunk number returns HTTP 409 with `chunk_hash_conflict`.
+
+Complete is idempotent for the owner of an upload session that already completed: a repeat after a lost response returns HTTP 200 with the stored `file_id`, `storage_id`, `encrypted_stream_sha256`, and the current storage totals, and performs no storage, accounting, or replication work. Any other session status that is not `in_progress` still returns HTTP 400.
 
 Browser and CLI clients retry individual chunk uploads and downloads on transient failures (network errors, HTTP 408/429/5xx) with exponential backoff before aborting that file transfer.
 

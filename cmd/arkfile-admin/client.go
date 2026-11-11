@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -18,6 +19,8 @@ type HTTPClient struct {
 	client  *http.Client
 	baseURL string
 	verbose bool
+	// sessionFile is removed when the server reports the admin session ended.
+	sessionFile string
 }
 
 // Response represents a generic API response.
@@ -92,11 +95,29 @@ func (c *HTTPClient) makeRequest(method, endpoint string, payload interface{}, t
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
+	if resp.StatusCode == http.StatusUnauthorized {
+		if endedErr := c.sessionEnded(apiResp.Error); endedErr != nil {
+			return &apiResp, endedErr
+		}
+	}
 	if resp.StatusCode >= 400 {
 		return &apiResp, fmt.Errorf("HTTP %d: %s", resp.StatusCode, apiResp.Message)
 	}
 
 	return &apiResp, nil
+}
+
+// sessionEnded removes the saved admin session and returns the admin notice
+// when code reports that the server ended this login. It returns nil otherwise.
+func (c *HTTPClient) sessionEnded(code string) error {
+	endedErr, ok := adminSessionEndedError(code)
+	if !ok {
+		return nil
+	}
+	if c.sessionFile != "" {
+		_ = os.Remove(c.sessionFile)
+	}
+	return endedErr
 }
 
 func (c *HTTPClient) fetchOpaqueServerID() (string, error) {

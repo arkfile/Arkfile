@@ -169,6 +169,7 @@ func exportFilenameForNaming(ctx context.Context, client *HTTPClient, session *A
 func runExportBatch(ctx context.Context, client *HTTPClient, session *AuthSession, targets []exportTarget) error {
 	var succeeded int
 	var failed, skipped []exportOutcome
+	var sessionEnded string
 
 	runPass := func(work []exportTarget) []exportOutcome {
 		var passFailures []exportOutcome
@@ -189,6 +190,9 @@ func runExportBatch(ctx context.Context, client *HTTPClient, session *AuthSessio
 					reason := "session_expired"
 					if !errors.Is(err, errAuthExpired) {
 						reason = "cancelled"
+					} else if summary := batchSessionEndedSummary(err, "exported", succeeded > 0, len(work)-i-1); summary != "" {
+						reason = "session_ended"
+						sessionEnded = summary
 					}
 					fmt.Fprintf(os.Stderr, "[X] %s (%s): %s\n", label, t.FileID, reason)
 					for _, rest := range work[i:] {
@@ -226,6 +230,10 @@ func runExportBatch(ctx context.Context, client *HTTPClient, session *AuthSessio
 		}
 		fmt.Fprintf(os.Stderr, "  [X] %s (%s): %s\n", label, f.Target.FileID, f.Reason)
 	}
+	if sessionEnded != "" {
+		fmt.Printf("Aborted: %s\n", sessionEnded)
+		return fmt.Errorf("export stopped because the session ended")
+	}
 	if len(failed) > 0 || len(skipped) > 0 {
 		return fmt.Errorf("export incomplete")
 	}
@@ -237,25 +245,31 @@ func runExportBatch(ctx context.Context, client *HTTPClient, session *AuthSessio
 // before it is published, so a truncated or malformed download never
 // replaces or claims a destination.
 func exportOneBundle(ctx context.Context, client *HTTPClient, session *AuthSession, fileID string, target *outputTarget) (int64, error) {
+	// A session refusal can only arrive before the bundle starts streaming.
 	if err := ensureFreshSessionToken(client, session, jwtRefreshThreshold); err != nil {
-		return 0, errAuthExpired
+		if errors.Is(err, errAuthExpired) {
+			return 0, notStarted(err)
+		}
+		return 0, notStarted(fmt.Errorf("%w: %v", errAuthExpired, err))
 	}
 	resp, err := requestExportBundle(ctx, client, session, fileID)
 	if err != nil {
 		return 0, err
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
+		refreshErr := refreshAfterUnauthorized(client, session, resp.Body)
 		resp.Body.Close()
-		if refreshErr := refreshSessionToken(client, session); refreshErr != nil {
-			return 0, errAuthExpired
+		if refreshErr != nil {
+			return 0, notStarted(refreshErr)
 		}
 		resp, err = requestExportBundle(ctx, client, session, fileID)
 		if err != nil {
 			return 0, err
 		}
 		if resp.StatusCode == http.StatusUnauthorized {
+			unauthorizedErr := unauthorizedTransferError(session, resp.Body)
 			resp.Body.Close()
-			return 0, errAuthExpired
+			return 0, notStarted(unauthorizedErr)
 		}
 	}
 	defer resp.Body.Close()

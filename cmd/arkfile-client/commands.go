@@ -342,7 +342,10 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 		// Preemptively refresh the JWT if it's near expiry. This
 		// prevents mid-chunk 401s on long batches.
 		if rerr := ensureFreshSessionToken(client, session, 0); rerr != nil {
-			fatalReason = fmt.Sprintf("session refresh failed before %s: %v", filepath.Base(path), rerr)
+			fatalReason = batchSessionEndedSummary(notStarted(rerr), "uploaded", succeeded > 0, len(files)-i-1)
+			if fatalReason == "" {
+				fatalReason = fmt.Sprintf("session refresh failed before %s: %v", filepath.Base(path), rerr)
+			}
 			fmt.Printf("[X] %s: %s\n", filepath.Base(path), fatalReason)
 			// Mark this file failed, then mark remaining as skipped.
 			failed++
@@ -365,14 +368,9 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 
 		// Classify error.
 		if isFatalUploadError(err) {
-			fatalReason = err.Error()
-			if errors.Is(err, errSessionAbsolute) {
-				remaining := len(files) - i - 1
-				if remaining == 1 {
-					fatalReason += " 1 other file in the queue was not uploaded."
-				} else if remaining > 1 {
-					fatalReason += fmt.Sprintf(" %d other files in the queue were not uploaded.", remaining)
-				}
+			fatalReason = batchSessionEndedSummary(err, "uploaded", succeeded > 0, len(files)-i-1)
+			if fatalReason == "" {
+				fatalReason = err.Error()
 			}
 			failed++
 			fmt.Printf("[X] %s: %s\n", filepath.Base(path), err)
@@ -661,7 +659,7 @@ func doChunkedUpload(client *HTTPClient, session *AuthSession, params *ChunkedUp
 
 	initResp, err := client.makeRequestWithSession("POST", "/api/uploads/init", initPayload, session)
 	if err != nil {
-		return "", fmt.Errorf("failed to initialize upload: %w", err)
+		return "", notStarted(fmt.Errorf("failed to initialize upload: %w", err))
 	}
 
 	uploadID, ok := initResp.Data["session_id"].(string)
@@ -777,8 +775,8 @@ func uploadChunk(client *HTTPClient, session *AuthSession, uploadID string, chun
 		defer resp.Body.Close()
 
 		if resp.StatusCode == http.StatusUnauthorized {
-			if refreshErr := ensureFreshSessionToken(client, session, 0); refreshErr != nil {
-				return errAuthExpired
+			if refreshErr := refreshAfterUnauthorized(client, session, resp.Body); refreshErr != nil {
+				return refreshErr
 			}
 			req2, err2 := http.NewRequest("POST", url, bytes.NewReader(data))
 			if err2 != nil {
@@ -794,7 +792,7 @@ func uploadChunk(client *HTTPClient, session *AuthSession, uploadID string, chun
 			}
 			defer resp2.Body.Close()
 			if resp2.StatusCode == http.StatusUnauthorized {
-				return errAuthExpired
+				return unauthorizedTransferError(session, resp2.Body)
 			}
 			if resp2.StatusCode != http.StatusOK && resp2.StatusCode != http.StatusCreated {
 				body, _ := io.ReadAll(resp2.Body)
@@ -1023,6 +1021,10 @@ func downloadOwnerFilesBatch(client *HTTPClient, config *ClientConfig, session *
 		"Batch download finished. Account succeeded: %d. Custom succeeded: %d. Unresolved failures: %d. Skipped: %d.\n",
 		totals.AccountOK, totals.CustomOK, totals.Unresolved, totals.Skipped,
 	)
+	if totals.SessionEnded != "" {
+		fmt.Printf("Aborted: %s\n", totals.SessionEnded)
+		return fmt.Errorf("batch download stopped because the session ended")
+	}
 	if totals.Cancelled {
 		return fmt.Errorf("batch download cancelled")
 	}
@@ -1050,6 +1052,8 @@ type batchDownloadTotals struct {
 	Skipped      int
 	Cancelled    bool
 	LastFailures []batchFileOutcome
+	// SessionEnded is the summary line when the server ended the login.
+	SessionEnded string
 }
 
 // runOwnerDownloadBatch downloads account-password files first and
@@ -1079,6 +1083,9 @@ func runOwnerDownloadBatch(ctx context.Context, pending []batchPendingFile, ops 
 		var accountOK, accountFail, customOK, customFail []batchFileOutcome
 		var skipped []batchFileOutcome
 		abortRound := false
+		priorSucceeded := func() bool {
+			return totals.AccountOK+totals.CustomOK+len(accountOK)+len(customOK) > 0
+		}
 
 		for i, p := range accountFirst {
 			if err := ctx.Err(); err != nil {
@@ -1100,6 +1107,10 @@ func runOwnerDownloadBatch(ctx context.Context, pending []batchPendingFile, ops 
 				if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 					reason = "cancelled"
 					abortRound = true
+				} else if errors.Is(err, errAuthExpired) {
+					reason = "session_ended"
+					abortRound = true
+					totals.SessionEnded = batchSessionEndedSummary(err, "downloaded", priorSucceeded(), len(accountFirst)-i-1+len(customLast))
 				}
 				accountFail = append(accountFail, batchFileOutcome{
 					FileID: p.FileID, Filename: p.Filename, PasswordType: "account", Reason: reason,
@@ -1108,12 +1119,12 @@ func runOwnerDownloadBatch(ctx context.Context, pending []batchPendingFile, ops 
 				if abortRound {
 					for _, rest := range accountFirst[i+1:] {
 						skipped = append(skipped, batchFileOutcome{
-							FileID: rest.FileID, Filename: rest.Filename, PasswordType: rest.PasswordType, Reason: "cancelled",
+							FileID: rest.FileID, Filename: rest.Filename, PasswordType: rest.PasswordType, Reason: reason,
 						})
 					}
 					for _, rest := range customLast {
 						skipped = append(skipped, batchFileOutcome{
-							FileID: rest.FileID, Filename: rest.Filename, PasswordType: rest.PasswordType, Reason: "cancelled",
+							FileID: rest.FileID, Filename: rest.Filename, PasswordType: rest.PasswordType, Reason: reason,
 						})
 					}
 					break
@@ -1186,6 +1197,12 @@ func runOwnerDownloadBatch(ctx context.Context, pending []batchPendingFile, ops 
 						abortRound = true
 						break
 					}
+					if errors.Is(derr, errAuthExpired) {
+						lastReason = "session_ended"
+						abortRound = true
+						totals.SessionEnded = batchSessionEndedSummary(derr, "downloaded", priorSucceeded(), len(customLast)-i-1)
+						break
+					}
 					if strings.Contains(derr.Error(), "wrong password") || strings.Contains(derr.Error(), "unwrap FEK") {
 						lastReason = "wrong_custom_password"
 						fmt.Fprintf(os.Stderr, "[!] %s: wrong custom password (attempt %d/%d)\n", displayName, attempt, MaxBatchCustomPasswordAttempts)
@@ -1205,10 +1222,10 @@ func runOwnerDownloadBatch(ctx context.Context, pending []batchPendingFile, ops 
 					customFail = append(customFail, batchFileOutcome{
 						FileID: p.FileID, Filename: p.Filename, PasswordType: "custom", Reason: lastReason,
 					})
-					if lastReason == "cancelled" {
+					if lastReason == "cancelled" || lastReason == "session_ended" {
 						for _, rest := range customLast[i+1:] {
 							skipped = append(skipped, batchFileOutcome{
-								FileID: rest.FileID, Filename: rest.Filename, PasswordType: rest.PasswordType, Reason: "cancelled",
+								FileID: rest.FileID, Filename: rest.Filename, PasswordType: rest.PasswordType, Reason: lastReason,
 							})
 						}
 						break
@@ -1235,7 +1252,7 @@ func runOwnerDownloadBatch(ctx context.Context, pending []batchPendingFile, ops 
 		failedOnly := append(append([]batchPendingFile(nil), batchOutcomesToPending(accountFail, pendingByID)...), batchOutcomesToPending(customFail, pendingByID)...)
 		work = failedOnly
 
-		if abortRound {
+		if abortRound && totals.SessionEnded == "" {
 			totals.Cancelled = true
 		}
 		if abortRound || len(work) == 0 || round >= MaxBatchDownloadRounds {
@@ -1277,14 +1294,35 @@ func batchOutcomesToPending(outcomes []batchFileOutcome, pendingByID map[string]
 }
 
 func fetchOwnerFileMeta(ctx context.Context, client *HTTPClient, session *AuthSession, fileID string) (*ServerFileInfo, error) {
-	metaReq, err := http.NewRequestWithContext(ctx, "GET", client.baseURL+"/api/files/"+fileID+"/meta", nil)
+	if err := ensureFreshSessionToken(client, session, jwtRefreshThreshold); err != nil {
+		return nil, err
+	}
+	doMeta := func() (*http.Response, error) {
+		metaReq, err := http.NewRequestWithContext(ctx, "GET", client.baseURL+"/api/files/"+fileID+"/meta", nil)
+		if err != nil {
+			return nil, err
+		}
+		metaReq.Header.Set("Authorization", "Bearer "+session.AccessToken)
+		return client.client.Do(metaReq)
+	}
+	metaResp, err := doMeta()
 	if err != nil {
 		return nil, err
 	}
-	metaReq.Header.Set("Authorization", "Bearer "+session.AccessToken)
-	metaResp, err := client.client.Do(metaReq)
-	if err != nil {
-		return nil, err
+	if metaResp.StatusCode == http.StatusUnauthorized {
+		refreshErr := refreshAfterUnauthorized(client, session, metaResp.Body)
+		metaResp.Body.Close()
+		if refreshErr != nil {
+			return nil, refreshErr
+		}
+		if metaResp, err = doMeta(); err != nil {
+			return nil, err
+		}
+		if metaResp.StatusCode == http.StatusUnauthorized {
+			unauthorizedErr := unauthorizedTransferError(session, metaResp.Body)
+			metaResp.Body.Close()
+			return nil, unauthorizedErr
+		}
 	}
 	defer metaResp.Body.Close()
 	if metaResp.StatusCode != http.StatusOK {
@@ -1309,7 +1347,7 @@ func downloadOneOwnerFile(
 ) error {
 	fileMeta, err := fetchOwnerFileMeta(ctx, client, session, fileID)
 	if err != nil {
-		return fmt.Errorf("failed to fetch file metadata: %w", err)
+		return notStarted(fmt.Errorf("failed to fetch file metadata: %w", err))
 	}
 
 	ownerUsername := fileMeta.OwnerUsername
@@ -1481,8 +1519,8 @@ func doChunkedDownload(ctx context.Context, client *HTTPClient, session *AuthSes
 			defer chunkResp.Body.Close()
 
 			if chunkResp.StatusCode == http.StatusUnauthorized {
-				if refreshErr := ensureFreshSessionToken(client, session, 0); refreshErr != nil {
-					return errAuthExpired
+				if refreshErr := refreshAfterUnauthorized(client, session, chunkResp.Body); refreshErr != nil {
+					return refreshErr
 				}
 				chunkReq2, err2 := http.NewRequestWithContext(ctx, "GET", chunkURL, nil)
 				if err2 != nil {
@@ -1495,7 +1533,7 @@ func doChunkedDownload(ctx context.Context, client *HTTPClient, session *AuthSes
 				}
 				defer chunkResp2.Body.Close()
 				if chunkResp2.StatusCode == http.StatusUnauthorized {
-					return errAuthExpired
+					return unauthorizedTransferError(session, chunkResp2.Body)
 				}
 				if chunkResp2.StatusCode != http.StatusOK {
 					return &httpStatusError{Status: chunkResp2.StatusCode, Body: fmt.Sprintf("chunk %d", i)}

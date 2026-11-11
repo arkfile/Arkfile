@@ -190,30 +190,6 @@ func effectiveLastUserActivity(familyID string, persisted time.Time) time.Time {
 	return persisted
 }
 
-func CheckSessionFamily(db *sql.DB, familyID string, now time.Time) (*SessionFamily, error) {
-	family, err := GetSessionFamily(db, familyID)
-	if err != nil {
-		return nil, err
-	}
-	if family.EndedAt != nil {
-		return family, sessionErrorForReason(family.EndedReason)
-	}
-
-	lastActivity := effectiveLastUserActivity(familyID, family.LastUserActivity)
-	if !now.Before(lastActivity.Add(SessionIdleLimit)) {
-		reason, endedNow, endErr := endSessionFamily(db, familyID, SessionEndReasonIdle, now)
-		if endErr != nil {
-			return nil, endErr
-		}
-		family.EndedReason = reason
-		family.EndedAt = &now
-		family.EndedNow = endedNow
-		return family, sessionErrorForReason(reason)
-	}
-
-	return family, nil
-}
-
 func RecordSessionActivity(db *sql.DB, familyID string, now time.Time) error {
 	sessionActivityCache.Lock()
 	previous := sessionActivityCache.entries[familyID]

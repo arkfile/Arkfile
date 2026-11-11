@@ -174,6 +174,7 @@ func main() {
 	}
 
 	client := newHTTPClient(adminConfig.ServerURL, adminConfig.TLSInsecure, adminConfig.TLSMinVersion, verbose)
+	client.sessionFile = adminConfig.TokenFile
 
 	// Parse command
 	command := flag.Arg(0)

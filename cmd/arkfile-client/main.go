@@ -608,15 +608,35 @@ func decodeJSONResponse(resp *http.Response, target interface{}) error {
 	return json.Unmarshal(data, target)
 }
 
-// requireSession loads and validates the current auth session.
-// Returns a clear error message if not logged in.
+// requireSession loads the current auth session and refreshes an access token
+// that has expired or is about to. The server's idle and 24-hour limits decide
+// whether the login may continue. Without a server URL (local diagnostics) an
+// expired access token is refused instead.
 func requireSession(config *ClientConfig) (*AuthSession, error) {
 	session, err := loadAuthSession(config.TokenFile)
 	if err != nil {
 		return nil, fmt.Errorf("not logged in. Please run: arkfile-client login --username <user>")
 	}
-	if time.Now().After(session.ExpiresAt) {
-		return nil, fmt.Errorf("session expired. Please run: arkfile-client login --username <user>")
+	if time.Until(session.ExpiresAt) >= jwtRefreshThreshold {
+		return session, nil
+	}
+	expired := time.Now().After(session.ExpiresAt)
+	if config.ServerURL == "" || session.RefreshToken == "" {
+		if expired {
+			return nil, fmt.Errorf("session expired. Please run: arkfile-client login --username <user>")
+		}
+		return session, nil
+	}
+
+	client := newHTTPClient(config.ServerURL, config.TLSInsecure, config.TimeoutSecs, verbose)
+	if refreshErr := refreshSessionToken(client, session); refreshErr != nil {
+		if errors.Is(refreshErr, errSessionIdle) || errors.Is(refreshErr, errSessionAbsolute) {
+			return nil, refreshErr
+		}
+		if expired {
+			return nil, fmt.Errorf("session expired. Please run: arkfile-client login --username <user>")
+		}
+		logVerbose("Access token refresh failed; continuing with the current token: %v", refreshErr)
 	}
 	return session, nil
 }
@@ -1599,6 +1619,30 @@ func refreshSessionToken(client *HTTPClient, session *AuthSession) error {
 		return errAuthExpired
 	}
 
+	sessionPath := getSessionFilePath()
+	unlock, lockErr := lockSessionFile(sessionPath)
+	if lockErr != nil {
+		logVerbose("Warning: could not lock session file for refresh: %v", lockErr)
+	} else {
+		defer unlock()
+	}
+
+	// Another arkfile-client process may have rotated this login while this
+	// one waited for the lock. Presenting the superseded refresh token would
+	// look like token reuse and revoke every device for the account, so adopt
+	// the stored tokens instead.
+	if stored, loadErr := loadAuthSession(sessionPath); loadErr == nil &&
+		stored.Username == session.Username &&
+		stored.RefreshToken != "" &&
+		stored.RefreshToken != session.RefreshToken {
+		session.AccessToken = stored.AccessToken
+		session.RefreshToken = stored.RefreshToken
+		session.ExpiresAt = stored.ExpiresAt
+		if time.Until(stored.ExpiresAt) > jwtRefreshThreshold {
+			return nil
+		}
+	}
+
 	// Empty token argument: the refresh endpoint authenticates via the
 	// refresh_token in the body, not the Authorization header.
 	resp, err := client.makeRequest("POST", "/api/refresh", map[string]string{
@@ -1629,6 +1673,7 @@ func refreshSessionToken(client *HTTPClient, session *AuthSession) error {
 	// Mutate the in-memory session before persisting. If the persist
 	// step fails we still keep the in-memory session usable for the
 	// remainder of this process, but we surface the error.
+	previousAccessToken := session.AccessToken
 	session.AccessToken = newToken
 	if newRefresh != "" {
 		session.RefreshToken = newRefresh
@@ -1636,14 +1681,132 @@ func refreshSessionToken(client *HTTPClient, session *AuthSession) error {
 	if !newExpiry.IsZero() {
 		session.ExpiresAt = newExpiry
 	}
+	rebindAgentSession(previousAccessToken, newToken)
 
-	if err := atomicSaveAuthSession(session, getSessionFilePath()); err != nil {
+	if err := atomicSaveAuthSession(session, sessionPath); err != nil {
 		// Log but do not fail the upload: the in-memory tokens are
 		// fresh and the next call will succeed. Persistence will
 		// retry on the next refresh.
 		logVerbose("Warning: failed to persist rotated session file: %v", err)
 	}
 	return nil
+}
+
+// transferNotStartedError marks a failure that happened before any bytes of
+// the current file moved, such as upload init or download metadata.
+type transferNotStartedError struct {
+	err error
+}
+
+func (e transferNotStartedError) Error() string { return e.err.Error() }
+func (e transferNotStartedError) Unwrap() error { return e.err }
+
+func notStarted(err error) error {
+	if err == nil {
+		return nil
+	}
+	return transferNotStartedError{err: err}
+}
+
+// batchSessionEndedSummary returns the batch notice for a server-ended login,
+// or "" when err is not a session-ended error. verb is "uploaded",
+// "downloaded", or "exported". filesAfterCurrent counts queued files after
+// the file that failed. The notice never contains filenames.
+func batchSessionEndedSummary(err error, verb string, priorSucceeded bool, filesAfterCurrent int) string {
+	var parts []string
+	switch {
+	case errors.Is(err, errSessionAbsolute):
+		parts = append(parts, "session ended 24 hours after login.")
+	case errors.Is(err, errSessionIdle):
+		parts = append(parts, "session ended after 6 hours without activity.")
+	default:
+		return ""
+	}
+
+	var notStartedErr transferNotStartedError
+	if errors.As(err, &notStartedErr) {
+		queued := filesAfterCurrent + 1
+		if priorSucceeded {
+			parts = append(parts, "The file in progress finished.", queueSentence(queued, verb, true))
+		} else {
+			parts = append(parts, queueSentence(queued, verb, false))
+		}
+	} else {
+		parts = append(parts, "The file in progress did not finish.")
+		if filesAfterCurrent > 0 {
+			parts = append(parts, queueSentence(filesAfterCurrent, "started", true))
+		}
+	}
+	parts = append(parts, "Please run: arkfile-client login --username <user>")
+	return strings.Join(parts, " ")
+}
+
+func queueSentence(count int, verb string, other bool) string {
+	noun := "files in the queue"
+	single := "file in the queue"
+	if other {
+		noun = "other " + noun
+		single = "other " + single
+	}
+	if count == 1 {
+		return fmt.Sprintf("1 %s was not %s.", single, verb)
+	}
+	return fmt.Sprintf("%d %s were not %s.", count, noun, verb)
+}
+
+// unauthorizedTransferError classifies an HTTP 401 on a raw transfer request.
+// A body carrying session_idle or session_absolute clears local session state
+// and returns the typed error; anything else returns errAuthExpired.
+func unauthorizedTransferError(session *AuthSession, body io.Reader) error {
+	raw, _ := io.ReadAll(io.LimitReader(body, 4096))
+	var parsed struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(raw, &parsed) == nil {
+		switch parsed.Error {
+		case "session_idle":
+			clearExpiredLocalSession(session)
+			return errSessionIdle
+		case "session_absolute":
+			clearExpiredLocalSession(session)
+			return errSessionAbsolute
+		}
+	}
+	return errAuthExpired
+}
+
+// refreshAfterUnauthorized handles the first 401 on a raw transfer request.
+// It returns nil when a fresh access token is ready for one retry.
+func refreshAfterUnauthorized(client *HTTPClient, session *AuthSession, body io.Reader) error {
+	if endedErr := unauthorizedTransferError(session, body); endedErr != errAuthExpired {
+		return endedErr
+	}
+	if refreshErr := refreshSessionToken(client, session); refreshErr != nil {
+		if errors.Is(refreshErr, errAuthExpired) {
+			return refreshErr
+		}
+		return fmt.Errorf("%w: %v", errAuthExpired, refreshErr)
+	}
+	return nil
+}
+
+// rebindAgentSession moves the agent's cached Account Key and digest cache to
+// the rotated access token. Without it the next agent request presents an
+// unknown token hash and the agent wipes the key.
+func rebindAgentSession(oldAccessToken, newAccessToken string) {
+	if oldAccessToken == "" || oldAccessToken == newAccessToken {
+		return
+	}
+	agentClient, err := NewAgentClient()
+	if err != nil {
+		return
+	}
+	if err := agentClient.Ping(); err != nil {
+		return
+	}
+	if err := agentClient.RebindSession(oldAccessToken, newAccessToken); err != nil {
+		logVerbose("Agent session not rebound after refresh: %v", err)
+	}
 }
 
 // atomicSaveAuthSession writes the session JSON to a sibling temp file

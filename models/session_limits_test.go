@@ -94,6 +94,46 @@ func TestAdminSessionEndsAtSixtyMinutes(t *testing.T) {
 	assert.True(t, ended.SessionEndedNow)
 }
 
+func TestAdminSessionEndsAfterFifteenIdleMinutes(t *testing.T) {
+	db := setupTestDB_RefreshToken(t)
+	defer db.Close()
+
+	session, err := CreateRefreshSession(db, "admin-idle-user", LoginKindAdmin)
+	require.NoError(t, err)
+	require.NoError(t, ShiftSessionFamilyClocks(db, session.FamilyID, time.Now(), AdminIdleLimit+time.Minute, 0))
+
+	ended, err := ValidateRefreshSessionUse(db, session.RefreshToken, SessionUse{DirectLocal: true})
+	require.ErrorIs(t, err, ErrSessionIdle)
+	assert.True(t, ended.SessionEndedNow)
+	assert.Equal(t, LoginKindAdmin, ended.LoginKind)
+}
+
+func TestAdminSessionInsideIdleWindowStaysOpen(t *testing.T) {
+	db := setupTestDB_RefreshToken(t)
+	defer db.Close()
+
+	session, err := CreateRefreshSession(db, "admin-active-user", LoginKindAdmin)
+	require.NoError(t, err)
+	now := time.Now()
+	require.NoError(t, ShiftSessionFamilyClocks(db, session.FamilyID, now, AdminIdleLimit-time.Minute, 0))
+
+	_, err = DecideSessionUse(db, session.FamilyID, now, SessionUse{})
+	require.NoError(t, err)
+}
+
+func TestNormalSessionKeepsSixHourIdleLimit(t *testing.T) {
+	db := setupTestDB_RefreshToken(t)
+	defer db.Close()
+
+	session, err := CreateRefreshSession(db, "normal-idle-user", "")
+	require.NoError(t, err)
+	now := time.Now()
+	require.NoError(t, ShiftSessionFamilyClocks(db, session.FamilyID, now, AdminIdleLimit+time.Minute, 0))
+
+	_, err = DecideSessionUse(db, session.FamilyID, now, SessionUse{})
+	require.NoError(t, err)
+}
+
 func TestAdminRefreshRefusedWhenNotLocal(t *testing.T) {
 	db := setupTestDB_RefreshToken(t)
 	defer db.Close()

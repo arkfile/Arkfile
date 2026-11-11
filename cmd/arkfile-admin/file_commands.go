@@ -67,7 +67,12 @@ EXAMPLES:
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if resp.StatusCode == http.StatusUnauthorized {
+			if endedErr := client.sessionEnded(readSessionEndedCode(body)); endedErr != nil {
+				return endedErr
+			}
+		}
 		return fmt.Errorf("export failed (HTTP %d): %s", resp.StatusCode, string(body))
 	}
 

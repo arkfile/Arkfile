@@ -271,6 +271,151 @@ func TestReregisterResponse_RejectsUnflaggedAccount(t *testing.T) {
 	assert.Equal(t, CodeReregistrationTokenInvalid, resp["error"])
 }
 
+func insertReregAdmin(t *testing.T, db *sql.DB, username string, flagged bool) {
+	t.Helper()
+	_, err := db.Exec(
+		`INSERT INTO users (username, is_approved, is_admin, requires_reregistration) VALUES (?, 1, 1, ?)`,
+		username, flagged,
+	)
+	require.NoError(t, err)
+}
+
+func reregCeremonyContext(path string, body interface{}, claims *auth.Claims) (echo.Context, *httptest.ResponseRecorder) {
+	e := echo.New()
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(raw))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("user", &jwt.Token{Claims: claims})
+	return c, rec
+}
+
+func reregErrorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	code, _ := resp["error"].(string)
+	return code
+}
+
+func TestAdminReregister_RefusesUnmarkedHandoffToken(t *testing.T) {
+	db := setupReregDB(t)
+	const admin = "flaggedadm1"
+	insertReregAdmin(t, db, admin, true)
+
+	cases := []struct {
+		name    string
+		path    string
+		body    interface{}
+		handler echo.HandlerFunc
+	}{
+		{"response", "/api/admin/reregister/response", map[string]string{"registration_request": "AAAA"}, AdminReregisterResponse},
+		{"finalize", "/api/admin/reregister/finalize", map[string]string{"session_id": "sid", "registration_record": "AAAA"}, AdminReregisterFinalize},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, rec := reregCeremonyContext(tc.path, tc.body, &auth.Claims{Username: admin})
+			require.NoError(t, tc.handler(c))
+			assert.Equal(t, http.StatusForbidden, rec.Code)
+			assert.Equal(t, CodeReregistrationTokenInvalid, reregErrorCode(t, rec))
+		})
+	}
+
+	var flag bool
+	require.NoError(t, db.QueryRow(`SELECT requires_reregistration FROM users WHERE username = ?`, admin).Scan(&flag))
+	assert.True(t, flag, "a refused ceremony must leave the flag set")
+}
+
+func TestAdminReregister_RefusesMarkedTokenForNonAdmin(t *testing.T) {
+	db := setupReregDB(t)
+	const user = "plainuser01"
+	_, err := db.Exec(`INSERT INTO users (username, is_approved, requires_reregistration) VALUES (?, 1, 1)`, user)
+	require.NoError(t, err)
+
+	c, rec := reregCeremonyContext(
+		"/api/admin/reregister/response",
+		map[string]string{"registration_request": "AAAA"},
+		&auth.Claims{Username: user, LoginKind: auth.LoginKindAdmin},
+	)
+	require.NoError(t, AdminReregisterResponse(c))
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Equal(t, CodeReregistrationTokenInvalid, reregErrorCode(t, rec))
+}
+
+func TestAdminReregister_MarkedTokenPassesGuard(t *testing.T) {
+	db := setupReregDB(t)
+	const admin = "unflagged-adm"
+	insertReregAdmin(t, db, admin, false)
+
+	c, rec := reregCeremonyContext(
+		"/api/admin/reregister/response",
+		map[string]string{"registration_request": "AAAA"},
+		&auth.Claims{Username: admin, LoginKind: auth.LoginKindAdmin},
+	)
+	require.NoError(t, AdminReregisterResponse(c))
+	// The guard accepted the marked admin token; the flag check refuses next.
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	assert.Equal(t, CodeReregistrationTokenInvalid, reregErrorCode(t, rec))
+}
+
+func TestPublicReregister_RefusesAdminAccounts(t *testing.T) {
+	db := setupReregDB(t)
+	const admin = "flaggedadm2"
+	insertReregAdmin(t, db, admin, true)
+
+	cases := []struct {
+		name    string
+		path    string
+		body    interface{}
+		handler echo.HandlerFunc
+	}{
+		{"response", "/api/opaque/reregister/response", map[string]string{"registration_request": "AAAA"}, ReregisterResponse},
+		{"finalize", "/api/opaque/reregister/finalize", map[string]string{"session_id": "sid", "registration_record": "AAAA"}, ReregisterFinalize},
+	}
+	for _, tc := range cases {
+		for _, loginKind := range []string{"", auth.LoginKindAdmin} {
+			t.Run(tc.name+"/"+loginKind, func(t *testing.T) {
+				c, rec := reregCeremonyContext(tc.path, tc.body, &auth.Claims{Username: admin, LoginKind: loginKind})
+				require.NoError(t, tc.handler(c))
+				assert.Equal(t, http.StatusForbidden, rec.Code)
+			})
+		}
+	}
+
+	var opaqueCount int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM opaque_user_data WHERE username = ?`, admin).Scan(&opaqueCount))
+	assert.Equal(t, 0, opaqueCount, "no OPAQUE record may be written for a refused admin")
+}
+
+func TestRespondAccountRequiresReregistration_AdminTokenIsMarked(t *testing.T) {
+	db := setupReregDB(t)
+	const admin = "flaggedadm3"
+	insertReregAdmin(t, db, admin, true)
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/login/response", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	require.NoError(t, respondAccountRequiresReregistration(c, admin, auth.LoginKindAdmin))
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	for _, cookie := range rec.Result().Cookies() {
+		assert.True(t, cookie.MaxAge < 0 || cookie.Value == "", "marked admin handoff must not set cookie %s", cookie.Name)
+	}
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	data := resp["data"].(map[string]interface{})
+	tokenString, _ := data["reregistration_token"].(string)
+	require.NotEmpty(t, tokenString)
+	claims := &auth.Claims{}
+	_, _, err := jwt.NewParser().ParseUnverified(tokenString, claims)
+	require.NoError(t, err)
+	assert.Equal(t, auth.LoginKindAdmin, claims.LoginKind)
+	assert.Equal(t, admin, claims.Username)
+}
+
 func TestReregisterFinalize_RejectsUnflaggedAccount(t *testing.T) {
 	db := setupReregDB(t)
 	const target = "unflagged2"

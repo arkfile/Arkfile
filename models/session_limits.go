@@ -13,6 +13,7 @@ const (
 	SessionGraceExtra    = 12 * time.Hour
 	SessionHardCeiling   = SessionAbsoluteLimit + SessionGraceExtra
 	AdminSessionLimit    = 60 * time.Minute
+	AdminIdleLimit       = 15 * time.Minute
 	GraceQuietTimeout    = 30 * time.Minute
 
 	GraceKindUpload = "upload_session"
@@ -46,6 +47,13 @@ func SessionAbsoluteExpiry(started time.Time, loginKind string) time.Time {
 		return started.Add(AdminSessionLimit)
 	}
 	return started.Add(SessionAbsoluteLimit)
+}
+
+func SessionIdleLimitFor(loginKind string) time.Duration {
+	if loginKind == LoginKindAdmin {
+		return AdminIdleLimit
+	}
+	return SessionIdleLimit
 }
 
 func SessionRefreshCeiling(started time.Time, loginKind string) time.Time {
@@ -106,7 +114,7 @@ func DecideSessionUse(db *sql.DB, familyID string, now time.Time, use SessionUse
 	}
 
 	lastActivity := effectiveLastUserActivity(familyID, family.LastUserActivity)
-	if !now.Before(lastActivity.Add(SessionIdleLimit)) {
+	if !now.Before(lastActivity.Add(SessionIdleLimitFor(family.LoginKind))) {
 		reason, endedNow, endErr := endSessionFamily(db, familyID, SessionEndReasonIdle, now)
 		if endErr != nil {
 			return nil, endErr

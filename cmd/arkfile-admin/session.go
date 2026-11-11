@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,7 +15,35 @@ const (
 	adminNotLoggedInMsg    = "not logged in as admin (use 'arkfile-admin login' first)"
 	adminSessionExpiredMsg = "admin session expired, please login again"
 	adminSessionEndedMsg   = "admin session ended 60 minutes after login, please login again"
+	adminSessionIdleMsg    = "admin session ended after 15 minutes without activity, please login again"
+	adminLoggedOutMsg      = "admin session was logged out, please login again"
 )
+
+// adminSessionEndedError maps a server session code to the admin notice.
+// ok is false when code is not a session-ended code.
+func adminSessionEndedError(code string) (err error, ok bool) {
+	switch code {
+	case "session_idle":
+		return errors.New(adminSessionIdleMsg), true
+	case "session_absolute":
+		return errors.New(adminSessionEndedMsg), true
+	case "session_logged_out":
+		return errors.New(adminLoggedOutMsg), true
+	default:
+		return nil, false
+	}
+}
+
+// readSessionEndedCode returns the JSON error code from a refused response body.
+func readSessionEndedCode(body []byte) string {
+	var parsed struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &parsed) != nil {
+		return ""
+	}
+	return parsed.Error
+}
 
 // AdminConfig holds configuration for the admin client.
 type AdminConfig struct {
@@ -153,8 +182,10 @@ func refreshAdminSession(client *HTTPClient, session *AdminSession, filePath str
 	}, "")
 	if err != nil {
 		_ = os.Remove(filePath)
-		if resp != nil && (resp.Error == "session_absolute" || resp.Error == "session_idle") {
-			return fmt.Errorf(adminSessionEndedMsg)
+		if resp != nil {
+			if endedErr, ok := adminSessionEndedError(resp.Error); ok {
+				return endedErr
+			}
 		}
 		return fmt.Errorf("%s: %v", adminSessionEndedMsg, err)
 	}

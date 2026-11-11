@@ -2,10 +2,16 @@
  * Unit Tests -- Export selected (export-batch.ts) and directory publishing.
  */
 
-import './setup';
-import { describe, test, expect, afterEach } from 'bun:test';
+import { resetMocks } from './setup';
+import { describe, test, expect, afterEach, beforeEach } from 'bun:test';
 import { runExportBatch, type ExportBatchEnvironment, type ExportBatchTarget } from '../files/export-batch';
 import { writeToDirectoryEntry } from '../files/directory-publish';
+import { AuthManager } from '../utils/auth';
+
+beforeEach(() => {
+  resetMocks();
+  AuthManager.clearAllSessionData();
+});
 
 function namedError(name: string): Error {
   return Object.assign(new Error(name), { name });
@@ -335,6 +341,52 @@ describe('runExportBatch', () => {
       ['id-b', 'auth_expired'],
       ['id-c', 'auth_expired'],
     ]);
+  });
+
+  test('24-hour cap stores a notice counting the files not exported', async () => {
+    const dir = new FakeDirectory();
+    let calls = 0;
+    await runExportBatch(
+      [...twoPhotos, { file_id: 'id-c', filename: 'c' }],
+      makeEnv(
+        {
+          dir,
+          ensureAuth: async () => {
+            calls += 1;
+            if (calls === 2) {
+              throw Object.assign(new Error('auth_expired'), { code: 'session_absolute' });
+            }
+          },
+        },
+        newLog(),
+      ),
+    );
+    const notice = AuthManager.consumeSessionNotice();
+    expect(notice).toContain('The export in progress finished.');
+    expect(notice).toContain('2 other files in the queue were not exported.');
+    expect(notice).not.toContain('photo.png');
+  });
+
+  test('native export notice counts only files not handed to the browser', async () => {
+    let calls = 0;
+    await runExportBatch(
+      [...twoPhotos, { file_id: 'id-c', filename: 'c' }],
+      makeEnv(
+        {
+          dir: 'unavailable',
+          ensureAuth: async () => {
+            calls += 1;
+            if (calls === 3) {
+              throw Object.assign(new Error('auth_expired'), { code: 'session_absolute' });
+            }
+          },
+        },
+        newLog(),
+      ),
+    );
+    expect(AuthManager.consumeSessionNotice()).toBe(
+      'Your session ended 24 hours after you signed in. 1 selected file was not started. Please log in again.',
+    );
   });
 
   test('large selections confirm after the folder is chosen and can be declined', async () => {

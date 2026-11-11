@@ -989,6 +989,11 @@ func CompleteUpload(c echo.Context) error {
 	if ownerUsername != username {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized for this upload session")
 	}
+	if status == "completed" && fileID.Valid {
+		if handled, replayErr := replayCompletedUpload(c, username, fileID.String); handled {
+			return replayErr
+		}
+	}
 	if status != "in_progress" {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Upload session is %s, not in progress", status))
 	}
@@ -1198,6 +1203,45 @@ func CompleteUpload(c echo.Context) error {
 		"file_id":                 fileID.String,
 		"storage_id":              storageID.String,
 		"encrypted_stream_sha256": serverCalculatedHash,
+		"storage": map[string]interface{}{
+			"total_bytes":     user.TotalStorageBytes,
+			"limit_bytes":     user.StorageLimitBytes,
+			"available_bytes": user.StorageLimitBytes - user.TotalStorageBytes,
+		},
+	})
+}
+
+// replayCompletedUpload answers a repeated complete for an upload that already
+// finished, so a client whose first response was lost does not report failure.
+// It reads the stored result and performs no storage, accounting, or
+// replication work. handled is false when no stored file exists for the owner.
+func replayCompletedUpload(c echo.Context, username, fileID string) (handled bool, err error) {
+	var storageID string
+	var streamHash sql.NullString
+	queryErr := database.DB.QueryRow(
+		`SELECT storage_id, encrypted_stream_sha256sum FROM file_metadata WHERE file_id = ? AND owner_username = ?`,
+		fileID, username,
+	).Scan(&storageID, &streamHash)
+	if queryErr == sql.ErrNoRows {
+		return false, nil
+	}
+	if queryErr != nil {
+		logging.ErrorLogger.Printf("CompleteUpload replay: failed to read file %s: %v", fileID, queryErr)
+		return true, echo.NewHTTPError(http.StatusInternalServerError, "Failed to read completed upload")
+	}
+
+	user, userErr := models.GetUserByUsername(database.DB, username)
+	if userErr != nil {
+		logging.ErrorLogger.Printf("CompleteUpload replay: failed to load user: %v", userErr)
+		return true, echo.NewHTTPError(http.StatusInternalServerError, "Failed to read completed upload")
+	}
+
+	logging.InfoLogger.Printf("CompleteUpload replay for completed file_id: %s", fileID)
+	return true, c.JSON(http.StatusOK, map[string]interface{}{
+		"message":                 "File uploaded successfully",
+		"file_id":                 fileID,
+		"storage_id":              storageID,
+		"encrypted_stream_sha256": streamHash.String,
 		"storage": map[string]interface{}{
 			"total_bytes":     user.TotalStorageBytes,
 			"limit_bytes":     user.StorageLimitBytes,

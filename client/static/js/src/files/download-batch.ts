@@ -10,7 +10,7 @@
  * supplies the browser implementation.
  */
 
-import { absoluteBatchNotice, isAuthenticated, refreshToken, replaceSessionNotice } from '../utils/auth.js';
+import { batchSessionEndCode, isAuthenticated, noteAbsoluteBatchEnd, refreshToken } from '../utils/auth.js';
 import { showError, showSuccess, showWarning } from '../ui/messages.js';
 import { showProgress, updateProgress, hideProgress } from '../ui/progress.js';
 import { showPasswordPrompt, hidePasswordPrompt } from '../ui/password-modal.js';
@@ -217,6 +217,15 @@ export function classifyDownloadError(err: unknown): BatchDownloadFailureReason 
   return msg || 'download_failed';
 }
 
+/** Like classifyDownloadError, but any failure after the session ended is auth_expired. */
+function classifyBatchDownloadError(err: unknown): BatchDownloadFailureReason {
+  const reason = classifyDownloadError(err);
+  if (reason !== 'cancelled' && batchSessionEndCode(err) !== null) {
+    return 'auth_expired';
+  }
+  return reason;
+}
+
 /**
  * Run the batch state machine over the given files. Account-password files go
  * first and custom-password files last in every round; only per-file failures
@@ -276,6 +285,13 @@ export async function runDownloadBatch(
     };
 
     let aborting = false;
+    // After the 24-hour cap the server lets the file in progress finish and
+    // refuses the next file's first request, so a refused file never started.
+    const batchEndOutcome = (): 'finished' | 'none' => {
+      const earlier = result.rounds.some((r) => r.accountSucceeded.length + r.customSucceeded.length > 0);
+      const now = summary.accountSucceeded.length + summary.customSucceeded.length > 0;
+      return earlier || now ? 'finished' : 'none';
+    };
 
     const markSkippedRest = (rest: BatchDownloadTarget[], reason: string) => {
       for (const file of rest) {
@@ -308,7 +324,7 @@ export async function runDownloadBatch(
           passwordType: 'account',
         });
       } catch (err) {
-        const reason = classifyDownloadError(err);
+        const reason = classifyBatchDownloadError(err);
         summary.accountFailed.push({
           fileId: file.file_id,
           filename: file.filename,
@@ -318,10 +334,7 @@ export async function runDownloadBatch(
         if (reason === 'auth_expired') {
           fatalAuth = true;
           aborting = true;
-          const queued = account.length - i - 1 + custom.length;
-          if ((err as { code?: string }).code === 'session_absolute') {
-            replaceSessionNotice(absoluteBatchNotice('download', false, queued));
-          }
+          noteAbsoluteBatchEnd(err, 'download', batchEndOutcome(), account.length - i + custom.length);
           markSkippedRest(account.slice(i + 1), 'skipped');
           markSkippedRest(custom, 'skipped');
           break;
@@ -383,9 +396,10 @@ export async function runDownloadBatch(
             succeeded = true;
             break;
           } catch (err) {
-            lastReason = classifyDownloadError(err);
+            lastReason = classifyBatchDownloadError(err);
             if (lastReason === 'auth_expired') {
               fatalAuth = true;
+              noteAbsoluteBatchEnd(err, 'download', batchEndOutcome(), custom.length - i);
               break;
             }
             if (lastReason === 'cancelled') {

@@ -317,6 +317,8 @@ func (a *Agent) handleConnection(conn net.Conn) {
 		a.handleAddDigest(conn, req.Params)
 	case "remove_digest":
 		a.handleRemoveDigest(conn, req.Params)
+	case "rebind_session":
+		a.handleRebindSession(conn, req.Params)
 	case "status":
 		a.handleStatus(conn)
 	case "clear":
@@ -326,6 +328,33 @@ func (a *Agent) handleConnection(conn net.Conn) {
 	default:
 		a.sendError(conn, fmt.Sprintf("unknown method: %s", req.Method))
 	}
+}
+
+// handleRebindSession moves the session binding to a rotated access token.
+// The caller proves the current binding with token_hash; the key, digest cache,
+// and TTL are unchanged. A wrong token_hash wipes everything, as on any
+// bound request.
+//
+// Expected params:
+//
+//	{
+//	  "token_hash":     "<sha256 hex of the previous access token>",
+//	  "new_token_hash": "<sha256 hex of the new access token>"
+//	}
+func (a *Agent) handleRebindSession(conn net.Conn, params map[string]interface{}) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	newTokenHash, _ := params["new_token_hash"].(string)
+	if len(newTokenHash) != sha256.Size*2 {
+		a.sendError(conn, "new_token_hash parameter required")
+		return
+	}
+	if !a.validateBoundSession(conn, params) {
+		return
+	}
+	a.keyEntry.tokenHash = newTokenHash
+	a.sendSuccess(conn, map[string]interface{}{"rebound": true})
 }
 
 // handlePing responds to ping requests
@@ -863,6 +892,25 @@ func (c *AgentClient) GetAccountKey(
 	}
 
 	return base64.StdEncoding.DecodeString(accountKeyB64)
+}
+
+// RebindSession moves the agent's session binding from oldAccessToken to
+// newAccessToken after a refresh, keeping the cached key and digests.
+func (c *AgentClient) RebindSession(oldAccessToken, newAccessToken string) error {
+	if oldAccessToken == "" || newAccessToken == "" {
+		return fmt.Errorf("access tokens required to rebind the agent session")
+	}
+	resp, err := c.sendRequest("rebind_session", map[string]interface{}{
+		"token_hash":     hashToken(oldAccessToken),
+		"new_token_hash": hashToken(newAccessToken),
+	})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return fmt.Errorf("rebind failed: %s", resp.Error)
+	}
+	return nil
 }
 
 // GetOfflineAccountKey retrieves the account key without session binding (offline decrypt-blob).

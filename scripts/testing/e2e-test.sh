@@ -82,7 +82,11 @@ SERVER_URL="${SERVER_URL:-https://localhost:8443}"
 # Binary locations: deploy client by default; optional --client-path for standalone builds.
 # Admin always stays on the deploy path. Reject /tmp clients (sticky world-writable dir).
 BUILD_DIR="/opt/arkfile/bin"
-ADMIN="$BUILD_DIR/arkfile-admin"
+ADMIN_BIN="$BUILD_DIR/arkfile-admin"
+# Admin commands go through admin_cli (defined below), which signs in again when
+# the server ends the admin session. Cases that test session ends call
+# "$ADMIN_BIN" directly so the retry cannot hide the result.
+ADMIN="admin_cli"
 
 if [ -n "$CLIENT_PATH_OVERRIDE" ]; then
     if [[ "$CLIENT_PATH_OVERRIDE" != /* ]]; then
@@ -111,8 +115,8 @@ else
     CLIENT="$BUILD_DIR/arkfile-client"
 fi
 
-if [ ! -x "$ADMIN" ]; then
-    echo "[X] arkfile-admin binary not found or not executable at $ADMIN"
+if [ ! -x "$ADMIN_BIN" ]; then
+    echo "[X] arkfile-admin binary not found or not executable at $ADMIN_BIN"
     echo "    Run 'sudo ./scripts/dev-reset.sh' to build and deploy first."
     exit 1
 fi
@@ -229,7 +233,7 @@ admin_login_with_totp() {
     }
     
     local out code
-    safe_exec out code bash -c "printf '%s\n' '$ADMIN_PASSWORD' | $ADMIN \
+    safe_exec out code bash -c "printf '%s\n' '$ADMIN_PASSWORD' | $ADMIN_BIN \
         --server-url '$SERVER_URL' \
         --tls-insecure \
         --username '$ADMIN_USERNAME' \
@@ -246,6 +250,32 @@ admin_login_with_totp() {
         printf '%s\n' "$out"
         record_test "$test_name" "FAIL"
     fi
+}
+
+# admin_cli runs arkfile-admin. A marked admin login ends after 15 minutes
+# without an admin request or 60 minutes after login. When a command reports
+# that, sign in again and retry it once so a long run does not fail late admin
+# steps. Commands that read stdin or manage the login itself are not retried.
+admin_cli() {
+    local errf out rc=0
+    errf=$(mktemp "$TEST_DATA_DIR/admin-stderr.XXXXXX")
+    out=$("$ADMIN_BIN" "$@" 2>"$errf") || rc=$?
+    if [ $rc -ne 0 ] && grep -q "admin session ended" "$errf"; then
+        case " $* " in
+            *" login "*|*" bootstrap "*|*" logout "*|*" setup-mfa "*|*" recover-mfa "*|*"--password-stdin"*) ;;
+            *)
+                admin_login_with_totp "Admin login after admin session end" >/dev/null
+                rc=0
+                out=$("$ADMIN_BIN" "$@" 2>"$errf") || rc=$?
+                ;;
+        esac
+    fi
+    if [ -n "$out" ]; then
+        printf '%s\n' "$out"
+    fi
+    cat "$errf" >&2
+    rm -f "$errf"
+    return $rc
 }
 
 user_login_with_totp() {
@@ -707,9 +737,9 @@ run_preflight() {
         record_test "arkfile-client available" "FAIL"
     fi
 
-    if [ -x "$ADMIN" ]; then
+    if [ -x "$ADMIN_BIN" ]; then
         record_test "arkfile-admin available" "PASS"
-        info "Using arkfile-admin from: $ADMIN"
+        info "Using arkfile-admin from: $ADMIN_BIN"
     else
         record_test "arkfile-admin available" "FAIL"
     fi
@@ -726,7 +756,7 @@ run_preflight() {
         record_test "arkfile-client version" "FAIL"
     fi
 
-    safe_exec admin_version_out admin_version_code "$ADMIN" version
+    safe_exec admin_version_out admin_version_code "$ADMIN_BIN" version
     if [ $admin_version_code -eq 0 ] && echo "$admin_version_out" | grep -Eq '^arkfile-admin .+'; then
         record_test "arkfile-admin version" "PASS"
         info "Admin version: $admin_version_out"
@@ -763,7 +793,7 @@ run_platform_bootstrap_protection() {
     local boot_exit_code
 
     safe_exec boot_output boot_exit_code \
-        bash -c "printf '%s\n%s\n' '$ATTACKER_ADMIN_PASSWORD' '$ATTACKER_ADMIN_PASSWORD' | $ADMIN \
+        bash -c "printf '%s\n%s\n' '$ATTACKER_ADMIN_PASSWORD' '$ATTACKER_ADMIN_PASSWORD' | $ADMIN_BIN \
         --server-url '$SERVER_URL' \
         --tls-insecure \
         bootstrap \
@@ -2155,26 +2185,49 @@ run_files_standard() {
     mv "$expired_session" "$client_session_file"
     chmod 600 "$client_session_file"
 
+    local old_refresh
+    old_refresh=$(jq -r '.refresh_token // empty' "$client_session_file" 2>/dev/null)
+
+    # Local diagnostics have no server to refresh against, so they refuse an
+    # expired access token.
     local expired_digest_out expired_digest_code
     safe_exec expired_digest_out expired_digest_code "$CLIENT" agent status --show-digests
-    local expired_list_out expired_list_code
-    safe_exec expired_list_out expired_list_code \
-        "$CLIENT" --server-url "$SERVER_URL" --tls-insecure list-files
-
-    mv "$session_backup" "$client_session_file"
-    chmod 600 "$client_session_file"
-
     if [ $expired_digest_code -ne 0 ] && echo "$expired_digest_out" | grep -qi "session expired"; then
         record_test "Agent digest diagnostics reject expired session" "PASS"
     else
         error "Agent digest diagnostics did not reject an expired session"
         record_test "Agent digest diagnostics reject expired session" "FAIL"
     fi
-    if [ $expired_list_code -ne 0 ] && echo "$expired_list_out" | grep -qi "session expired"; then
-        record_test "Authenticated client command rejects expired session" "PASS"
+
+    # A server command refreshes the expired access token. The refreshed file
+    # replaces the backup: restoring the superseded refresh token would look
+    # like token reuse and revoke every login for the account.
+    local expired_list_out expired_list_code
+    safe_exec expired_list_out expired_list_code \
+        "$CLIENT" --server-url "$SERVER_URL" --tls-insecure list-files
+    rm -f "$session_backup"
+    local new_refresh new_expiry
+    new_refresh=$(jq -r '.refresh_token // empty' "$client_session_file" 2>/dev/null)
+    new_expiry=$(jq -r '.expires_at // empty' "$client_session_file" 2>/dev/null)
+    if [ $expired_list_code -eq 0 ] \
+        && [ -n "$new_refresh" ] && [ "$new_refresh" != "$old_refresh" ] \
+        && [ "$new_expiry" != "2000-01-01T00:00:00Z" ]; then
+        record_test "Client command refreshes an expired access token" "PASS"
     else
-        error "list-files did not reject an expired client session"
-        record_test "Authenticated client command rejects expired session" "FAIL"
+        error "list-files did not refresh an expired client session:"
+        echo "$expired_list_out"
+        record_test "Client command refreshes an expired access token" "FAIL"
+    fi
+
+    # The agent's cached Account Key must follow the refreshed token.
+    local rebound_out rebound_code
+    safe_exec rebound_out rebound_code "$CLIENT" agent status --show-digests
+    if [ $rebound_code -eq 0 ] && echo "$rebound_out" | grep -Fq "$UPLOADED_FILE_ID"; then
+        record_test "Agent key follows the refreshed access token" "PASS"
+    else
+        error "Agent did not follow the refreshed access token:"
+        echo "$rebound_out"
+        record_test "Agent key follows the refreshed access token" "FAIL"
     fi
 
     scenario "Verifying list-files --raw API privacy"
@@ -5482,6 +5535,255 @@ run_session_absolute_and_admin_scope() {
     fi
 }
 
+# http_code_of prints only the status line that curl -w appended to a body.
+http_code_of() {
+    printf '%s\n' "$1" | tail -n 1
+}
+
+# refresh_cookie_max_age prints the Max-Age of the refresh cookie in a header dump.
+refresh_cookie_max_age() {
+    grep -i '^set-cookie: __Host-arkfile-refresh=' "$1" \
+        | sed -n 's/.*[Mm]ax-[Aa]ge=\([0-9][0-9]*\).*/\1/p' \
+        | head -n 1
+}
+
+# Two logins for one user are separate families: logging out one leaves the
+# other usable. The refresh cookie shrinks toward the 36-hour ceiling and the
+# reported session end stays fixed across rotations.
+run_session_logins_and_refresh_ceiling() {
+    group "Session families: separate logins and refresh ceiling"
+
+    local second_home="$TEST_DATA_DIR/home-second-login"
+    rm -rf "$second_home"
+    mkdir -p "$second_home"
+    chmod 700 "$second_home"
+
+    user_login_with_totp "User login (first family)" >/dev/null
+
+    wait_for_totp_window
+    local second_totp
+    second_totp=$(generate_totp_code "$TEST_USER_TOTP_SECRET") || {
+        record_test "User login (second family)" "FAIL"
+        return
+    }
+    local out code
+    safe_exec out code env HOME="$second_home" bash -c "printf '%s\n' '$TEST_PASSWORD' | $CLIENT \
+        --server-url '$SERVER_URL' \
+        --tls-insecure \
+        --username '$TEST_USERNAME' \
+        login \
+        --password-stdin \
+        --totp-code '$second_totp' \
+        --save-session"
+    if [ $code -eq 0 ] && echo "$out" | grep -q "Login successful"; then
+        record_test "User login (second family)" "PASS"
+    else
+        error "Second login failed:"; echo "$out"
+        record_test "User login (second family)" "FAIL"
+    fi
+
+    local first_access
+    first_access=$(jq -r '.access_token // empty' "$HOME/.arkfile-session.json" 2>/dev/null)
+    logout_user_session "Log out the first login"
+
+    local body
+    body=$(curl -sk -w $'\n%{http_code}' -H "Authorization: Bearer $first_access" "$SERVER_URL/api/files")
+    if [ "$(http_code_of "$body")" = "401" ]; then
+        record_test "Logged-out login's access token is refused" "PASS"
+    else
+        error "Logged-out access token response: $body"
+        record_test "Logged-out login's access token is refused" "FAIL"
+    fi
+
+    safe_exec out code env HOME="$second_home" "$CLIENT" --server-url "$SERVER_URL" --tls-insecure list-files
+    if [ $code -eq 0 ]; then
+        record_test "Other login keeps working after logout" "PASS"
+    else
+        error "Second login stopped working after the first logged out:"; echo "$out"
+        record_test "Other login keeps working after logout" "FAIL"
+    fi
+
+    scenario "Refresh cookie shrinks toward the 36-hour ceiling"
+    local refresh_token hdr1="$TEST_DATA_DIR/refresh-headers-1" hdr2="$TEST_DATA_DIR/refresh-headers-2"
+    refresh_token=$(jq -r '.refresh_token // empty' "$second_home/.arkfile-session.json" 2>/dev/null)
+    local body1 body2 rt1 exp1 exp2 age1 age2
+    body1=$(curl -sk -D "$hdr1" -X POST -H "Content-Type: application/json" \
+        -d "{\"refresh_token\":\"$refresh_token\"}" "$SERVER_URL/api/refresh")
+    rt1=$(echo "$body1" | jq -r '.data.refresh_token // empty' 2>/dev/null)
+    exp1=$(echo "$body1" | jq -r '.data.session_expires_at // empty' 2>/dev/null)
+    age1=$(refresh_cookie_max_age "$hdr1")
+    sleep 2
+    body2=$(curl -sk -D "$hdr2" -X POST -H "Content-Type: application/json" \
+        -d "{\"refresh_token\":\"$rt1\"}" "$SERVER_URL/api/refresh")
+    exp2=$(echo "$body2" | jq -r '.data.session_expires_at // empty' 2>/dev/null)
+    age2=$(refresh_cookie_max_age "$hdr2")
+    rm -f "$hdr1" "$hdr2"
+    if [ -n "$age1" ] && [ -n "$age2" ] \
+        && [ "$age1" -le 129600 ] && [ "$age2" -le "$age1" ] && [ "$age2" -gt 0 ]; then
+        record_test "Refresh cookie Max-Age does not slide past the ceiling" "PASS"
+    else
+        error "Refresh cookie Max-Age values: first=$age1 second=$age2"
+        record_test "Refresh cookie Max-Age does not slide past the ceiling" "FAIL"
+    fi
+    if [ -n "$exp1" ] && [ "$exp1" = "$exp2" ]; then
+        record_test "session_expires_at stays constant across refreshes" "PASS"
+    else
+        error "session_expires_at changed across refreshes: $exp1 then $exp2"
+        record_test "session_expires_at stays constant across refreshes" "FAIL"
+    fi
+
+    HOME="$second_home" "$CLIENT" agent stop >/dev/null 2>&1 || true
+    rm -rf "$second_home"
+}
+
+# Admin sessions refresh before a command, end on logout and on a
+# self force-logout, and end after 15 minutes without an admin request.
+# These cases call "$ADMIN_BIN" directly so admin_cli cannot sign in again.
+run_admin_session_lifecycle() {
+    group "Admin session lifecycle"
+
+    local admin_file="$HOME/.arkfile-admin-session.json"
+    local out code body
+
+    admin_login_with_totp "Admin login for refresh check" >/dev/null
+    local old_refresh new_refresh
+    old_refresh=$(jq -r '.refresh_token // empty' "$admin_file" 2>/dev/null)
+    if jq '.expires_at = "2000-01-01T00:00:00Z"' "$admin_file" > "$admin_file.tmp"; then
+        mv "$admin_file.tmp" "$admin_file"
+        chmod 600 "$admin_file"
+    fi
+    safe_exec out code "$ADMIN_BIN" --server-url "$SERVER_URL" --tls-insecure list-users
+    new_refresh=$(jq -r '.refresh_token // empty' "$admin_file" 2>/dev/null)
+    if [ $code -eq 0 ] && [ -n "$new_refresh" ] && [ "$new_refresh" != "$old_refresh" ]; then
+        record_test "Admin command refreshes an expired access token" "PASS"
+    else
+        error "Admin refresh before command failed:"; echo "$out"
+        record_test "Admin command refreshes an expired access token" "FAIL"
+    fi
+
+    scenario "Admin logout ends this admin login on the server"
+    local copied_access copied_refresh
+    copied_access=$(jq -r '.access_token // empty' "$admin_file" 2>/dev/null)
+    copied_refresh=$(jq -r '.refresh_token // empty' "$admin_file" 2>/dev/null)
+    logout_admin_session "Admin logout (lifecycle check)"
+    body=$(curl -sk -w $'\n%{http_code}' -H "Authorization: Bearer $copied_access" "$SERVER_URL/api/admin/users")
+    if [ "$(http_code_of "$body")" = "401" ]; then
+        record_test "Logged-out admin access token is refused" "PASS"
+    else
+        error "Logged-out admin access token response: $body"
+        record_test "Logged-out admin access token is refused" "FAIL"
+    fi
+    body=$(curl -sk -w $'\n%{http_code}' -X POST -H "Content-Type: application/json" \
+        -d "{\"refresh_token\":\"$copied_refresh\"}" "$SERVER_URL/api/refresh")
+    if [ "$(http_code_of "$body")" = "401" ] && echo "$body" | grep -q '"error":"session_logged_out"'; then
+        record_test "Logged-out admin refresh returns session_logged_out" "PASS"
+    else
+        error "Logged-out admin refresh response: $body"
+        record_test "Logged-out admin refresh returns session_logged_out" "FAIL"
+    fi
+
+    scenario "Admin force-logout of its own account revokes its access token"
+    admin_login_with_totp "Admin login for self force-logout" >/dev/null
+    copied_access=$(jq -r '.access_token // empty' "$admin_file" 2>/dev/null)
+    safe_exec out code "$ADMIN_BIN" --server-url "$SERVER_URL" --tls-insecure \
+        force-logout --username "$ADMIN_USERNAME"
+    body=$(curl -sk -w $'\n%{http_code}' -H "Authorization: Bearer $copied_access" "$SERVER_URL/api/admin/users")
+    if [ $code -eq 0 ] && [ "$(http_code_of "$body")" = "401" ]; then
+        record_test "Admin self force-logout revokes the admin token" "PASS"
+    else
+        error "Self force-logout (exit $code): $out; admin route response: $body"
+        record_test "Admin self force-logout revokes the admin token" "FAIL"
+    fi
+
+    scenario "Admin login ends after 15 minutes without an admin request"
+    admin_login_with_totp "Admin login for idle check" >/dev/null
+    local admin_token
+    admin_token=$(jq -r '.access_token // empty' "$admin_file" 2>/dev/null)
+    body=$(curl -sk -w $'\n%{http_code}' -X POST \
+        -H "Authorization: Bearer $admin_token" \
+        -H "Content-Type: application/json" \
+        -d "{\"username\":\"$ADMIN_USERNAME\",\"idle_seconds\":960}" \
+        "$SERVER_URL/api/admin/dev-test/sessions/shift")
+    if [ "$(http_code_of "$body")" = "200" ]; then
+        record_test "Shift admin session past the admin idle limit" "PASS"
+    else
+        error "Admin idle shift failed: $body"
+        record_test "Shift admin session past the admin idle limit" "FAIL"
+    fi
+    safe_exec out code "$ADMIN_BIN" --server-url "$SERVER_URL" --tls-insecure list-users
+    if [ $code -ne 0 ] && echo "$out" | grep -q "admin session ended after 15 minutes without activity"; then
+        record_test "Idle admin command reports the 15-minute notice" "PASS"
+    else
+        error "Idle admin command output was unexpected:"; echo "$out"
+        record_test "Idle admin command reports the 15-minute notice" "FAIL"
+    fi
+    if [ ! -e "$admin_file" ]; then
+        record_test "Idle admin session file is removed" "PASS"
+    else
+        record_test "Idle admin session file is removed" "FAIL"
+    fi
+
+    admin_login_with_totp "Admin login after lifecycle checks" >/dev/null
+}
+
+# A flagged admin re-registers only through arkfile-admin on the server. The
+# public login gives the same generic failure as any bad login. This flags one
+# account; it does not rotate the server's OPAQUE keys.
+run_admin_reregistration() {
+    group "Admin re-registration on the server"
+
+    admin_login_with_totp "Admin login (admin re-registration flag)" >/dev/null
+    local out code
+    safe_exec out code "$ADMIN_BIN" --server-url "$SERVER_URL" --tls-insecure \
+        flag-user-reregistration --username "$ADMIN_USERNAME" --confirm
+    if [ $code -eq 0 ]; then
+        record_test "Admin flags its own account for re-registration" "PASS"
+    else
+        error "Admin self-flag failed:"; echo "$out"
+        record_test "Admin flags its own account for re-registration" "FAIL"
+        return
+    fi
+
+    scenario "Public login of a flagged admin gets the generic failure"
+    local public_home="$TEST_DATA_DIR/home-admin-public-login"
+    rm -rf "$public_home"
+    mkdir -p "$public_home"
+    chmod 700 "$public_home"
+    wait_for_totp_window
+    local public_totp
+    public_totp=$(generate_totp_code "$ADMIN_TOTP_SECRET") || {
+        record_test "Flagged admin refused on the public login" "FAIL"
+        return
+    }
+    safe_exec out code env HOME="$public_home" bash -c "printf '%s\n' '$ADMIN_PASSWORD' | $CLIENT \
+        --server-url '$SERVER_URL' \
+        --tls-insecure \
+        --username '$ADMIN_USERNAME' \
+        login \
+        --password-stdin \
+        --totp-code '$public_totp' \
+        --non-interactive"
+    if [ $code -ne 0 ] && ! echo "$out" | grep -qi "re-registration" \
+        && [ ! -e "$public_home/.arkfile-session.json" ]; then
+        record_test "Flagged admin refused on the public login" "PASS"
+    else
+        error "Public login of a flagged admin was not a generic failure:"; echo "$out"
+        record_test "Flagged admin refused on the public login" "FAIL"
+    fi
+    HOME="$public_home" "$CLIENT" agent stop >/dev/null 2>&1 || true
+    rm -rf "$public_home"
+
+    scenario "arkfile-admin login completes the admin re-registration"
+    admin_login_with_totp "Admin re-registration through arkfile-admin login"
+    safe_exec out code "$ADMIN_BIN" --server-url "$SERVER_URL" --tls-insecure list-users
+    if [ $code -eq 0 ]; then
+        record_test "Re-registered admin login works on admin routes" "PASS"
+    else
+        error "Admin route failed after re-registration:"; echo "$out"
+        record_test "Re-registered admin login works on admin routes" "FAIL"
+    fi
+}
+
 run_teardown() {
     group "Teardown"
 
@@ -5754,6 +6056,9 @@ main() {
         run_registration_throttle
         run_session_idle_enforcement
         run_session_absolute_and_admin_scope
+        run_session_logins_and_refresh_ceiling
+        run_admin_session_lifecycle
+        run_admin_reregistration
         run_enable_auto_approval
         run_teardown
     )

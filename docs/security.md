@@ -300,7 +300,8 @@ Arkfile issues short-lived JWT access tokens after OPAQUE plus MFA. Tokens shoul
 - **Automatic refresh at 25 minutes**: Clients renew before expiration
 - **Six-hour idle limit**: A full login family ends after six hours without a user-started authenticated request. Refresh does not count as activity
 - **24-hour absolute limit**: A normal login also ends 24 hours after it started. A file already uploading or downloading at that point may continue until it finishes, goes 30 minutes quiet, or reaches 36 hours from sign-in. Other selected files do not start
-- **60-minute admin limit**: A login started with arkfile-admin on the server ends 60 minutes after login. It is not a browser session and cannot call file, share, or billing routes
+- **Admin limits**: A login started with arkfile-admin on the server ends 60 minutes after login, or after 15 minutes without an admin request, whichever comes first. It is not a browser session and cannot call file, share, or billing routes. An admin export the server accepted before either limit keeps streaming until it finishes
+- **Login identity required**: Every full access token carries the `family_id` of its login. A token without one is refused
 - **Per-login enforcement**: Browser and command-line logins have separate family clocks; activity on one login does not extend another
 - **Revocation on authenticated requests**: `TokenRevocationMiddleware` checks every authenticated request against the per-token (`revoked_tokens`) list and the per-user `user_jwt_revocations` row
 - **User-wide cache**: The per-user revocation timestamp may be cached in-process for up to 30 seconds to avoid a database read on every request. `InvalidateUserRevocationCache` clears that entry when a revocation is written on the same process. A second process could see a stale "not revoked" result for up to that cache TTL
@@ -310,7 +311,8 @@ Arkfile issues short-lived JWT access tokens after OPAQUE plus MFA. Tokens shoul
 - Logout ends only the current login family. Other logins for the account remain usable
 - `revoke-all`, admin force-logout, and refresh-token reuse write `user_jwt_revocations` so existing access tokens for the account fail on the next checked request
 - A family ended by the idle limit is rejected even when its access JWT has not expired. Later refresh attempts return the stable `session_idle` reason. The 24-hour cap returns `session_absolute`. Logout of that same login returns `session_logged_out`
-- Admin routes answer only on the server. The public proxy returns 404 for `/api/admin` and `/api/bootstrap`. A normal website login, including an admin account, cannot call admin routes. An arkfile-admin login works only from that machine and does not receive browser cookies
+- Admin routes answer only on the server. See Admin Access below
+- `arkfile-admin logout` ends that admin login on the server before deleting the saved session, so a copied admin refresh token stops working
 - Per-JTI revocation is stored in `revoked_tokens` and consulted on each authenticated request
 - A stolen access token that is never revoked remains valid until it expires (up to 30 minutes)
 - Cryptographically independent from file encryption
@@ -322,6 +324,18 @@ Arkfile issues short-lived JWT access tokens after OPAQUE plus MFA. Tokens shoul
 3. **Idle enforcement**: Authenticated routes and refresh reject a family after six hours without user activity. Upload and download chunk requests count as activity while bytes continue moving
 4. **Revocation**: Authenticated routes reject ended families, revoked JTIs, and JWTs issued before a user-wide revocation timestamp
 5. **Unaffected theft**: If the owner does not revoke and the idle clock has not ended the family, a stolen cookie or Bearer token works until expiry, then fails if the refresh token was also revoked
+
+### Admin Access
+
+Admin functions are reachable only through `arkfile-admin` run on the server it administers, talking to the Go server over a direct local connection. Three layers enforce this:
+
+1. **Proxy**: Caddy answers 404 for `/api/admin`, `/api/admin/*`, and `/api/bootstrap/*` before reverse-proxying. `/api/admin-contacts` stays public
+2. **Direct local connection**: The Go server requires a loopback peer with none of `X-Arkfile-Peer`, `X-Forwarded-For`, `X-Real-IP`, or `Forwarded` on admin, admin login, admin re-registration, and bootstrap routes, and answers 403 otherwise. Caddy always sets `X-Arkfile-Peer`, so a request relayed from outside the box cannot pass
+3. **Marked admin logins**: Only a login that starts at the admin login, bootstrap, or the admin re-registration carries a signed admin mark, and the mark is kept through every token derived from that login. Admin routes require the mark and recheck `is_admin` on every request. A marked token is accepted only over a direct local connection, only from the `Authorization` header, and only on admin, MFA-management, refresh, and logout routes. Marked logins never receive browser cookies. A website or `arkfile-client` login of an admin account is unmarked and is refused on admin routes
+
+Admin access comes only from the account's `is_admin` flag. `ADMIN_USERNAMES` is a deployment check and blocks the dev admin name in production; it does not grant access.
+
+A flagged admin re-registers only through `arkfile-admin login` on the server. The public login gives a flagged admin the same generic failure as any bad login, so it does not reveal admin usernames, and the public re-registration routes refuse admin accounts. An admin who loses access to the server cannot recover admin access through the web app.
 
 ### Access Control and Rate Limiting
 
@@ -594,7 +608,7 @@ arkfile-admin rotate-opaque-keys replace-keys --confirm
 
 Do not run key replacement before step 1. The `replace-keys` subcommand enforces that every active account is flagged and that no `opaque_user_data` rows remain; the atomic `rotate` subcommand performs both steps in the correct order automatically.
 
-On their next login, each user is met with a clear, structured prompt (HTTP 409 `account_requires_reregistration`) and is guided through the re-registration ceremony within the same login attempt, continuing into their existing MFA. To rotate a single account instead, use:
+On their next login, each user is met with a clear, structured prompt (HTTP 409 `account_requires_reregistration`) and is guided through the re-registration ceremony within the same login attempt, continuing into their existing MFA. Admin accounts are flagged too, and they re-register only by running `arkfile-admin login` on the server; the website and `arkfile-client` give a flagged admin the generic login failure. Confirm that an on-box `arkfile-admin login` works before rotating keys on a deployment you cannot reach over SSH. To rotate a single account instead, use:
 
 ```bash
 arkfile-admin flag-user-reregistration --username USER --confirm

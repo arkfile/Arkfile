@@ -143,8 +143,8 @@ func reregisterResponse(c echo.Context, adminCeremony bool) error {
 	if username == "" {
 		return JSONErrorCode(c, http.StatusUnauthorized, CodeReregistrationTokenInvalid, "Re-registration token is missing or invalid")
 	}
-	if err := guardReregistrationCeremony(c, username, adminCeremony); err != nil {
-		return err
+	if allowed, guardErr := guardReregistrationCeremony(c, username, adminCeremony); !allowed {
+		return guardErr
 	}
 
 	flagged, err := models.UserRequiresReregistration(database.DB, username)
@@ -198,25 +198,28 @@ func AdminReregisterFinalize(c echo.Context) error {
 	return reregisterFinalize(c, true)
 }
 
-func guardReregistrationCeremony(c echo.Context, username string, adminCeremony bool) error {
-	user, err := models.GetUserByUsername(database.DB, username)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return JSONErrorCode(c, http.StatusUnauthorized, CodeReregistrationTokenInvalid, "Re-registration token is missing or invalid")
+// guardReregistrationCeremony reports whether the ceremony may continue. When
+// allowed is false the refusal has already been written and the handler must
+// return err without doing any further work.
+func guardReregistrationCeremony(c echo.Context, username string, adminCeremony bool) (allowed bool, err error) {
+	user, lookupErr := models.GetUserByUsername(database.DB, username)
+	if lookupErr != nil {
+		if lookupErr == sql.ErrNoRows {
+			return false, JSONErrorCode(c, http.StatusUnauthorized, CodeReregistrationTokenInvalid, "Re-registration token is missing or invalid")
 		}
-		logging.ErrorLogger.Printf("Re-registration account lookup failed for %s: %v", username, err)
-		return JSONError(c, http.StatusInternalServerError, "Re-registration failed")
+		logging.ErrorLogger.Printf("Re-registration account lookup failed for %s: %v", username, lookupErr)
+		return false, JSONError(c, http.StatusInternalServerError, "Re-registration failed")
 	}
 	if adminCeremony {
 		if loginKindFromContext(c) != models.LoginKindAdmin || !user.IsAdmin {
-			return JSONErrorCode(c, http.StatusForbidden, CodeReregistrationTokenInvalid, "Re-registration token is missing or invalid")
+			return false, JSONErrorCode(c, http.StatusForbidden, CodeReregistrationTokenInvalid, "Re-registration token is missing or invalid")
 		}
-		return nil
+		return true, nil
 	}
 	if user.IsAdmin {
-		return JSONError(c, http.StatusForbidden, "Admin accounts must re-register on the server")
+		return false, JSONError(c, http.StatusForbidden, "Admin accounts must re-register on the server")
 	}
-	return nil
+	return true, nil
 }
 
 func reregisterFinalize(c echo.Context, adminCeremony bool) error {
@@ -224,8 +227,8 @@ func reregisterFinalize(c echo.Context, adminCeremony bool) error {
 	if username == "" {
 		return JSONErrorCode(c, http.StatusUnauthorized, CodeReregistrationTokenInvalid, "Re-registration token is missing or invalid")
 	}
-	if err := guardReregistrationCeremony(c, username, adminCeremony); err != nil {
-		return err
+	if allowed, guardErr := guardReregistrationCeremony(c, username, adminCeremony); !allowed {
+		return guardErr
 	}
 
 	var request struct {

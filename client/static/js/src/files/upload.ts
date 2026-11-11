@@ -71,6 +71,7 @@ import {
   authenticatedFetch,
   getUsernameFromToken,
   getCurrentUser,
+  noteAbsoluteBatchEnd,
   refreshToken as doRefreshToken,
 } from '../utils/auth.js';
 import { loadFiles } from './list.js';
@@ -1080,6 +1081,7 @@ export async function uploadFiles(
       // Refresh failed -- session is gone. Mark the rest of the batch as
       // skipped and propagate the fatal reason.
       const reason = err instanceof Error ? err.message : 'Session expired';
+      noteAbsoluteBatchEnd(err, 'upload', result.succeeded.length > 0 ? 'finished' : 'none', files.length - i);
       result.fatal = { name: file.name, reason };
       result.skipped.push({ name: file.name, reason: 'Session expired before upload' });
       for (let j = i + 1; j < files.length; j++) {
@@ -1129,6 +1131,9 @@ export async function uploadFiles(
 
       if (isFatalUploadError(err)) {
         // Stop the batch, mark current file as failed, mark remaining as skipped.
+        // After the 24-hour cap the server refuses the next file's upload init,
+        // so the refused file counts as not started.
+        noteAbsoluteBatchEnd(err, 'upload', result.succeeded.length > 0 ? 'finished' : 'none', files.length - i);
         result.fatal = { name: file.name, reason: message };
         result.failed.push({ name: file.name, reason: message });
         for (let j = i + 1; j < files.length; j++) {
@@ -1385,6 +1390,11 @@ export async function handleFileUpload(): Promise<void> {
     // Refresh file list once at the end of the batch.
     if (batchResult.succeeded.length > 0) {
       await loadFiles();
+      // A list reload refused by the 24-hour cap is the session notice, not
+      // an upload failure: every selected file finished.
+      if (!batchResult.fatal && batchResult.skipped.length === 0) {
+        noteAbsoluteBatchEnd(null, 'upload', 'finished', 0);
+      }
     }
   } catch (error) {
     // Errors that escape uploadFiles() (e.g. failed initial account-key

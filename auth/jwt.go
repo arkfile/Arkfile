@@ -45,12 +45,6 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-var processStartedAt = time.Now().UTC().Truncate(time.Second)
-
-func ProcessStartedAt() time.Time {
-	return processStartedAt
-}
-
 // GenerateRefreshToken creates a cryptographically secure random string to be used as a refresh token.
 // It aims for approximately 256 bits of entropy.
 func GenerateRefreshToken() (string, error) {
