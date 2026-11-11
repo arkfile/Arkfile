@@ -2,7 +2,7 @@
 
 ## Status
 
-The behavior in this document is implemented in the tree, together with the admin confinement in `docs/wip/admin-sec.md`. Local `dev-reset.sh` followed by `e2e-test.sh` passed, including six-hour idle expiry, the 24-hour cap, admin scope checks, and the user re-registration login. The next check is `test-update.sh` on the test VPS. After it, an outside request to `/api/admin/system/health` should return 404, `arkfile-admin login` on the box should still work, and a normal sign-in should still reach the file list. Use `prod-update.sh` only after that. The first start of the new binary ends families already older than their cap. Each admin signs in again with `arkfile-admin` on that machine. No account, file, share, or billing row is rewritten.
+The behavior in this document is implemented in the tree, together with the admin confinement in `docs/wip/admin-sec.md`. Local `dev-reset.sh` followed by `e2e-test.sh` passed, including six-hour idle expiry, the 24-hour cap, admin scope checks, and the user re-registration login. The code is deployed to the test VPS with `test-update.sh` and to production with `prod-update.sh`. On 2026-11-11 an outside request to `/api/admin/system/health` returned 404 on both. The first start of the new binary ends families already older than their cap. Each admin signs in again with `arkfile-admin` on that machine. No account, file, share, or billing row is rewritten.
 
 Normal logins store an empty `login_kind`. Logins that start through `arkfile-admin`, bootstrap, or the on-box admin re-registration store `admin` on the existing family row. There is no `refresh_tokens.login_kind` column. A marked admin login lasts 60 minutes, is confined to admin work over a direct local connection, and receives no cookies. A normal login is also ended 24 hours after it starts, with one-file grace up to 36 hours from sign-in. Refresh-token expiry is that same ceiling, and the browser refresh cookie shrinks toward it.
 
@@ -280,7 +280,7 @@ A sign-in lasts until you have gone 6 hours without using Arkfile, or until 24 h
 
 ## Open questions
 
-These were left open on purpose. The shipped admin cap is 60 minutes from login, with no shorter idle limit.
+These were left open on purpose and are now decided in `docs/wip/finish-logout-admin-sec.md`: a 15-minute idle limit inside the 60-minute admin cap, no hard stop for an admin export already streaming, and a repeated upload complete for a completed session returning success. That document also decides that `arkfile-client` refreshes before a command rather than rejecting an expired access token locally, and that full access tokens without `family_id` are rejected immediately. Those two decisions replace the conflicting statements in the Clients and Enforcement sections above. The questions are kept below for context.
 
 Should a marked admin login also have an idle limit inside the 60-minute cap? Without one, an SSH window left open on the server keeps a working admin login for up to an hour after the last command. A 15-minute idle limit would end it sooner, at the cost of logging in again after a short break. The recommendation is 15 minutes, since admin work tends to come in short bursts.
 

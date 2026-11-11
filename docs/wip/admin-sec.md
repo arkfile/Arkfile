@@ -2,11 +2,11 @@
 
 ## Status
 
-The behavior in this document is implemented, including the 60-minute admin cap from `docs/wip/auto-logout.md`. Local `e2e-test.sh` passed the Go checks: an unmarked login is refused on admin routes, a marked admin token is refused on `/api/files`, and an admin request that carries `X-Arkfile-Peer` is refused. `dev-reset.sh` has no Caddy, so the public 404 is not proven until `test-update.sh`. After that update, an outside request to `/api/admin/system/health` should return 404, and `arkfile-admin login` on the box should still work. Sign in again on that machine; saved admin sessions from before the update are unmarked and stop working on admin routes. Do not run `arkfile-admin rotate-opaque-keys rotate` until that on-box login, including a flagged admin re-registration if one is needed, has been tried.
+The behavior in this document is implemented, including the 60-minute admin cap from `docs/wip/auto-logout.md`. Local `e2e-test.sh` passed the Go checks: an unmarked login is refused on admin routes, a marked admin token is refused on `/api/files`, and an admin request that carries `X-Arkfile-Peer` is refused. The code is deployed to `test.arkfile.net` and `arkfile.net`. On 2026-11-11 a check from outside both servers returned 404 for `/api/admin/system/health` and `/api/bootstrap/register/response`, and 200 for `/api/admin-contacts`. Sign in again on that machine; saved admin sessions from before the update are unmarked and stop working on admin routes. Do not run `arkfile-admin rotate-opaque-keys rotate` until that on-box login, including a flagged admin re-registration if one is needed, has been tried.
 
-A flagged admin who tries the website or `arkfile-client` gets the same generic failure as any other bad login. Admin access comes only from the account's `is_admin` flag. `ADMIN_USERNAMES` remains a deployment check, including blocking the dev admin name in production. Caddy answers 404 for `/api/admin`, `/api/admin/*`, and `/api/bootstrap/*`. The Go server answers 403 when a request is not a direct local connection. A shorter idle limit inside the 60 minutes, and a hard stop for an export already streaming past that mark, are still open.
+A flagged admin who tries the website or `arkfile-client` gets the same generic failure as any other bad login. Admin access comes only from the account's `is_admin` flag. `ADMIN_USERNAMES` remains a deployment check, including blocking the dev admin name in production. Caddy answers 404 for `/api/admin`, `/api/admin/*`, and `/api/bootstrap/*`. The Go server answers 403 when a request is not a direct local connection. The two open questions below are decided: a 15-minute idle limit inside the 60 minutes, and no hard stop for an export already streaming past that mark.
 
-Remaining test and doc work for this plan, including coverage of the admin re-registration ceremony before any OPAQUE key rotation, is tracked in `docs/wip/finish-logout-admin-sec.md`.
+Remaining work for this plan, including those decisions and test coverage of the admin re-registration ceremony, is tracked in `docs/wip/finish-logout-admin-sec.md`.
 
 ## Goal
 
@@ -14,7 +14,7 @@ Admin endpoints and admin functionality must be reachable only through `arkfile-
 
 ## Findings
 
-Before this code is deployed, `/api/admin/*` is reachable from the public internet through Caddy. That was confirmed on `test.arkfile.net`: an unauthenticated `curl` from outside the box to `/api/admin/system/health` returned `401` from the Go JWT middleware, so the request reached the admin route group. `test-update.sh` and `prod-update.sh` replace that Caddyfile from the templates in this tree. Until `test-update.sh` runs, the test instance is still in the old state.
+Before this code was deployed, `/api/admin/*` was reachable from the public internet through Caddy. That was confirmed on `test.arkfile.net`: an unauthenticated `curl` from outside the box to `/api/admin/system/health` returned `401` from the Go JWT middleware, so the request reached the admin route group. `test-update.sh` and `prod-update.sh` replaced that Caddyfile from the templates in this tree, and the same request now returns 404 on both deployments.
 
 The localhost gate in `AdminMiddleware` used to check only the kernel-reported peer address. On a VPS the Go server listens on `127.0.0.1:8443` and Caddy reverse-proxies every public request over loopback, so that check alone let public traffic through. The four Caddyfile templates now refuse `/api/admin`, `/api/admin/*`, and `/api/bootstrap/*` with 404, and the Go server also requires a direct local connection with no proxy headers. `dev-reset.sh` still has no Caddy, so its tests talk to the Go server directly.
 
@@ -118,6 +118,8 @@ Admin access comes only from `is_admin`. Bootstrap sets that flag when it create
 Caddy answers 404. The Go server answers 403. The Go refusal is only reachable from something already on the box or already past Caddy.
 
 ## Remaining open questions
+
+Both are decided in `docs/wip/finish-logout-admin-sec.md`: a marked admin login ends after 15 minutes without an admin request, and an accepted admin export keeps streaming with no write deadline. The questions are kept below for context.
 
 Should a marked admin login also have an idle limit inside the 60-minute cap, for example 15 or 30 minutes without an admin request? With only the absolute cap, a forgotten SSH session keeps a usable admin login for up to an hour.
 
