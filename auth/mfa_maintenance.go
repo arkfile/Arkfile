@@ -8,9 +8,13 @@ import (
 
 // CleanupMFALogs removes old MFA usage and backup-code replay logs.
 func CleanupMFALogs(db *sql.DB) error {
-	cutoff := time.Now().Add(-2 * time.Minute)
+	// A code stays acceptable until TOTPSkew windows after its own window ends. Compare
+	// integer window starts: used_at is SQLite text and does not compare reliably against
+	// driver-formatted time parameters.
+	retention := time.Duration((TOTPSkew+2)*TOTPPeriod) * time.Second
+	windowCutoff := time.Now().Add(-retention).Unix()
 
-	_, err := db.Exec("DELETE FROM mfa_usage_log WHERE used_at < ?", cutoff)
+	_, err := db.Exec("DELETE FROM mfa_usage_log WHERE window_start < ?", windowCutoff)
 	if err != nil {
 		return fmt.Errorf("failed to clean MFA usage logs: %w", err)
 	}

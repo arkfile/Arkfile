@@ -293,9 +293,38 @@ func TestTOTPCleanup(t *testing.T) {
 	db := setupTOTPTestDB(t)
 	defer db.Close()
 
-	// Test cleanup function doesn't error
+	now := time.Now().UTC()
+	period := time.Duration(TOTPPeriod) * time.Second
+	expiredWindow := now.Add(-5 * period).Truncate(period).Unix()
+	liveWindow := now.Add(period).Truncate(period).Unix()
+
+	for _, w := range []int64{expiredWindow, liveWindow} {
+		if _, err := db.Exec(
+			`INSERT INTO mfa_usage_log (username, code_hash, window_start) VALUES ('cleanup-user', 'h', ?)`, w,
+		); err != nil {
+			t.Fatalf("insert usage row: %v", err)
+		}
+	}
+
 	if err := CleanupMFALogs(db); err != nil {
 		t.Fatalf("TOTP cleanup failed: %v", err)
+	}
+
+	var remaining []int64
+	rows, err := db.Query(`SELECT window_start FROM mfa_usage_log`)
+	if err != nil {
+		t.Fatalf("query usage rows: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var w int64
+		if err := rows.Scan(&w); err != nil {
+			t.Fatalf("scan usage row: %v", err)
+		}
+		remaining = append(remaining, w)
+	}
+	if len(remaining) != 1 || remaining[0] != liveWindow {
+		t.Fatalf("expected only the still-acceptable window %d to remain, got %v", liveWindow, remaining)
 	}
 }
 
@@ -730,5 +759,62 @@ func TestTOTPSkew_AcceptsPreviousWindow(t *testing.T) {
 
 	if err := ValidateTOTPCode(db, username, prevCode); err != nil {
 		t.Fatalf("code from previous window should be accepted: %v", err)
+	}
+}
+
+// TestTOTPReplay_CodeAcceptedOnceAcrossServerWindows verifies that a code is accepted
+// only once, even though skew keeps it acceptable across three server windows.
+func TestTOTPReplay_CodeAcceptedOnceAcrossServerWindows(t *testing.T) {
+	setupTOTPTestEnvironment(t)
+	db := setupTOTPTestDB(t)
+	defer db.Close()
+
+	username := "replay-span-user"
+	setup := setupFullTOTP(t, db, username)
+
+	period := time.Duration(TOTPPeriod) * time.Second
+	base := time.Now().UTC().Truncate(period).Add(10 * time.Second)
+
+	nextCode, err := totp.GenerateCode(setup.Secret, base.Add(period))
+	if err != nil {
+		t.Fatalf("GenerateCode for next window: %v", err)
+	}
+
+	if err := validateTOTPCodeAt(db, username, nextCode, base); err != nil {
+		t.Fatalf("next-window code should be accepted once: %v", err)
+	}
+	if err := validateTOTPCodeAt(db, username, nextCode, base.Add(period)); err == nil {
+		t.Fatal("code reused in its own window should be rejected as a replay")
+	}
+	if err := validateTOTPCodeAt(db, username, nextCode, base.Add(2*period)); err == nil {
+		t.Fatal("code reused in the following window should be rejected as a replay")
+	}
+}
+
+// TestTOTPReplay_AdjacentWindowCodesEachAcceptedOnce verifies that the distinct codes for
+// the previous, current, and next windows are each accepted once in the same server window.
+func TestTOTPReplay_AdjacentWindowCodesEachAcceptedOnce(t *testing.T) {
+	setupTOTPTestEnvironment(t)
+	db := setupTOTPTestDB(t)
+	defer db.Close()
+
+	username := "replay-adjacent-user"
+	setup := setupFullTOTP(t, db, username)
+
+	period := time.Duration(TOTPPeriod) * time.Second
+	base := time.Now().UTC().Truncate(period).Add(10 * time.Second)
+
+	for _, offset := range []time.Duration{-period, 0, period} {
+		code, err := totp.GenerateCode(setup.Secret, base.Add(offset))
+		if err != nil {
+			t.Fatalf("GenerateCode at offset %v: %v", offset, err)
+		}
+		if err := validateTOTPCodeAt(db, username, code, base); err != nil {
+			// A six-digit collision with an earlier window's code is possible but rare.
+			t.Fatalf("code at offset %v should be accepted: %v", offset, err)
+		}
+		if err := validateTOTPCodeAt(db, username, code, base); err == nil {
+			t.Fatalf("code at offset %v should be rejected on reuse", offset)
+		}
 	}
 }

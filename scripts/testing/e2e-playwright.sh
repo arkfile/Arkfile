@@ -48,6 +48,7 @@ section() { echo -e "\n${CYAN}$1${NC}\n"; }
 SERVER_URL="${SERVER_URL:-https://localhost:8443}"
 TEST_DATA_DIR="/tmp/arkfile-e2e-test-data"
 MFA_SECRET_FILE="$TEST_DATA_DIR/mfa-secret"
+TOTP_WINDOW_DIR="$TEST_DATA_DIR/totp-windows"
 PLAYWRIGHT_TEMP_DIR="$TEST_DATA_DIR/playwright"
 # Playwright outputDir (read by playwright.config.ts). Fixed location so traces
 # are always in the same place; Playwright clears it at the start of each run.
@@ -272,6 +273,7 @@ export REG_FLOW_USERNAME
 export REG_FLOW_PASSWORD
 export REG_FLOW_CUSTOM_PASSWORD
 export MULTI_DL_CORPUS_PATH
+export TOTP_WINDOW_DIR
 
 # Run Playwright
 PLAYWRIGHT_EXIT_CODE=0

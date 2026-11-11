@@ -147,6 +147,7 @@ export HOME="$TEST_DATA_DIR/home"
 mkdir -p "$HOME"
 
 MFA_SECRET_FILE="$TEST_DATA_DIR/mfa-secret"
+TOTP_WINDOW_DIR="$TEST_DATA_DIR/totp-windows"
 BACKUP_CODE_PRIMARY_FILE="$TEST_DATA_DIR/backup-code-primary"
 BACKUP_CODE_REENROLL_FILE="$TEST_DATA_DIR/backup-code-reenroll"
 MFA_ADMIN_RESET_DONE_FILE="$TEST_DATA_DIR/mfa-admin-reset-done"
@@ -223,7 +224,7 @@ generate_totp_code() {
 
 admin_login_with_totp() {
     local test_name="$1"
-    wait_for_totp_window
+    wait_for_totp_window_if_used "$ADMIN_USERNAME"
 
     local totp_code
     totp_code=$(generate_totp_code "$ADMIN_TOTP_SECRET") || {
@@ -231,6 +232,7 @@ admin_login_with_totp() {
         record_test "$test_name" "FAIL"
         return
     }
+    mark_totp_window_used "$ADMIN_USERNAME"
     
     local out code
     safe_exec out code bash -c "printf '%s\n' '$ADMIN_PASSWORD' | $ADMIN_BIN \
@@ -280,7 +282,7 @@ admin_cli() {
 
 user_login_with_totp() {
     local test_name="$1"
-    wait_for_totp_window
+    wait_for_totp_window_if_used "$TEST_USERNAME"
     
     if [ -z "$TEST_USER_TOTP_SECRET" ]; then
         error "Missing TOTP secret from MFA enrollment"
@@ -294,6 +296,7 @@ user_login_with_totp() {
         record_test "$test_name" "FAIL"
         return
     }
+    mark_totp_window_used "$TEST_USERNAME"
 
     local out code
     safe_exec out code bash -c "printf '%s\n' '$TEST_PASSWORD' | $CLIENT \
@@ -434,7 +437,6 @@ user_mfa_verify_after_reset() {
         return 1
     fi
 
-    wait_for_totp_window
     local code
     code=$("$CLIENT" generate-totp --secret "$TEST_USER_TOTP_SECRET" 2>/dev/null)
     if [ -z "$code" ]; then
@@ -493,7 +495,6 @@ user_mfa_enroll_after_deferred_login() {
         export TEST_USER_BACKUP_CODE="$backup_code"
     fi
 
-    wait_for_totp_window
     local code
     code=$("$CLIENT" generate-totp --secret "$secret" 2>/dev/null)
     if [ -z "$code" ]; then
@@ -672,11 +673,12 @@ safe_exec() {
 
 # TOTP WINDOW MANAGEMENT
 
-# Wait for next TOTP window to avoid replay protection.
-# The server records each used TOTP code and rejects reuse within the same
-# 30-second window. This is needed before any login that uses a generated
-# --totp-code, since a previous operation (e.g., server bootstrap validation,
-# or a prior login in the same test run) may have consumed the current window.
+# The server accepts each TOTP code once per user. A login can only reuse a code
+# if the same user's previous code was generated in the current 30-second window,
+# so only that case waits. Each user's last code window is kept in a file under
+# TOTP_WINDOW_DIR (shared with e2e-playwright.ts, and safe across subshells).
+# A missing file means unknown (for example the admin code the server uses during
+# dev-admin startup validation), so wait. Enrollment checks do not consume codes.
 wait_for_totp_window() {
     local current_seconds
     current_seconds=$(date +%s)
@@ -685,6 +687,27 @@ wait_for_totp_window() {
 
     info "Waiting ${seconds_to_wait}s + 1s buffer for next TOTP window (replay protection)..."
     sleep "$((seconds_to_wait + 1))"
+}
+
+wait_for_totp_window_if_used() {
+    local user="$1"
+    local state_file="$TOTP_WINDOW_DIR/$user"
+    local current_window=$(( $(date +%s) / 30 ))
+    if [ ! -f "$state_file" ] || [ "$(cat "$state_file")" = "$current_window" ]; then
+        wait_for_totp_window
+    fi
+}
+
+mark_totp_window_used() {
+    local user="$1"
+    mkdir -p "$TOTP_WINDOW_DIR"
+    printf '%s\n' "$(( $(date +%s) / 30 ))" > "$TOTP_WINDOW_DIR/$user"
+}
+
+mark_totp_user_unused() {
+    local user="$1"
+    mkdir -p "$TOTP_WINDOW_DIR"
+    : > "$TOTP_WINDOW_DIR/$user"
 }
 
 # AGENT LIFECYCLE
@@ -879,6 +902,7 @@ run_user_onboarding_mfa_enrollment() {
 
     write_secret_file "$MFA_SECRET_FILE" "$secret"
     export TEST_USER_TOTP_SECRET="$secret"
+    mark_totp_user_unused "$TEST_USERNAME"
     record_test "TOTP setup initiation" "PASS"
     info "Captured TOTP secret for automated verification"
 
@@ -5560,12 +5584,13 @@ run_session_logins_and_refresh_ceiling() {
 
     user_login_with_totp "User login (first family)" >/dev/null
 
-    wait_for_totp_window
+    wait_for_totp_window_if_used "$TEST_USERNAME"
     local second_totp
     second_totp=$(generate_totp_code "$TEST_USER_TOTP_SECRET") || {
         record_test "User login (second family)" "FAIL"
         return
     }
+    mark_totp_window_used "$TEST_USERNAME"
     local out code
     safe_exec out code env HOME="$second_home" bash -c "printf '%s\n' '$TEST_PASSWORD' | $CLIENT \
         --server-url '$SERVER_URL' \
@@ -5574,6 +5599,7 @@ run_session_logins_and_refresh_ceiling() {
         login \
         --password-stdin \
         --totp-code '$second_totp' \
+        --no-cache-key \
         --save-session"
     if [ $code -eq 0 ] && echo "$out" | grep -q "Login successful"; then
         record_test "User login (second family)" "PASS"
@@ -5749,12 +5775,13 @@ run_admin_reregistration() {
     rm -rf "$public_home"
     mkdir -p "$public_home"
     chmod 700 "$public_home"
-    wait_for_totp_window
+    wait_for_totp_window_if_used "$ADMIN_USERNAME"
     local public_totp
     public_totp=$(generate_totp_code "$ADMIN_TOTP_SECRET") || {
         record_test "Flagged admin refused on the public login" "FAIL"
         return
     }
+    mark_totp_window_used "$ADMIN_USERNAME"
     safe_exec out code env HOME="$public_home" bash -c "printf '%s\n' '$ADMIN_PASSWORD' | $CLIENT \
         --server-url '$SERVER_URL' \
         --tls-insecure \
@@ -5945,13 +5972,14 @@ run_opaque_reregistration() {
     # password-match check (the user owns files), leaving the account flagged
     # and unchanged so the correct password can still re-register afterward.
     scenario "Re-registration rejects an incorrect password (no changes made)"
-    wait_for_totp_window
+    wait_for_totp_window_if_used "$TEST_USERNAME"
     local bad_totp_code
     bad_totp_code=$(generate_totp_code "$TEST_USER_TOTP_SECRET") || {
         error "Could not generate TOTP code for wrong-password re-registration check"
         record_test "Re-registration wrong-password rejected" "FAIL"
         return 0
     }
+    mark_totp_window_used "$TEST_USERNAME"
     local bad_out bad_code
     safe_exec bad_out bad_code bash -c "printf '%s\n' 'WrongPassword2026!DoesNotMatch' | $CLIENT \
         --server-url '$SERVER_URL' \
@@ -5971,13 +5999,14 @@ run_opaque_reregistration() {
     # Positive: the correct password runs the ceremony inline and continues
     # straight into the existing MFA flow within the same login attempt.
     scenario "Re-registering $TEST_USERNAME with the correct password"
-    wait_for_totp_window
+    wait_for_totp_window_if_used "$TEST_USERNAME"
     local rr_totp_code
     rr_totp_code=$(generate_totp_code "$TEST_USER_TOTP_SECRET") || {
         error "Could not generate TOTP code for re-registration login"
         record_test "OPAQUE re-registration + login" "FAIL"
         return 0
     }
+    mark_totp_window_used "$TEST_USERNAME"
     local rr_out rr_code
     safe_exec rr_out rr_code bash -c "printf '%s\n' '$TEST_PASSWORD' | $CLIENT \
         --server-url '$SERVER_URL' \

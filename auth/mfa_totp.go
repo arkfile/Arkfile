@@ -2,6 +2,7 @@ package auth
 
 import (
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
@@ -15,7 +16,13 @@ import (
 
 // ValidateTOTPCode validates a TOTP code with replay protection and shared MFA lockout.
 func ValidateTOTPCode(db *sql.DB, username, code string) error {
-	now := time.Now().UTC()
+	return validateTOTPCodeAt(db, username, code, time.Now().UTC())
+}
+
+// validateTOTPCodeAt validates a TOTP code as of the given time. Replay protection is
+// keyed on the time step the code belongs to, so each code is accepted at most once
+// across all server windows in which skew still accepts it.
+func validateTOTPCodeAt(db *sql.DB, username, code string, now time.Time) error {
 	lockState, err := getMFALockoutState(db, username)
 	if err != nil && err != sql.ErrNoRows {
 		return fmt.Errorf("failed to check MFA lockout state: %w", err)
@@ -41,29 +48,21 @@ func ValidateTOTPCode(db *sql.DB, username, code string) error {
 		return fmt.Errorf("failed to decrypt TOTP secret: %w", err)
 	}
 
-	currentTime := time.Now().UTC()
-	windowStart := currentTime.Truncate(time.Duration(TOTPPeriod) * time.Second).Unix()
-
-	valid, err := totp.ValidateCustom(code, secret, currentTime, totp.ValidateOpts{
-		Period:    TOTPPeriod,
-		Skew:      uint(TOTPSkew),
-		Digits:    otp.DigitsSix,
-		Algorithm: otp.AlgorithmSHA1,
-	})
+	codeWindowStart, matched, err := matchTOTPWindow(secret, code, now)
 	if err != nil {
 		return fmt.Errorf("TOTP validation error: %w", err)
 	}
 
-	if !valid {
+	if !matched {
 		if isDebugMode() && logging.ErrorLogger != nil {
 			logging.ErrorLogger.Printf("TOTP code mismatch for user: %s, window_start: %d, skew: %d",
-				username, windowStart, TOTPSkew)
+				username, now.Truncate(time.Duration(TOTPPeriod)*time.Second).Unix(), TOTPSkew)
 		}
 		recordMFAFailureAndEmit(db, username, now)
 		return fmt.Errorf("invalid TOTP code")
 	}
 
-	if err := checkTOTPReplay(db, username, code, currentTime); err != nil {
+	if err := recordTOTPUsageOnce(db, username, code, codeWindowStart); err != nil {
 		if isDebugMode() && logging.ErrorLogger != nil {
 			logging.ErrorLogger.Printf("TOTP replay detected for user: %s", username)
 		}
@@ -72,15 +71,36 @@ func ValidateTOTPCode(db *sql.DB, username, code string) error {
 
 	clearMFAFailuresIfLocked(db, username, lockState)
 
-	if err := logTOTPUsage(db, username, code, currentTime); err != nil {
-		if logging.ErrorLogger != nil {
-			logging.ErrorLogger.Printf("Failed to log TOTP usage: %v", err)
-		}
-	}
-
 	updateMethodLastUsed(db, username, MFAMethodTOTP)
 
 	return nil
+}
+
+// matchTOTPWindow reports which accepted window (current, previous, or next within
+// TOTPSkew) the code belongs to, returning that window's start as a Unix timestamp.
+func matchTOTPWindow(secret, code string, now time.Time) (int64, bool, error) {
+	period := time.Duration(TOTPPeriod) * time.Second
+	current := now.Truncate(period)
+	offsets := []int{0}
+	for i := 1; i <= TOTPSkew; i++ {
+		offsets = append(offsets, -i, i)
+	}
+
+	for _, offset := range offsets {
+		windowStart := current.Add(time.Duration(offset) * period)
+		expected, err := totp.GenerateCodeCustom(secret, windowStart, totp.ValidateOpts{
+			Period:    TOTPPeriod,
+			Digits:    otp.DigitsSix,
+			Algorithm: otp.AlgorithmSHA1,
+		})
+		if err != nil {
+			return 0, false, err
+		}
+		if subtle.ConstantTimeCompare([]byte(expected), []byte(code)) == 1 {
+			return windowStart.Unix(), true, nil
+		}
+	}
+	return 0, false, nil
 }
 
 // CanDecryptMFASecret checks whether a user's MFA credential blob decrypts (dev diagnostic helper).
@@ -126,36 +146,33 @@ func validateTOTPCodeInternal(secret, code string) bool {
 	return valid
 }
 
-func checkTOTPReplay(db *sql.DB, username, code string, testTime time.Time) error {
+// recordTOTPUsageOnce records a code under the window it belongs to, failing if that
+// code was already recorded. Check and insert run as one statement so concurrent
+// requests carrying the same code cannot both succeed.
+func recordTOTPUsageOnce(db *sql.DB, username, code string, codeWindowStart int64) error {
 	codeHash := hashString(code)
-	windowStart := testTime.Truncate(time.Duration(TOTPPeriod) * time.Second).Unix()
 
-	var count int
-	err := db.QueryRow(`
-		SELECT COUNT(*) 
-		FROM mfa_usage_log 
-		WHERE username = ? AND code_hash = ? AND window_start = ?`,
-		username, codeHash, windowStart,
-	).Scan(&count)
+	result, err := db.Exec(`
+		INSERT INTO mfa_usage_log (username, code_hash, window_start)
+		SELECT ?, ?, ?
+		WHERE NOT EXISTS (
+			SELECT 1 FROM mfa_usage_log
+			WHERE username = ? AND code_hash = ? AND window_start = ?
+		)`,
+		username, codeHash, codeWindowStart,
+		username, codeHash, codeWindowStart,
+	)
 	if err != nil {
-		return fmt.Errorf("failed to check replay: %w", err)
+		return fmt.Errorf("failed to record TOTP usage: %w", err)
 	}
-	if count > 0 {
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to record TOTP usage: %w", err)
+	}
+	if rows == 0 {
 		return fmt.Errorf("code already used")
 	}
 	return nil
-}
-
-func logTOTPUsage(db *sql.DB, username, code string, testTime time.Time) error {
-	codeHash := hashString(code)
-	windowStart := testTime.Truncate(time.Duration(TOTPPeriod) * time.Second).Unix()
-
-	_, err := db.Exec(`
-		INSERT INTO mfa_usage_log (username, code_hash, window_start) 
-		VALUES (?, ?, ?)`,
-		username, codeHash, windowStart,
-	)
-	return err
 }
 
 func decryptTOTPSecret(encrypted []byte, username string) (string, error) {

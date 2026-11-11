@@ -34,7 +34,7 @@
 import { test, expect, type Page, type Download, type BrowserContext } from '@playwright/test';
 import { execFileSync, execSync } from 'child_process';
 import { createHash } from 'crypto';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 
 interface MultiDlCorpusFile {
@@ -76,6 +76,7 @@ const REG_FLOW_USERNAME = process.env.REG_FLOW_USERNAME!;
 const REG_FLOW_PASSWORD = process.env.REG_FLOW_PASSWORD!;
 const REG_FLOW_CUSTOM_PASSWORD = process.env.REG_FLOW_CUSTOM_PASSWORD!;
 const MULTI_DL_CORPUS_PATH = process.env.MULTI_DL_CORPUS_PATH || '';
+const TOTP_WINDOW_DIR = process.env.TOTP_WINDOW_DIR || '/tmp/arkfile-e2e-test-data/totp-windows';
 const CLIENT_BIN = '/opt/arkfile/bin/arkfile-client';
 
 // Directories
@@ -113,20 +114,29 @@ function attachConsoleListener(page: Page, label: string) {
 }
 
 /**
- * Wait for the next TOTP time window to avoid replay rejection.
- * Same logic as e2e-test.sh wait_for_totp_window: sleep until (30 - seconds_into_window + 1).
+ * Wait for the next TOTP window only if the test user's last code was generated in the
+ * current window. Shares the per-user window files written by e2e-test.sh
+ * (wait_for_totp_window_if_used); a missing file means unknown, so wait.
  */
-async function waitForMfaWindow(context: string): Promise<void> {
-  const now = Math.floor(Date.now() / 1000);
-  const secondsIntoWindow = now % 30;
-  const secondsToWait = 30 - secondsIntoWindow + 1;
+async function waitForMfaWindowIfUsed(context: string): Promise<void> {
+  const stateFile = join(TOTP_WINDOW_DIR, TEST_USERNAME);
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const currentWindow = String(Math.floor(nowSeconds / 30));
+  if (existsSync(stateFile) && readFileSync(stateFile, 'utf-8').trim() !== currentWindow) {
+    return;
+  }
+  const secondsToWait = 30 - (nowSeconds % 30) + 1;
   logStep(context, `Waiting ${secondsToWait}s for next TOTP window...`);
   await new Promise((resolve) => setTimeout(resolve, secondsToWait * 1000));
 }
 
+function markMfaWindowUsed(): void {
+  mkdirSync(TOTP_WINDOW_DIR, { recursive: true, mode: 0o700 });
+  writeFileSync(join(TOTP_WINDOW_DIR, TEST_USERNAME), `${Math.floor(Date.now() / 30_000)}\n`);
+}
+
 /**
  * Generate a TOTP code using arkfile-client CLI for an arbitrary secret.
- * Must be called AFTER waitForMfaWindow().
  *
  * UI "manual entry" secrets are space-grouped (e.g. "ABCD EFGH ..."); strip
  * whitespace and pass via argv so the full base32 secret reaches the CLI.
@@ -150,10 +160,12 @@ function generateTotpCode(secret: string, context: string): string {
 
 /**
  * Generate a TOTP code for the shared e2e-test.sh MFA secret.
- * Must be called AFTER waitForMfaWindow().
+ * Must be called AFTER waitForMfaWindowIfUsed().
  */
 function generateMfaCode(context: string): string {
-  return generateTotpCode(MFA_SECRET, context);
+  const code = generateTotpCode(MFA_SECRET, context);
+  markMfaWindowUsed();
+  return code;
 }
 
 /**
@@ -196,7 +208,7 @@ async function performLogin(
 
   await page.waitForSelector('#totp-login-code', { state: 'visible', timeout: 60_000 });
 
-  await waitForMfaWindow(context);
+  await waitForMfaWindowIfUsed(context);
   const totpCode = generateMfaCode(context);
 
   await page.fill('#totp-login-code', totpCode);
@@ -1965,7 +1977,6 @@ test.describe.serial('Arkfile Playwright registration flow', () => {
     logStep('reg-flow', `TOTP secret captured (${totpSecret.substring(0, 4)}...)`);
 
     await page.waitForSelector('#totp-setup-code', { state: 'visible', timeout: 15_000 });
-    await waitForMfaWindow('reg-flow');
     const totpCode = generateTotpCode(totpSecret, 'reg-flow');
     await page.fill('#totp-setup-code', totpCode);
     await page.waitForSelector('#complete-totp-setup:not([disabled])', { timeout: 5_000 });
