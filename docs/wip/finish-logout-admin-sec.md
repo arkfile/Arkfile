@@ -4,10 +4,9 @@
 
 This document tracks the work left over from `docs/wip/auto-logout.md` and `docs/wip/admin-sec.md`. Both plans were implemented on the server side and deployed to `test.arkfile.net` and `arkfile.net`. On 2026-11-11 a check from outside both servers returned 404 for `GET /api/admin/system/health` and `POST /api/bootstrap/register/response`, and 200 for `GET /api/admin-contacts`.
 
-All code and test changes in the work list below are now in the tree. Go unit tests for the server packages and all Bun unit tests and type checks pass. What remains:
+All code and test changes in the work list below are in the tree. On 2026-11-11, after `sudo bash scripts/dev-reset.sh`, every local test passed: `e2e-test.sh`, `e2e-playwright.sh`, the integrity tests, `go test ./...` with the CGO flags from `AGENTS.md` (all packages, including `cmd/arkfile-client`, `cmd/arkfile-admin`, `cli/*`, and `clictap`), and the TypeScript type check and Bun unit tests (`scripts/testing/test-typescript.sh`). The same change set raises `go.mod` to Go 1.26.11 (GO-2026-6859) and `golang.org/x/crypto` to v0.59.0 (GO-2026-5932), and the `build.sh` govulncheck allowed list is now empty. What remains:
 
-- The developer runs `sudo bash scripts/dev-reset.sh`, then `bash scripts/testing/e2e-test.sh` and `bash scripts/testing/e2e-playwright.sh`. `dev-reset.sh` also rebuilds the vendored FIDO2 stack, whose cache was built under GCC 12 while this host now has GCC 14; until then the `cmd/arkfile-client`, `cmd/arkfile-admin`, and `cli/*` unit tests cannot link (`libcbor.a` LTO version mismatch). Run `go test ./...` with the CGO flags from `AGENTS.md` after that rebuild.
-- After the e2e runs pass, apply the update with `test-update.sh`, then `prod-update.sh`, and confirm on each server that `arkfile-admin login` followed by a read-only admin command works and that a normal browser sign-in reaches the file list.
+- Apply the update with `test-update.sh`, then `prod-update.sh`, and confirm on each server that `arkfile-admin login` followed by a read-only admin command works and that a normal browser sign-in reaches the file list.
 - When everything is confirmed, archive this document together with `docs/wip/auto-logout.md` and `docs/wip/admin-sec.md`.
 
 None of this requires an OPAQUE key rotation. The e2e admin re-registration case flags one account with `flag-user-reregistration`; it does not rotate server keys.
@@ -42,7 +41,7 @@ Tests and docs. New Go tests cover the admin idle limit, family-less tokens, the
 2. Admin path coverage. Done.
 3. `arkfile-client` session handling. Done.
 4. Browser batch notices. Done.
-5. Remaining e2e cases and docs. Done, pending the developer's e2e runs.
+5. Remaining e2e cases and docs. Done; all e2e, integrity, Go, and TypeScript tests pass.
 
 ## Notes for review
 
@@ -51,3 +50,7 @@ Browser batch notices assume the server's grace rule: after the 24-hour mark the
 The maintenance scripts under `scripts/maintenance/` call `arkfile-admin` and were not changed. A long manual run with more than 15 minutes between admin commands now needs a fresh `arkfile-admin login`.
 
 `auth.DeleteAllRefreshTokensForUser` has no callers and can be deleted in a later cleanup.
+
+Source-mode govulncheck also reports GO-2026-6875 and GO-2026-6872 for `github.com/labstack/echo/v4`, with no fix in v4 (fixed only in Echo v5). Neither applies: Arkfile does not use Echo's proxy or rate-limiter middleware, and `main.go` pins `e.IPExtractor = echo.ExtractIPDirect()`. Binary-mode govulncheck in `build.sh` does not flag them. Moving to Echo v5 is tracked as technical debt.
+
+`cmd/arkfile-client` tests that refresh call `isolateSessionHome`, because `refreshSessionToken` adopts a newer refresh token found in the shared session file and a file left by an earlier test would otherwise skip the refresh.
