@@ -533,12 +533,9 @@ build_go_binaries_static
 # Verify binary linking policy
 verify_built_binaries
 
-# govulncheck OSV IDs that must not fail the production gate.
-# GO-2026-5932: golang.org/x/crypto/openpgp is deprecated with Fixed-in: N/A.
-# Arkfile links x/crypto for argon2/hkdf/acme only; openpgp is not imported or
-# present in vendor/, and fresh binaries contain no openpgp strings. Binary-mode
-# govulncheck still flags the module. Revisit if Arkfile ever uses OpenPGP.
-GOVULNCHECK_WHITELIST_IDS="GO-2026-5932"
+# govulncheck OSV IDs that must not fail the production gate. Space-separated;
+# each entry needs a comment explaining why the finding does not apply.
+GOVULNCHECK_WHITELIST_IDS=""
 
 # Return 0 if $1 is in GOVULNCHECK_WHITELIST_IDS (space-separated).
 govulncheck_id_is_whitelisted() {
