@@ -316,10 +316,21 @@ func TestAtomicSaveAuthSession_OverwritesExisting(t *testing.T) {
 // ensureFreshSessionToken
 // ============================================================
 
+// isolateSessionHome gives the test its own session file, session lock, and
+// agent socket. refreshSessionToken adopts a newer refresh token it finds in
+// the session file, so a file left by an earlier test would skip the refresh.
+func isolateSessionHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	return home
+}
+
 // refreshCallCount is a helper that runs a mock /api/refresh server and
 // returns how many times it was called after ensureFreshSessionToken runs.
 func runEnsureFreshTest(t *testing.T, expiresAt time.Time, threshold time.Duration, serverStatus int) (int, error) {
 	t.Helper()
+	isolateSessionHome(t)
 	calls := 0
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -459,6 +470,7 @@ func TestMakeRequestWithSession_200Passthrough(t *testing.T) {
 }
 
 func TestMakeRequestWithSession_401ThenRefreshThen200(t *testing.T) {
+	isolateSessionHome(t)
 	attempt := 0
 	refreshCalled := false
 
@@ -506,6 +518,7 @@ func TestMakeRequestWithSession_401ThenRefreshThen200(t *testing.T) {
 }
 
 func TestMakeRequestWithSession_401ThenRefreshAlso401(t *testing.T) {
+	isolateSessionHome(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Everything returns 401 (both the original request and refresh).
 		w.WriteHeader(http.StatusUnauthorized)
@@ -526,8 +539,7 @@ func TestMakeRequestWithSession_401ThenRefreshAlso401(t *testing.T) {
 }
 
 func TestMakeRequestWithSession_IdleResponseClearsLocalSession(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := isolateSessionHome(t)
 	sessionPath := filepath.Join(home, ".arkfile-session.json")
 	session := newTestSession("idle-token", "idle-refresh", 30*time.Minute)
 	if err := atomicSaveAuthSession(session, sessionPath); err != nil {
@@ -558,8 +570,7 @@ func TestMakeRequestWithSession_IdleResponseClearsLocalSession(t *testing.T) {
 }
 
 func TestLogoutEndsServerSessionBeforeLocalCleanup(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := isolateSessionHome(t)
 	sessionPath := filepath.Join(home, ".arkfile-session.json")
 	session := newTestSession("logout-access", "logout-refresh", 30*time.Minute)
 	if err := atomicSaveAuthSession(session, sessionPath); err != nil {

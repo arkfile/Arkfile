@@ -79,6 +79,7 @@ func writeHomeSession(t *testing.T, session *AuthSession) string {
 }
 
 func TestUploadChunkReportsSessionAbsolute(t *testing.T) {
+	isolateSessionHome(t)
 	sessionPath := writeHomeSession(t, newTestSession("chunk-access", "chunk-refresh", 30*time.Minute))
 	session := newTestSession("chunk-access", "chunk-refresh", 30*time.Minute)
 
@@ -103,6 +104,7 @@ func TestUploadChunkReportsSessionAbsolute(t *testing.T) {
 }
 
 func TestDownloadChunkRefreshesThenReportsSessionIdle(t *testing.T) {
+	isolateSessionHome(t)
 	writeHomeSession(t, newTestSession("dl-access", "dl-refresh", 30*time.Minute))
 	session := newTestSession("dl-access", "dl-refresh", 30*time.Minute)
 
@@ -131,6 +133,7 @@ func TestDownloadChunkRefreshesThenReportsSessionIdle(t *testing.T) {
 }
 
 func TestRefreshAdoptsTokensRotatedByAnotherProcess(t *testing.T) {
+	isolateSessionHome(t)
 	rotated := newTestSession("rotated-access", "rotated-refresh", 30*time.Minute)
 	writeHomeSession(t, rotated)
 	stale := newTestSession("stale-access", "stale-refresh", time.Minute)
@@ -176,6 +179,7 @@ func refreshServer(t *testing.T, calls *int32) *httptest.Server {
 }
 
 func TestRequireSessionRefreshesExpiredAccessToken(t *testing.T) {
+	isolateSessionHome(t)
 	sessionPath := writeHomeSession(t, newTestSession("expired-access", "valid-refresh", -time.Minute))
 	var calls int32
 	srv := refreshServer(t, &calls)
@@ -194,6 +198,7 @@ func TestRequireSessionRefreshesExpiredAccessToken(t *testing.T) {
 }
 
 func TestRequireSessionWithoutServerRefusesExpiredToken(t *testing.T) {
+	isolateSessionHome(t)
 	sessionPath := writeHomeSession(t, newTestSession("expired-access", "valid-refresh", -time.Minute))
 	_, err := requireSession(&ClientConfig{TokenFile: sessionPath})
 	if err == nil || !strings.Contains(err.Error(), "session expired") {
@@ -202,6 +207,7 @@ func TestRequireSessionWithoutServerRefusesExpiredToken(t *testing.T) {
 }
 
 func TestRefreshRebindsAgentToNewAccessToken(t *testing.T) {
+	isolateSessionHome(t)
 	socketPath, err := getAgentSocketPath()
 	if err != nil {
 		t.Fatal(err)
