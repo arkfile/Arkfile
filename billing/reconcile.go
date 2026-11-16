@@ -14,12 +14,29 @@ type InvoiceStatusProvider interface {
 }
 
 type PendingReconcileReport struct {
-	Checked int `json:"checked"`
-	Settled int `json:"settled"`
-	Updated int `json:"updated"`
-	Skipped int `json:"skipped"`
-	Errors  int `json:"errors"`
+	Checked   int `json:"checked"`
+	Settled   int `json:"settled"`
+	Updated   int `json:"updated"`
+	Skipped   int `json:"skipped"`
+	Errors    int `json:"errors"`
+	Closed    int `json:"closed"`
+	Abandoned int `json:"abandoned"`
 }
+
+const (
+	// openInvoiceMaxAge is how long an open invoice stays open locally while
+	// the provider cannot report it (for example after the provider was
+	// reinstalled). Provider expiry plus confirmation timeouts are far shorter.
+	openInvoiceMaxAge = 48 * time.Hour
+	// Expired and failed invoices are re-checked for this long after creation,
+	// at most once per closedInvoiceRecheckInterval, so a completion the
+	// provider operator records late is still credited.
+	closedInvoiceRecheckWindow   = 72 * time.Hour
+	closedInvoiceRecheckInterval = 30 * time.Minute
+	// creatingInvoiceMaxAge bounds the window between writing the local
+	// invoice and attaching the provider invoice.
+	creatingInvoiceMaxAge = 15 * time.Minute
+)
 
 // ApplyProviderInvoiceStatus records a normalized provider status on a local
 // invoice and returns the resulting local status. Status only moves forward:
@@ -63,9 +80,11 @@ func advanceInvoiceStatus(db *sql.DB, invoice *models.PaymentInvoice, from []str
 	return latest.Status, nil
 }
 
-// ReconcilePendingInvoices queries a bounded batch of open (pending or
-// confirming) invoices and applies each provider status. Only a provider
-// status of "paid" settles an invoice.
+// ReconcilePendingInvoices fails abandoned creating invoices, then queries a
+// bounded batch of open and recently closed invoices, least recently checked
+// first, and applies each provider status. Only a provider status of "paid"
+// settles an invoice. An open invoice the provider cannot report is closed
+// locally once it is older than openInvoiceMaxAge.
 func ReconcilePendingInvoices(ctx context.Context, db *sql.DB, provider InvoiceStatusProvider, paymentType string, batchSize int, requestTimeout time.Duration) (PendingReconcileReport, error) {
 	var report PendingReconcileReport
 	if provider == nil {
@@ -77,9 +96,15 @@ func ReconcilePendingInvoices(ctx context.Context, db *sql.DB, provider InvoiceS
 	if requestTimeout <= 0 || requestTimeout > 30*time.Second {
 		return report, fmt.Errorf("billing.ReconcilePendingInvoices: request timeout must be between 1ns and 30s")
 	}
-	invoices, err := models.ListPendingPaymentInvoices(db, paymentType, batchSize)
+	abandoned, err := models.FailStaleCreatingPaymentInvoices(db, creatingInvoiceMaxAge)
 	if err != nil {
-		return report, fmt.Errorf("billing.ReconcilePendingInvoices: list pending: %w", err)
+		return report, fmt.Errorf("billing.ReconcilePendingInvoices: fail stale creating: %w", err)
+	}
+	report.Abandoned = int(abandoned)
+
+	invoices, err := models.ListPaymentInvoicesToReconcile(db, paymentType, batchSize, closedInvoiceRecheckWindow, closedInvoiceRecheckInterval)
+	if err != nil {
+		return report, fmt.Errorf("billing.ReconcilePendingInvoices: list invoices: %w", err)
 	}
 	for _, invoice := range invoices {
 		if err := ctx.Err(); err != nil {
@@ -89,8 +114,19 @@ func ReconcilePendingInvoices(ctx context.Context, db *sql.DB, provider InvoiceS
 		requestCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 		status, statusErr := provider.GetInvoiceStatus(requestCtx, invoice)
 		cancel()
+		if err := models.MarkPaymentInvoiceChecked(db, invoice.InvoiceID); err != nil {
+			report.Errors++
+		}
 		if statusErr != nil {
 			report.Errors++
+			if models.IsOpenPaymentStatus(invoice.Status) {
+				closed, err := models.CloseStalePaymentInvoice(db, invoice.InvoiceID, openInvoiceMaxAge)
+				if err != nil {
+					report.Errors++
+				} else if closed != "" {
+					report.Closed++
+				}
+			}
 			continue
 		}
 		previous := invoice.Status

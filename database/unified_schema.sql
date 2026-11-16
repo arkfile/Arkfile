@@ -507,6 +507,7 @@ CREATE TABLE IF NOT EXISTS payment_invoices (
     provider_invoice_id TEXT UNIQUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_checked_at TIMESTAMP,                        -- Last provider status lookup by the reconciler
     FOREIGN KEY(username) REFERENCES users(username) ON DELETE RESTRICT,
     CHECK(status IN ('creating', 'pending', 'confirming', 'paid', 'expired', 'failed'))
 );

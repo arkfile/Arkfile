@@ -22,6 +22,17 @@ import (
 	"github.com/arkfile/Arkfile/payments"
 )
 
+// maxUnpaidInvoicesPerUser bounds how many invoices one user can hold open on
+// the payment provider, since each one allocates provider wallet addresses.
+const maxUnpaidInvoicesPerUser = 5
+
+// isOwnInvoice reports whether invoiceID already exists for username, so a
+// retried request is answered as a duplicate rather than refused by the cap.
+func isOwnInvoice(invoiceID, username string) bool {
+	existing, err := models.GetPaymentInvoice(database.DB, invoiceID)
+	return err == nil && existing.Username == username
+}
+
 type CreateInvoiceRequest struct {
 	AmountUSD string `json:"amount_usd"`
 	RequestID string `json:"request_id"`
@@ -85,6 +96,16 @@ func CreateInvoiceHandler(c echo.Context) error {
 		}
 	}
 	invoiceID := "inv_" + strings.ReplaceAll(requestUUID.String(), "-", "")
+
+	unpaid, err := models.CountUnpaidPaymentInvoicesForUser(database.DB, username)
+	if err != nil {
+		logging.ErrorLogger.Printf("Payment invoice count failed: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check existing payment requests")
+	}
+	if unpaid >= maxUnpaidInvoicesPerUser && !isOwnInvoice(invoiceID, username) {
+		return echo.NewHTTPError(http.StatusTooManyRequests,
+			"Too many unpaid invoices. Pay an open invoice or wait for one to expire before creating another.")
+	}
 
 	invoice := &models.PaymentInvoice{
 		InvoiceID:           invoiceID,
@@ -402,6 +423,45 @@ func AdminSyncInvoiceHandler(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"success": true,
 		"data":    invoice,
+		"message": message,
+	})
+}
+
+// AdminCheckPaymentsProviderHandler reports whether the payment provider
+// settings Arkfile relies on are in place.
+func AdminCheckPaymentsProviderHandler(c echo.Context) error {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Internal configuration error")
+	}
+	if !cfg.Payments.Enabled {
+		return echo.NewHTTPError(http.StatusForbidden, "Payments integration is disabled")
+	}
+	provider, err := payments.NewProvider(cfg)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Payments provider is not configured")
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request().Context(), 30*time.Second)
+	defer cancel()
+	checks := provider.CheckConfiguration(ctx)
+	passed := true
+	for _, check := range checks {
+		if check.Status == payments.ProviderCheckFail {
+			passed = false
+		}
+	}
+	message := "Payment provider configuration looks correct"
+	if !passed {
+		message = "Payment provider configuration has problems that must be fixed"
+	}
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"success": true,
+		"data": map[string]interface{}{
+			"provider": provider.Name(),
+			"passed":   passed,
+			"checks":   checks,
+		},
 		"message": message,
 	})
 }

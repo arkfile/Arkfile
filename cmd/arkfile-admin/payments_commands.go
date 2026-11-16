@@ -26,6 +26,8 @@ func handlePaymentsCommand(client *HTTPClient, config *AdminConfig, args []strin
 		return handlePaymentsSyncInvoiceCommand(client, config, rest)
 	case "reconcile":
 		return handlePaymentsReconcileCommand(client, config, rest)
+	case "check":
+		return handlePaymentsCheckCommand(client, config, rest)
 	case "help", "--help", "-h":
 		printPaymentsUsage()
 		return nil
@@ -45,6 +47,7 @@ SUBCOMMANDS:
     list [--user NAME] [--status STATUS]  List payment invoices with optional filters.
     sync-invoice <invoice_id>             Sync local invoice state with the payment provider.
     reconcile                             Credit paid invoices missing ledger rows.
+    check                                 Check the Bitcart token and store settings Arkfile relies on.
 
 GLOBAL FLAGS:
     --json                                Emit machine-readable JSON instead of formatted text.
@@ -54,7 +57,61 @@ EXAMPLES:
     arkfile-admin payments show inv_f359120ac9
     arkfile-admin payments list --status pending
     arkfile-admin payments sync-invoice inv_f359120ac9
+    arkfile-admin payments check
 `)
+}
+
+func handlePaymentsCheckCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+	fs := flag.NewFlagSet("payments check", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "Emit JSON instead of formatted text")
+	fs.Usage = func() {
+		fmt.Print(`Usage: arkfile-admin payments check [--json]
+
+Check that the Bitcart API token is accepted and that the store checkout
+settings Arkfile relies on are in place. Exits non-zero when a check fails.
+`)
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	session, err := requireBillingSession(config)
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.makeRequest("GET", "/api/admin/payments/provider-check", nil, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("provider check failed: %w", err)
+	}
+
+	passed, _ := resp.Data["passed"].(bool)
+	if *jsonOut {
+		if err := printJSON(resp.Data); err != nil {
+			return err
+		}
+	} else {
+		fmt.Printf("Payment provider: %s\n", safeString(resp.Data, "provider"))
+		checks, _ := resp.Data["checks"].([]interface{})
+		for _, raw := range checks {
+			check, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			fmt.Printf("  [%s] %-28s %s\n",
+				strings.ToUpper(safeString(check, "status")),
+				safeString(check, "name"),
+				safeString(check, "detail"),
+			)
+		}
+		if resp.Message != "" {
+			fmt.Println(resp.Message)
+		}
+	}
+	if !passed {
+		return fmt.Errorf("payment provider configuration check failed")
+	}
+	return nil
 }
 
 func handlePaymentsShowCommand(client *HTTPClient, config *AdminConfig, args []string) error {

@@ -125,6 +125,7 @@ func setupPaymentsSQLiteDB(t *testing.T) *sql.DB {
 			provider_invoice_id TEXT UNIQUE,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			last_checked_at TIMESTAMP,
 			FOREIGN KEY(username) REFERENCES users(username) ON DELETE RESTRICT,
 			CHECK(status IN ('creating', 'pending', 'confirming', 'paid', 'expired', 'failed'))
 		);

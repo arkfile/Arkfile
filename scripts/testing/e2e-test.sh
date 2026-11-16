@@ -4731,6 +4731,39 @@ run_bitcart_payments() {
         record_test "Bitcart expired marks the invoice expired" "FAIL"
     fi
 
+    scenario "Completion without a block confirmation is not credited"
+    local inv3 pid3 zero_notify
+    raw=$(create_user_invoice "2.00")
+    inv3=$(echo "$raw" | sed '$d' | jq -r '.data.invoice_id // empty' 2>/dev/null)
+    pid3=$(bitcart_mock_last_invoice | jq -r '.id // empty')
+    bitcart_mock_control /mock/tamper "{\"id\":\"$pid3\",\"required_confirmations\":0}" >/dev/null
+    zero_notify=$(bitcart_mock_control /mock/set-status "{\"id\":\"$pid3\",\"status\":\"complete\"}")
+    sleep 1
+    st=$(user_invoice_status "$inv3")
+    count=$(payment_credit_count "$pid3")
+    if [ -n "$inv3" ] && [ "$(echo "$zero_notify" | jq -r '.notify_http')" = "502" ] && [ "$st" = "pending" ] && [ "$count" = "0" ]; then
+        record_test "Zero-confirmation completion is refused" "PASS"
+    else
+        error "Zero-confirmation check failed: invoice=$inv3 notify=$zero_notify status='$st' credits=$count"
+        record_test "Zero-confirmation completion is refused" "FAIL"
+    fi
+    bitcart_mock_control /mock/set-status "{\"id\":\"$pid3\",\"status\":\"expired\"}" >/dev/null
+    wait_invoice_status "$inv3" expired >/dev/null || true
+
+    scenario "Admin payments check reports the Bitcart store settings"
+    local check_out check_code
+    safe_exec check_out check_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        payments check
+    if [ $check_code -eq 0 ] && echo "$check_out" | grep -q "transaction_speed" \
+        && ! echo "$check_out" | grep -q "\[FAIL\]"; then
+        record_test "Admin payments check passes against the recommended store settings" "PASS"
+    else
+        error "Admin payments check failed (exit $check_code):"
+        echo "$check_out"
+        record_test "Admin payments check passes against the recommended store settings" "FAIL"
+    fi
+
     scenario "CLI top-up --wait follows the invoice to paid"
     run_cli_topup_wait "1.00" "complete" 0 "paid"
 

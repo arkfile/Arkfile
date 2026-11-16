@@ -492,6 +492,7 @@ func startPaymentsReconciler(ctx context.Context, cfg *config.Config) {
 		return
 	}
 	go func() {
+		logPaymentsProviderCheck(ctx, provider)
 		ticker := time.NewTicker(paymentsReconcileInterval)
 		defer ticker.Stop()
 		for {
@@ -504,13 +505,28 @@ func startPaymentsReconciler(ctx context.Context, cfg *config.Config) {
 					logging.ErrorLogger.Printf("payments reconciler: %v", err)
 					continue
 				}
-				if report.Settled > 0 || report.Updated > 0 || report.Errors > 0 {
-					logging.InfoLogger.Printf("payments reconciler: checked=%d settled=%d updated=%d errors=%d",
-						report.Checked, report.Settled, report.Updated, report.Errors)
+				if report.Settled > 0 || report.Updated > 0 || report.Errors > 0 || report.Closed > 0 || report.Abandoned > 0 {
+					logging.InfoLogger.Printf("payments reconciler: checked=%d settled=%d updated=%d errors=%d closed=%d abandoned=%d",
+						report.Checked, report.Settled, report.Updated, report.Errors, report.Closed, report.Abandoned)
 				}
 			}
 		}
 	}()
+}
+
+// logPaymentsProviderCheck logs payment provider settings that need attention
+// once at startup. It does not block startup or disable payments.
+func logPaymentsProviderCheck(ctx context.Context, provider payments.PaymentProvider) {
+	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	for _, check := range provider.CheckConfiguration(checkCtx) {
+		switch check.Status {
+		case payments.ProviderCheckFail:
+			logging.ErrorLogger.Printf("payments provider check %s failed: %s", check.Name, check.Detail)
+		case payments.ProviderCheckWarn:
+			logging.WarningLogger.Printf("payments provider check %s warning: %s", check.Name, check.Detail)
+		}
+	}
 }
 
 // runSchemaMigrations applies one-shot schema migrations that cannot be expressed in
@@ -604,6 +620,34 @@ func runSchemaMigrations() {
 
 	migrateCreditTransactionsPaymentType()
 	migratePaymentInvoicesChecks()
+	migratePaymentInvoicesLastCheckedAt()
+}
+
+// migratePaymentInvoicesLastCheckedAt adds payment_invoices.last_checked_at
+// and turns empty provider_invoice_id values into NULL so they no longer
+// collide on the UNIQUE constraint. It runs after migratePaymentInvoicesChecks
+// because that rebuild copies an explicit column list.
+func migratePaymentInvoicesLastCheckedAt() {
+	const desc = "Add last_checked_at to payment_invoices"
+	_, err := database.DB.Exec("ALTER TABLE payment_invoices ADD COLUMN last_checked_at TIMESTAMP")
+	switch {
+	case err == nil:
+		log.Printf("Migration: %s applied successfully", desc)
+	case strings.Contains(strings.ToLower(err.Error()), "duplicate column"):
+		log.Printf("Migration: %s (already applied)", desc)
+	default:
+		log.Printf("Migration: %s failed: %v", desc, err)
+	}
+
+	const nullDesc = "Store missing payment_invoices.provider_invoice_id as NULL"
+	result, err := database.DB.Exec("UPDATE payment_invoices SET provider_invoice_id = NULL WHERE provider_invoice_id = ''")
+	if err != nil {
+		log.Printf("Migration: %s failed: %v", nullDesc, err)
+		return
+	}
+	if rows, _ := result.RowsAffected(); rows > 0 {
+		log.Printf("Migration: %s applied to %d invoice(s)", nullDesc, rows)
+	}
 }
 
 // migrateCreditTransactionsPaymentType rebuilds credit_transactions when the CHECK
@@ -688,6 +732,7 @@ func migratePaymentInvoicesChecks() {
 			provider_invoice_id TEXT UNIQUE,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			last_checked_at TIMESTAMP,
 			FOREIGN KEY(username) REFERENCES users(username) ON DELETE RESTRICT,
 			CHECK(status IN ('creating', 'pending', 'confirming', 'paid', 'expired', 'failed'))
 		);

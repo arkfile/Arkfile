@@ -417,7 +417,7 @@ SeaweedFS S3 credentials are also stored in `/opt/arkfile/etc/seaweedfs-s3.json`
 
 **Bitcoin and Monero Invoice Top-Ups (Bitcart):**
 
-Arkfile can create top-up invoices on a Bitcart instance that you run (see the Bitcart documentation for installing it and connecting Bitcoin and Monero wallets). Top-ups are off by default. To enable them on an existing deployment, add these values to `secrets.env` and run the matching update script (`prod-update.sh`, `test-update.sh`, or `local-deploy.sh` for a local instance):
+Arkfile can create top-up invoices on a Bitcart instance that you run. Top-ups are off by default. See `docs/bitcart-setup.md` for the full operator guide: installing Bitcart on its own host, the store settings Arkfile depends on, verifying the token, and testing on a test network first. To enable them on an existing deployment, add these values to `secrets.env` and run the matching update script (`prod-update.sh`, `test-update.sh`, or `local-deploy.sh` for a local instance):
 
 ```bash
 ARKFILE_PAYMENTS_ENABLED=true
@@ -425,14 +425,15 @@ ARKFILE_MIN_TOP_UP_USD=0.50
 ARKFILE_MAX_TOP_UP_USD=1000.00
 # Merchants API base URL (in Bitcart one-domain mode this ends in /api)
 ARKFILE_BITCART_API_URL=https://pay.example.com/api
-# Origin that serves the checkout page; Arkfile links users to <origin>/i/<invoice id>
+# Base that serves the checkout page; Arkfile links users to <base>/i/<invoice id>.
+# Without Bitcart's checkout component this is usually https://pay.example.com/admin
 ARKFILE_BITCART_CHECKOUT_URL=https://pay.example.com
-# API token with invoice permissions, created in the Bitcart admin panel
+# API token with only invoice_management, created by the store owner
 ARKFILE_BITCART_API_TOKEN=<token>
 ARKFILE_BITCART_STORE_ID=<store id>
 ```
 
-Both URLs must use HTTPS unless they point at loopback (`127.0.0.1`, `localhost`, `::1`). Startup fails with a clear error if any value is missing or invalid. Bitcart must be able to reach `https://<your Arkfile domain>/api/webhooks/bitcart`; Arkfile passes this URL on each invoice, so nothing needs to be configured in Bitcart for it. In the Bitcart store settings, set the store currency to USD, set the transaction speed to at least 1 confirmation (the default of 0 marks invoices complete on an unconfirmed payment), and set the underpaid percentage to 0. Arkfile credits only invoices that Bitcart marks complete. The first start after this update migrates the `payment_invoices` table in place to allow the new `confirming` status; existing rows are kept.
+Both URLs must use HTTPS unless they point at loopback (`127.0.0.1`, `localhost`, `::1`). Startup fails with a clear error if any value is missing or invalid. Bitcart must be able to reach `https://<your Arkfile domain>/api/webhooks/bitcart`; Arkfile passes this URL on each invoice, so nothing needs to be configured in Bitcart for it. In the Bitcart store settings, set the store currency to USD, set the transaction speed to at least 1 confirmation (the default of 0 marks invoices complete on an unconfirmed payment), set the underpaid percentage to 0, and turn off both the email requirement and anonymous invoice creation. Arkfile credits only invoices that Bitcart marks complete, and refuses invoices whose on-chain payment methods require zero confirmations. After the update, run `arkfile-admin payments check` on the Arkfile server to confirm the token and store settings. The first start after this update migrates the `payment_invoices` table in place (adding the `confirming` status and the `last_checked_at` column); existing rows are kept.
 
 `dev-reset.sh` enables top-ups against a local Bitcart mock (`scripts/testing/bitcart-mock.go` on `127.0.0.1:8082`) that `e2e-test.sh` starts and stops. Outside an e2e run, creating an invoice on a dev instance returns 502 unless you start the mock yourself with `go run scripts/testing/bitcart-mock.go`.
 

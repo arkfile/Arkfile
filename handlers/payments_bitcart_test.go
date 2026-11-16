@@ -28,8 +28,9 @@ const (
 type handlerFakeBitcart struct {
 	mu       sync.Mutex
 	invoices map[string]map[string]interface{}
-	gets     int
-	nextID   int
+	gets       int
+	nextID     int
+	storeSpeed int
 }
 
 func (f *handlerFakeBitcart) set(id, field string, value interface{}) {
@@ -44,6 +45,13 @@ func (f *handlerFakeBitcart) add(id, orderID, price string) {
 	f.invoices[id] = map[string]interface{}{
 		"id": id, "status": "pending", "order_id": orderID,
 		"store_id": bitcartTestStore, "price": price, "currency": "USD",
+		"payments": confirmedPayments(), "payment_id": "pm1",
+	}
+}
+
+func confirmedPayments() []interface{} {
+	return []interface{}{
+		map[string]interface{}{"id": "pm1", "lightning": false, "required_confirmations": 1},
 	}
 }
 
@@ -51,7 +59,7 @@ func withBitcartTestEnv(t *testing.T) (*sql.DB, *handlerFakeBitcart, func()) {
 	t.Helper()
 	db, cleanup := withPaymentsTestEnv(t)
 
-	fake := &handlerFakeBitcart{invoices: map[string]map[string]interface{}{}}
+	fake := &handlerFakeBitcart{invoices: map[string]map[string]interface{}{}, storeSpeed: 1}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fake.mu.Lock()
 		defer fake.mu.Unlock()
@@ -68,9 +76,20 @@ func withBitcartTestEnv(t *testing.T) (*sql.DB, *handlerFakeBitcart, func()) {
 			inv := map[string]interface{}{
 				"id": id, "status": "pending", "order_id": body["order_id"],
 				"store_id": body["store_id"], "price": body["price"], "currency": body["currency"],
+				"payments": confirmedPayments(),
 			}
 			fake.invoices[id] = inv
 			_ = json.NewEncoder(w).Encode(inv)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/invoices/count":
+			_ = json.NewEncoder(w).Encode(len(fake.invoices))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/stores/"+bitcartTestStore:
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id": bitcartTestStore, "name": "Handler store",
+				"checkout_settings": map[string]interface{}{
+					"expiration": 15, "transaction_speed": fake.storeSpeed, "underpaid_percentage": 0,
+					"email_required": false, "allow_anonymous_invoice_creation": false,
+				},
+			})
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/invoices/"):
 			fake.gets++
 			inv, ok := fake.invoices[strings.TrimPrefix(r.URL.Path, "/api/invoices/")]
@@ -280,6 +299,90 @@ func TestCreateInvoiceHandler_Bitcart(t *testing.T) {
 	require.NotNil(t, remote)
 	assert.Equal(t, invoiceID, remote["order_id"])
 	assert.Equal(t, "12.50", remote["price"])
+}
+
+func createTopUp(t *testing.T, requestID string) (*httptest.ResponseRecorder, error) {
+	t.Helper()
+	fields := map[string]string{"amount_usd": "1.00"}
+	if requestID != "" {
+		fields["request_id"] = requestID
+	}
+	body, _ := json.Marshal(fields)
+	c, rec := newPaymentsEchoContext(t, http.MethodPost, "/api/billing/invoice", bytes.NewReader(body), paymentsTestUser)
+	return rec, CreateInvoiceHandler(c)
+}
+
+func TestCreateInvoiceHandler_CapsUnpaidInvoices(t *testing.T) {
+	_, fake, cleanup := withBitcartTestEnv(t)
+	defer cleanup()
+
+	retryID := "6f1d3c2a-9b8e-4c7d-a6f5-0e1d2c3b4a59"
+	for i := 0; i < maxUnpaidInvoicesPerUser; i++ {
+		id := ""
+		if i == 0 {
+			id = retryID
+		}
+		rec, err := createTopUp(t, id)
+		require.NoError(t, err, "invoice %d", i+1)
+		assert.Equal(t, http.StatusOK, rec.Code)
+	}
+
+	_, err := createTopUp(t, "")
+	he, ok := err.(*echo.HTTPError)
+	require.True(t, ok, "expected an HTTP error, got %v", err)
+	assert.Equal(t, http.StatusTooManyRequests, he.Code)
+
+	_, err = createTopUp(t, retryID)
+	he, ok = err.(*echo.HTTPError)
+	require.True(t, ok, "expected an HTTP error, got %v", err)
+	assert.Equal(t, http.StatusConflict, he.Code, "a retried request is a duplicate, not a new invoice")
+
+	fake.mu.Lock()
+	created := len(fake.invoices)
+	fake.mu.Unlock()
+	assert.Equal(t, maxUnpaidInvoicesPerUser, created, "refused requests must not reach Bitcart")
+}
+
+func TestBitcartWebhook_ZeroConfirmationCompletionNotCredited(t *testing.T) {
+	db, fake, cleanup := withBitcartTestEnv(t)
+	defer cleanup()
+	seedBitcartInvoice(t, db, fake, "inv_zc", "bc_zc", 1_000_000_000, "10.00")
+	fake.set("bc_zc", "payments", []interface{}{
+		map[string]interface{}{"id": "pm1", "lightning": false, "required_confirmations": 0},
+	})
+	fake.set("bc_zc", "status", "complete")
+
+	_, err := postBitcartNotification(t, "bc_zc")
+	he, ok := err.(*echo.HTTPError)
+	require.True(t, ok, "expected an HTTP error, got %v", err)
+	assert.Equal(t, http.StatusBadGateway, he.Code)
+	assert.Equal(t, models.PaymentStatusPending, localStatus(t, db, "inv_zc"))
+	count, _ := paymentCredits(t, db, "bc_zc")
+	assert.Equal(t, 0, count)
+}
+
+func runProviderCheck(t *testing.T) map[string]interface{} {
+	t.Helper()
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/payments/provider-check", nil)
+	rec := httptest.NewRecorder()
+	require.NoError(t, AdminCheckPaymentsProviderHandler(e.NewContext(req, rec)))
+	return parseJSONResponse(t, rec)["data"].(map[string]interface{})
+}
+
+func TestAdminCheckPaymentsProviderHandler(t *testing.T) {
+	_, fake, cleanup := withBitcartTestEnv(t)
+	defer cleanup()
+
+	data := runProviderCheck(t)
+	assert.Equal(t, "bitcart", data["provider"])
+	assert.Equal(t, true, data["passed"])
+
+	fake.mu.Lock()
+	fake.storeSpeed = 0
+	fake.mu.Unlock()
+	data = runProviderCheck(t)
+	assert.Equal(t, false, data["passed"], "a store completing at 0 confirmations must fail the check")
 }
 
 func TestAdminSyncInvoiceHandler_BitcartSettles(t *testing.T) {

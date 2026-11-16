@@ -2,6 +2,8 @@ package billing
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -12,6 +14,120 @@ type reconcileStatusProvider map[string]string
 
 func (p reconcileStatusProvider) GetInvoiceStatus(_ context.Context, invoice *models.PaymentInvoice) (string, error) {
 	return p[invoice.ProviderInvoiceID], nil
+}
+
+// lookupErrorProvider reports every invoice as unknown to the provider.
+type lookupErrorProvider struct{}
+
+func (lookupErrorProvider) GetInvoiceStatus(context.Context, *models.PaymentInvoice) (string, error) {
+	return "", errors.New("invoice not found")
+}
+
+func backdateInvoice(t *testing.T, db *sql.DB, invoiceID, modifier string) {
+	t.Helper()
+	if _, err := db.Exec(`UPDATE payment_invoices SET created_at = datetime('now', ?) WHERE invoice_id = ?`, modifier, invoiceID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReconcilePendingInvoices_ClosesOldInvoicesProviderCannotReport(t *testing.T) {
+	db := openPaymentsTestDB(t)
+	defer db.Close()
+	createPaymentInvoicesTable(t, db)
+	seedBillingInvoice(t, db, "inv_lost_p", models.PaymentStatusPending, "prov_lost_p", 100_000_000)
+	seedBillingInvoice(t, db, "inv_lost_c", models.PaymentStatusConfirming, "prov_lost_c", 100_000_000)
+	seedBillingInvoice(t, db, "inv_new", models.PaymentStatusPending, "prov_new", 100_000_000)
+	backdateInvoice(t, db, "inv_lost_p", "-3 days")
+	backdateInvoice(t, db, "inv_lost_c", "-3 days")
+
+	report, err := ReconcilePendingInvoices(context.Background(), db, lookupErrorProvider{}, "testprov", 10, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Checked != 3 || report.Errors != 3 || report.Closed != 2 {
+		t.Fatalf("report = %+v, want checked=3 errors=3 closed=2", report)
+	}
+	if got := invoiceStatus(t, db, "inv_lost_p"); got != models.PaymentStatusExpired {
+		t.Errorf("old pending = %q, want expired", got)
+	}
+	if got := invoiceStatus(t, db, "inv_lost_c"); got != models.PaymentStatusFailed {
+		t.Errorf("old confirming = %q, want failed", got)
+	}
+	if got := invoiceStatus(t, db, "inv_new"); got != models.PaymentStatusPending {
+		t.Errorf("recent pending = %q, want pending", got)
+	}
+}
+
+func TestReconcilePendingInvoices_CreditsLateCompletionOfExpiredInvoice(t *testing.T) {
+	db := openPaymentsTestDB(t)
+	defer db.Close()
+	createPaymentInvoicesTable(t, db)
+	seedBillingInvoice(t, db, "inv_late", models.PaymentStatusExpired, "prov_late", 250_000_000)
+	seedBillingInvoice(t, db, "inv_ancient", models.PaymentStatusExpired, "prov_ancient", 250_000_000)
+	backdateInvoice(t, db, "inv_ancient", "-10 days")
+
+	provider := reconcileStatusProvider{"prov_late": models.PaymentStatusPaid, "prov_ancient": models.PaymentStatusPaid}
+	report, err := ReconcilePendingInvoices(context.Background(), db, provider, "testprov", 10, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Settled != 1 || report.Checked != 1 {
+		t.Fatalf("report = %+v, want checked=1 settled=1", report)
+	}
+	if got := invoiceStatus(t, db, "inv_late"); got != models.PaymentStatusPaid {
+		t.Errorf("late completion status = %q, want paid", got)
+	}
+	if got := creditRowCount(t, db, "prov_late"); got != 1 {
+		t.Errorf("late completion credits = %d, want 1", got)
+	}
+	if got := creditRowCount(t, db, "prov_ancient"); got != 0 {
+		t.Errorf("invoice outside the recheck window was credited")
+	}
+
+	report, err = ReconcilePendingInvoices(context.Background(), db, provider, "testprov", 10, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Checked != 0 {
+		t.Errorf("second pass checked %d invoices, want 0", report.Checked)
+	}
+}
+
+func TestReconcilePendingInvoices_RechecksClosedInvoicesAtInterval(t *testing.T) {
+	db := openPaymentsTestDB(t)
+	defer db.Close()
+	createPaymentInvoicesTable(t, db)
+	seedBillingInvoice(t, db, "inv_closed", models.PaymentStatusExpired, "prov_closed", 100_000_000)
+
+	provider := reconcileStatusProvider{"prov_closed": models.PaymentStatusExpired}
+	for pass, want := range []int{1, 0} {
+		report, err := ReconcilePendingInvoices(context.Background(), db, provider, "testprov", 10, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if report.Checked != want {
+			t.Errorf("pass %d checked %d, want %d", pass+1, report.Checked, want)
+		}
+	}
+}
+
+func TestReconcilePendingInvoices_FailsAbandonedCreatingInvoices(t *testing.T) {
+	db := openPaymentsTestDB(t)
+	defer db.Close()
+	createPaymentInvoicesTable(t, db)
+	seedBillingInvoice(t, db, "inv_stuck", models.PaymentStatusCreating, "", 100_000_000)
+	backdateInvoice(t, db, "inv_stuck", "-1 hours")
+
+	report, err := ReconcilePendingInvoices(context.Background(), db, reconcileStatusProvider{}, "testprov", 10, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Abandoned != 1 {
+		t.Fatalf("report = %+v, want abandoned=1", report)
+	}
+	if got := invoiceStatus(t, db, "inv_stuck"); got != models.PaymentStatusFailed {
+		t.Errorf("stuck creating invoice = %q, want failed", got)
+	}
 }
 
 func TestReconcilePaidInvoices_RepairsOrphans(t *testing.T) {

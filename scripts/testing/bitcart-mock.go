@@ -1,8 +1,11 @@
 //go:build ignore
 
 // Mock of the Bitcart Merchants API subset used by Arkfile, for e2e tests only.
-// Listens on 127.0.0.1:8082. Real endpoints: POST /api/invoices (bearer token),
-// GET /api/invoices/{id}, GET /i/{id}. Test controls live under /mock/.
+// Listens on 127.0.0.1:8082. It models a store configured as docs/bitcart-setup.md
+// recommends: anonymous invoice creation off, 1 confirmation, no email prompt.
+// Real endpoints: POST /api/invoices (bearer token), GET /api/invoices/{id},
+// GET /api/invoices/count (bearer token), GET /api/stores/{id}, GET /i/{id}.
+// Test controls live under /mock/.
 package main
 
 import (
@@ -20,17 +23,25 @@ import (
 	"time"
 )
 
+type paymentMethod struct {
+	ID                    string `json:"id"`
+	Lightning             bool   `json:"lightning"`
+	RequiredConfirmations int    `json:"required_confirmations"`
+}
+
 type invoice struct {
-	ID              string  `json:"id"`
-	Status          string  `json:"status"`
-	ExceptionStatus string  `json:"exception_status"`
-	OrderID         string  `json:"order_id"`
-	StoreID         *string `json:"store_id"`
-	Price           string  `json:"price"`
-	Currency        string  `json:"currency"`
-	NotificationURL string  `json:"notification_url"`
-	RedirectURL     string  `json:"redirect_url"`
-	CreatedAt       string  `json:"created"`
+	ID              string          `json:"id"`
+	Status          string          `json:"status"`
+	ExceptionStatus string          `json:"exception_status"`
+	OrderID         string          `json:"order_id"`
+	StoreID         *string         `json:"store_id"`
+	Price           string          `json:"price"`
+	Currency        string          `json:"currency"`
+	NotificationURL string          `json:"notification_url"`
+	RedirectURL     string          `json:"redirect_url"`
+	CreatedAt       string          `json:"created"`
+	PaymentID       *string         `json:"payment_id"`
+	Payments        []paymentMethod `json:"payments"`
 }
 
 var (
@@ -38,6 +49,7 @@ var (
 	invoices = map[string]*invoice{}
 	lastID   string
 	token    = envOr("BITCART_MOCK_TOKEN", "dev-bitcart-token")
+	storeID  = envOr("BITCART_MOCK_STORE", "dev-store")
 	notifier = &http.Client{
 		Timeout:   10 * time.Second,
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
@@ -84,13 +96,23 @@ func notify(inv invoice, status string) int {
 }
 
 type controlRequest struct {
-	ID       string `json:"id"`
-	OrderID  string `json:"order_id"`
-	Status   string `json:"status"`
-	Price    string `json:"price"`
-	StoreID  string `json:"store_id"`
-	Currency string `json:"currency"`
-	Notify   *bool  `json:"notify"`
+	ID                    string `json:"id"`
+	OrderID               string `json:"order_id"`
+	Status                string `json:"status"`
+	Price                 string `json:"price"`
+	StoreID               string `json:"store_id"`
+	Currency              string `json:"currency"`
+	RequiredConfirmations *int   `json:"required_confirmations"`
+	Notify                *bool  `json:"notify"`
+}
+
+// markPaid records the first payment method as the one paid, as Bitcart does
+// once it sees a payment.
+func markPaid(inv *invoice) {
+	if inv.PaymentID == nil && len(inv.Payments) > 0 {
+		id := inv.Payments[0].ID
+		inv.PaymentID = &id
+	}
 }
 
 func lookup(req controlRequest) *invoice {
@@ -149,7 +171,7 @@ func main() {
 			return
 		}
 		if r.Header.Get("Authorization") != "Bearer "+token {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"detail": "Unauthorized"})
+			writeJSON(w, http.StatusForbidden, map[string]string{"detail": "Anonymous invoice creation is disabled"})
 			return
 		}
 		var body struct {
@@ -172,11 +194,13 @@ func main() {
 		}
 		price := strings.Trim(string(body.Price), `"`)
 		store := body.StoreID
+		id := newID()
 		inv := &invoice{
-			ID: newID(), Status: "pending", ExceptionStatus: "none",
+			ID: id, Status: "pending", ExceptionStatus: "none",
 			OrderID: body.OrderID, StoreID: &store, Price: price, Currency: body.Currency,
 			NotificationURL: body.NotificationURL, RedirectURL: body.RedirectURL,
 			CreatedAt: time.Now().UTC().Format(time.RFC3339),
+			Payments:  []paymentMethod{{ID: "pm" + id, RequiredConfirmations: 1}},
 		}
 		mu.Lock()
 		invoices[inv.ID] = inv
@@ -192,6 +216,17 @@ func main() {
 			return
 		}
 		id := strings.TrimPrefix(r.URL.Path, "/api/invoices/")
+		if id == "count" {
+			if r.Header.Get("Authorization") != "Bearer "+token {
+				writeJSON(w, http.StatusUnauthorized, map[string]string{"detail": "Could not validate credentials"})
+				return
+			}
+			mu.Lock()
+			n := len(invoices)
+			mu.Unlock()
+			writeJSON(w, http.StatusOK, n)
+			return
+		}
 		mu.Lock()
 		inv, ok := invoices[id]
 		var snap invoice
@@ -204,6 +239,24 @@ func main() {
 			return
 		}
 		writeJSON(w, http.StatusOK, snap)
+	})
+
+	http.HandleFunc("/api/stores/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if strings.TrimPrefix(r.URL.Path, "/api/stores/") != storeID {
+			writeJSON(w, http.StatusNotFound, map[string]string{"detail": "Object not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"id": storeID, "name": "Mock store", "default_currency": "USD",
+			"checkout_settings": map[string]interface{}{
+				"expiration": 15, "transaction_speed": 1, "underpaid_percentage": 0,
+				"email_required": false, "allow_anonymous_invoice_creation": false,
+			},
+		})
 	})
 
 	http.HandleFunc("/i/", func(w http.ResponseWriter, r *http.Request) {
@@ -230,6 +283,10 @@ func main() {
 	// Changes the invoice status and sends the notification Bitcart would send.
 	http.HandleFunc("/mock/set-status", control(func(inv *invoice, req controlRequest) (bool, string) {
 		inv.Status = req.Status
+		switch req.Status {
+		case "paid", "unconfirmed", "confirmed", "complete":
+			markPaid(inv)
+		}
 		return true, req.Status
 	}))
 
@@ -247,6 +304,11 @@ func main() {
 		}
 		if req.OrderID != "" && req.ID != "" {
 			inv.OrderID = req.OrderID
+		}
+		if req.RequiredConfirmations != nil {
+			for i := range inv.Payments {
+				inv.Payments[i].RequiredConfirmations = *req.RequiredConfirmations
+			}
 		}
 		return false, ""
 	}))

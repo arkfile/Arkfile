@@ -351,6 +351,7 @@ func RegisterRoutes() {
 	adminGroup.GET("/payments/invoices", AdminListInvoicesHandler)
 	adminGroup.POST("/payments/invoice/:invoice_id/sync", AdminSyncInvoiceHandler)
 	adminGroup.POST("/payments/reconcile", AdminReconcilePaymentsHandler)
+	adminGroup.GET("/payments/provider-check", AdminCheckPaymentsProviderHandler)
 
 	// Subscriptions - admin endpoints
 	adminGroup.GET("/subscriptions/plans", AdminListSubscriptionPlansHandler)

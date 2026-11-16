@@ -2,6 +2,7 @@ package models
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -34,10 +35,12 @@ type PaymentInvoice struct {
 	UpdatedAt           time.Time `json:"updated_at"`
 }
 
+// CreatePaymentInvoice stores a missing provider invoice id as NULL, since
+// provider_invoice_id is UNIQUE and repeated empty strings would collide.
 func CreatePaymentInvoice(db DBTX, invoice *PaymentInvoice) error {
 	_, err := db.Exec(`
 		INSERT INTO payment_invoices (invoice_id, username, amount_usd_microcents, status, provider, provider_invoice_id, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 	`, invoice.InvoiceID, invoice.Username, invoice.AmountUSDMicrocents, invoice.Status, invoice.Provider, invoice.ProviderInvoiceID)
 	return err
 }
@@ -158,9 +161,17 @@ func AttachPaymentProviderInvoice(db DBTX, invoiceID, providerInvoiceID string) 
 	return nil
 }
 
-// ListPendingPaymentInvoices returns a bounded oldest-first reconciliation
-// batch of open (pending or confirming) invoices.
-func ListPendingPaymentInvoices(db *sql.DB, provider string, limit int) ([]*PaymentInvoice, error) {
+// sqliteAgo formats d as a negative SQLite datetime modifier, e.g. "-3600 seconds".
+func sqliteAgo(d time.Duration) string {
+	return fmt.Sprintf("-%d seconds", int64(d/time.Second))
+}
+
+// ListPaymentInvoicesToReconcile returns a bounded batch of invoices to check
+// with the provider, least recently checked first: every open (pending or
+// confirming) invoice, plus expired or failed invoices created within
+// closedWindow and not checked within closedInterval, so a completion the
+// provider records after the invoice closed is still credited.
+func ListPaymentInvoicesToReconcile(db *sql.DB, provider string, limit int, closedWindow, closedInterval time.Duration) ([]*PaymentInvoice, error) {
 	if limit < 1 || limit > 500 {
 		return nil, sql.ErrNoRows
 	}
@@ -168,11 +179,17 @@ func ListPendingPaymentInvoices(db *sql.DB, provider string, limit int) ([]*Paym
 		SELECT invoice_id, username, amount_usd_microcents, status, provider,
 		       COALESCE(provider_invoice_id, ''), created_at, updated_at
 		FROM payment_invoices
-		WHERE status IN ('pending', 'confirming') AND provider = ?
+		WHERE provider = ?
 		  AND provider_invoice_id IS NOT NULL AND provider_invoice_id != ''
-		ORDER BY created_at ASC
+		  AND (
+		    status IN ('pending', 'confirming')
+		    OR (status IN ('expired', 'failed')
+		        AND created_at >= datetime('now', ?)
+		        AND (last_checked_at IS NULL OR last_checked_at <= datetime('now', ?)))
+		  )
+		ORDER BY CASE WHEN last_checked_at IS NULL THEN 0 ELSE 1 END, last_checked_at ASC, created_at ASC
 		LIMIT ?
-	`, provider, limit)
+	`, provider, sqliteAgo(closedWindow), sqliteAgo(closedInterval), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -195,6 +212,63 @@ func ListPendingPaymentInvoices(db *sql.DB, provider string, limit int) ([]*Paym
 		invoices = append(invoices, invoice)
 	}
 	return invoices, rows.Err()
+}
+
+// MarkPaymentInvoiceChecked records that the provider was just queried for an invoice.
+func MarkPaymentInvoiceChecked(db DBTX, invoiceID string) error {
+	_, err := db.Exec(`UPDATE payment_invoices SET last_checked_at = CURRENT_TIMESTAMP WHERE invoice_id = ?`, invoiceID)
+	return err
+}
+
+// CloseStalePaymentInvoice closes an open invoice created more than maxAge
+// ago: pending becomes expired and confirming becomes failed. It returns the
+// new status, or "" when the invoice was not open or not old enough. Callers
+// use it only after the provider could not report the invoice.
+func CloseStalePaymentInvoice(db DBTX, invoiceID string, maxAge time.Duration) (string, error) {
+	steps := []struct{ from, to string }{
+		{PaymentStatusPending, PaymentStatusExpired},
+		{PaymentStatusConfirming, PaymentStatusFailed},
+	}
+	for _, step := range steps {
+		result, err := db.Exec(`
+			UPDATE payment_invoices SET status = ?, updated_at = CURRENT_TIMESTAMP
+			WHERE invoice_id = ? AND status = ? AND created_at < datetime('now', ?)
+		`, step.to, invoiceID, step.from, sqliteAgo(maxAge))
+		if err != nil {
+			return "", err
+		}
+		if rows, err := result.RowsAffected(); err != nil {
+			return "", err
+		} else if rows == 1 {
+			return step.to, nil
+		}
+	}
+	return "", nil
+}
+
+// FailStaleCreatingPaymentInvoices marks invoices stuck in creating for longer
+// than maxAge as failed. A creating invoice was never shown to the user with
+// a payment link, so it cannot have been paid.
+func FailStaleCreatingPaymentInvoices(db DBTX, maxAge time.Duration) (int64, error) {
+	result, err := db.Exec(`
+		UPDATE payment_invoices SET status = 'failed', updated_at = CURRENT_TIMESTAMP
+		WHERE status = 'creating' AND created_at < datetime('now', ?)
+	`, sqliteAgo(maxAge))
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// CountUnpaidPaymentInvoicesForUser counts a user's invoices that are being
+// created or are waiting for a payment.
+func CountUnpaidPaymentInvoicesForUser(db DBTX, username string) (int, error) {
+	var count int
+	err := db.QueryRow(
+		`SELECT COUNT(1) FROM payment_invoices WHERE username = ? AND status IN ('creating', 'pending')`,
+		username,
+	).Scan(&count)
+	return count, err
 }
 
 func parsePaymentTimestamp(value string) time.Time {

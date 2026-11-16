@@ -20,26 +20,50 @@ const (
 	testNotifyURL      = "https://arkfile.test/api/webhooks/bitcart"
 )
 
+// fakeBitcart models a store with anonymous invoice creation off: creating
+// invoices and counting them need the token, reading an invoice or the store
+// does not.
 type fakeBitcart struct {
-	mu       sync.Mutex
-	invoices map[string]map[string]interface{}
-	lastBody map[string]interface{}
-	authErrs int
+	mu          sync.Mutex
+	invoices    map[string]map[string]interface{}
+	lastBody    map[string]interface{}
+	authErrs    int
+	createConfs int
+	store       map[string]interface{}
+}
+
+func recommendedCheckoutSettings() map[string]interface{} {
+	return map[string]interface{}{
+		"expiration":                       15,
+		"transaction_speed":                1,
+		"underpaid_percentage":             0,
+		"email_required":                   false,
+		"allow_anonymous_invoice_creation": false,
+	}
 }
 
 func newFakeBitcart(t *testing.T) (*fakeBitcart, *httptest.Server) {
 	t.Helper()
-	fb := &fakeBitcart{invoices: map[string]map[string]interface{}{}}
+	fb := &fakeBitcart{
+		invoices:    map[string]map[string]interface{}{},
+		createConfs: 1,
+		store: map[string]interface{}{
+			"id":                testBitcartStoreID,
+			"name":              "Test store",
+			"checkout_settings": recommendedCheckoutSettings(),
+		},
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fb.mu.Lock()
 		defer fb.mu.Unlock()
-		if r.Header.Get("Authorization") != "Bearer "+testBitcartToken {
-			fb.authErrs++
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
+		authorized := r.Header.Get("Authorization") == "Bearer "+testBitcartToken
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/invoices":
+			if !authorized {
+				fb.authErrs++
+				http.Error(w, "anonymous invoice creation is disabled", http.StatusForbidden)
+				return
+			}
 			var body map[string]interface{}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "bad json", http.StatusBadRequest)
@@ -53,9 +77,23 @@ func newFakeBitcart(t *testing.T) (*fakeBitcart, *httptest.Server) {
 				"store_id": body["store_id"],
 				"price":    body["price"],
 				"currency": body["currency"],
+				"payments": []interface{}{
+					map[string]interface{}{"id": "pm1", "lightning": false, "required_confirmations": fb.createConfs},
+					map[string]interface{}{"id": "pm2", "lightning": true, "required_confirmations": 0},
+				},
+				"payment_id": "pm1",
 			}
 			fb.invoices["bc_inv_1"] = inv
 			_ = json.NewEncoder(w).Encode(inv)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/invoices/count":
+			if !authorized {
+				fb.authErrs++
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(len(fb.invoices))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/stores/"+testBitcartStoreID:
+			_ = json.NewEncoder(w).Encode(fb.store)
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/invoices/"):
 			inv, ok := fb.invoices[strings.TrimPrefix(r.URL.Path, "/api/invoices/")]
 			if !ok {
@@ -205,7 +243,7 @@ func TestBitcartGetInvoiceStatus_AcceptsNumericAndPaddedPrice(t *testing.T) {
 	}
 }
 
-func TestBitcartRequestsFailWithoutValidToken(t *testing.T) {
+func TestBitcartCreateInvoiceFailsWithoutValidToken(t *testing.T) {
 	fb, srv := newFakeBitcart(t)
 	p := newTestBitcartProvider(t, srv)
 	p.token = "wrong"
@@ -214,6 +252,129 @@ func TestBitcartRequestsFailWithoutValidToken(t *testing.T) {
 	}
 	if fb.authErrs != 1 {
 		t.Errorf("auth errors = %d, want 1", fb.authErrs)
+	}
+}
+
+func TestBitcartCreateInvoice_RefusesZeroConfirmationStore(t *testing.T) {
+	fb, srv := newFakeBitcart(t)
+	fb.createConfs = 0
+	p := newTestBitcartProvider(t, srv)
+	_, err := p.CreateInvoice(context.Background(), "inv_abc", 1_250_000_000)
+	if !errors.Is(err, ErrBitcartUnconfirmedPayments) {
+		t.Fatalf("err = %v, want ErrBitcartUnconfirmedPayments", err)
+	}
+}
+
+func TestBitcartGetInvoiceStatus_RequiresConfirmedCompletion(t *testing.T) {
+	unconfirmed := []interface{}{
+		map[string]interface{}{"id": "pm1", "lightning": false, "required_confirmations": 0},
+		map[string]interface{}{"id": "pm2", "lightning": true, "required_confirmations": 0},
+	}
+	cases := []struct {
+		name      string
+		paymentID interface{}
+		payments  interface{}
+		wantErr   bool
+	}{
+		{"on-chain with confirmations", "pm1", nil, false},
+		{"lightning", "pm2", nil, false},
+		{"on-chain without confirmations", "pm1", unconfirmed, true},
+		{"no paid method reported", nil, nil, true},
+		{"paid method missing", "pm9", nil, true},
+	}
+	for _, tc := range cases {
+		fb, srv := newFakeBitcart(t)
+		p := newTestBitcartProvider(t, srv)
+		if _, err := p.CreateInvoice(context.Background(), "inv_abc", 1_250_000_000); err != nil {
+			t.Fatal(err)
+		}
+		fb.set("bc_inv_1", "status", "complete")
+		fb.set("bc_inv_1", "payment_id", tc.paymentID)
+		if tc.payments != nil {
+			fb.set("bc_inv_1", "payments", tc.payments)
+		}
+		got, err := p.GetInvoiceStatus(context.Background(), localInvoice("bc_inv_1"))
+		if tc.wantErr {
+			if !errors.Is(err, ErrBitcartUnconfirmedPayments) {
+				t.Errorf("%s: err = %v, want ErrBitcartUnconfirmedPayments", tc.name, err)
+			}
+			continue
+		}
+		if err != nil || got != models.PaymentStatusPaid {
+			t.Errorf("%s: got %q, %v; want paid", tc.name, got, err)
+		}
+	}
+
+	fb, srv := newFakeBitcart(t)
+	p := newTestBitcartProvider(t, srv)
+	if _, err := p.CreateInvoice(context.Background(), "inv_abc", 1_250_000_000); err != nil {
+		t.Fatal(err)
+	}
+	fb.set("bc_inv_1", "payment_id", nil)
+	fb.set("bc_inv_1", "status", "expired")
+	if got, err := p.GetInvoiceStatus(context.Background(), localInvoice("bc_inv_1")); err != nil || got != models.PaymentStatusExpired {
+		t.Errorf("expired without a paid method: got %q, %v", got, err)
+	}
+}
+
+func checkStatuses(checks []ProviderCheck) map[string]string {
+	out := map[string]string{}
+	for _, c := range checks {
+		out[c.Name] = c.Status
+	}
+	return out
+}
+
+func TestBitcartCheckConfiguration_RecommendedStorePasses(t *testing.T) {
+	_, srv := newFakeBitcart(t)
+	p := newTestBitcartProvider(t, srv)
+	got := checkStatuses(p.CheckConfiguration(context.Background()))
+	for _, name := range []string{"api_token", "store", "transaction_speed", "underpaid_percentage", "email_required", "anonymous_invoice_creation", "expiration"} {
+		if got[name] != ProviderCheckOK {
+			t.Errorf("%s = %q, want ok (all: %v)", name, got[name], got)
+		}
+	}
+}
+
+func TestBitcartCheckConfiguration_FlagsRiskySettings(t *testing.T) {
+	fb, srv := newFakeBitcart(t)
+	fb.store["checkout_settings"] = map[string]interface{}{
+		"transaction_speed":                0,
+		"underpaid_percentage":             5,
+		"email_required":                   true,
+		"allow_anonymous_invoice_creation": true,
+	}
+	p := newTestBitcartProvider(t, srv)
+	p.token = "wrong"
+	got := checkStatuses(p.CheckConfiguration(context.Background()))
+	want := map[string]string{
+		"api_token":                  ProviderCheckFail,
+		"store":                      ProviderCheckOK,
+		"transaction_speed":          ProviderCheckFail,
+		"underpaid_percentage":       ProviderCheckFail,
+		"email_required":             ProviderCheckWarn,
+		"anonymous_invoice_creation": ProviderCheckWarn,
+	}
+	for name, status := range want {
+		if got[name] != status {
+			t.Errorf("%s = %q, want %q", name, got[name], status)
+		}
+	}
+	if _, ok := got["expiration"]; ok {
+		t.Error("expiration should be omitted when Bitcart does not report it")
+	}
+}
+
+func TestBitcartCheckConfiguration_UnknownStoreFails(t *testing.T) {
+	_, srv := newFakeBitcart(t)
+	p := newTestBitcartProvider(t, srv)
+	p.storeID = "store_missing"
+	got := checkStatuses(p.CheckConfiguration(context.Background()))
+	if got["store"] != ProviderCheckFail {
+		t.Errorf("store = %q, want fail", got["store"])
+	}
+	if _, ok := got["transaction_speed"]; ok {
+		t.Error("settings checks should stop when the store cannot be read")
 	}
 }
 
