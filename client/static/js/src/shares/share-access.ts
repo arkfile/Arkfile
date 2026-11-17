@@ -428,6 +428,14 @@ export class ShareAccessUI {
         if (result.error && /partial file may already/i.test(result.error)) {
           showPartialDownloadWarning();
         }
+        // Ticket and chunk failures include the HTTP status. Keep the server's
+        // reason when it is expiry or the download limit; those are not a bad token.
+        if (result.error && /expired/i.test(result.error)) {
+          throw new Error('Share link has expired');
+        }
+        if (result.error && /download limit|exhausted/i.test(result.error)) {
+          throw new Error('Download limit reached');
+        }
         if (result.error?.includes('403') || result.error?.includes('invalid')) {
           throw new Error('Download token invalid or share has been revoked');
         }

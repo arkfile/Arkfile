@@ -177,6 +177,20 @@ function computeSha256(filePath: string): string {
 }
 
 /**
+ * Wait until document.body text contains needle.
+ * waitForFunction(fn, arg, options) treats a bare options object as the
+ * page-function argument, which drops the timeout back to the 30s action default.
+ */
+async function waitForBodyText(page: Page, needle: string, timeoutMs: number): Promise<void> {
+  const expected = needle.toLowerCase();
+  await page.waitForFunction(
+    (text: string) => document.body.innerText.toLowerCase().includes(text),
+    expected,
+    { timeout: timeoutMs },
+  );
+}
+
+/**
  * Perform the full login flow on the given page: OPAQUE auth + MFA (TOTP) + cache opt-in.
  * After this returns, the Account Key wrapping key is live in the page's JS heap.
  */
@@ -544,13 +558,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await sharedPage.click('#upload-file-btn');
 
     logStep('account-upload', 'Waiting for upload success message (timeout: 180s)...');
-    await sharedPage.waitForFunction(
-      () => {
-        const text = document.body.innerText.toLowerCase();
-        return text.includes('uploaded successfully');
-      },
-      { timeout: 180_000 },
-    );
+    await waitForBodyText(sharedPage, 'uploaded successfully', 180_000);
     logStep('account-upload', 'Upload success message detected');
 
     // Give the app a moment to refresh the file list automatically
@@ -616,10 +624,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await sharedPage.click('#upload-file-btn');
 
     logStep('duplicate-upload', 'Waiting for duplicate error message...');
-    await sharedPage.waitForFunction(
-      () => document.body.innerText.toLowerCase().includes('duplicate file detected'),
-      { timeout: 30_000 },
-    );
+    await waitForBodyText(sharedPage, 'duplicate file detected', 30_000);
 
     console.log('[OK] Duplicate upload correctly rejected');
   });
@@ -643,13 +648,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await expect(sharedPage.locator('#useAccountPassword')).toBeChecked();
     await sharedPage.click('#upload-file-btn');
 
-    await sharedPage.waitForFunction(
-      () => {
-        const text = document.body.innerText.toLowerCase();
-        return text.includes('uploaded successfully');
-      },
-      { timeout: 180_000 },
-    );
+    await waitForBodyText(sharedPage, 'uploaded successfully', 180_000);
     logStep('file-deletion', 'Delete-test file uploaded');
 
     await sharedPage.waitForTimeout(3000);
@@ -734,13 +733,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await sharedPage.click('#upload-file-btn');
 
     logStep('custom-upload', 'Waiting for upload success message (timeout: 180s)...');
-    await sharedPage.waitForFunction(
-      () => {
-        const text = document.body.innerText.toLowerCase();
-        return text.includes('uploaded successfully');
-      },
-      { timeout: 180_000 },
-    );
+    await waitForBodyText(sharedPage, 'uploaded successfully', 180_000);
     logStep('custom-upload', 'Upload success message detected');
 
     // Give the app a moment to refresh the file list automatically
@@ -832,6 +825,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     });
     await sharedPage.waitForFunction(
       () => !document.querySelector('#message-container .toast'),
+      undefined,
       { timeout: 5_000 },
     );
 
@@ -893,10 +887,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await expect(sharedPage.locator('#useAccountPassword')).toBeChecked();
     await sharedPage.fill('#uploadTagsInput', 'PC-1, folder-A');
     await sharedPage.click('#upload-file-btn');
-    await sharedPage.waitForFunction(
-      () => document.body.innerText.toLowerCase().includes('uploaded successfully'),
-      { timeout: 180_000 },
-    );
+    await waitForBodyText(sharedPage, 'uploaded successfully', 180_000);
     await sharedPage.waitForTimeout(2000);
 
     let appeared = await fileExistsInList(sharedPage, tagsFileName);
@@ -1226,7 +1217,9 @@ test.describe.serial('Arkfile Playwright E2E', () => {
   // --------------------------------------------------------------------------
   // Share creation (A, B, C)
   // --------------------------------------------------------------------------
-  test('Create shares A (no limits), B (max_downloads=2), C (expires=1m)', async () => {
+  test('Create shares A (no limits), B (max_downloads=2), C (expires=1m)', async ({ browser }) => {
+    // Three share creates, then Share C's download and the 65s expiry wait.
+    test.setTimeout(420_000);
     const fileItem = findFileItem(sharedPage, TEST_FILE_NAME);
     await expect(fileItem).toBeVisible({ timeout: 60_000 });
 
@@ -1281,6 +1274,37 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     console.log(`[OK] Share C created: ${shareCId}`);
 
     console.log('[OK] All three shares created successfully');
+
+    // Share C expires one minute after creation. Download it in this test,
+    // before share-list refresh and the anonymous Share A download.
+    logStep('share-expiry', 'Downloading Share C before the 1-minute expiry');
+    const expiryContext = await browser.newContext({
+      baseURL: SERVER_URL,
+      ignoreHTTPSErrors: true,
+      acceptDownloads: true,
+    });
+    const expiryPage = await expiryContext.newPage();
+    attachConsoleListener(expiryPage, 'share-expiry');
+    await expiryPage.goto(shareCUrl);
+    await expiryPage.waitForSelector('#sharePassword', { state: 'visible', timeout: 15_000 });
+    await expiryPage.fill('#sharePassword', SHARE_C_PASSWORD);
+    await expiryPage.click('#shareAccessForm button[type="submit"]');
+    await expiryPage.waitForSelector('#fileDetails', { state: 'visible', timeout: 120_000 });
+
+    const beforeExpiry = expiryPage.waitForEvent('download', { timeout: 120_000 });
+    await expiryPage.click('#downloadBtn');
+    await saveDownload(await beforeExpiry, 'share_c_before_expiry.bin');
+    console.log('[OK] Share C download before expiry succeeded');
+
+    logStep('share-expiry', 'Waiting 65s for Share C to expire...');
+    await new Promise((resolve) => setTimeout(resolve, 65_000));
+
+    logStep('share-expiry', 'Attempting download after expiry...');
+    // Server returns 403.html at page level for expired shares (before rendering shared.html).
+    await expiryPage.goto(shareCUrl);
+    await expiryPage.waitForSelector('[data-testid="share-expired"]', { timeout: 15_000 });
+    console.log('[OK] Share C download after expiry correctly rejected');
+    await expiryContext.close();
   });
 
   // --------------------------------------------------------------------------
@@ -1320,6 +1344,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     });
     await sharedPage.waitForFunction(
       () => !document.querySelector('#message-container .toast'),
+      undefined,
       { timeout: 5_000 },
     ).catch(() => {});
 
@@ -1375,41 +1400,17 @@ test.describe.serial('Arkfile Playwright E2E', () => {
   // --------------------------------------------------------------------------
   // Share access controls
   // --------------------------------------------------------------------------
-  test('Share access controls (max downloads, expiry, non-existent)', async ({ browser }) => {
-    const anonContext = await browser.newContext({ baseURL: SERVER_URL, ignoreHTTPSErrors: true });
-    let page = await anonContext.newPage();
+  test('Share access controls (max downloads, non-existent)', async ({ browser }) => {
+    const anonContext = await browser.newContext({
+      baseURL: SERVER_URL,
+      ignoreHTTPSErrors: true,
+      acceptDownloads: true,
+    });
+    const page = await anonContext.newPage();
     attachConsoleListener(page, 'share-controls-anon');
 
-    // Share C expiry (test FIRST -- Share C was created with 1-minute expiry during
-    // share creation, so we must download before it expires. Testing this before
-    // Share B avoids the time-consuming max_downloads test consuming the expiry window.)
-    logStep('share-expiry', 'Testing Share C expiry');
-
-    await page.goto(shareCUrl);
-    await page.waitForSelector('#sharePassword', { state: 'visible', timeout: 15_000 });
-    await page.fill('#sharePassword', SHARE_C_PASSWORD);
-    await page.click('#shareAccessForm button[type="submit"]');
-    await page.waitForSelector('#fileDetails', { state: 'visible', timeout: 120_000 });
-
-    let dlPromise = page.waitForEvent('download', { timeout: 120_000 });
-    await page.click('#downloadBtn');
-    await saveDownload(await dlPromise, 'share_c_before_expiry.bin');
-    console.log('[OK] Share C download before expiry succeeded');
-
-    logStep('share-expiry', 'Waiting 65s for Share C to expire...');
-    await new Promise((resolve) => setTimeout(resolve, 65_000));
-
-    logStep('share-expiry', 'Attempting download after expiry...');
-    // Server returns 403.html at page level for expired shares (before rendering shared.html).
-    await page.goto(shareCUrl);
-    await page.waitForSelector('[data-testid="share-expired"]', { timeout: 15_000 });
-    console.log('[OK] Share C download after expiry correctly rejected');
-
-    // Share B max_downloads=2
-    // Use a fresh page to avoid stale state from Share C expiry test
-    await page.close();
-    page = await anonContext.newPage();
-    attachConsoleListener(page, 'share-controls-anon');
+    // Share C's before-expiry download and the expired-page check already ran
+    // in the create-shares test, immediately after the 1-minute share was created.
     logStep('share-max-downloads', 'Testing Share B max_downloads=2');
 
     await page.goto(shareBUrl);
@@ -1418,7 +1419,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await page.click('#shareAccessForm button[type="submit"]');
     await page.waitForSelector('#fileDetails', { state: 'visible', timeout: 120_000 });
 
-    dlPromise = page.waitForEvent('download', { timeout: 120_000 });
+    let dlPromise = page.waitForEvent('download', { timeout: 120_000 });
     await page.click('#downloadBtn');
     await saveDownload(await dlPromise, 'share_b_download_1.bin');
     console.log('[OK] Share B download 1/2');
@@ -2024,11 +2025,19 @@ test.describe.serial('Arkfile Playwright registration flow', () => {
     await page.locator('#password-modal-submit-btn').click();
 
     logStep('reg-flow', 'Waiting for 25 MB upload success (timeout: 360s)...');
+    // Success toasts dismiss after 5s, so the durable signal is the file row.
     await page.waitForFunction(
-      () => document.body.innerText.toLowerCase().includes('uploaded successfully'),
+      (name: string) => {
+        const items = document.querySelectorAll('.file-item .file-info strong');
+        for (const item of items) {
+          if (item.textContent === name) return true;
+        }
+        return false;
+      },
+      REG_FLOW_FILE_NAME,
       { timeout: 360_000 },
     );
-    logStep('reg-flow', 'Upload success message detected');
+    logStep('reg-flow', 'Uploaded file is in the file list');
 
     await page.waitForTimeout(3000);
     let appeared = await fileExistsInList(page, REG_FLOW_FILE_NAME);
