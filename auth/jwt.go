@@ -42,7 +42,26 @@ type Claims struct {
 	RequiresMFA bool   `json:"requires_mfa,omitempty"`
 	FamilyID    string `json:"family_id,omitempty"`
 	LoginKind   string `json:"login_kind,omitempty"`
+	// IssuedAtMicros is the issue time in Unix microseconds. The standard iat
+	// claim has whole-second precision, which cannot order a token against a
+	// user-wide revocation written earlier in the same second.
+	IssuedAtMicros int64 `json:"iat_us,omitempty"`
 	jwt.RegisteredClaims
+}
+
+// IssuedAtTime returns the most precise issue time the token carries. The
+// microsecond claim is used only when it falls in the same second as iat.
+func (c *Claims) IssuedAtTime() (time.Time, bool) {
+	if c.IssuedAt == nil {
+		return time.Time{}, false
+	}
+	if c.IssuedAtMicros > 0 {
+		precise := time.UnixMicro(c.IssuedAtMicros)
+		if precise.Unix() == c.IssuedAt.Unix() {
+			return precise, true
+		}
+	}
+	return c.IssuedAt.Time, true
 }
 
 // GenerateRefreshToken creates a cryptographically secure random string to be used as a refresh token.
@@ -76,16 +95,18 @@ func GenerateTemporaryMFAToken(username string) (string, time.Time, error) {
 
 func GenerateTemporaryMFATokenForLogin(username, loginKind string) (string, time.Time, error) {
 	tokenID := uuid.New().String()
-	expirationTime := time.Now().Add(20 * time.Minute)
+	now := time.Now()
+	expirationTime := now.Add(20 * time.Minute)
 
 	claims := &Claims{
-		Username:    username,
-		RequiresMFA: true,
-		LoginKind:   loginKind,
+		Username:       username,
+		RequiresMFA:    true,
+		LoginKind:      loginKind,
+		IssuedAtMicros: now.UnixMicro(),
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			NotBefore: jwt.NewNumericDate(time.Now()),
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
 			Issuer:    Issuer,
 			Audience:  []string{AudienceMFA},
 			ID:        tokenID,
@@ -105,16 +126,18 @@ func GenerateTemporaryResetToken(username string) (string, time.Time, error) {
 
 func GenerateTemporaryResetTokenForLogin(username, loginKind string) (string, time.Time, error) {
 	tokenID := uuid.New().String()
-	expirationTime := time.Now().Add(15 * time.Minute)
+	now := time.Now()
+	expirationTime := now.Add(15 * time.Minute)
 
 	claims := &Claims{
-		Username:    username,
-		RequiresMFA: true,
-		LoginKind:   loginKind,
+		Username:       username,
+		RequiresMFA:    true,
+		LoginKind:      loginKind,
+		IssuedAtMicros: now.UnixMicro(),
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			NotBefore: jwt.NewNumericDate(time.Now()),
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
 			Issuer:    Issuer,
 			Audience:  []string{AudienceReset},
 			ID:        tokenID,
@@ -136,16 +159,18 @@ func GenerateReregistrationToken(username string) (string, time.Time, error) {
 
 func GenerateReregistrationTokenForLogin(username, loginKind string) (string, time.Time, error) {
 	tokenID := uuid.New().String()
-	expirationTime := time.Now().Add(15 * time.Minute)
+	now := time.Now()
+	expirationTime := now.Add(15 * time.Minute)
 
 	claims := &Claims{
-		Username:    username,
-		RequiresMFA: true,
-		LoginKind:   loginKind,
+		Username:       username,
+		RequiresMFA:    true,
+		LoginKind:      loginKind,
+		IssuedAtMicros: now.UnixMicro(),
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			NotBefore: jwt.NewNumericDate(time.Now()),
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
 			Issuer:    Issuer,
 			Audience:  []string{AudienceReregistration},
 			ID:        tokenID,
@@ -182,14 +207,15 @@ func GenerateFullAccessTokenForSession(username, familyID, loginKind string, ses
 	}
 
 	claims := &Claims{
-		Username:    username,
-		RequiresMFA: false,
-		FamilyID:    familyID,
-		LoginKind:   loginKind,
+		Username:       username,
+		RequiresMFA:    false,
+		FamilyID:       familyID,
+		LoginKind:      loginKind,
+		IssuedAtMicros: now.UnixMicro(),
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			NotBefore: jwt.NewNumericDate(time.Now()),
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
 			Issuer:    Issuer,
 			Audience:  []string{AudienceAPI},
 			ID:        tokenID,

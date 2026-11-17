@@ -604,3 +604,94 @@ func TestRevokeAllUserJWTTokens_EnforcesMiddleware(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, http.StatusUnauthorized, httpErr.Code)
 }
+
+// runUserWideRevocationCheck writes a revocation at revokedAt (sub-second
+// precision, as the server stores it) and runs one request with claims.
+func runUserWideRevocationCheck(t *testing.T, username string, revokedAt time.Time, claims *Claims) error {
+	t.Helper()
+	db := setupTestDB(t)
+	t.Cleanup(func() { db.Close() })
+
+	_, err := db.Exec(
+		`INSERT INTO user_jwt_revocations (username, revoked_at, reason) VALUES (?, ?, ?)`,
+		username, revokedAt.Format(time.RFC3339Nano), "same-second test",
+	)
+	require.NoError(t, err)
+	InvalidateUserRevocationCache(username)
+
+	tokenString, err := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims).SignedString(GetJWTFullPrivateKey())
+	require.NoError(t, err)
+	parsedToken, _, err := new(jwt.Parser).ParseUnverified(tokenString, &Claims{})
+	require.NoError(t, err)
+
+	e := echo.New()
+	c := e.NewContext(httptest.NewRequest(http.MethodGet, "/api/files", nil), httptest.NewRecorder())
+	c.Set("user", parsedToken)
+	return TokenRevocationMiddleware(db)(func(c echo.Context) error { return c.NoContent(http.StatusOK) })(c)
+}
+
+func sameSecondClaims(username, jti string, issued time.Time, withMicros bool) *Claims {
+	claims := &Claims{
+		Username: username,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(issued.Add(10 * time.Minute)),
+			IssuedAt:  jwt.NewNumericDate(issued),
+			ID:        jti,
+			Issuer:    Issuer,
+			Audience:  []string{AudienceAPI},
+		},
+	}
+	if withMicros {
+		claims.IssuedAtMicros = issued.UnixMicro()
+	}
+	return claims
+}
+
+// A login completed later in the same second as a revoke-all must not be
+// refused because iat drops the fraction of a second.
+func TestTokenRevocationMiddleware_SameSecondLoginAfterRevocation(t *testing.T) {
+	second := time.Now().Truncate(time.Second)
+	revokedAt := second.Add(500 * time.Millisecond)
+	issued := second.Add(800 * time.Millisecond)
+
+	err := runUserWideRevocationCheck(t, "same_second_after", revokedAt,
+		sameSecondClaims("same_second_after", "same-second-after-jti", issued, true))
+	assert.NoError(t, err, "token issued after the revocation in the same second should be accepted")
+}
+
+// A token minted earlier in the same second as the revocation must still be refused.
+func TestTokenRevocationMiddleware_SameSecondTokenBeforeRevocation(t *testing.T) {
+	second := time.Now().Truncate(time.Second)
+	revokedAt := second.Add(500 * time.Millisecond)
+	issued := second.Add(200 * time.Millisecond)
+
+	err := runUserWideRevocationCheck(t, "same_second_before", revokedAt,
+		sameSecondClaims("same_second_before", "same-second-before-jti", issued, true))
+	require.Error(t, err, "token issued before the revocation in the same second should be refused")
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusUnauthorized, httpErr.Code)
+}
+
+// Tokens minted before iat_us existed keep whole-second iat, so a same-second
+// revocation still refuses them.
+func TestTokenRevocationMiddleware_TokenWithoutMicrosFallsBackToIat(t *testing.T) {
+	second := time.Now().Truncate(time.Second)
+	revokedAt := second.Add(500 * time.Millisecond)
+	issued := second.Add(800 * time.Millisecond)
+
+	err := runUserWideRevocationCheck(t, "no_micros_user", revokedAt,
+		sameSecondClaims("no_micros_user", "no-micros-jti", issued, false))
+	require.Error(t, err, "without iat_us the whole-second iat precedes the revocation")
+}
+
+// An iat_us that disagrees with iat is ignored in favor of iat.
+func TestClaimsIssuedAtTime_RejectsMismatchedMicros(t *testing.T) {
+	issued := time.Now().Truncate(time.Second)
+	claims := sameSecondClaims("mismatch_user", "mismatch-jti", issued, false)
+	claims.IssuedAtMicros = issued.Add(5 * time.Second).UnixMicro()
+
+	got, ok := claims.IssuedAtTime()
+	require.True(t, ok)
+	assert.True(t, got.Equal(issued), "mismatched iat_us must not move the issue time")
+}

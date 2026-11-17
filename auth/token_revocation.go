@@ -285,9 +285,9 @@ func TokenRevocationMiddleware(db *sql.DB) echo.MiddlewareFunc {
 
 			// Per-user user-wide JWT revocation check.
 			// Uses a cached lookup; cache TTL is 30 seconds.
-			if claims.Username != "" && claims.IssuedAt != nil {
+			if issuedAt, ok := claims.IssuedAtTime(); claims.Username != "" && ok {
 				revokedAt, err := getUserRevocationTimeCached(db, claims.Username)
-				if err == nil && !revokedAt.IsZero() && revokedAt.After(claims.IssuedAt.Time) {
+				if err == nil && !revokedAt.IsZero() && revokedAt.After(issuedAt) {
 					return echo.NewHTTPError(http.StatusUnauthorized, "Token has been revoked")
 				}
 			}
