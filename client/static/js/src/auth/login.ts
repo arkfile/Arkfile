@@ -584,6 +584,7 @@ export function setupLoginForm(): void {
       username: usernameInput.value.trim(),
       password: passwordInput.value
     };
+    passwordInput.value = '';
 
     await LoginManager.login(credentials);
   };
@@ -622,6 +623,7 @@ export async function login(): Promise<void> {
     username: usernameInput.value.trim(),
     password: passwordInput.value
   };
+  passwordInput.value = '';
 
   await LoginManager.login(credentials);
 }

@@ -10,6 +10,7 @@ import { isHomePage as detectHomePage, showHome as revealHome, showApp as reveal
 import { setupAppListenersOnce, type ListenerAttachState } from './app/app-listeners';
 import { bootstrapApplication } from './app/bootstrap';
 import type { AppShell } from './app/shell';
+import { registerSwDownload } from './files/sw-streaming-download';
 
 registerTrustedTypesPolicy();
 
@@ -71,12 +72,23 @@ class ArkFileApp implements AppShell {
 
 const app = new ArkFileApp();
 
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => {
-    void app.initialize();
-  });
-} else {
+// The anonymous share page must not run the account bootstrap: it would send
+// the visitor's session cookies to /api/auth/me, /api/files, and /api/refresh
+// alongside the share access and tie the recipient's account to the share.
+function startPage(): void {
+  if (window.location.pathname.startsWith('/shared/')) {
+    void registerSwDownload().catch((err) => {
+      console.warn('[arkfile] SW registration error:', err);
+    });
+    return;
+  }
   void app.initialize();
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', startPage);
+} else {
+  startPage();
 }
 
 if (typeof window !== 'undefined') {

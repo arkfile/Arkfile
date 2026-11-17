@@ -10,6 +10,7 @@ import { getAdminContactForDisplay } from '../ui/footer';
 import { showFileSection, showAuthSection, showTOTPSetupSection } from '../ui/sections';
 import { loadFiles } from '../files/list';
 import { LoginManager } from './login';
+import { escapeHtml } from '../utils/html';
 
 // Make showTOTPAppsModal available globally for inline onclick handlers
 if (typeof window !== 'undefined') {
@@ -384,7 +385,7 @@ export async function generateAndDisplayTOTPSetup(): Promise<void> {
   const backupList = document.getElementById('backup-codes-list');
 
   if (qrDisplay) {
-    qrDisplay.innerHTML = `<img src="${data.qr_code_url}" alt="TOTP QR Code" style="max-width:200px;height:auto;border:1px solid var(--depth-4);border-radius:4px;">`;
+    qrDisplay.innerHTML = `<img src="${escapeHtml(data.qr_code_url)}" alt="TOTP QR Code" style="max-width:200px;height:auto;border:1px solid var(--depth-4);border-radius:4px;">`;
   }
   if (manualCode) {
     manualCode.textContent = data.manual_entry;
@@ -396,7 +397,7 @@ export async function generateAndDisplayTOTPSetup(): Promise<void> {
     verifyBtn.disabled = false;
   }
   if (backupList && data.backup_codes?.length) {
-    backupList.innerHTML = data.backup_codes.map(c => `<li>${c}</li>`).join('');
+    backupList.innerHTML = data.backup_codes.map(c => `<li>${escapeHtml(c)}</li>`).join('');
   }
   if (backupSection) {
     backupSection.classList.remove('hidden');

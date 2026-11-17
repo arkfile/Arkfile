@@ -33,6 +33,7 @@ export async function requestShareTicket(
 
   const response = await fetch(TICKET_ENDPOINT(shareId), {
     method: 'POST',
+    credentials: 'omit',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ download_token: downloadToken }),
   });

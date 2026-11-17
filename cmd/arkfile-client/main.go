@@ -21,8 +21,10 @@ import (
 	"time"
 
 	"github.com/arkfile/Arkfile/auth"
+	"github.com/arkfile/Arkfile/cli/jsonutil"
 	"github.com/arkfile/Arkfile/cli/mfa"
 	"github.com/arkfile/Arkfile/cli/secureinput"
+	"github.com/arkfile/Arkfile/cli/tlspolicy"
 	"github.com/arkfile/Arkfile/config"
 	"github.com/arkfile/Arkfile/crypto"
 	"github.com/arkfile/Arkfile/utils"
@@ -251,6 +253,13 @@ func main() {
 		}
 	}
 
+	if config.TLSInsecure {
+		if err := tlspolicy.RequireLoopbackForInsecure(config.ServerURL); err != nil {
+			logError("%v", err)
+			os.Exit(1)
+		}
+	}
+
 	client := newHTTPClient(config.ServerURL, config.TLSInsecure, config.TimeoutSecs, verbose)
 
 	command := flag.Arg(0)
@@ -464,7 +473,7 @@ func (c *HTTPClient) makeRequest(method, endpoint string, payload interface{}, t
 
 	if c.verbose {
 		logVerbose("Response status: %d", resp.StatusCode)
-		logVerbose("Response body: %s", string(responseData))
+		logVerbose("Response body: %s", jsonutil.RedactSensitiveJSON(responseData))
 	}
 
 	var apiResp Response

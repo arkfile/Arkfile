@@ -11,6 +11,7 @@ import { getCachedAccountKey } from '../crypto/file-encryption.js';
 import { decryptMetadataField } from '../crypto/metadata-helpers.js';
 import { AAD_FIELD_FILENAME, AAD_FIELD_SHA256 } from '../crypto/aad.js';
 import { formatBytes } from '../utils/format.js';
+import { escapeHtml } from '../utils/html.js';
 
 // Types
 
@@ -192,7 +193,7 @@ export class ShareListUI {
    */
   private renderShareItem(share: Share): string {
     const statusClass = share.is_active ? 'status-active' : 'status-revoked';
-    const statusText = share.is_active ? 'Active' : `Revoked: ${share.revoked_reason || 'Unknown'}`;
+    const statusText = share.is_active ? 'Active' : `Revoked: ${escapeHtml(share.revoked_reason || 'Unknown')}`;
     
     const accessText = share.max_accesses !== null
       ? `${share.access_count} / ${share.max_accesses} downloads`
@@ -208,8 +209,8 @@ export class ShareListUI {
       ? `Size: ${formatBytes(share.size)}`
       : '';
 
-    const filenameDisplay = share.filename_local 
-      ? share.filename_local 
+    const filenameDisplay = share.filename_local
+      ? escapeHtml(share.filename_local)
       : '<span class="status-encrypted">[Encrypted]</span>';
 
     const isExhausted = share.max_accesses !== null && share.access_count >= share.max_accesses && share.max_accesses > 0;
@@ -222,23 +223,25 @@ export class ShareListUI {
           ? `<span class="share-inactive-badge">Expired</span>`
           : '';
       
-    const sha256Display = share.sha256_local
+    const sha256 = share.sha256_local ? escapeHtml(share.sha256_local) : '';
+    const sha256Display = sha256
       ? `<div class="stat-item stat-item-hash">
            <span class="stat-label">SHA-256:</span>
-           <span class="stat-value hash-value" title="${share.sha256_local}">${share.sha256_local}</span>
-           <button class="btn-copy-hash" data-hash="${share.sha256_local}" title="Copy SHA-256 to clipboard">Copy</button>
+           <span class="stat-value hash-value" title="${sha256}">${sha256}</span>
+           <button class="btn-copy-hash" data-hash="${sha256}" title="Copy SHA-256 to clipboard">Copy</button>
          </div>`
       : '';
-      
+
     const pwdTypeDisplay = share.password_type
-      ? `<div class="stat-item"><span class="stat-label">Key Type:</span><span class="stat-value type-badge ${share.password_type === 'custom' ? 'type-custom' : 'type-account'}">${share.password_type}</span></div>`
+      ? `<div class="stat-item"><span class="stat-label">Key Type:</span><span class="stat-value type-badge ${share.password_type === 'custom' ? 'type-custom' : 'type-account'}">${escapeHtml(share.password_type)}</span></div>`
       : '';
 
-    // Truncate share_id for display
-    const shareIdShort = share.share_id.substring(0, 8);
+    const shareId = escapeHtml(share.share_id);
+    const shareIdShort = escapeHtml(share.share_id.substring(0, 8));
+    const shareUrl = escapeHtml(share.share_url);
 
     return `
-      <div class="share-item" data-share-id="${share.share_id}">
+      <div class="share-item" data-share-id="${shareId}">
         <div class="share-header">
           <div class="share-title">
             <h3>${filenameDisplay}${inactiveBadge}</h3>
@@ -253,14 +256,13 @@ export class ShareListUI {
               <input 
                 type="text" 
                 readonly 
-                value="${share.share_url}" 
+                value="${shareUrl}"
                 class="share-url-input"
-                id="url-${share.share_id}"
-                onclick="this.select()"
+                id="url-${shareId}"
               />
               <button 
                 class="btn-copy" 
-                data-share-id="${share.share_id}"
+                data-share-id="${shareId}"
                 title="Copy to clipboard"
               >
                 Copy
@@ -288,7 +290,7 @@ export class ShareListUI {
             ` : ''}
             ${pwdTypeDisplay}
             ${sha256Display}
-            <div class="stat-item"><span class="stat-label">ID:</span><span class="stat-value" title="${share.share_id}">${shareIdShort}...</span></div>
+            <div class="stat-item"><span class="stat-label">ID:</span><span class="stat-value" title="${shareId}">${shareIdShort}...</span></div>
           </div>
         </div>
         
@@ -296,7 +298,7 @@ export class ShareListUI {
           <div class="share-actions">
             <button 
               class="btn-revoke" 
-              data-share-id="${share.share_id}"
+              data-share-id="${shareId}"
             >
               Revoke Share
             </button>
@@ -310,6 +312,10 @@ export class ShareListUI {
    * Attaches event listeners to share items
    */
   private attachEventListeners(): void {
+    this.container.querySelectorAll<HTMLInputElement>('.share-url-input').forEach((input) => {
+      input.addEventListener('click', () => input.select());
+    });
+
     // Copy button listeners
     const copyButtons = this.container.querySelectorAll('.btn-copy');
     copyButtons.forEach(button => {

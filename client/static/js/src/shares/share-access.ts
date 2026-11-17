@@ -40,6 +40,7 @@ import {
   showPartialDownloadWarning,
 } from '../files/download-integrity';
 import { addPasswordToggle } from '../utils/password-toggle';
+import { safeDownloadBasename } from '../files/output-basename';
 import { ShareTicketHolder } from './share-ticket';
 
 /**
@@ -242,7 +243,9 @@ export class ShareAccessUI {
     try {
       // 1. Get share envelope (public metadata + encrypted FEK)
       if (!this.envelope) {
-        const response = await fetch(`/api/public/shares/${this.shareId}/envelope`);
+        const response = await fetch(`/api/public/shares/${encodeURIComponent(this.shareId)}/envelope`, {
+          credentials: 'omit',
+        });
         if (!response.ok) {
           // 403: share is expired, revoked, or download limit reached
           // 404: share does not exist
@@ -393,6 +396,12 @@ export class ShareAccessUI {
       if (!this.ticketHolder) {
         this.ticketHolder = new ShareTicketHolder(this.shareId, this.downloadToken);
       }
+      if (!this.envelope) {
+        throw new Error('Share envelope not available');
+      }
+
+      // The sharer authors the envelope filename; reduce it before it names a file on disk.
+      const saveName = safeDownloadBasename(filename, 'shared-file');
 
       // The streaming-download manager picks the SW path when available and
       // falls back to incremental Blob construction only when generator
@@ -402,7 +411,7 @@ export class ShareAccessUI {
         this.shareId,
         fek,
         this.ticketHolder,
-        { filename, sha256 },
+        { filename: saveName, sha256, fileId: this.envelope.file_id },
         {
           showProgressUI: true,
           onProgress: (progress: { stage: string; percentage: number; error?: string | undefined }) => {
@@ -443,7 +452,7 @@ export class ShareAccessUI {
       }
 
       // Use the filename from the result, or fall back to the one we already have
-      const downloadFilename = result.filename || filename;
+      const downloadFilename = result.filename || saveName;
       const expected = result.sha256sum || sha256;
 
       const integrity = {

@@ -23,18 +23,60 @@ export function splitBasenameExtension(filename: string): { stem: string; ext: s
 // C0/C1 controls, DEL, and Unicode bidirectional controls.
 const UNSAFE_NAME_CHARS = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 
+// Keeps names well under the common 255-byte filename limit. Mirrors the CLI.
+const MAX_SAFE_BASENAME_BYTES = 200;
+const MAX_KEPT_EXTENSION_BYTES = 16;
+
+function utf8Length(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  let out = '';
+  let used = 0;
+  for (const ch of value) {
+    const size = utf8Length(ch);
+    if (used + size > maxBytes) break;
+    out += ch;
+    used += size;
+  }
+  return out;
+}
+
+function truncateBasename(name: string, maxBytes: number): string {
+  if (utf8Length(name) <= maxBytes) return name;
+  let { stem, ext } = splitBasenameExtension(name);
+  if (utf8Length(ext) > MAX_KEPT_EXTENSION_BYTES) {
+    stem = name;
+    ext = '';
+  }
+  return truncateUtf8(stem, maxBytes - utf8Length(ext)) + ext;
+}
+
+function sanitizeUntrustedBasename(value: string, stripLeadingDots: boolean): string {
+  const base = value.replace(/^.*[/\\]/, '').replace(UNSAFE_NAME_CHARS, '');
+  const leading = stripLeadingDots ? /^[.\-\s]+/ : /^[-\s]+/;
+  const trimmed = base.replace(leading, '').replace(/\s+$/, '');
+  return /^\.*$/.test(trimmed) ? '' : truncateBasename(trimmed, MAX_SAFE_BASENAME_BYTES);
+}
+
+/**
+ * Reduce an untrusted filename, such as the sharer-authored name in a share
+ * envelope, to one safe path element: no directory parts, no control or
+ * bidirectional characters, no leading dots or dashes, and a bounded length.
+ * Mirrors safeDownloadBasename in the CLI.
+ */
+export function safeDownloadBasename(name: string, fallback: string): string {
+  return sanitizeUntrustedBasename(name, true) || sanitizeUntrustedBasename(fallback, true) || 'download';
+}
+
 /**
  * Reduce an owner's decrypted filename to one safe path element, keeping
  * leading dots (dotfile backups are legitimate) but rejecting names made only
  * of dots. Mirrors safeOwnerBasename in the CLI.
  */
 export function safeOwnerBasename(name: string, fallback: string): string {
-  const reduce = (value: string): string => {
-    const base = value.replace(/^.*[/\\]/, '').replace(UNSAFE_NAME_CHARS, '');
-    const trimmed = base.replace(/^[-\s]+/, '').replace(/\s+$/, '');
-    return /^\.*$/.test(trimmed) ? '' : trimmed;
-  };
-  return reduce(name) || reduce(fallback) || 'download';
+  return sanitizeUntrustedBasename(name, false) || safeDownloadBasename(fallback, 'download');
 }
 
 /** `taken` holds lowercase names. */

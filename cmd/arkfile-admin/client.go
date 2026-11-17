@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arkfile/Arkfile/cli/jsonutil"
 	"github.com/arkfile/Arkfile/cli/mfa"
 )
 
@@ -87,7 +88,7 @@ func (c *HTTPClient) makeRequest(method, endpoint string, payload interface{}, t
 
 	if c.verbose {
 		logVerbose("Response status: %d", resp.StatusCode)
-		logVerbose("Response body: %s", string(responseData))
+		logVerbose("Response body: %s", jsonutil.RedactSensitiveJSON(responseData))
 	}
 
 	var apiResp Response

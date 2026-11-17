@@ -5,7 +5,7 @@
  * populateDigestCache
  *
  * The digest cache stores fileId → plaintextSHA256 hex mappings in
- * sessionStorage. It enables pre-upload duplicate detection without
+ * JS heap memory. It enables pre-upload duplicate detection without
  * ever sending plaintext hashes to the server.
  */
 
@@ -32,6 +32,20 @@ import {
 
 beforeEach(() => {
   resetMocks();
+  clearDigestCache();
+});
+
+describe('storage', () => {
+  test('never writes plaintext digests to sessionStorage', () => {
+    addDigest('file-001', toHex(randomBytes(32)));
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  test('clearDigestCache removes the legacy sessionStorage entry', () => {
+    sessionStorage.setItem('arkfile.digestCache', '{"file-001":"aa"}');
+    clearDigestCache();
+    expect(sessionStorage.getItem('arkfile.digestCache')).toBeNull();
+  });
 });
 
 // ============================================================================

@@ -2951,6 +2951,11 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 	if shareEnvelopeData.FileID == "" {
 		return fmt.Errorf("share envelope missing file_id")
 	}
+	// The envelope AAD must bind to the share the user asked for, not to an ID
+	// the server chooses to echo back.
+	if shareEnvelopeData.ShareID != *shareID {
+		return fmt.Errorf("server returned an envelope for a different share; refusing to continue")
+	}
 
 	// Step 2: Prompt for share password and derive share KEK
 	sharePass, err := readPassword("Enter share password: ")
@@ -2972,7 +2977,7 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 		return fmt.Errorf("failed to decode encrypted envelope: %w", err)
 	}
 
-	aad := crypto.CreateAAD(shareEnvelopeData.ShareID, shareEnvelopeData.FileID)
+	aad := crypto.CreateAAD(*shareID, shareEnvelopeData.FileID)
 	envelopeJSON, err := crypto.DecryptGCMWithAAD(encryptedEnvelope, shareKEK, aad)
 	if err != nil {
 		return fmt.Errorf("failed to decrypt share envelope (wrong password?): %w", err)
@@ -3047,6 +3052,9 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 	}
 	if err := decodeJSONResponse(chunkMetaResp, &chunkMeta); err != nil {
 		return fmt.Errorf("failed to decode chunk metadata: %w", err)
+	}
+	if chunkMeta.FileID != shareEnvelopeData.FileID {
+		return fmt.Errorf("share metadata file_id does not match the share envelope; refusing to continue")
 	}
 
 	chunkCount := chunkMeta.ChunkCount

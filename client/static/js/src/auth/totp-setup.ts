@@ -9,6 +9,7 @@ import { showModal } from '../ui/modals.js';
 import { clearAllSessionData, csrfHeader, mfaHandoffHeaders } from '../utils/auth.js';
 import { showFileSection, showPendingApprovalSection, showAuthSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
+import { escapeHtml } from '../utils/html.js';
 
 export interface TOTPSetupFlowData {
   tempToken: string;
@@ -168,7 +169,7 @@ function showTOTPSetupUI(modalContent: Element, setupData: TOTPSetupData, flowDa
       <h3>Step 1: Scan QR Code</h3>
       <div class="qr-code-container">
         ${setupData.qr_code_image 
-          ? `<img src="${setupData.qr_code_image}" alt="TOTP QR Code" style="width: 200px; height: 200px;">`
+          ? `<img src="${escapeHtml(setupData.qr_code_image)}" alt="TOTP QR Code" style="width: 200px; height: 200px;">`
           : `<div style="padding: 1rem; background: color-mix(in srgb, var(--coral) 15%, var(--depth-3)); color: var(--coral); border-radius: 4px;">QR code unavailable. Please use manual entry below.</div>`
         }
       </div>
@@ -181,7 +182,7 @@ function showTOTPSetupUI(modalContent: Element, setupData: TOTPSetupData, flowDa
     <div class="totp-step">
       <h3>Step 2: Manual Entry (Alternative)</h3>
       <div class="manual-entry">
-        <code id="totp-reg-secret" style="white-space: nowrap; overflow-x: auto; display: block;">${setupData.manual_entry}</code>
+        <code id="totp-reg-secret" style="white-space: nowrap; overflow-x: auto; display: block;">${escapeHtml(setupData.manual_entry)}</code>
         <button type="button" id="copy-totp-reg-btn" class="btn-copy-hash" style="margin-top: 0.5rem; display: block;">copy</button>
       </div>
       <p style="font-size: 0.9rem; color: var(--foam-2);">
@@ -195,7 +196,7 @@ function showTOTPSetupUI(modalContent: Element, setupData: TOTPSetupData, flowDa
       </p>
       <div class="backup-codes-container">
         <div class="backup-codes-grid">
-          ${setupData.backup_codes.map((code: string) => `<span class="backup-code">${code}</span>`).join('')}
+          ${setupData.backup_codes.map((code: string) => `<span class="backup-code">${escapeHtml(code)}</span>`).join('')}
         </div>
       </div>
       <p style="font-size: 0.9rem; color: var(--phosphor);">

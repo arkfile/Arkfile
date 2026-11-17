@@ -170,7 +170,9 @@ The file encryption system uses secure key generation combined with AES-256-GCM 
 - Optional download-count limits
 - Revocable share links
 - Custom-password hints are owner-only Account Key ciphertext. They are never placed in share envelopes. Recipients see filename, size, and hash only after they decrypt the envelope with the share password. Owner `.arkbackup` bundles carry the hint ciphertext so offline decrypt can show it before asking for the custom password.
-- The sharer authors every share envelope field, so recipients treat them as untrusted. Without `--output`, `arkfile-client share download` reduces the envelope filename to one safe name (no directory parts, no leading dots or dashes, no control or bidirectional characters, bounded length) and saves it in the current directory without replacing any existing entry. It prints the name with control characters neutralized and rejects a malformed SHA-256 digest before downloading. The browser shows the name as plain text and leaves download naming to the browser.
+- The sharer authors every share envelope field, so recipients treat them as untrusted. Without `--output`, `arkfile-client share download` reduces the envelope filename to one safe name (no directory parts, no leading dots or dashes, no control or bidirectional characters, bounded length) and saves it in the current directory without replacing any existing entry. It prints the name with control characters neutralized and rejects a malformed SHA-256 digest before downloading. The browser shows the name as plain text and applies the same reduction to the name it saves the file under.
+- Both recipient clients bind the envelope to the share ID the recipient was given, not to an ID echoed by the server, and refuse chunk metadata whose `file_id` differs from the one authenticated by the envelope.
+- Recipient requests carry no account credentials. The browser share page does not run the signed-in application bootstrap and sends its envelope, ticket, metadata, and chunk requests with `credentials: 'omit'`, so a recipient who also has an account on the same instance is not linked to the share by session cookies. `arkfile-client share download` sends no `Authorization` header. The server still sees the connecting IP address at request time; it is reduced to an HMAC entity ID for rate limiting and is not logged.
 
 ## Authentication System
 
@@ -319,6 +321,12 @@ Arkfile issues short-lived JWT access tokens after OPAQUE plus MFA. Tokens shoul
 - A stolen access token that is never revoked remains valid until it expires (up to 30 minutes)
 - Cryptographically independent from file encryption
 - Session keys derived from OPAQUE authentication
+
+**Command-Line Session and Agent:**
+- `arkfile-client` stores its access and refresh tokens in `~/.arkfile-session.json` with mode 0600. Anyone who can read that file as the user can act as that login until it is revoked or reaches its idle or absolute limit.
+- The `arkfile-client` agent holds the Account Key in memory (mlock where available) behind a Unix socket with mode 0600 and a peer UID check. It returns the raw key to any process running as the same OS user; the session-token binding does not stop such a process, because it can read the session file too. This matches the general limit that malware running as the user can also capture passwords as they are typed. Use `arkfile-client agent stop` or a short cache TTL on shared or untrusted accounts.
+- `--verbose` output redacts tokens, MFA secrets, and backup codes from logged response bodies. It still prints local file names and plaintext SHA-256 digests, so treat verbose logs as private.
+- `--tls-insecure` (and `tls_insecure` in a config file) is refused unless the server URL is `localhost` or a loopback address, for both `arkfile-client` and `arkfile-admin`.
 
 **Token Lifecycle Management:**
 1. **Initial Authentication**: A 30-minute access token is issued after OPAQUE and MFA

@@ -296,7 +296,7 @@ export class StreamingDownloadManager {
   async downloadSharedFile(
     shareId: string,
     fek: Uint8Array,
-    shareMetadata?: { filename?: string | undefined; sha256?: string | undefined },
+    shareMetadata?: { filename?: string | undefined; sha256?: string | undefined; fileId?: string | undefined },
   ): Promise<StreamingDownloadResult> {
     const t0 = Date.now();
     debugLog(`${LOG_PREFIX_SHARE} Starting shared download (shareId hash=${shortHash(shareId)})`);
@@ -313,6 +313,9 @@ export class StreamingDownloadManager {
       const tMeta = Date.now();
       const metadata = await this.fetchShareMetadata(shareId);
       debugLog(`${LOG_PREFIX_SHARE} Metadata fetched in ${Date.now() - tMeta}ms (chunk_count=${metadata.chunk_count}, size_bytes=${metadata.size_bytes})`);
+      if (shareMetadata?.fileId && metadata.file_id !== shareMetadata.fileId) {
+        throw new Error('Share metadata file_id does not match the share envelope');
+      }
 
       const filename = shareMetadata?.filename ?? 'shared-file';
       const sha256sum = shareMetadata?.sha256;
@@ -708,7 +711,7 @@ export class StreamingDownloadManager {
   private async fetchShareMetadata(shareId: string): Promise<ChunkedDownloadMetadata> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     await this.applyShareAuthHeader(headers);
-    const response = await fetch(`${this.baseUrl}/api/public/shares/${shareId}/metadata`, { method: 'GET', headers });
+    const response = await fetch(`${this.baseUrl}/api/public/shares/${shareId}/metadata`, { method: 'GET', headers, credentials: 'omit' });
     if (response.ok) return response.json();
 
     // On 403, the ticket may have expired mid-session; refresh once and retry.
@@ -716,7 +719,7 @@ export class StreamingDownloadManager {
       await this.options.shareTicket.refresh();
       const retryHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
       await this.applyShareAuthHeader(retryHeaders);
-      const retry = await fetch(`${this.baseUrl}/api/public/shares/${shareId}/metadata`, { method: 'GET', headers: retryHeaders });
+      const retry = await fetch(`${this.baseUrl}/api/public/shares/${shareId}/metadata`, { method: 'GET', headers: retryHeaders, credentials: 'omit' });
       if (retry.ok) return retry.json();
       console.error(`${LOG_PREFIX_SHARE} Metadata fetch failed after ticket refresh: HTTP ${retry.status} ${retry.statusText}`);
       throw new Error(`Failed to fetch share metadata: ${retry.status} ${retry.statusText}`);
@@ -762,7 +765,7 @@ export class StreamingDownloadManager {
     const doFetch = async (): Promise<Response> => {
       const headers: Record<string, string> = {};
       await this.applyShareAuthHeader(headers);
-      const init: RequestInit = { headers };
+      const init: RequestInit = { headers, credentials: 'omit' };
       const signal = this.options.abortController?.signal;
       if (signal) {
         init.signal = signal;
@@ -870,7 +873,7 @@ export async function downloadSharedFileWithTicket(
   shareId: string,
   fek: Uint8Array,
   shareTicket: { get: () => Promise<string>; refresh: () => Promise<string> },
-  shareMetadata?: { filename?: string | undefined; sha256?: string | undefined },
+  shareMetadata?: { filename?: string | undefined; sha256?: string | undefined; fileId?: string | undefined },
   options: Partial<StreamingDownloadOptions> = {},
 ): Promise<StreamingDownloadResult> {
   const manager = new StreamingDownloadManager('', { shareTicket, ...options });

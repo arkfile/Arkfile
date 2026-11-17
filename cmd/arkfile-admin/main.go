@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/arkfile/Arkfile/cli/tlspolicy"
 	"github.com/arkfile/Arkfile/config"
 )
 
@@ -169,6 +170,13 @@ func main() {
 	if *configFile != "" {
 		if err := loadConfigFile(adminConfig, *configFile); err != nil {
 			logError("Failed to load config file: %v", err)
+			os.Exit(1)
+		}
+	}
+
+	if adminConfig.TLSInsecure {
+		if err := tlspolicy.RequireLoopbackForInsecure(adminConfig.ServerURL); err != nil {
+			logError("%v", err)
 			os.Exit(1)
 		}
 	}

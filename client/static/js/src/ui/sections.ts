@@ -2,6 +2,8 @@
  * UI section management utilities
  */
 
+import { escapeHtml } from '../utils/html.js';
+
 /** Absolute-positioned nav dropdown panels that must be mutually exclusive. */
 export const NAV_INLINE_PANEL_IDS = [
   'security-settings',
@@ -159,7 +161,7 @@ export function showTOTPSetupSection(predefinedData?: any): void {
     const backupList = document.getElementById('backup-codes-list');
 
     if (qrDisplay) {
-      qrDisplay.innerHTML = `<img src="${predefinedData.qr_code_url}" alt="TOTP QR Code" style="max-width:200px;height:auto;border:1px solid var(--depth-4);border-radius:4px;">`;
+      qrDisplay.innerHTML = `<img src="${escapeHtml(String(predefinedData.qr_code_url))}" alt="TOTP QR Code" style="max-width:200px;height:auto;border:1px solid var(--depth-4);border-radius:4px;">`;
     }
     if (manualCode) {
       manualCode.textContent = predefinedData.manual_entry;
@@ -171,7 +173,7 @@ export function showTOTPSetupSection(predefinedData?: any): void {
       verifyBtn.disabled = false;
     }
     if (backupList && predefinedData.backup_codes?.length) {
-      backupList.innerHTML = predefinedData.backup_codes.map((c: string) => `<li>${c}</li>`).join('');
+      backupList.innerHTML = predefinedData.backup_codes.map((c: string) => `<li>${escapeHtml(c)}</li>`).join('');
     }
     if (backupSection) {
       backupSection.classList.remove('hidden');

@@ -255,7 +255,7 @@ function showShareUrlModal(shareUrl: string): void {
         <div class="password-modal-field">
           <label for="share-result-url">Share URL</label>
           <input type="text" id="share-result-url" class="password-modal-input"
-                 value="${escapeAttr(shareUrl)}" readonly onclick="this.select()" />
+                 value="${escapeAttr(shareUrl)}" readonly />
         </div>
       </div>
       <div class="password-modal-footer">
@@ -281,6 +281,9 @@ function showShareUrlModal(shareUrl: string): void {
   document.getElementById('share-result-close')!.addEventListener('click', close);
   document.getElementById('share-result-done')!.addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  const urlInput = document.getElementById('share-result-url') as HTMLInputElement | null;
+  urlInput?.addEventListener('click', () => urlInput.select());
 
   document.getElementById('share-result-copy')!.addEventListener('click', async () => {
     const input = document.getElementById('share-result-url') as HTMLInputElement;

@@ -146,10 +146,26 @@ export function resolvePasswordConfig(server: Partial<PasswordConfig> | null | u
     minAccountPasswordLength: Math.max(server.minAccountPasswordLength ?? 0, FLOOR_PASSWORD.minAccountPasswordLength),
     minCustomPasswordLength: Math.max(server.minCustomPasswordLength ?? 0, FLOOR_PASSWORD.minCustomPasswordLength),
     minSharePasswordLength: Math.max(server.minSharePasswordLength ?? 0, FLOOR_PASSWORD.minSharePasswordLength),
-    maxPasswordLength: server.maxPasswordLength ?? FLOOR_PASSWORD.maxPasswordLength,
+    maxPasswordLength: Math.max(server.maxPasswordLength ?? 0, FLOOR_PASSWORD.maxPasswordLength),
     minCharacterClassesRequired: Math.max(server.minCharacterClassesRequired ?? 0, FLOOR_PASSWORD.minCharacterClassesRequired),
-    specialCharacters: server.specialCharacters ?? FLOOR_PASSWORD.specialCharacters,
+    specialCharacters: resolveSpecialCharacters(server.specialCharacters),
   };
+}
+
+/**
+ * A server may narrow the special-character set but not widen it: letters or
+ * digits counted as "special" would let a single character class pass.
+ */
+function resolveSpecialCharacters(server: string | undefined): string {
+  if (!server) {
+    return FLOOR_PASSWORD.specialCharacters;
+  }
+  for (const ch of server) {
+    if (!FLOOR_PASSWORD.specialCharacters.includes(ch)) {
+      return FLOOR_PASSWORD.specialCharacters;
+    }
+  }
+  return server;
 }
 
 /**

@@ -281,6 +281,8 @@ export function setupRegisterForm(): void {
       username,
       password
     };
+    passwordInput.value = '';
+    confirmPasswordInput.value = '';
 
     await RegistrationManager.register(credentials);
   };
@@ -348,6 +350,8 @@ export async function register(): Promise<void> {
     username,
     password
   };
+  passwordInput.value = '';
+  confirmPasswordInput.value = '';
 
   await RegistrationManager.register(credentials);
 }

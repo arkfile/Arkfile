@@ -3,6 +3,7 @@
  */
 
 import { showModal, ModalManager } from '../ui/modals.js';
+import { escapeHtml } from '../utils/html.js';
 
 export type MFAMethod = 'totp' | 'webauthn';
 
@@ -73,7 +74,7 @@ function methodButtonLabel(option: MFALoginMethodOption): string {
     return 'Authenticator app (TOTP)';
   }
   if (option.label) {
-    return `Security key: ${option.label}`;
+    return `Security key: ${escapeHtml(option.label)}`;
   }
   return 'Security key';
 }

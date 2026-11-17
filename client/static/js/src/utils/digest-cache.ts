@@ -1,12 +1,13 @@
 /**
  * Digest Cache -- Client-Side Deduplication
  *
- * Maintains a sessionStorage map of fileId -> plaintextSHA256 hex digest.
+ * Maintains an in-memory map of fileId -> plaintextSHA256 hex digest.
  * Used to detect duplicate uploads before sending any data to the server.
  *
  * Privacy: plaintext SHA-256 digests are NEVER sent to the server.
  * The server stores only encrypted sha256 values. This module decrypts
- * them client-side and stores the plaintext only in sessionStorage.
+ * them client-side and keeps the plaintext only in JS heap memory, never in
+ * Web Storage, which browsers may write to disk for session restore.
  *
  * Lifecycle:
  *   Login  -> populateDigestCache (fetch file list, decrypt each sha256)
@@ -18,30 +19,20 @@
 import { decryptMetadataField } from '../crypto/metadata-helpers.js';
 import { AAD_FIELD_SHA256 } from '../crypto/aad.js';
 
-// Storage key
+// Former sessionStorage key; removed so a tab open across an update keeps no plaintext digests.
+const LEGACY_STORAGE_KEY = 'arkfile.digestCache';
 
-const CACHE_KEY = 'arkfile.digestCache';
+const cache = new Map<string, string>();
 
-// Internal helpers
-
-function readCache(): Record<string, string> {
+function removeLegacyStorage(): void {
   try {
-    const raw = sessionStorage.getItem(CACHE_KEY);
-    if (!raw) return {};
-    return JSON.parse(raw) as Record<string, string>;
+    sessionStorage.removeItem(LEGACY_STORAGE_KEY);
   } catch {
-    return {};
+    // sessionStorage unavailable
   }
 }
 
-function writeCache(cache: Record<string, string>): void {
-  try {
-    sessionStorage.setItem(CACHE_KEY, JSON.stringify(cache));
-  } catch {
-    // sessionStorage full or unavailable -- silently skip
-    console.warn('digest-cache: unable to write to sessionStorage');
-  }
-}
+removeLegacyStorage();
 
 // Public API
 
@@ -73,7 +64,7 @@ export async function populateDigestCache(
   accountKey: Uint8Array,
   files: RawFileEntry[]
 ): Promise<void> {
-  const cache: Record<string, string> = {};
+  cache.clear();
 
   for (const file of files) {
     try {
@@ -86,15 +77,13 @@ export async function populateDigestCache(
           AAD_FIELD_SHA256,
           file.owner_username,
         );
-        cache[file.file_id] = plaintext;
+        cache.set(file.file_id, plaintext);
       }
     } catch (err) {
       // Non-fatal: skip individual entry if decryption fails
       console.warn(`digest-cache: failed to decrypt sha256 for file ${file.file_id}:`, err);
     }
   }
-
-  writeCache(cache);
 }
 
 /**
@@ -104,8 +93,7 @@ export async function populateDigestCache(
  * @returns fileId of the matching file, or null if no duplicate found
  */
 export function checkDuplicate(plaintextSha256Hex: string): string | null {
-  const cache = readCache();
-  for (const [fileId, digest] of Object.entries(cache)) {
+  for (const [fileId, digest] of cache) {
     if (digest === plaintextSha256Hex) {
       return fileId;
     }
@@ -120,9 +108,7 @@ export function checkDuplicate(plaintextSha256Hex: string): string | null {
  * @param plaintextSha256Hex - hex-encoded SHA-256 of the plaintext file
  */
 export function addDigest(fileId: string, plaintextSha256Hex: string): void {
-  const cache = readCache();
-  cache[fileId] = plaintextSha256Hex;
-  writeCache(cache);
+  cache.set(fileId, plaintextSha256Hex);
 }
 
 /**
@@ -131,9 +117,7 @@ export function addDigest(fileId: string, plaintextSha256Hex: string): void {
  * @param fileId - the file ID to remove
  */
 export function removeDigest(fileId: string): void {
-  const cache = readCache();
-  delete cache[fileId];
-  writeCache(cache);
+  cache.delete(fileId);
 }
 
 /**
@@ -141,9 +125,6 @@ export function removeDigest(fileId: string): void {
  * Call this on logout.
  */
 export function clearDigestCache(): void {
-  try {
-    sessionStorage.removeItem(CACHE_KEY);
-  } catch {
-    // ignore
-  }
+  cache.clear();
+  removeLegacyStorage();
 }

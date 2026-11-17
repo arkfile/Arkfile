@@ -3,6 +3,7 @@ import {
   BasenameReserver,
   nextAvailableBasename,
   reserveBasenames,
+  safeDownloadBasename,
   safeOwnerBasename,
   splitBasenameExtension,
 } from '../files/output-basename.js';
@@ -58,6 +59,25 @@ describe('output basename helper', () => {
     expect(safeOwnerBasename('..', 'id')).toBe('id');
     expect(safeOwnerBasename('bad\u001b[31m\u202ename.txt', 'id')).toBe('bad[31mname.txt');
     expect(safeOwnerBasename('', '')).toBe('download');
+  });
+
+  test('safeDownloadBasename strips leading dots, dashes, paths, and bidi controls', () => {
+    expect(safeDownloadBasename('.bashrc', 'share.bin')).toBe('bashrc');
+    expect(safeDownloadBasename('--rf', 'share.bin')).toBe('rf');
+    expect(safeDownloadBasename('../../etc/passwd', 'share.bin')).toBe('passwd');
+    expect(safeDownloadBasename('invoice\u202Efdp.exe', 'share.bin')).toBe('invoicefdp.exe');
+    expect(safeDownloadBasename('...', 'share.bin')).toBe('share.bin');
+    expect(safeDownloadBasename('', '')).toBe('download');
+  });
+
+  test('safeDownloadBasename bounds length and keeps a short extension', () => {
+    const long = `${'a'.repeat(300)}.pdf`;
+    const safe = safeDownloadBasename(long, 'share.bin');
+    expect(new TextEncoder().encode(safe).length).toBeLessThanOrEqual(200);
+    expect(safe.endsWith('.pdf')).toBe(true);
+    const multiByte = safeDownloadBasename(`${'\u00e9'.repeat(150)}.txt`, 'share.bin');
+    expect(new TextEncoder().encode(multiByte).length).toBeLessThanOrEqual(200);
+    expect(multiByte.endsWith('.txt')).toBe(true);
   });
 
   test('reserveBasenames is stable for a batch', () => {

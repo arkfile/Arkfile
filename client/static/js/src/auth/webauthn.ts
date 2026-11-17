@@ -15,6 +15,7 @@ import { showProgressMessage, hideProgress } from '../ui/progress.js';
 import { showModal, ModalManager } from '../ui/modals.js';
 import { clearAllSessionData, csrfHeader, mfaHandoffHeaders } from '../utils/auth.js';
 import { getAdminContactForDisplay } from '../ui/footer.js';
+import { escapeHtml } from '../utils/html.js';
 import { showFileSection, showPendingApprovalSection, showAuthSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
 import { LoginManager } from './login.js';
@@ -165,7 +166,7 @@ function showWebAuthnSetupUI(
   backupCodes: string[],
 ): void {
   const codesHtml = backupCodes.length > 0
-    ? backupCodes.map(c => `<span class="backup-code">${c}</span>`).join('')
+    ? backupCodes.map(c => `<span class="backup-code">${escapeHtml(c)}</span>`).join('')
     : '<span style="color: var(--foam-2); font-size: 0.9rem;">Backup codes were shown earlier in this session. Check your saved copy.</span>';
 
   modalContent.innerHTML = `
@@ -373,7 +374,7 @@ export function handleWebAuthnLoginFlow(data: WebAuthnLoginFlowData): void {
 
   modalContent.innerHTML = `
     <h3 style="margin: 0 0 1rem 0;">Security Key Required</h3>
-    ${data.label ? `<p style="margin: 0 0 0.75rem 0; color: var(--foam-2); font-size: 0.95rem; text-align: center;">Using: ${data.label}</p>` : ''}
+    ${data.label ? `<p style="margin: 0 0 0.75rem 0; color: var(--foam-2); font-size: 0.95rem; text-align: center;">Using: ${escapeHtml(data.label)}</p>` : ''}
     <p style="margin: 0 0 1.25rem 0; color: var(--foam-2); font-size: 0.95rem; text-align: center;">
       Insert or tap your security key when prompted.
     </p>

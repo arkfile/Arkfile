@@ -7,6 +7,7 @@ import { authenticatedFetch, clearAllSessionData, csrfHeader } from '../utils/au
 import { showMFAMethodPicker } from './mfa-method.js';
 import { handleTOTPSetupFlow } from './totp-setup.js';
 import { handleWebAuthnSetupFlow } from './webauthn.js';
+import { escapeHtml } from '../utils/html.js';
 
 interface MFACredentialSummary {
   credential_id: string;
@@ -19,7 +20,7 @@ function methodDisplayName(cred: MFACredentialSummary): string {
   if (cred.method_type === 'totp') {
     return 'Authenticator app (TOTP)';
   }
-  return cred.label ? `Security key: ${cred.label}` : 'Security key';
+  return cred.label ? `Security key: ${escapeHtml(cred.label)}` : 'Security key';
 }
 
 async function fetchCredentials(): Promise<MFACredentialSummary[]> {
@@ -45,7 +46,7 @@ function renderCredentialList(container: HTMLElement, credentials: MFACredential
           <strong>${methodDisplayName(cred)}</strong>
           ${cred.created_at ? `<div style="font-size: 0.85rem; color: var(--foam-2);">Enrolled ${new Date(cred.created_at).toLocaleString()}</div>` : ''}
         </div>
-        <button type="button" class="secondary-button mfa-remove-btn" data-id="${cred.credential_id}">Remove</button>
+        <button type="button" class="secondary-button mfa-remove-btn" data-id="${escapeHtml(cred.credential_id)}">Remove</button>
       </div>
     </div>
   `).join('');
