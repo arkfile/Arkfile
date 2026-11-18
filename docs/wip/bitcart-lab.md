@@ -38,15 +38,20 @@ Running the lab is strictly a developer action. Per `AGENTS.md`, an AI agent mus
 
 ## Isolation
 
-All lab definitions live under `scripts/testing/bitcart-lab/` as a single Compose project named `arkfile-paylab`, with one internal bridge network and named Podman volumes. It never bind-mounts `/opt/arkfile`, `/var/tmp/arkfile-build`, or the developer's home directory. The repository root is used only as the build context for `Containerfile.arkfile` (filtered through `Containerfile.arkfile.containerignore`), and `scripts/testing/bitcart-lab/lab.env` is passed via `--env-file` rather than mounted into Arkfile. Published ports bind `127.0.0.1` exclusively.
+All lab definitions live under `scripts/testing/bitcart-lab/` as a single Compose project named `arkfile-paylab`, with one internal bridge network and named Podman volumes. It never bind-mounts `/opt/arkfile`, `/var/tmp/arkfile-build`, or the developer's home directory. The repository root is used only as the build context for `Containerfile.arkfile` (filtered through identical `Containerfile.arkfile.containerignore` and `Containerfile.arkfile.dockerignore` files), and `scripts/testing/bitcart-lab/lab.env` is passed via `--env-file` rather than mounted into Arkfile. Published ports bind `127.0.0.1` exclusively.
 
-Running `podman compose down -v` from `scripts/testing/bitcart-lab/` destroys every container, network, and named volume in the lab -- including its rqlite database, SeaweedFS objects, Arkfile keys, Bitcart Postgres database, Bitcart wallet data, and generated certificates. A host `dev-reset.sh` or `local-deploy.sh` instance can run before, during, and after the lab without data or port collisions.
+Rootless execution is enforced at two independent layers so neither Podman nor an installed Docker daemon can ever run this lab as root:
+
+1. **Host launcher (`scripts/testing/bitcart-lab/paylab.sh`):** Sources `scripts/testing/testing-common.sh` to refuse `root` (`id -u == 0`) and `SUDO_USER`, unsets any ambient `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_TLS_VERIFY`, `DOCKER_CERT_PATH`, `CONTAINER_HOST`, and `CONTAINER_CONNECTION` variables, verifies `podman info --format '{{.Host.Security.Rootless}}'` is `true`, verifies `${XDG_RUNTIME_DIR}/podman/podman.sock` is owned by the calling developer UID (starting `systemctl --user start podman.socket` automatically when available), and pins both `CONTAINER_HOST` and `DOCKER_HOST` to that user-owned rootless Podman socket before invoking `podman compose`. Even on a system with both Docker (`dockerd` on `/var/run/docker.sock`) and `docker-compose-plugin` installed alongside Podman, `paylab.sh` cannot connect to a rootful daemon.
+2. **In-container user-namespace tripwire:** `ca-init.sh`, `secrets-init.sh`, `provision.sh`, and `entrypoint-arkfile.sh` inspect `/proc/self/uid_map` at startup and immediately abort if the container is running in the host's initial user namespace (`0 0 4294967295`), blocking direct `sudo podman compose` or rootful `docker compose` invocations even if `paylab.sh` is bypassed.
+
+Running `bash scripts/testing/bitcart-lab/paylab.sh down` destroys every container, network, and named volume in the lab -- including its rqlite database, SeaweedFS objects, Arkfile keys, Bitcart Postgres database, Bitcart wallet data, and generated certificates. A host `dev-reset.sh` or `local-deploy.sh` instance can run before, during, and after the lab without data or port collisions.
 
 The Compose network permits outbound internet traffic because Bitcart requires live USD exchange-rate feeds and Electrum servers (and a remote Monero node when `--profile xmr` is enabled). Host isolation comes from binding published ports only to `127.0.0.1`, refusing host filesystem mounts, and isolating host CLI state under `/tmp/arkfile-bitcart-lab`.
 
 Do not run Bitcart's upstream `setup.sh`. That script invokes Docker, modifies `/etc/hosts` for `.local` domains, and sets up host management (`bitcart-agent` systemd sockets or root SSH key injection). Our Compose translation explicitly sets `BITCART_AGENT_TRANSPORT=none` and `BITCART_ENABLE_SSH=false`, omits all SSH, `/run/bitcart`, `/var/lib/dbus/machine-id`, and container-socket mounts, omits `host.docker.internal`, and keeps inter-service traffic strictly on Compose DNS aliases.
 
-Invoke the stack with rootless `podman compose`. Never invoke `docker`. If the host lacks a compose plugin, install `podman-compose` and still drive it via `podman compose`.
+Invoke the stack through `bash scripts/testing/bitcart-lab/paylab.sh` (which drives rootless `podman compose` with socket and UID verification). Never invoke `docker`. If the host lacks both `docker-compose-plugin` and `podman-compose`, install `podman-compose` and still drive it via `paylab.sh`.
 
 ## Reserved and published ports
 
@@ -110,7 +115,7 @@ Several startup and networking rules in the Arkfile codebase dictate exact conta
 - **SeaweedFS storage:** `STORAGE_PROVIDER_1=generic-s3`, `STORAGE_PROVIDER_1_ID=generic-s3:arkfile-paylab`, `STORAGE_1_ENDPOINT=http://seaweedfs:9332`, `STORAGE_1_ACCESS_KEY=arkfile-paylab`, generated `STORAGE_1_SECRET_KEY`, `STORAGE_1_BUCKET=arkfile-paylab`, `STORAGE_1_REGION=us-east-1`, `STORAGE_1_FORCE_PATH_STYLE=true`, and `STORAGE_1_USE_SSL=false`. `storage.InitS3()` creates the bucket automatically on first boot.
 - **Hardcoded `/opt/arkfile` paths and working directory:** `crypto.UserSecretMasterPath` in `crypto/user_secret_master.go` is hardcoded to `"/opt/arkfile/etc/keys/user-secret-master.bin"` with no env override, `auth.BootstrapTokenPath` in `auth/bootstrap.go` is hardcoded to `"/opt/arkfile/etc/keys/bootstrap-token.bin"` (requiring `/opt/arkfile/etc/keys` to exist beforehand), `handlers/route_config.go` serves `client/static/...` relative to `WORKDIR`, and `database/database.go` loads `database/unified_schema.sql` relative to `WORKDIR`. `Containerfile.arkfile` therefore stages built `bin/`, `client/`, `database/`, and `version.json` under `/opt/arkfile`, sets `WORKDIR /opt/arkfile`, mounts named volumes at `/opt/arkfile/etc/keys` (mode `0700`) and `/opt/arkfile/var` (with `HOME=/opt/arkfile/var/home`), and has `entrypoint-arkfile.sh` generate the 32-byte raw `/opt/arkfile/etc/keys/user-secret-master.bin` (mode `0400`) and 64-hex-char `ARKFILE_MASTER_KEY` on first start.
 - **Billing and PAYG:** `ARKFILE_BILLING_ENABLED=true` and `ARKFILE_BILLING_PAYG_ENABLED=true` are both set (leaving `ARKFILE_BILLING_PAYG_ENABLED` unset causes `config/config.go` to default `PaygEnabled` to `false`, disabling metering and negative-balance caps). `ARKFILE_FREE_STORAGE_BYTES`, `ARKFILE_BILLING_TICK_INTERVAL`, `ARKFILE_CUSTOMER_PRICE_USD_PER_TB_PER_MONTH`, and `ARKFILE_MIN_TOP_UP_USD` accept optional overrides from `lab.env` so the operator can also test rapid PAYG metering and debt recovery if desired.
-- **Registration and admin accounts:** `ENABLE_REGISTRATION=true`, `REQUIRE_APPROVAL=false`, and `ADMIN_USERNAMES=lab-admin`. Startup writes `/opt/arkfile/etc/keys/bootstrap-token.bin` and does not auto-create `lab-admin`. Regular user registration and top-up testing work immediately without bootstrapping an admin. When the operator wants to run `arkfile-admin` commands (`payments check`, `payments list`, `payments sync-invoice`, `payments reconcile`, `billing gift`), they run `arkfile-admin` inside the container via `podman compose exec arkfile` against `https://127.0.0.1:18443`, which satisfies `DirectLocalMiddleware` (`peerAddrIsLoopback` with no proxy headers) and `MarkedSessionMiddleware`.
+- **Registration and admin accounts:** `ENABLE_REGISTRATION=true`, `REQUIRE_APPROVAL=false`, and `ADMIN_USERNAMES=paylab-admin` (12 characters, satisfying `utils.ValidateUsername`'s 10-to-50 character rule). Startup writes `/opt/arkfile/etc/keys/bootstrap-token.bin` and does not auto-create `paylab-admin`. Regular user registration and top-up testing work immediately without bootstrapping an admin. When the operator wants to run `arkfile-admin` commands (`payments check`, `payments list`, `payments sync-invoice`, `payments reconcile`, `billing gift`), they run `paylab.sh bootstrap-admin` and `paylab.sh admin ...` (which executes `arkfile-admin` inside the container over `https://127.0.0.1:18443`), satisfying `DirectLocalMiddleware` (`peerAddrIsLoopback` with no proxy headers) and `MarkedSessionMiddleware`.
 
 ## Services
 
@@ -131,9 +136,9 @@ All services live in `scripts/testing/bitcart-lab/compose.yaml`:
 
 ## Building `Containerfile.arkfile` cleanly
 
-`scripts/testing/bitcart-lab/Containerfile.arkfile` uses the repository root (`../../..`) as its build context and pairs with `scripts/testing/bitcart-lab/Containerfile.arkfile.containerignore` (Podman's native per-Containerfile ignore file, avoiding any `.dockerignore` clutter at the repo root). That ignore file excludes `.git/`, `vendor/`, `node_modules/`, `client/static/js/node_modules/`, `client/static/js/dist/`, `client/static/js/.buildcache`, `.vendor_cache`, host-compiled archives under `vendor_c/`, and `scripts/testing/bitcart-lab/lab.env`, so gigabytes of host build state or root-owned `dev-reset.sh` artifacts never enter or poison the container build.
+`scripts/testing/bitcart-lab/Containerfile.arkfile` uses the repository root (`../../..`) as its build context and pairs with identical `scripts/testing/bitcart-lab/Containerfile.arkfile.containerignore` and `scripts/testing/bitcart-lab/Containerfile.arkfile.dockerignore` files (so context filtering works whether `podman compose` uses native Podman/Buildah or an external `docker-compose-plugin`, without adding any ignore file at the repo root). Those ignore files exclude `.git/`, `vendor/`, `vendor_c/` (preventing broken submodule gitdir links so `ensure-vendor-c.sh` clones clean pinned sources inside the builder stage), `node_modules/`, `client/static/js/node_modules/`, `client/static/js/dist/`, `client/static/js/.buildcache`, `.vendor_cache`, host build outputs, and `scripts/testing/bitcart-lab/lab.env`.
 
-The builder stage is Debian-based and runs `./scripts/setup/build.sh --build-only` as `root` (with `SUDO_USER` unset so `build.sh` never invokes `sudo` or `systemctl`). It installs the Go version required by `go.mod`, Zig-built Bun `1.3.14` (`BUN_ZIG_VERSION` in `scripts/setup/build-config.sh`; never Bun 1.4+), C/C++ build tools, `cmake`, `autoconf`, `automake`, `libtool`, `pkg-config`, `libudev-dev` (required by `build-libfido2.sh` for CLI binaries), `python3`, `git`, `jq`, and `openssl`. The final runtime stage is a slim Debian image containing only `ca-certificates`, `curl`, `libudev1`, an unprivileged `arkfile` user, and `/var/tmp/arkfile-build/{bin,client,database,version.json}` copied into `/opt/arkfile`.
+The builder stage is Debian-based and runs `./scripts/setup/build.sh --build-only` as `root` inside the rootless user namespace (with `SUDO_USER` unset so `build.sh` never invokes `sudo` or `systemctl`). It installs the Go version required by `go.mod`, Zig-built Bun `1.3.14` (`BUN_ZIG_VERSION` in `scripts/setup/build-config.sh`; never Bun 1.4+), C/C++ build tools, `cmake`, `autoconf`, `automake`, `libtool`, `pkg-config`, `libudev-dev`, `perl`, `libtext-template-perl` (required by OpenSSL `3.5.7` `Configure` in `build-libfido2.sh`), `libatomic1` (required by Emscripten Binaryen tools), `file`, `python3`, `git`, `jq`, and `openssl`. The final runtime stage is a slim Debian image containing only `ca-certificates`, `curl`, `libudev1`, an unprivileged `arkfile` user (`UID 10001`, home `/opt/arkfile/var/home`), and `/var/tmp/arkfile-build/{bin,client,database,version.json}` copied into `/opt/arkfile`.
 
 ## Bitcart one-domain translation
 
@@ -166,52 +171,46 @@ All internal secrets (CA key, rqlite password, SeaweedFS S3 key, Bitcart Postgre
 
 ## Operator workflow
 
-From `scripts/testing/bitcart-lab/`, start the lab with rootless Podman. Bitcoin and Monero both default to mainnet:
+From the repository root (or `scripts/testing/bitcart-lab/`), configure `lab.env` and start the lab through `paylab.sh`. Bitcoin and Monero both default to mainnet, and `paylab.sh up` automatically enables `--profile xmr` whenever `BITCART_CRYPTOS` in `lab.env` includes `xmr`:
 
 ```bash
-cp lab.env.example lab.env
-chmod 600 lab.env
-# Edit lab.env to set BTC_XPUB and BITCART_ADMIN_PASSWORD
-podman compose --env-file lab.env up -d --build
+cp scripts/testing/bitcart-lab/lab.env.example scripts/testing/bitcart-lab/lab.env
+chmod 600 scripts/testing/bitcart-lab/lab.env
+# Edit scripts/testing/bitcart-lab/lab.env to set BTC_XPUB and BITCART_ADMIN_PASSWORD
+bash scripts/testing/bitcart-lab/paylab.sh up
 ```
 
-When testing Monero as well, set `BITCART_CRYPTOS=btc,xmr` and the `XMR_*` variables in `lab.env`, and pass `--profile xmr`:
+Export the name-constrained lab CA certificate to `/tmp/arkfile-bitcart-lab/ca.crt` and import it into a dedicated browser profile:
 
 ```bash
-podman compose --env-file lab.env --profile xmr up -d --build
-```
-
-Export the name-constrained lab CA certificate to `/tmp/arkfile-bitcart-lab` and import it into a dedicated browser profile:
-
-```bash
-mkdir -p /tmp/arkfile-bitcart-lab/home
-podman compose cp arkfile:/ca/ca.crt /tmp/arkfile-bitcart-lab/ca.crt
+bash scripts/testing/bitcart-lab/paylab.sh export-ca
 ```
 
 Open `https://arkfile.lab:18443` in that browser profile, register a normal user, enroll TOTP, upload and download a file, create and open an anonymous share link (`https://arkfile.lab:18443/...`), and initiate a top-up from the billing panel. The checkout opens at `https://bitcart.lab:19080/i/<id>`. Pay the displayed address from an external wallet for at least the crypto amount shown. The invoice moves from `pending` to `confirming` when seen in mempool, then to `paid` after at least one block confirmation, crediting the user's USD balance once.
 
-To test `arkfile-client` from the host without touching `~/.arkfile-session.json` or failing `cli/tlspolicy`'s loopback-only check on `--tls-insecure` (`cli/tlspolicy/tlspolicy.go` rejects `--tls-insecure` for non-loopback hostnames such as `arkfile.lab`), pass both an isolated `HOME` and `SSL_CERT_FILE`:
+To test `arkfile-client` from the host without touching `~/.arkfile-session.json` or failing `cli/tlspolicy`'s loopback-only check on `--tls-insecure` (`cli/tlspolicy/tlspolicy.go` rejects `--tls-insecure` for non-loopback hostnames such as `arkfile.lab`), use `paylab.sh client` (which sets `HOME=/tmp/arkfile-bitcart-lab/home` and `SSL_CERT_FILE=/tmp/arkfile-bitcart-lab/ca.crt` automatically):
 
 ```bash
-HOME=/tmp/arkfile-bitcart-lab/home \
-SSL_CERT_FILE=/tmp/arkfile-bitcart-lab/ca.crt \
-/opt/arkfile/bin/arkfile-client --server-url https://arkfile.lab:18443 billing top-up --amount 0.50 --wait
+bash scripts/testing/bitcart-lab/paylab.sh client billing top-up --amount 0.50 --wait
 ```
 
-(If `/opt/arkfile/bin/arkfile-client` is not installed on the host, copy or invoke `/opt/arkfile/bin/arkfile-client` from the `arkfile` container.)
+(If `/opt/arkfile/bin/arkfile-client` is not installed on the host, set `ARKFILE_CLIENT_BIN` or copy `/opt/arkfile/bin/arkfile-client` out of the `arkfile` container.)
 
-To run `arkfile-admin` commands (`payments check`, `payments list`, `billing gift`), execute `arkfile-admin` inside the `arkfile` container against `https://127.0.0.1:18443` so `DirectLocalMiddleware` sees a direct loopback connection:
+To run `arkfile-admin` commands (`payments check`, `payments list`, `billing gift`), use `paylab.sh bootstrap-admin` and `paylab.sh admin`, which execute `arkfile-admin` inside the `arkfile` container against `https://127.0.0.1:18443` so `DirectLocalMiddleware` sees a direct loopback connection:
 
 ```bash
 # One-time admin bootstrap inside the lab container (interactive password + TOTP setup):
-podman compose exec arkfile sh -c \
-  'cat /opt/arkfile/etc/keys/bootstrap-token.bin | /opt/arkfile/bin/arkfile-admin --server-url https://127.0.0.1:18443 bootstrap --token-stdin --username lab-admin'
-podman compose exec -it arkfile /opt/arkfile/bin/arkfile-admin --server-url https://127.0.0.1:18443 setup-mfa
-podman compose exec -it arkfile /opt/arkfile/bin/arkfile-admin --server-url https://127.0.0.1:18443 login --username lab-admin
+bash scripts/testing/bitcart-lab/paylab.sh bootstrap-admin
+bash scripts/testing/bitcart-lab/paylab.sh admin setup-mfa
+bash scripts/testing/bitcart-lab/paylab.sh admin login --username paylab-admin
 
 # Verify Bitcart configuration and inspect invoices:
-podman compose exec arkfile /opt/arkfile/bin/arkfile-admin --server-url https://127.0.0.1:18443 payments check
-podman compose exec arkfile /opt/arkfile/bin/arkfile-admin --server-url https://127.0.0.1:18443 payments list
+bash scripts/testing/bitcart-lab/paylab.sh admin payments check
+bash scripts/testing/bitcart-lab/paylab.sh admin payments list
+
+# Stop without wiping volumes, or tear down all containers and volumes:
+bash scripts/testing/bitcart-lab/paylab.sh stop
+bash scripts/testing/bitcart-lab/paylab.sh down
 ```
 
 ## Success criteria
@@ -228,14 +227,16 @@ The lab is complete when all of the following hold on a machine that also has a 
 
 ## Files to add
 
+- `scripts/testing/bitcart-lab/paylab.sh` -- rootless-only launcher (`testing_refuse_root`, `podman info` rootless check, user-owned `podman.socket` pinning, and isolated `admin` / `client` / `export-ca` helpers).
 - `scripts/testing/bitcart-lab/compose.yaml` -- complete rootless Podman Compose stack (`arkfile-paylab`).
 - `scripts/testing/bitcart-lab/Containerfile.arkfile` -- multi-stage Debian builder (`build.sh --build-only` with Bun `1.3.14`) and slim runtime image staged at `/opt/arkfile`.
-- `scripts/testing/bitcart-lab/Containerfile.arkfile.containerignore` -- excludes `.git/`, `vendor/`, `node_modules/`, host build caches, host C archives, and `lab.env` from the build context.
-- `scripts/testing/bitcart-lab/entrypoint-arkfile.sh` -- initializes `/opt/arkfile/etc/keys/user-secret-master.bin`, loads generated secrets and `bitcart.env` from `lab-config`, and execs `/opt/arkfile/bin/arkfile`.
-- `scripts/testing/bitcart-lab/Caddyfile` -- one-domain HTTPS and WebSocket reverse proxy on `:19080` for `bitcart-api`, `bitcart-admin`, and `bitcart-checkout`.
-- `scripts/testing/bitcart-lab/provision/` -- idempotent one-shot Bitcart provisioner script/container.
+- `scripts/testing/bitcart-lab/Containerfile.arkfile.containerignore` and `scripts/testing/bitcart-lab/Containerfile.arkfile.dockerignore` -- identical context ignore lists for both native Podman and `docker-compose-plugin` providers, excluding `.git/`, `vendor/`, `vendor_c/`, `node_modules/`, host build caches, and `lab.env`.
+- `scripts/testing/bitcart-lab/ca-init.sh` and `scripts/testing/bitcart-lab/secrets-init.sh` -- one-shot certificate and credential generators with `/proc/self/uid_map` rootful-container guards.
+- `scripts/testing/bitcart-lab/entrypoint-arkfile.sh` -- verifies rootless user namespace, initializes `/opt/arkfile/etc/keys/user-secret-master.bin`, loads generated secrets and `bitcart.env` from `lab-config`, and execs `/opt/arkfile/bin/arkfile` as `arkfile`.
+- `scripts/testing/bitcart-lab/Caddyfile` -- one-domain HTTPS and WebSocket reverse proxy on `:19080` for `backend`, `admin`, and `checkout`.
+- `scripts/testing/bitcart-lab/provision/provision.sh` -- idempotent one-shot Bitcart provisioner script.
 - `scripts/testing/bitcart-lab/lab.env.example` -- template for operator watch-only wallet keys and optional overrides.
-- `.gitignore` -- add `scripts/testing/bitcart-lab/lab.env` (plus `scripts/testing/bitcart-lab/*.crt` and `scripts/testing/bitcart-lab/*.pem` as defense in depth).
+- `.gitignore` -- ignores `scripts/testing/bitcart-lab/lab.env`, `*.crt`, and `*.pem`.
 
 No changes are made to `dev-reset.sh`, `local-deploy.sh`, or `e2e-test.sh` beyond the `8989` mock port already updated.
 

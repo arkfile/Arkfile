@@ -6,6 +6,11 @@
 :19080 {
 	tls /certs/bitcart.crt /certs/bitcart.key
 
+	redir /api /api/ 308
+	# With the Ready Store omitted, bitcart-admin serves at /; redirect /admin there.
+	redir /admin / 302
+	redir /admin/ / 302
+
 	# Bitcart's API process serves / without the public /api prefix.
 	handle_path /api/* {
 		reverse_proxy backend:8000

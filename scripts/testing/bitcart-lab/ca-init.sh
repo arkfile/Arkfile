@@ -3,7 +3,18 @@
 # created under /tmp and removed before this process exits.
 set -eu
 
-if [ -f /ca-public/ca.crt ] && [ -f /tls-arkfile/arkfile.crt ] && [ -f /tls-bitcart/bitcart.crt ]; then
+# Refuse rootful containers (initial user namespace maps all 4294967295 UIDs at 0 -> 0).
+if [ -r /proc/self/uid_map ] && awk '$1 == 0 && $2 == 0 && $3 == 4294967295 { exit 0 } END { exit 1 }' /proc/self/uid_map; then
+    echo "[X] Refusing to start in a rootful container (host root user namespace detected)." >&2
+    echo "    Run this lab only with rootless Podman via: bash scripts/testing/bitcart-lab/paylab.sh up" >&2
+    exit 1
+fi
+
+if [ -f /ca-public/ca.crt ] && [ -f /ca-public/ca-bundle.crt ] \
+    && [ -f /tls-arkfile/arkfile.crt ] && [ -f /tls-arkfile/arkfile.key ] \
+    && [ -f /tls-bitcart/bitcart.crt ] && [ -f /tls-bitcart/bitcart.key ]; then
+    chown 10001:10001 /tls-arkfile/arkfile.key
+    chmod 0400 /tls-arkfile/arkfile.key /tls-bitcart/bitcart.key
     echo "lab certificates already present"
     exit 0
 fi
@@ -36,6 +47,8 @@ issue() {
     cn=$2
     san=$3
     outdir=$4
+    key_uid=$5
+    key_gid=$6
     cat > "$workdir/${name}.cnf" <<EOF
 [req]
 distinguished_name=dn
@@ -57,11 +70,14 @@ EOF
         -out "$workdir/${name}.crt" -days 825 \
         -extfile "$workdir/${name}.cnf" -extensions v3_req
     install -m 0644 "$workdir/${name}.crt" "${outdir}/${name}.crt"
-    install -m 0640 "$workdir/${name}.key" "${outdir}/${name}.key"
+    install -m 0400 "$workdir/${name}.key" "${outdir}/${name}.key"
+    chown "${key_uid}:${key_gid}" "${outdir}/${name}.key"
 }
 
-issue arkfile arkfile.lab "DNS:arkfile.lab,DNS:localhost,IP:127.0.0.1" /tls-arkfile
-issue bitcart bitcart.lab "DNS:bitcart.lab,DNS:localhost,IP:127.0.0.1" /tls-bitcart
+# arkfile drops privileges to UID/GID 10001 before reading /tls/arkfile.key;
+# bitcart-proxy runs Caddy as container UID 0.
+issue arkfile arkfile.lab "DNS:arkfile.lab,DNS:localhost,IP:127.0.0.1" /tls-arkfile 10001 10001
+issue bitcart bitcart.lab "DNS:bitcart.lab,DNS:localhost,IP:127.0.0.1" /tls-bitcart 0 0
 
 install -m 0644 "$workdir/ca.crt" /ca-public/ca.crt
 cat /etc/ssl/certs/ca-certificates.crt /ca-public/ca.crt > /ca-public/ca-bundle.crt

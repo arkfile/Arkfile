@@ -49,13 +49,9 @@ services:
   rqlite:
     image: rqlite/rqlite:8.36.18
     command:
-      - -http-addr
-      - 0.0.0.0:4001
-      - -raft-addr
-      - 0.0.0.0:4002
+      - -fk
       - -auth
       - /auth/rqlite-auth.json
-      - /rqlite/file/data
     volumes:
       - arkfile-rqlite:/rqlite/file
       - lab-config:/auth:ro
@@ -141,6 +137,9 @@ services:
         condition: service_healthy
       bitcoin:
         condition: service_started
+      monero:
+        condition: service_started
+        required: false
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/cryptos', timeout=3)"]
       interval: 10s
@@ -212,8 +211,8 @@ services:
     restart: "no"
     command: ["/bin/sh", "/provision/provision.sh"]
     environment:
-      BITCART_ADMIN_PASSWORD: ${BITCART_ADMIN_PASSWORD:?set BITCART_ADMIN_PASSWORD in lab.env}
-      BTC_XPUB: ${BTC_XPUB:?set BTC_XPUB in lab.env}
+      BITCART_ADMIN_PASSWORD: ${BITCART_ADMIN_PASSWORD:-}
+      BTC_XPUB: ${BTC_XPUB:-}
       BITCART_CRYPTOS: ${BITCART_CRYPTOS:-btc}
       BITCART_TX_SPEED: ${BITCART_TX_SPEED:-1}
       XMR_ADDRESS: ${XMR_ADDRESS:-}
@@ -250,7 +249,7 @@ services:
       LOG_LEVEL: info
       REQUIRE_APPROVAL: "false"
       ENABLE_REGISTRATION: "true"
-      ADMIN_USERNAMES: lab-admin
+      ADMIN_USERNAMES: paylab-admin
       RQLITE_NODES: rqlite:4001
       RQLITE_ADDRESS: http://rqlite:4001
       RQLITE_USERNAME: lab-user

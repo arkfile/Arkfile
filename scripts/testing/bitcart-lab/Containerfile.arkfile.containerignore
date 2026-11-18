@@ -1,5 +1,6 @@
 .git
 vendor
+vendor_c
 node_modules
 client/static/js/node_modules
 client/static/js/dist
@@ -9,6 +10,13 @@ client/static/js/sw-download.js.map
 client/static/js/libopaque.js
 client/static/js/libopaque.debug.js
 .vendor_cache
+/arkfile
+/arkfile-client
+/arkfile-admin
+build
+dist
+test-results
+playwright-report
 **/*.a
 **/*.o
 **/*.so
