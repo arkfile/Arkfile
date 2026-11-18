@@ -230,8 +230,8 @@ services:
 
   arkfile:
     build:
-      context: ../../..
-      dockerfile: scripts/testing/bitcart-lab/Containerfile.arkfile
+      context: ${ARKFILE_PAYLAB_IMAGE_CONTEXT:-/tmp/arkfile-bitcart-lab/image}
+      dockerfile: Containerfile.arkfile
     hostname: arkfile
     ports:
       - "127.0.0.1:18443:18443"

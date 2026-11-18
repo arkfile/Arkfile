@@ -77,6 +77,35 @@ run_compose() {
     podman compose "${args[@]}" "$@"
 }
 
+# Copy the already-built host install into a small build context. The image
+# does not compile Arkfile.
+stage_arkfile_image() {
+    local src="/opt/arkfile"
+    local stage="${LAB_TMP_DIR}/image"
+    local need
+    for need in \
+        "$src/bin/arkfile" \
+        "$src/bin/arkfile-admin" \
+        "$src/client/static/index.html" \
+        "$src/client/static/js/libopaque.js" \
+        "$src/client/static/js/dist/app.js" \
+        "$src/database/unified_schema.sql"
+    do
+        if [ ! -e "$need" ]; then
+            echo "[X] Missing ${need}." >&2
+            echo "    Build the host install with dev-reset.sh or local-deploy.sh before starting the lab." >&2
+            exit 1
+        fi
+    done
+    rm -rf "$stage"
+    mkdir -p "$stage/client" "$stage/database"
+    cp -a "$src/bin/arkfile" "$src/bin/arkfile-admin" "$stage/"
+    cp -a "$src/client/." "$stage/client/"
+    cp -a "$src/database/." "$stage/database/"
+    cp -a "$SCRIPT_DIR/entrypoint-arkfile.sh" "$SCRIPT_DIR/Containerfile.arkfile" "$stage/"
+    export ARKFILE_PAYLAB_IMAGE_CONTEXT="$stage"
+}
+
 require_lab_env() {
     if [ ! -f "$ENV_FILE" ]; then
         echo "[X] Missing ${ENV_FILE}." >&2
@@ -110,6 +139,7 @@ shift || true
 case "$cmd" in
     up)
         require_lab_env
+        stage_arkfile_image
         profile_args=()
         if grep -Eq '^[[:space:]]*BITCART_CRYPTOS=.*xmr' "$ENV_FILE"; then
             profile_args+=(--profile xmr)

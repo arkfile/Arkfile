@@ -238,6 +238,41 @@ REG_FLOW_FILE_SHA256=$(sha256sum "$REG_FLOW_FILE_PATH" | awk '{print $1}')
 REG_FLOW_FILE_NAME=$(basename "$REG_FLOW_FILE_PATH")
 success "Reg-flow file: $REG_FLOW_FILE_PATH (SHA-256: ${REG_FLOW_FILE_SHA256:0:16}...)"
 
+# dev-reset starts with approval required. e2e-test.sh turns that off at the
+# end; do it again here so a new Playwright registration is not left pending
+# when that step did not stick.
+section "Ensuring new registrations are auto-approved"
+ADMIN_BIN="/opt/arkfile/bin/arkfile-admin"
+ADMIN_HOME="$TEST_DATA_DIR/home"
+ADMIN_USERNAME="arkfile-dev-admin"
+ADMIN_PASSWORD='DevAdmin2025!SecureInitialPassword'
+ADMIN_TOTP_SECRET="ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D"
+mkdir -p "$ADMIN_HOME"
+approval_is_off() {
+    HOME="$ADMIN_HOME" "$ADMIN_BIN" --server-url "$SERVER_URL" --tls-insecure \
+        get-approval-policy --json 2>/dev/null | jq -e '.require_approval == false' >/dev/null
+}
+if ! approval_is_off; then
+    info "Signing in as ${ADMIN_USERNAME} to turn off required approval"
+    TOTP_CODE=$("$CLIENT" generate-totp --secret "$ADMIN_TOTP_SECRET" 2>/dev/null || true)
+    if [ -z "$TOTP_CODE" ]; then
+        error "Could not generate the dev admin TOTP code"
+        exit 1
+    fi
+    if ! printf '%s\n' "$ADMIN_PASSWORD" | HOME="$ADMIN_HOME" "$ADMIN_BIN" \
+        --server-url "$SERVER_URL" --tls-insecure --username "$ADMIN_USERNAME" \
+        login --password-stdin --totp-code "$TOTP_CODE" --save-session; then
+        error "Dev admin login failed, so new Playwright users would stay pending approval"
+        exit 1
+    fi
+    if ! HOME="$ADMIN_HOME" "$ADMIN_BIN" --server-url "$SERVER_URL" --tls-insecure \
+        set-approval-policy --require-approval false; then
+        error "Could not set require_approval=false"
+        exit 1
+    fi
+fi
+success "New registrations are auto-approved"
+
 # RUN PLAYWRIGHT TESTS
 
 section "RUNNING PLAYWRIGHT TESTS"
