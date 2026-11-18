@@ -253,7 +253,7 @@ func withSubscriptionsTestEnv(t *testing.T) (*sql.DB, func()) {
 
 	t.Setenv("ARKFILE_SUBSCRIPTIONS_ENABLED", "true")
 	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_ENABLED", "true")
-	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_URL", "http://127.0.0.1:8081")
+	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_URL", "http://127.0.0.1:8787")
 	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_PAIRING_ROOT", subscriptionsTestSecret)
 	t.Setenv("ARKFILE_SUBSCRIPTION_RETURN_URL", "https://arkfile.test/?subscription=return")
 	t.Setenv("ARKFILE_BILLING_PAYG_ENABLED", "true")

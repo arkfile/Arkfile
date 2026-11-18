@@ -46,9 +46,8 @@ The host deployment and existing e2e harnesses own the following ports, which th
 |---|---|
 | 8443 | Host Arkfile TLS (`dev-reset.sh` and `local-deploy.sh`) |
 | 8080 | Host Arkfile HTTP |
-| 8081 | Subscription Bridge mock (`e2e-test.sh`) |
+| 8787 | Subscription Bridge mock (`scripts/testing/subscription-bridge-mock.go`, `dev-reset.sh`, `e2e-test.sh`) |
 | 8989 | Bitcart mock (`scripts/testing/bitcart-mock.go`, `dev-reset.sh`, `e2e-test.sh`) |
-| 8082 | Former Bitcart mock port (a pre-change `secrets.env` may still point here until the next `dev-reset.sh`; leave unused) |
 | 4001 | Host rqlite |
 | 9332 | Host SeaweedFS S3 gateway |
 

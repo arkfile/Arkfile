@@ -4847,14 +4847,14 @@ start_mock_subscription_bridge() {
         return 1
     fi
 
-    info "Starting mock Subscription Bridge on :8081..."
+    info "Starting mock Subscription Bridge on :8787..."
     "$mock_bin" >>"$mock_log" 2>&1 &
     mock_pid=$!
 
     local i
     for i in $(seq 1 60); do
-        if curl -s --connect-timeout 1 http://127.0.0.1:8081/health >/dev/null 2>&1; then
-            info "Mock Subscription Bridge is listening on :8081"
+        if curl -s --connect-timeout 1 http://127.0.0.1:8787/health >/dev/null 2>&1; then
+            info "Mock Subscription Bridge is listening on :8787"
             echo "$mock_pid"
             return 0
         fi
@@ -4904,21 +4904,21 @@ user_credits_json() {
 mock_bridge_activate() {
     local checkout_id="$1"
     local username="$2"
-    curl -s -X POST "http://127.0.0.1:8081/v1/mock/activate" \
+    curl -s -X POST "http://127.0.0.1:8787/v1/mock/activate" \
         -H "Content-Type: application/json" \
         -d "{\"checkout_id\":\"$checkout_id\",\"username\":\"$username\"}"
 }
 
 mock_bridge_expire() {
     local subscription_ref="$1"
-    curl -s -X POST "http://127.0.0.1:8081/v1/mock/expire" \
+    curl -s -X POST "http://127.0.0.1:8787/v1/mock/expire" \
         -H "Content-Type: application/json" \
         -d "{\"subscription_ref\":\"$subscription_ref\"}"
 }
 
 mock_bridge_replay() {
     local subscription_ref="$1"
-    curl -s -X POST "http://127.0.0.1:8081/v1/mock/replay" \
+    curl -s -X POST "http://127.0.0.1:8787/v1/mock/replay" \
         -H "Content-Type: application/json" \
         -d "{\"subscription_ref\":\"$subscription_ref\"}"
 }
@@ -4946,7 +4946,7 @@ run_subscriptions() {
     export ARKFILE_SUBSCRIPTIONS_ENABLED=true
     export ARKFILE_SUBSCRIPTION_BRIDGE_ENABLED=true
     export ARKFILE_BILLING_PAYG_ENABLED=true
-    export ARKFILE_SUBSCRIPTION_BRIDGE_URL="http://127.0.0.1:8081"
+    export ARKFILE_SUBSCRIPTION_BRIDGE_URL="http://127.0.0.1:8787"
     export ARKFILE_SUBSCRIPTION_BRIDGE_PAIRING_ROOT="000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
     export ADMIN_DEV_TEST_API_ENABLED=true
 

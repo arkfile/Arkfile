@@ -721,7 +721,7 @@ func TestSubscriptionsConfigValidationRequiresPairingRoot(t *testing.T) {
 		"STORAGE_1_BUCKET":                    "test-bucket",
 		"ARKFILE_SUBSCRIPTIONS_ENABLED":       "true",
 		"ARKFILE_SUBSCRIPTION_BRIDGE_ENABLED": "true",
-		"ARKFILE_SUBSCRIPTION_BRIDGE_URL":     "http://127.0.0.1:8081",
+		"ARKFILE_SUBSCRIPTION_BRIDGE_URL":     "http://127.0.0.1:8787",
 	}
 	originalEnv := map[string]string{}
 	for key := range baseEnv {

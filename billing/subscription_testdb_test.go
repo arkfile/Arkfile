@@ -30,7 +30,7 @@ func withBillingSubscriptionEnv(t *testing.T) {
 	t.Setenv("STORAGE_1_BUCKET", "test-bucket")
 	t.Setenv("ARKFILE_SUBSCRIPTIONS_ENABLED", "true")
 	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_ENABLED", "true")
-	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_URL", "http://127.0.0.1:8081")
+	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_URL", "http://127.0.0.1:8787")
 	t.Setenv("ARKFILE_SUBSCRIPTION_BRIDGE_PAIRING_ROOT", subTestSecret)
 	t.Setenv("ARKFILE_SUBSCRIPTION_RETURN_URL", "https://arkfile.test/?subscription=return")
 	t.Setenv("ARKFILE_BILLING_ENABLED", "true")

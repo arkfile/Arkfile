@@ -229,8 +229,8 @@ func main() {
 		})
 	})
 
-	log.Println("Starting mock Subscription Bridge on :8081...")
-	if err := http.ListenAndServe(":8081", nil); err != nil {
+	log.Println("Starting mock Subscription Bridge on 127.0.0.1:8787...")
+	if err := http.ListenAndServe("127.0.0.1:8787", nil); err != nil {
 		log.Fatal(err)
 	}
 }

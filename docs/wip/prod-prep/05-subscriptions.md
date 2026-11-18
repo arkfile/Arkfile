@@ -703,7 +703,7 @@ Implemented and passing in CI/dev:
 
 ### Shell e2e (done)
 
-**`run_subscriptions`** group in `scripts/testing/e2e-test.sh` (after `run_payments`), using `scripts/testing/subscription-bridge-mock.go` on `:8081`. Verified as part of the full suite (**212 tests**, June 2026 dev-reset run):
+**`run_subscriptions`** group in `scripts/testing/e2e-test.sh` (after `run_payments`), using `scripts/testing/subscription-bridge-mock.go` on `127.0.0.1:8787`. Verified as part of the full suite (**212 tests**, June 2026 dev-reset run):
 
 - Mock Subscription Bridge start
 - Dev plan `plan_dev_250gb` present (admin list-plans; exercises rqlite plan reads)
