@@ -631,8 +631,8 @@ func TestPaymentsConfigRejectsPlainHTTPBitcartOffLoopback(t *testing.T) {
 	}
 
 	env = bitcartPaymentsEnv()
-	env["ARKFILE_BITCART_API_URL"] = "http://127.0.0.1:8082/api"
-	env["ARKFILE_BITCART_CHECKOUT_URL"] = "http://127.0.0.1:8082"
+	env["ARKFILE_BITCART_API_URL"] = "http://127.0.0.1:8989/api"
+	env["ARKFILE_BITCART_CHECKOUT_URL"] = "http://127.0.0.1:8989"
 	_, err = loadConfigWithEnv(t, env)
 	assert.NoError(t, err)
 }

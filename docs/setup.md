@@ -435,7 +435,7 @@ ARKFILE_BITCART_STORE_ID=<store id>
 
 Both URLs must use HTTPS unless they point at loopback (`127.0.0.1`, `localhost`, `::1`). Startup fails with a clear error if any value is missing or invalid. Bitcart must be able to reach `https://<your Arkfile domain>/api/webhooks/bitcart`; Arkfile passes this URL on each invoice, so nothing needs to be configured in Bitcart for it. In the Bitcart store settings, set the store currency to USD, set the transaction speed to at least 1 confirmation (the default of 0 marks invoices complete on an unconfirmed payment), set the underpaid percentage to 0, and turn off both the email requirement and anonymous invoice creation. Arkfile credits only invoices that Bitcart marks complete, and refuses invoices whose on-chain payment methods require zero confirmations. After the update, run `arkfile-admin payments check` on the Arkfile server to confirm the token and store settings. The first start after this update migrates the `payment_invoices` table in place (adding the `confirming` status and the `last_checked_at` column); existing rows are kept.
 
-`dev-reset.sh` enables top-ups against a local Bitcart mock (`scripts/testing/bitcart-mock.go` on `127.0.0.1:8082`) that `e2e-test.sh` starts and stops. Outside an e2e run, creating an invoice on a dev instance returns 502 unless you start the mock yourself with `go run scripts/testing/bitcart-mock.go`.
+`dev-reset.sh` enables top-ups against a local Bitcart mock (`scripts/testing/bitcart-mock.go` on `127.0.0.1:8989`) that `e2e-test.sh` starts and stops. Outside an e2e run, creating an invoice on a dev instance returns 502 unless you start the mock yourself with `go run scripts/testing/bitcart-mock.go`.
 
 **External S3 Provider Configuration:**
 

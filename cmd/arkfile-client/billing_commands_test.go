@@ -141,7 +141,7 @@ func TestWaitForInvoiceSettlement_TimesOut(t *testing.T) {
 }
 
 func TestCheckBrowserCheckoutURL(t *testing.T) {
-	ok := []string{"https://pay.example.com/i/abc", "http://127.0.0.1:8082/i/abc", "http://localhost/i/x"}
+	ok := []string{"https://pay.example.com/i/abc", "http://127.0.0.1:8989/i/abc", "http://localhost/i/x"}
 	for _, u := range ok {
 		if err := checkBrowserCheckoutURL(u); err != nil {
 			t.Errorf("%s: unexpected error %v", u, err)

@@ -4456,7 +4456,7 @@ run_payments() {
 # Bitcart mock (scripts/testing/bitcart-mock.go). dev-reset.sh points the
 # server at it. It stays up through run_subscriptions, which also creates
 # invoices, and is stopped (after closing every open invoice) at the end.
-BITCART_MOCK_URL="http://127.0.0.1:8082"
+BITCART_MOCK_URL="http://127.0.0.1:8989"
 BITCART_MOCK_PID=""
 
 find_go_bin() {

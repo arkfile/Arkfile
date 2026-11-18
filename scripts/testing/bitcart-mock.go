@@ -1,7 +1,7 @@
 //go:build ignore
 
 // Mock of the Bitcart Merchants API subset used by Arkfile, for e2e tests only.
-// Listens on 127.0.0.1:8082. It models a store configured as docs/bitcart-setup.md
+// Listens on 127.0.0.1:8989. It models a store configured as docs/bitcart-setup.md
 // recommends: anonymous invoice creation off, 1 confirmation, no email prompt.
 // Real endpoints: POST /api/invoices (bearer token), GET /api/invoices/{id},
 // GET /api/invoices/count (bearer token), GET /api/stores/{id}, GET /i/{id}.
@@ -159,7 +159,7 @@ func control(handler func(inv *invoice, req controlRequest) (bool, string)) http
 }
 
 func main() {
-	addr := envOr("BITCART_MOCK_ADDR", "127.0.0.1:8082")
+	addr := envOr("BITCART_MOCK_ADDR", "127.0.0.1:8989")
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))

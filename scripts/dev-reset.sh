@@ -479,13 +479,13 @@ ARKFILE_BILLING_INCLUDE_ADMINS=false
 ARKFILE_PAYG_NEGATIVE_BALANCE_LIMIT_USD=10.00
 
 # Bitcoin/Monero invoice top-ups through Bitcart. Dev points at the Bitcart
-# mock (scripts/testing/bitcart-mock.go) that e2e-test.sh starts on :8082.
+# mock (scripts/testing/bitcart-mock.go) that e2e-test.sh starts on :8989.
 # Outside e2e runs, creating an invoice returns 502 unless the mock is running.
 ARKFILE_PAYMENTS_ENABLED=true
 ARKFILE_MIN_TOP_UP_USD=0.50
 ARKFILE_MAX_TOP_UP_USD=1000.00
-ARKFILE_BITCART_API_URL=http://127.0.0.1:8082/api
-ARKFILE_BITCART_CHECKOUT_URL=http://127.0.0.1:8082
+ARKFILE_BITCART_API_URL=http://127.0.0.1:8989/api
+ARKFILE_BITCART_CHECKOUT_URL=http://127.0.0.1:8989
 ARKFILE_BITCART_API_TOKEN=dev-bitcart-token
 ARKFILE_BITCART_STORE_ID=dev-store
 
