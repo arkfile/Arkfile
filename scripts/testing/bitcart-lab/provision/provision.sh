@@ -167,8 +167,8 @@ fi
 
 xmr_id=""
 if [ "$want_xmr" -eq 1 ]; then
-    if [ -z "${XMR_ADDRESS:-}" ] || [ -z "${XMR_VIEW_KEY:-}" ]; then
-        echo "XMR_ADDRESS and XMR_VIEW_KEY are required when BITCART_CRYPTOS includes xmr" >&2
+    if [ -z "${XMR_ADDRESS:-}" ] || [ -z "${XMR_PRIVATE_VIEW_KEY:-}" ]; then
+        echo "XMR_ADDRESS and XMR_PRIVATE_VIEW_KEY are required when BITCART_CRYPTOS includes xmr" >&2
         exit 1
     fi
     xmr_id=$(find_wallet xmr)
@@ -177,13 +177,13 @@ if [ "$want_xmr" -eq 1 ]; then
         if [ -n "${XMR_RESTORE_HEIGHT:-}" ]; then
             extra=$(printf '%s' "$extra" | jq --argjson h "$XMR_RESTORE_HEIGHT" '. + {restore_height:$h}')
         fi
-        created=$(auth -d "$(jq -nc --arg key "$XMR_VIEW_KEY" --argjson extra "$extra" \
+        created=$(auth -d "$(jq -nc --arg key "$XMR_PRIVATE_VIEW_KEY" --argjson extra "$extra" \
             '{name:"lab-xmr",xpub:$key,currency:"xmr",additional_xpub_data:$extra}')" \
             "$API/wallets" || true)
         xmr_id=$(json_id_of "$created")
         if [ -z "$xmr_id" ] && [ -n "${XMR_RESTORE_HEIGHT:-}" ]; then
             echo "retrying monero wallet without restore_height"
-            created=$(auth -d "$(jq -nc --arg key "$XMR_VIEW_KEY" --arg address "$XMR_ADDRESS" \
+            created=$(auth -d "$(jq -nc --arg key "$XMR_PRIVATE_VIEW_KEY" --arg address "$XMR_ADDRESS" \
                 '{name:"lab-xmr",xpub:$key,currency:"xmr",additional_xpub_data:{address:$address}}')" \
                 "$API/wallets" || true)
             xmr_id=$(json_id_of "$created")
