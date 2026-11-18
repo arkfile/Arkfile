@@ -1,0 +1,320 @@
+# Isolated Arkfile and Bitcart lab. Project name arkfile-paylab.
+# Service names database, redis, bitcoin, monero, backend, and worker match
+# the hostnames Bitcart connects to. Postgres uses trust authentication on
+# this private network because that is what the pinned Bitcart component does.
+
+name: arkfile-paylab
+
+x-bitcart-common: &bitcart-common
+  BITCART_ENV: production
+  LOG_FILE: bitcart.log
+  BITCART_DATADIR: /datadir
+  BITCART_BACKUPS_DIR: /backups
+  BITCART_VOLUMES: /datadir /backups /plugins
+  BITCART_CRYPTOS: ${BITCART_CRYPTOS:-btc}
+  BTC_NETWORK: ${BTC_NETWORK:-mainnet}
+  BTC_LIGHTNING: "false"
+  XMR_NETWORK: ${XMR_NETWORK:-mainnet}
+  BITCART_HOST: bitcart.lab:19080
+  BITCART_HTTPS_ENABLED: "true"
+  BITCART_REVERSEPROXY: none
+  BITCART_BACKEND_ROOTPATH: /api
+  BITCART_CHECKOUT_URL: https://bitcart.lab:19080
+  BITCART_AGENT_TRANSPORT: none
+  BITCART_ENABLE_SSH: "false"
+  ONE_DOMAIN_MODE: "true"
+  BITCART_API_WORKERS: "1"
+  DB_HOST: database
+  DB_PORT: "5432"
+
+services:
+  ca:
+    image: alpine:3.21
+    restart: "no"
+    command: ["/bin/sh", "/ca-init.sh"]
+    volumes:
+      - ./ca-init.sh:/ca-init.sh:ro
+      - lab-ca-public:/ca-public
+      - lab-tls-arkfile:/tls-arkfile
+      - lab-tls-bitcart:/tls-bitcart
+
+  secrets-init:
+    image: alpine:3.21
+    restart: "no"
+    command: ["/bin/sh", "/secrets-init.sh"]
+    volumes:
+      - ./secrets-init.sh:/secrets-init.sh:ro
+      - lab-config:/lab-config
+
+  rqlite:
+    image: rqlite/rqlite:8.36.18
+    command:
+      - -http-addr
+      - 0.0.0.0:4001
+      - -raft-addr
+      - 0.0.0.0:4002
+      - -auth
+      - /auth/rqlite-auth.json
+      - /rqlite/file/data
+    volumes:
+      - arkfile-rqlite:/rqlite/file
+      - lab-config:/auth:ro
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.18
+    command:
+      - server
+      - -dir=/data
+      - -s3
+      - -s3.port=9332
+      - -s3.config=/config/seaweedfs-s3.json
+    volumes:
+      - arkfile-seaweedfs:/data
+      - lab-config:/config:ro
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+
+  database:
+    image: pgautoupgrade/pgautoupgrade:17-alpine
+    command: ["-c", "random_page_cost=1.0"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: bitcart
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - bitcart-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d bitcart"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  bitcoin:
+    image: bitcart/bitcart-btc:stable
+    environment:
+      BTC_NETWORK: ${BTC_NETWORK:-mainnet}
+      BTC_LIGHTNING: "false"
+      BTC_SERVER: ${BTC_SERVER:-}
+    volumes:
+      - bitcart-btc-data:/data
+
+  monero:
+    profiles: ["xmr"]
+    image: bitcart/bitcart-xmr:stable
+    environment:
+      XMR_NETWORK: ${XMR_NETWORK:-mainnet}
+      XMR_SERVER: ${XMR_SERVER:-https://seed-server.bitcart.ai}
+    volumes:
+      - bitcart-xmr-data:/data
+
+  backend:
+    image: bitcart/bitcart:stable
+    command: ["just", "prod-api-up"]
+    environment:
+      <<: *bitcart-common
+      FORWARDED_ALLOW_IPS: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+      SSL_CERT_FILE: /ca/ca-bundle.crt
+      REQUESTS_CA_BUNDLE: /ca/ca-bundle.crt
+    volumes:
+      - bitcart-datadir:/datadir
+      - bitcart-backups:/backups
+      - bitcart-plugins:/plugins
+      - lab-ca-public:/ca:ro
+    depends_on:
+      ca:
+        condition: service_completed_successfully
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      bitcoin:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/cryptos', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+
+  worker:
+    image: bitcart/bitcart:stable
+    command: ["just", "worker"]
+    environment:
+      <<: *bitcart-common
+      SSL_CERT_FILE: /ca/ca-bundle.crt
+      REQUESTS_CA_BUNDLE: /ca/ca-bundle.crt
+    volumes:
+      - bitcart-datadir:/datadir
+      - bitcart-backups:/backups
+      - bitcart-plugins:/plugins
+      - lab-ca-public:/ca:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  admin:
+    image: bitcart/bitcart-admin:stable
+    command: ["yarn", "start"]
+    environment:
+      ONE_DOMAIN_MODE: "true"
+      BITCART_ADMIN_ROOTPATH: /
+      BITCART_ADMIN_API_URL: https://bitcart.lab:19080/api
+      BITCART_ADMIN_SERVER_API_URL: http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  checkout:
+    image: bitcart/bitcart-checkout:stable
+    environment:
+      ONE_DOMAIN_MODE: "true"
+      BITCART_API_URL: https://bitcart.lab:19080/api
+      BITCART_CHECKOUT_URL: https://bitcart.lab:19080
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  bitcart-proxy:
+    image: caddy:2.11.4-alpine
+    ports:
+      - "127.0.0.1:19080:19080"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - lab-tls-bitcart:/certs:ro
+    networks:
+      default:
+        aliases:
+          - bitcart.lab
+    depends_on:
+      ca:
+        condition: service_completed_successfully
+      backend:
+        condition: service_healthy
+      admin:
+        condition: service_started
+      checkout:
+        condition: service_started
+
+  provision:
+    image: alpine:3.21
+    restart: "no"
+    command: ["/bin/sh", "/provision/provision.sh"]
+    environment:
+      BITCART_ADMIN_PASSWORD: ${BITCART_ADMIN_PASSWORD:?set BITCART_ADMIN_PASSWORD in lab.env}
+      BTC_XPUB: ${BTC_XPUB:?set BTC_XPUB in lab.env}
+      BITCART_CRYPTOS: ${BITCART_CRYPTOS:-btc}
+      BITCART_TX_SPEED: ${BITCART_TX_SPEED:-1}
+      XMR_ADDRESS: ${XMR_ADDRESS:-}
+      XMR_VIEW_KEY: ${XMR_VIEW_KEY:-}
+      XMR_RESTORE_HEIGHT: ${XMR_RESTORE_HEIGHT:-}
+    volumes:
+      - ./provision/provision.sh:/provision/provision.sh:ro
+      - lab-config:/lab-config
+      - lab-ca-public:/ca:ro
+    depends_on:
+      bitcart-proxy:
+        condition: service_started
+      worker:
+        condition: service_started
+
+  arkfile:
+    build:
+      context: ../../..
+      dockerfile: scripts/testing/bitcart-lab/Containerfile.arkfile
+    hostname: arkfile
+    ports:
+      - "127.0.0.1:18443:18443"
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8088"
+      TLS_ENABLED: "true"
+      TLS_PORT: "18443"
+      TLS_CERT_FILE: /tls/arkfile.crt
+      TLS_KEY_FILE: /tls/arkfile.key
+      BASE_URL: https://arkfile.lab:18443
+      ARKFILE_DOMAIN: arkfile.lab
+      CORS_ALLOWED_ORIGINS: https://arkfile.lab:18443
+      DEBUG_MODE: "false"
+      LOG_LEVEL: info
+      REQUIRE_APPROVAL: "false"
+      ENABLE_REGISTRATION: "true"
+      ADMIN_USERNAMES: lab-admin
+      RQLITE_NODES: rqlite:4001
+      RQLITE_ADDRESS: http://rqlite:4001
+      RQLITE_USERNAME: lab-user
+      STORAGE_PROVIDER_1: generic-s3
+      STORAGE_PROVIDER_1_ID: generic-s3:arkfile-paylab
+      STORAGE_1_ENDPOINT: http://seaweedfs:9332
+      STORAGE_1_ACCESS_KEY: arkfile-paylab
+      STORAGE_1_BUCKET: arkfile-paylab
+      STORAGE_1_REGION: us-east-1
+      STORAGE_1_FORCE_PATH_STYLE: "true"
+      STORAGE_1_USE_SSL: "false"
+      ARKFILE_BILLING_ENABLED: "true"
+      ARKFILE_BILLING_PAYG_ENABLED: "true"
+      ARKFILE_CUSTOMER_PRICE_USD_PER_TB_PER_MONTH: ${ARKFILE_CUSTOMER_PRICE_USD_PER_TB_PER_MONTH:-10.00}
+      ARKFILE_FREE_STORAGE_BYTES: ${ARKFILE_FREE_STORAGE_BYTES:-1073741824}
+      ARKFILE_BILLING_TICK_INTERVAL: ${ARKFILE_BILLING_TICK_INTERVAL:-1h}
+      ARKFILE_MIN_TOP_UP_USD: ${ARKFILE_MIN_TOP_UP_USD:-0.50}
+      ARKFILE_MAX_TOP_UP_USD: "1000.00"
+      ARKFILE_PAYMENTS_ENABLED: "true"
+      ARKFILE_BITCART_API_URL: https://bitcart.lab:19080/api
+      ARKFILE_BITCART_CHECKOUT_URL: https://bitcart.lab:19080
+      ARKFILE_SUBSCRIPTIONS_ENABLED: "false"
+      SSL_CERT_FILE: /ca/ca-bundle.crt
+      HOME: /opt/arkfile/var/home
+    volumes:
+      - lab-config:/lab-config:ro
+      - lab-ca-public:/ca:ro
+      - lab-tls-arkfile:/tls:ro
+      - arkfile-keys:/opt/arkfile/etc/keys
+      - arkfile-var:/opt/arkfile/var
+    networks:
+      default:
+        aliases:
+          - arkfile.lab
+    depends_on:
+      provision:
+        condition: service_completed_successfully
+      rqlite:
+        condition: service_started
+      seaweedfs:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "--cacert", "/ca/ca-bundle.crt", "https://127.0.0.1:18443/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+networks:
+  default:
+    name: arkfile-paylab
+
+volumes:
+  lab-ca-public:
+  lab-tls-arkfile:
+  lab-tls-bitcart:
+  lab-config:
+  arkfile-rqlite:
+  arkfile-seaweedfs:
+  arkfile-keys:
+  arkfile-var:
+  bitcart-db-data:
+  bitcart-datadir:
+  bitcart-backups:
+  bitcart-plugins:
+  bitcart-btc-data:
+  bitcart-xmr-data:

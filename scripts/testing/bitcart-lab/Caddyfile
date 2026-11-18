@@ -1,0 +1,33 @@
+{
+	auto_https off
+	admin off
+}
+
+:19080 {
+	tls /certs/bitcart.crt /certs/bitcart.key
+
+	# Bitcart's API process serves / without the public /api prefix.
+	handle_path /api/* {
+		reverse_proxy backend:8000
+	}
+
+	handle /i/* {
+		reverse_proxy checkout:80
+	}
+	handle /refunds/* {
+		reverse_proxy checkout:80
+	}
+	handle /checkout/* {
+		reverse_proxy checkout:80
+	}
+	handle /embed/* {
+		reverse_proxy checkout:80
+	}
+	handle /modal/bitcart.js {
+		reverse_proxy checkout:80
+	}
+
+	handle {
+		reverse_proxy admin:4000
+	}
+}

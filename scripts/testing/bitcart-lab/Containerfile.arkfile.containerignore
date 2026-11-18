@@ -1,0 +1,17 @@
+.git
+vendor
+node_modules
+client/static/js/node_modules
+client/static/js/dist
+client/static/js/.buildcache
+client/static/js/sw-download.js
+client/static/js/sw-download.js.map
+client/static/js/libopaque.js
+client/static/js/libopaque.debug.js
+.vendor_cache
+**/*.a
+**/*.o
+**/*.so
+scripts/testing/bitcart-lab/lab.env
+scripts/testing/bitcart-lab/*.crt
+scripts/testing/bitcart-lab/*.pem

@@ -2,7 +2,17 @@
 
 ## Status
 
-Draft planning document. No lab files have been added yet. The host Bitcart mock now listens on `127.0.0.1:8989`. This lab is a separate stack under `scripts/testing/bitcart-lab/` and must not take that port.
+The lab files are in `scripts/testing/bitcart-lab/`. Podman has not been run. The host Bitcart mock listens on `127.0.0.1:8989`. This lab must not take that port.
+
+## Pinned Bitcart reference
+
+`bitcart/bitcart-docker` has no release tags. The component files were read at commit `ff6ddbf612a9236e447107bd9a1d9c619e2db558` on `master`. Image tags in the compose file stay on the upstream `stable` tags until a successful payment, when they should be replaced with digests.
+
+Images and listen ports from those components: `bitcart/bitcart:stable` runs the API (`just prod-api-up`, port 8000) and the worker (`just worker`, port 9020). `bitcart/bitcart-btc:stable` is the Bitcoin daemon on port 5000. `bitcart/bitcart-xmr:stable` is Monero on port 5011 and defaults `XMR_SERVER` to `https://seed-server.bitcart.ai`. `bitcart/bitcart-admin:stable` listens on port 4000. `bitcart/bitcart-checkout:stable` listens on port 80. Postgres is `pgautoupgrade/pgautoupgrade:17-alpine` with user `postgres`, database `bitcart`, and trust authentication. Redis is `redis:7-alpine`.
+
+Compose service names are `database`, `redis`, `bitcoin`, `monero`, `backend`, and `worker` because those are the hostnames the Bitcart processes use. The lab does not run the Ready Store service. With the store omitted, one-domain mode serves the API at `/api/`, checkout at `/i/`, and the admin UI at `/`. Nginx strips the `/api/` prefix before the API process. The lab Caddyfile does the same. `BITCART_BACKEND_ROOTPATH=/api` is set so Bitcart still generates public URLs under `/api`.
+
+Current Bitcart wallet creation uses `xpub` for the extended public key or the Monero view key, and `additional_xpub_data.address` for the Monero primary address. A restore height is not part of that schema. The provisioner sends it when `XMR_RESTORE_HEIGHT` is set and retries without it if Bitcart rejects the field. The provisioner does not set a wallet transaction speed. Store checkout settings are sent on create and on a later update: transaction speed at least 1, underpaid percentage 0, email off, anonymous invoice creation off.
 
 The goal is one rootless Podman Compose project that runs a complete Arkfile instance and a real Bitcart stack beside each other. Normal browser features -- registration, OPAQUE + TOTP sign-in, file encryption and upload, streaming download and decryption (including the service worker), anonymous file shares, `.arkbackup` export, and billing -- all work at one origin (`https://arkfile.lab:18443`). Creating a top-up opens a real Bitcart checkout page (`https://bitcart.lab:19080`), displays a real Bitcoin (and, optionally, Monero) address derived from watch-only wallet material, delivers a real webhook over the Compose network, and credits the Arkfile user once confirmed on-chain. Nothing in the stack reads or writes `/opt/arkfile`, systemd units, `~/.arkfile-session.json`, or the database of a `dev-reset.sh` or `local-deploy.sh` deployment already running on the host.
 
@@ -107,15 +117,15 @@ Several startup and networking rules in the Arkfile codebase dictate exact conta
 All services live in `scripts/testing/bitcart-lab/compose.yaml`:
 
 - `ca` -- one-shot init service (`restart: "no"`). Generates the name-constrained lab CA, `ca-bundle.crt`, `arkfile` leaf cert/key, and `bitcart` leaf cert/key into `lab-ca-public`, `lab-tls-arkfile`, and `lab-tls-bitcart` when absent, deletes the CA private key from `/tmp`, and exits `0`.
-- `secrets-init` -- one-shot init service (`restart: "no"`). Generates random credentials on first run into the `lab-config` volume (`rqlite` password and `rqlite-auth.json`, SeaweedFS S3 secret and `seaweedfs-s3.json`, Bitcart Postgres password, and `ARKFILE_MASTER_KEY`) so restarts reuse the same secrets until `down -v`.
+- `secrets-init` -- one-shot init service (`restart: "no"`). Generates the rqlite password and auth file, the SeaweedFS S3 secret and config, and `ARKFILE_MASTER_KEY` into `lab-config`. The pinned Bitcart Postgres component uses trust authentication, so this lab does not invent a database password the API would not read.
 - `rqlite` -- official `rqlite/rqlite` image with auth enabled from `lab-config/rqlite-auth.json` and persistent volume `arkfile-rqlite`.
 - `seaweedfs` -- official `chrislusf/seaweedfs` image running `server -s3 -s3.port=9332 -s3.config=/config/seaweedfs-s3.json` with persistent volume `arkfile-seaweedfs`.
-- `bitcart-db` and `bitcart-redis` -- Postgres and Redis images from the pinned `bitcart/bitcart-docker` tag, backed by `bitcart-db-data` and `bitcart-redis-data`.
-- `bitcart-btc` -- Bitcoin Electrum daemon image from the pinned Bitcart generator, with `BTC_NETWORK=${BTC_NETWORK:-testnet}`, `BTC_LIGHTNING=false`, optional `BTC_SERVER`, and persistent volume `bitcart-btc-data`.
-- `bitcart-xmr` -- Monero daemon/wallet service from the pinned Bitcart generator, gated behind `profiles: ["xmr"]`, configured with external node settings (`XMR_SERVER`, `XMR_NETWORK`) and persistent volume `bitcart-xmr-data`.
-- `bitcart-api` and `bitcart-worker` -- upstream `bitcart/bitcart` image (no custom wrapper image), mounting `lab-ca-public` read-only at `/ca` with `SSL_CERT_FILE=/ca/ca-bundle.crt` and `REQUESTS_CA_BUNDLE=/ca/ca-bundle.crt`, sharing `bitcart-datadir`, and using `BITCART_CRYPTOS=${BITCART_CRYPTOS:-btc}`.
-- `bitcart-admin` and `bitcart-checkout` -- the Bitcart Admin Panel (`admin`) and standalone Checkout (`checkout`) containers from the pinned generator. Bitcart's Ready Store POS (`store`, port 3000) is excluded because Arkfile only uses invoice checkout and admin management.
-- `bitcart-proxy` -- official Caddy image listening on `0.0.0.0:19080`, aliased as `bitcart.lab` on the Compose network, published at `127.0.0.1:19080:19080`, presenting `bitcart.crt`/`bitcart.key`, and routing `/api/*` (including WebSocket upgrades), `/admin/*`, and checkout paths (`/i/*`, `/checkout/*`, `/modal/*`, `/embed/*`, `/refunds/*`) to `bitcart-api`, `bitcart-admin`, and `bitcart-checkout` following the pinned tag's one-domain nginx map.
+- `database` and `redis` -- Postgres and Redis from the pinned components, backed by `bitcart-db-data`. Redis has no separate data volume because invoice state lives in Postgres.
+- `bitcoin` -- `bitcart/bitcart-btc` with `BTC_NETWORK=${BTC_NETWORK:-mainnet}`, `BTC_LIGHTNING=false`, optional `BTC_SERVER`, and volume `bitcart-btc-data`.
+- `monero` -- `bitcart/bitcart-xmr`, profile `xmr`, with `XMR_SERVER` and `XMR_NETWORK`, and volume `bitcart-xmr-data`.
+- `backend` and `worker` -- upstream `bitcart/bitcart` with no wrapper image. Both mount `lab-ca-public` at `/ca` and set `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE`. `BITCART_CRYPTOS` comes from `lab.env` and defaults to `btc`.
+- `admin` and `checkout` -- the admin panel and the standalone checkout. The Ready Store service is not included, so invoices are at `/i/<id>` rather than `/admin/i/<id>`.
+- `bitcart-proxy` -- Caddy `2.11.4` listening on `0.0.0.0:19080`, aliased as `bitcart.lab`, and published at `127.0.0.1:19080:19080`. It presents `bitcart.crt` and routes `/api/*` to `backend:8000` with the prefix removed, checkout paths to `checkout:80`, and everything else to `admin:4000`.
 - `provision` -- one-shot idempotent provisioner (`restart: "no"`) that configures the Bitcart admin user, watch-only wallet(s), USD store, checkout security settings, and `invoice_management` token, writing `store_id` and `invoice_token` into `lab-config`.
 - `arkfile` -- multi-stage Debian image built from this repo via `Containerfile.arkfile`, aliased as `arkfile.lab` on the Compose network and published at `127.0.0.1:18443:18443`. Its entrypoint waits for `lab-config` (`store_id` and `invoice_token`), `rqlite`, and `seaweedfs`, initializes `/opt/arkfile/etc/keys/user-secret-master.bin` if absent, exports `ARKFILE_PAYMENTS_ENABLED=true` and `ARKFILE_BITCART_*`, and starts `/opt/arkfile/bin/arkfile`.
 
@@ -127,9 +137,7 @@ The builder stage is Debian-based and runs `./scripts/setup/build.sh --build-onl
 
 ## Bitcart one-domain translation
 
-The first implementation step checks out a single release tag of `bitcart/bitcart-docker` in a temporary directory outside the repo and renders its generator for `BITCART_CRYPTOS=btc,xmr`, `BTC_NETWORK=testnet`, and `BITCART_ADDITIONAL_COMPONENTS=checkout` as a read-only reference for exact image tags, internal ports, healthchecks, and one-domain nginx locations.
-
-In `bitcart/bitcart-docker`, **one-domain mode** activates only when `BITCART_HOST` is set and `BITCART_ADMIN_HOST`, `BITCART_STORE_HOST`, `BITCART_CHECKOUT_HOST`, and `BITCART_API_URL` are all **unset**. Setting `BITCART_ADMIN_HOST` or `BITCART_STORE_HOST` disables one-domain mode and breaks rootpaths (`/api` and `/admin`). Furthermore, `BITCART_HOST` must include the port (`BITCART_HOST=bitcart.lab:19080`) and `BITCART_HTTPS_ENABLED=true` must be set on the Bitcart services; otherwise the Nuxt/Vue checkout and admin SPAs opened at `https://bitcart.lab:19080` attempt XHR and WebSocket calls to `http://bitcart.lab/api` on port 80 and fail to render invoice addresses. Confirm against the pinned tag's `checkout` component and nginx template that `https://bitcart.lab:19080/i/<id>` serves invoices directly (and if a component variation serves them under `/admin/i/<id>`, set `ARKFILE_BITCART_CHECKOUT_URL=https://bitcart.lab:19080/admin` and record it here).
+The component files were read from the commit in the pinned reference above. One-domain mode in that tree is active when `BITCART_HOST` is set and `BITCART_ADMIN_HOST`, `BITCART_STORE_HOST`, `BITCART_CHECKOUT_HOST`, and `BITCART_API_URL` are unset. The compose file follows that. `BITCART_HOST` is `bitcart.lab:19080` and `BITCART_HTTPS_ENABLED=true`, so the admin and checkout pages call `https://bitcart.lab:19080/api` instead of port 80. With the store service left out, `https://bitcart.lab:19080/i/<id>` is the checkout page.
 
 ## Idempotent provisioner
 
@@ -149,16 +157,16 @@ If wallet creation fails (for example due to an xpub script-type mismatch or an 
 
 `scripts/testing/bitcart-lab/lab.env` is gitignored, `chmod 600`, and never committed. `scripts/testing/bitcart-lab/lab.env.example` documents all variables with empty secrets:
 
-- Required: `BTC_XPUB` (watch-only `tpub`/`upub`/`vpub` for testnet or `xpub`/`ypub`/`zpub` for mainnet; never a private key) and `BITCART_ADMIN_PASSWORD`.
-- Optional Bitcoin settings: `BTC_NETWORK` (`testnet` default, or `mainnet`), `BTC_SERVER` (specific Electrum server `host:port:ssl` when public testnet Electrum servers are slow).
-- Optional Monero settings (used with `BITCART_CRYPTOS=btc,xmr` and `--profile xmr`): `BITCART_CRYPTOS`, `XMR_NETWORK` (`mainnet`, `stagenet`, or `testnet`), `XMR_SERVER` (remote Monero daemon URL), `XMR_ADDRESS`, `XMR_VIEW_KEY`, `XMR_RESTORE_HEIGHT`.
+- Required: `BTC_XPUB` (a mainnet watch-only `xpub`, `ypub`, or `zpub`; never a private key) and `BITCART_ADMIN_PASSWORD`.
+- Optional Bitcoin settings: `BTC_NETWORK` (default `mainnet`) and `BTC_SERVER` (a specific Electrum server as `host:port:ssl`).
+- Optional Monero settings (used with `BITCART_CRYPTOS=btc,xmr` and `--profile xmr`): `BITCART_CRYPTOS`, `XMR_NETWORK` (default `mainnet`), `XMR_SERVER` (remote Monero daemon URL), `XMR_ADDRESS`, `XMR_VIEW_KEY`, `XMR_RESTORE_HEIGHT`.
 - Optional Arkfile billing overrides for rapid PAYG testing: `ARKFILE_FREE_STORAGE_BYTES`, `ARKFILE_BILLING_TICK_INTERVAL`, `ARKFILE_CUSTOMER_PRICE_USD_PER_TB_PER_MONTH`, `ARKFILE_MIN_TOP_UP_USD`.
 
 All internal secrets (CA key, rqlite password, SeaweedFS S3 key, Bitcart Postgres password, `ARKFILE_MASTER_KEY`, `user-secret-master.bin`, and the Bitcart `invoice_management` token) are generated automatically inside volumes and destroyed by `podman compose down -v`.
 
 ## Operator workflow
 
-From `scripts/testing/bitcart-lab/`, start the Bitcoin testnet lab with rootless Podman:
+From `scripts/testing/bitcart-lab/`, start the lab with rootless Podman. Bitcoin and Monero both default to mainnet:
 
 ```bash
 cp lab.env.example lab.env
@@ -233,17 +241,17 @@ No changes are made to `dev-reset.sh`, `local-deploy.sh`, or `e2e-test.sh` beyon
 
 ## Implementation order
 
-1. Pin a release tag of `bitcart/bitcart-docker` in a scratch directory under `/tmp`, render its generator for `btc,xmr` (`BTC_NETWORK=testnet`, `BITCART_ADDITIONAL_COMPONENTS=checkout`), and record the exact image digests, internal service ports, one-domain nginx route rules, and wallet/store API schemas in this document.
+1. The Bitcart component files were read at the commit in the pinned reference above, for `btc` and `xmr` on mainnet with the checkout component. Image digests are still to be recorded after the first successful payment.
 2. Implement `ca`, `secrets-init`, `Caddyfile`, and the Bitcart subset of `scripts/testing/bitcart-lab/compose.yaml`. Verify (with developer consent for each Podman invocation) that `https://bitcart.lab:19080/admin` loads cleanly in the browser and that `ca-bundle.crt` validates `https://bitcart.lab:19080/api` from inside the Compose network.
 3. Implement `scripts/testing/bitcart-lab/provision/` against the live Bitcart API, verifying first-run provisioning, private-key prefix rejection, idempotent re-runs on existing volumes, and the manual-UI recovery message on bad wallet input.
 4. Implement `Containerfile.arkfile`, `Containerfile.arkfile.containerignore`, `entrypoint-arkfile.sh`, `rqlite`, and `seaweedfs`. Verify `/readyz` on `https://127.0.0.1:18443/readyz`, normal user registration, file upload/download, share links, and `arkfile-admin payments check` via `podman compose exec`.
-5. Create a top-up invoice from the browser and from `arkfile-client` (with isolated `HOME` and `SSL_CERT_FILE`), confirm Bitcart received zero PII, pay a Bitcoin testnet invoice from an external wallet, verify the `200` webhook delivery and single credit settlement, and verify an unpaid invoice expiring with no credit.
+5. Create a top-up invoice from the browser and from `arkfile-client` (with isolated `HOME` and `SSL_CERT_FILE`), confirm Bitcart received zero PII, pay the invoice address with mainnet bitcoin from an external wallet, verify the `200` webhook delivery and single credit settlement, and verify an unpaid invoice expiring with no credit.
 6. Test the optional `--profile xmr` flow (`BITCART_CRYPTOS=btc,xmr` plus remote Monero node and watch-only view key) once the Bitcoin path is proven.
 7. Pin every image reference in `compose.yaml` and `Containerfile.arkfile` by digest, test `podman compose stop` / `up -d` persistence and `podman compose down -v` clean teardown, and verify host `e2e-test.sh` on `127.0.0.1:8989` remains green.
 
 ## Open risks
 
 - **Bitcart API schema nuances across releases:** While Arkfile's read-side schema in `payments/bitcart.go` is already fixed, the write-side fields accepted by `POST /api/wallets` (especially Monero `additional_data` fields for view key and restore height) and `PATCH /api/stores/<id>` must be verified directly against the pinned Bitcart release tag in step 1 rather than guessed.
-- **Public Bitcoin testnet Electrum availability:** Default public testnet Electrum servers can lag or drop connections, making an unconfirmed transaction appear invisible even when the stack is healthy. Supporting `BTC_SERVER` in `lab.env` lets the operator pin a known-good Electrum testnet server immediately if the default pool stalls.
+- **Electrum connectivity:** The Bitcoin daemon uses public mainnet Electrum servers unless `BTC_SERVER` is set. A stalled server makes a broadcast transaction look invisible even when the stack is healthy. Set `BTC_SERVER` to a known-good Electrum server if the default pool stalls.
 - **Monero scan catch-up time:** Even with a remote `monerod`, `monero-wallet-rpc` inside `bitcart-xmr` must scan blocks from `XMR_RESTORE_HEIGHT` to the chain tip before detecting incoming outputs. Setting `XMR_RESTORE_HEIGHT` just below the current block height before starting `--profile xmr` avoids long initial sync delays.
 - **Sensitive watch-only metadata in volumes:** Although `BTC_XPUB` and `XMR_VIEW_KEY` cannot spend funds, they expose address history and incoming transfers for that wallet. Keep a dedicated test/lab wallet or subaccount for lab runs, never copy Bitcart volumes out to persistent host backups, and run `podman compose down -v` when finished.

@@ -187,6 +187,11 @@ playwright-report/
 blob-report/
 playwright/.cache/
 
+# Bitcart payment lab operator secrets and exported certificates
+scripts/testing/bitcart-lab/lab.env
+scripts/testing/bitcart-lab/*.crt
+scripts/testing/bitcart-lab/*.pem
+
 # Runtime artifacts
 pid/
 *.pid
