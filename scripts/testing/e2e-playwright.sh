@@ -238,9 +238,10 @@ REG_FLOW_FILE_SHA256=$(sha256sum "$REG_FLOW_FILE_PATH" | awk '{print $1}')
 REG_FLOW_FILE_NAME=$(basename "$REG_FLOW_FILE_PATH")
 success "Reg-flow file: $REG_FLOW_FILE_PATH (SHA-256: ${REG_FLOW_FILE_SHA256:0:16}...)"
 
-# dev-reset starts with approval required. e2e-test.sh turns that off at the
-# end; do it again here so a new Playwright registration is not left pending
-# when that step did not stick.
+# dev-reset starts with approval required. e2e-test.sh turns that off, then
+# logs the admin out, so the saved session is gone and the policy cannot be
+# read until we sign in again. The server accepts each admin TOTP code once.
+# e2e-test.sh records the window it used under TOTP_WINDOW_DIR.
 section "Ensuring new registrations are auto-approved"
 ADMIN_BIN="/opt/arkfile/bin/arkfile-admin"
 ADMIN_HOME="$TEST_DATA_DIR/home"
@@ -252,16 +253,56 @@ approval_is_off() {
     HOME="$ADMIN_HOME" "$ADMIN_BIN" --server-url "$SERVER_URL" --tls-insecure \
         get-approval-policy --json 2>/dev/null | jq -e '.require_approval == false' >/dev/null
 }
+wait_for_admin_totp_window() {
+    local state_file="$TOTP_WINDOW_DIR/$ADMIN_USERNAME"
+    local current_window=$(( $(date +%s) / 30 ))
+    local recorded=""
+    if [ -f "$state_file" ]; then
+        recorded=$(cat "$state_file" 2>/dev/null || true)
+    fi
+    if [ -z "$recorded" ] || [ "$recorded" = "$current_window" ]; then
+        local seconds_into_window=$(( $(date +%s) % 30 ))
+        local seconds_to_wait=$((30 - seconds_into_window))
+        info "Waiting ${seconds_to_wait}s + 1s buffer for the next admin TOTP window..."
+        sleep "$((seconds_to_wait + 1))"
+    fi
+}
+mark_admin_totp_window_used() {
+    mkdir -p "$TOTP_WINDOW_DIR"
+    printf '%s\n' "$(( $(date +%s) / 30 ))" > "$TOTP_WINDOW_DIR/$ADMIN_USERNAME"
+}
+admin_login_for_approval() {
+    local attempt login_out login_code totp_code
+    for attempt in 1 2; do
+        wait_for_admin_totp_window
+        totp_code=$("$CLIENT" generate-totp --secret "$ADMIN_TOTP_SECRET" 2>/dev/null || true)
+        if [ -z "$totp_code" ]; then
+            error "Could not generate the dev admin TOTP code"
+            return 1
+        fi
+        mark_admin_totp_window_used
+        set +e
+        login_out=$(printf '%s\n' "$ADMIN_PASSWORD" | HOME="$ADMIN_HOME" "$ADMIN_BIN" \
+            --server-url "$SERVER_URL" --tls-insecure --username "$ADMIN_USERNAME" \
+            login --password-stdin --totp-code "$totp_code" --save-session 2>&1)
+        login_code=$?
+        set -e
+        if [ "$login_code" -eq 0 ]; then
+            return 0
+        fi
+        if [ "$attempt" -eq 1 ] && printf '%s\n' "$login_out" | grep -q "Invalid TOTP code"; then
+            info "Admin TOTP was rejected; waiting for a fresh code"
+            continue
+        fi
+        printf '%s\n' "$login_out"
+        return 1
+    done
+    printf '%s\n' "$login_out"
+    return 1
+}
 if ! approval_is_off; then
     info "Signing in as ${ADMIN_USERNAME} to turn off required approval"
-    TOTP_CODE=$("$CLIENT" generate-totp --secret "$ADMIN_TOTP_SECRET" 2>/dev/null || true)
-    if [ -z "$TOTP_CODE" ]; then
-        error "Could not generate the dev admin TOTP code"
-        exit 1
-    fi
-    if ! printf '%s\n' "$ADMIN_PASSWORD" | HOME="$ADMIN_HOME" "$ADMIN_BIN" \
-        --server-url "$SERVER_URL" --tls-insecure --username "$ADMIN_USERNAME" \
-        login --password-stdin --totp-code "$TOTP_CODE" --save-session; then
+    if ! admin_login_for_approval; then
         error "Dev admin login failed, so new Playwright users would stay pending approval"
         exit 1
     fi
