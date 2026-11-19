@@ -10,6 +10,12 @@ x-bitcart-common: &bitcart-common
   LOG_FILE: bitcart.log
   BITCART_DATADIR: /datadir
   BITCART_BACKUPS_DIR: /backups
+  # Defaults are data/... and modules under /app. The API runs as electrum and
+  # cannot create those. /plugins is chowned before startup.
+  BITCART_BACKEND_PLUGINS_DIR: /plugins/backend
+  BITCART_ADMIN_PLUGINS_DIR: /plugins/admin
+  BITCART_STORE_PLUGINS_DIR: /plugins/store
+  BITCART_DOCKER_PLUGINS_DIR: /plugins/docker
   BITCART_VOLUMES: /datadir /backups /plugins
   BITCART_CRYPTOS: ${BITCART_CRYPTOS:-btc}
   BTC_NETWORK: ${BTC_NETWORK:-mainnet}
