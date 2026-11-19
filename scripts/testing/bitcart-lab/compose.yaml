@@ -32,6 +32,9 @@ x-bitcart-common: &bitcart-common
   BITCART_API_WORKERS: "1"
   DB_HOST: database
   DB_PORT: "5432"
+  REDIS_HOST: redis
+  BTC_HOST: bitcoin
+  XMR_HOST: monero
 
 services:
   ca:
@@ -147,7 +150,7 @@ services:
         condition: service_started
         required: false
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/cryptos', timeout=3)"]
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8000/cryptos\", timeout=3)'"]
       interval: 10s
       timeout: 5s
       retries: 30
@@ -166,8 +169,17 @@ services:
       - bitcart-plugins:/plugins
       - lab-ca-public:/ca:ro
     depends_on:
-      backend:
+      ca:
+        condition: service_completed_successfully
+      database:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      bitcoin:
+        condition: service_started
+      monero:
+        condition: service_started
+        required: false
 
   admin:
     image: bitcart/bitcart-admin:stable
