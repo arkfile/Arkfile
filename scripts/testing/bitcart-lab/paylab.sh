@@ -78,14 +78,14 @@ run_compose() {
 }
 
 # Copy the already-built host install into a small build context. The image
-# does not compile Arkfile.
+# does not compile Arkfile. Only the fully static server binary goes into the
+# image; arkfile-admin and arkfile-client run natively on the host.
 stage_arkfile_image() {
     local src="/opt/arkfile"
     local stage="${LAB_TMP_DIR}/image"
     local need
     for need in \
         "$src/bin/arkfile" \
-        "$src/bin/arkfile-admin" \
         "$src/client/static/index.html" \
         "$src/client/static/js/libopaque.js" \
         "$src/client/static/js/dist/app.js" \
@@ -99,11 +99,148 @@ stage_arkfile_image() {
     done
     rm -rf "$stage"
     mkdir -p "$stage/client" "$stage/database"
-    cp -a "$src/bin/arkfile" "$src/bin/arkfile-admin" "$stage/"
+    cp -a "$src/bin/arkfile" "$stage/"
     cp -a "$src/client/." "$stage/client/"
     cp -a "$src/database/." "$stage/database/"
     cp -a "$SCRIPT_DIR/entrypoint-arkfile.sh" "$SCRIPT_DIR/Containerfile.arkfile" "$stage/"
     export ARKFILE_PAYLAB_IMAGE_CONTEXT="$stage"
+}
+
+ensure_lab_ca() {
+    mkdir -p -m 700 "$LAB_TMP_DIR" "$LAB_HOME_DIR"
+    if [ "${1:-}" = "force" ] || [ ! -s "$LAB_CA_PATH" ]; then
+        run_compose cp arkfile:/ca/ca.crt "$LAB_CA_PATH"
+        chmod 0644 "$LAB_CA_PATH"
+    fi
+}
+
+require_arkfile_cid() {
+    local cid
+    cid="$(run_compose ps -q arkfile 2>/dev/null | head -n 1 || true)"
+    if [ -z "$cid" ]; then
+        echo "[X] arkfile container is not running. Start the lab first with: bash scripts/testing/bitcart-lab/paylab.sh up" >&2
+        exit 1
+    fi
+    if ! env -u CONTAINER_HOST -u DOCKER_HOST podman exec "$cid" sh -c 'command -v socat >/dev/null 2>&1'; then
+        echo "[X] Running arkfile container is missing socat. Recreate it with: bash scripts/testing/bitcart-lab/paylab.sh up" >&2
+        exit 1
+    fi
+    printf '%s\n' "$cid"
+}
+
+# Run the host's native arkfile-admin binary over an ephemeral 127.0.0.1 TCP
+# tunnel into the arkfile container's loopback interface so DirectLocalMiddleware
+# sees 127.0.0.1 and host glibc/libudev differences across distros never matter.
+run_host_admin() {
+    local admin_bin="${ARKFILE_ADMIN_BIN:-/opt/arkfile/bin/arkfile-admin}"
+    if [ ! -x "$admin_bin" ]; then
+        echo "[X] arkfile-admin binary not found at ${admin_bin} (override with ARKFILE_ADMIN_BIN)." >&2
+        exit 1
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "[X] python3 is required on the host to tunnel arkfile-admin into the container." >&2
+        exit 1
+    fi
+    ensure_lab_ca
+    local arkfile_cid
+    arkfile_cid="$(require_arkfile_cid)"
+
+    (
+        port_file="$(mktemp "${LAB_TMP_DIR}/admin-tunnel.XXXXXX")"
+        tunnel_pid=""
+        cleanup_tunnel() {
+            if [ -n "$tunnel_pid" ]; then
+                kill "$tunnel_pid" 2>/dev/null || true
+                wait "$tunnel_pid" 2>/dev/null || true
+            fi
+            rm -f "$port_file"
+        }
+        trap cleanup_tunnel EXIT INT TERM
+
+        env -u CONTAINER_HOST -u DOCKER_HOST python3 -c '
+import asyncio, os, sys
+
+cid, port_file = sys.argv[1], sys.argv[2]
+
+async def pipe_to_stdin(reader, proc):
+    try:
+        while True:
+            chunk = await reader.read(65536)
+            if not chunk:
+                break
+            proc.stdin.write(chunk)
+            await proc.stdin.drain()
+    except Exception:
+        pass
+    finally:
+        try:
+            proc.stdin.close()
+        except Exception:
+            pass
+
+async def pipe_from_stdout(proc, writer):
+    try:
+        while True:
+            chunk = await proc.stdout.read(65536)
+            if not chunk:
+                break
+            writer.write(chunk)
+            await writer.drain()
+    except Exception:
+        pass
+    finally:
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
+            pass
+
+async def handle_client(reader, writer):
+    proc = await asyncio.create_subprocess_exec(
+        "podman", "exec", "-i", cid, "socat", "STDIO", "TCP4:127.0.0.1:18443",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    await asyncio.gather(pipe_to_stdin(reader, proc), pipe_from_stdout(proc, writer))
+    try:
+        await proc.wait()
+    except Exception:
+        pass
+
+async def main():
+    server = await asyncio.start_server(handle_client, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    tmp = port_file + ".ready"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(f"{port}\n")
+    os.replace(tmp, port_file)
+    async with server:
+        await server.serve_forever()
+
+asyncio.run(main())
+' "$arkfile_cid" "$port_file" </dev/null >/dev/null 2>&1 &
+        tunnel_pid="$!"
+
+        tunnel_port=""
+        for _ in $(seq 1 100); do
+            if [ -s "$port_file" ]; then
+                tunnel_port="$(cat "$port_file")"
+                break
+            fi
+            if ! kill -0 "$tunnel_pid" 2>/dev/null; then
+                break
+            fi
+            sleep 0.02
+        done
+        if [ -z "$tunnel_port" ]; then
+            echo "[X] Failed to open loopback tunnel to arkfile container." >&2
+            exit 1
+        fi
+
+        HOME="$LAB_HOME_DIR" SSL_CERT_FILE="$LAB_CA_PATH" \
+            "$admin_bin" --server-url "https://127.0.0.1:${tunnel_port}" "$@"
+    )
 }
 
 require_lab_env() {
@@ -126,8 +263,8 @@ Commands:
   ps                         Show lab container status
   logs [args...]             View lab logs (for example: logs -f provision arkfile worker)
   export-ca                  Copy the lab CA certificate to /tmp/arkfile-bitcart-lab/ca.crt
-  bootstrap-admin [username] Bootstrap the lab admin inside the arkfile container (default: paylab-admin)
-  admin <args...>            Run arkfile-admin inside the arkfile container over loopback
+  bootstrap-admin [username] Bootstrap the lab admin via host arkfile-admin over loopback tunnel (default: paylab-admin)
+  admin <args...>            Run host arkfile-admin against the lab over an ephemeral loopback tunnel
   client <args...>           Run host arkfile-client against https://arkfile.lab:18443 with isolated HOME and SSL_CERT_FILE
   compose <args...>          Run an arbitrary podman compose command under rootless enforcement
 EOF
@@ -159,38 +296,33 @@ case "$cmd" in
         run_compose logs "$@"
         ;;
     export-ca)
-        mkdir -p -m 700 "$LAB_TMP_DIR" "$LAB_HOME_DIR"
-        run_compose cp arkfile:/ca/ca.crt "$LAB_CA_PATH"
-        chmod 0644 "$LAB_CA_PATH"
+        ensure_lab_ca force
         echo "[OK] Lab CA written to ${LAB_CA_PATH}"
         ;;
     bootstrap-admin)
         admin_user="${1:-paylab-admin}"
-        run_compose exec -it arkfile sh -c \
-            'cat /opt/arkfile/etc/keys/bootstrap-token.bin | /opt/arkfile/bin/arkfile-admin --server-url https://127.0.0.1:18443 bootstrap --token-stdin --username "$1"' \
-            _ "$admin_user"
+        arkfile_cid="$(require_arkfile_cid)"
+        bootstrap_token="$(env -u CONTAINER_HOST -u DOCKER_HOST podman exec "$arkfile_cid" cat /opt/arkfile/etc/keys/bootstrap-token.bin 2>/dev/null || true)"
+        if [ -z "$bootstrap_token" ]; then
+            echo "[X] No bootstrap token found at /opt/arkfile/etc/keys/bootstrap-token.bin inside arkfile." >&2
+            echo "    If an admin was already bootstrapped, sign in with: bash scripts/testing/bitcart-lab/paylab.sh admin --username ${admin_user} login" >&2
+            exit 1
+        fi
+        printf '%s\n' "$bootstrap_token" | run_host_admin bootstrap --token-stdin --username "$admin_user"
         ;;
     admin)
         if [ "$#" -eq 0 ]; then
             echo "[X] Provide an arkfile-admin subcommand (for example: payments check)." >&2
             exit 1
         fi
-        tty_flags=()
-        if [ -t 0 ] && [ -t 1 ]; then
-            tty_flags+=(-it)
-        fi
-        run_compose exec "${tty_flags[@]}" arkfile /opt/arkfile/bin/arkfile-admin --server-url https://127.0.0.1:18443 "$@"
+        run_host_admin "$@"
         ;;
     client)
         if [ "$#" -eq 0 ]; then
             echo "[X] Provide an arkfile-client subcommand." >&2
             exit 1
         fi
-        mkdir -p -m 700 "$LAB_TMP_DIR" "$LAB_HOME_DIR"
-        if [ ! -s "$LAB_CA_PATH" ]; then
-            run_compose cp arkfile:/ca/ca.crt "$LAB_CA_PATH"
-            chmod 0644 "$LAB_CA_PATH"
-        fi
+        ensure_lab_ca
         client_bin="${ARKFILE_CLIENT_BIN:-/opt/arkfile/bin/arkfile-client}"
         if [ ! -x "$client_bin" ]; then
             echo "[X] arkfile-client binary not found at ${client_bin} (override with ARKFILE_CLIENT_BIN)." >&2
