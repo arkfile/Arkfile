@@ -57,8 +57,8 @@ services:
 
   rqlite:
     image: rqlite/rqlite:8.36.18
+    hostname: rqlite
     command:
-      - -fk
       - -auth
       - /auth/rqlite-auth.json
     volumes:
