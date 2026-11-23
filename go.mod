@@ -4,7 +4,7 @@ go 1.26.11
 
 require (
 	github.com/joho/godotenv v1.5.1
-	github.com/labstack/echo/v4 v4.16.1
+	github.com/labstack/echo/v4 v4.16.6
 	golang.org/x/crypto v0.59.0
 )
 

@@ -34,9 +34,8 @@ type BootstrapRegisterFinalizeRequest struct {
 // BootstrapRegisterResponse handles the first step of OPAQUE registration for the bootstrap admin.
 func BootstrapRegisterResponse(c echo.Context) error {
 	// SECURITY: Strict localhost-only check using the kernel-reported
-	// transport peer address. MUST NOT use c.RealIP(), which walks the
-	// client-controllable X-Forwarded-For chain under Echo's default
-	// extractor and is therefore spoofable from any internet host.
+	// transport peer address. MUST NOT use c.RealIP(). That value follows
+	// e.IPExtractor, and forwarded-IP headers are client-controllable.
 	if !DirectLocalConnection(c) {
 		logging.ErrorLogger.Printf("SECURITY ALERT: Bootstrap attempt from non-local peer")
 		return JSONError(c, http.StatusForbidden, "Bootstrap endpoints only accessible from localhost")
@@ -106,9 +105,8 @@ func BootstrapRegisterResponse(c echo.Context) error {
 // BootstrapRegisterFinalize completes the OPAQUE registration for the bootstrap admin.
 func BootstrapRegisterFinalize(c echo.Context) error {
 	// SECURITY: Strict localhost-only check using the kernel-reported
-	// transport peer address. MUST NOT use c.RealIP(), which walks the
-	// client-controllable X-Forwarded-For chain under Echo's default
-	// extractor and is therefore spoofable from any internet host.
+	// transport peer address. MUST NOT use c.RealIP(). That value follows
+	// e.IPExtractor, and forwarded-IP headers are client-controllable.
 	if !DirectLocalConnection(c) {
 		logging.ErrorLogger.Printf("SECURITY ALERT: Bootstrap attempt from non-local peer")
 		return JSONError(c, http.StatusForbidden, "Bootstrap endpoints only accessible from localhost")

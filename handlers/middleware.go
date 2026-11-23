@@ -35,13 +35,12 @@ func parseIPAddress(ipStr string) net.IP {
 // address is loopback. This is the ONLY correct primitive for localhost-only
 // authorization decisions (AdminMiddleware, BootstrapRegister*).
 //
-// It MUST NOT consult c.RealIP(), X-Forwarded-For, or X-Real-IP. Those values
-// are client-controllable (set by any HTTP client) and Echo's default IP
-// extractor walks them.
+// It MUST NOT consult c.RealIP(), X-Forwarded-For, or X-Real-IP. Those header
+// values are client-controllable, and c.RealIP() follows e.IPExtractor.
 //
 // main.go pins e.IPExtractor = echo.ExtractIPDirect() which makes c.RealIP()
-// also safe today, but this helper documents the intent at the call site so
-// a future regression to e.IPExtractor cannot silently reopen the hole.
+// the kernel peer today, but this helper reads RemoteAddr so a future
+// extractor change cannot silently reopen the localhost gate.
 func peerAddrIsLoopback(c echo.Context) bool {
 	remote := c.Request().RemoteAddr
 	host, _, err := net.SplitHostPort(remote)
