@@ -24,12 +24,13 @@ const (
 // invoices and counting them need the token, reading an invoice or the store
 // does not.
 type fakeBitcart struct {
-	mu          sync.Mutex
-	invoices    map[string]map[string]interface{}
-	lastBody    map[string]interface{}
-	authErrs    int
-	createConfs int
-	store       map[string]interface{}
+	mu             sync.Mutex
+	invoices       map[string]map[string]interface{}
+	lastBody       map[string]interface{}
+	authErrs       int
+	createConfs    int
+	createPayments []interface{}
+	store          map[string]interface{}
 }
 
 func recommendedCheckoutSettings() map[string]interface{} {
@@ -70,17 +71,21 @@ func newFakeBitcart(t *testing.T) (*fakeBitcart, *httptest.Server) {
 				return
 			}
 			fb.lastBody = body
+			payments := fb.createPayments
+			if payments == nil {
+				payments = []interface{}{
+					map[string]interface{}{"id": "pm1", "currency": "btc", "lightning": false, "required_confirmations": fb.createConfs},
+					map[string]interface{}{"id": "pm2", "currency": "btc", "lightning": true, "required_confirmations": 0},
+				}
+			}
 			inv := map[string]interface{}{
-				"id":       "bc_inv_1",
-				"status":   "pending",
-				"order_id": body["order_id"],
-				"store_id": body["store_id"],
-				"price":    body["price"],
-				"currency": body["currency"],
-				"payments": []interface{}{
-					map[string]interface{}{"id": "pm1", "lightning": false, "required_confirmations": fb.createConfs},
-					map[string]interface{}{"id": "pm2", "lightning": true, "required_confirmations": 0},
-				},
+				"id":         "bc_inv_1",
+				"status":     "pending",
+				"order_id":   body["order_id"],
+				"store_id":   body["store_id"],
+				"price":      body["price"],
+				"currency":   body["currency"],
+				"payments":   payments,
 				"payment_id": "pm1",
 			}
 			fb.invoices["bc_inv_1"] = inv
@@ -262,6 +267,53 @@ func TestBitcartCreateInvoice_RefusesZeroConfirmationStore(t *testing.T) {
 	_, err := p.CreateInvoice(context.Background(), "inv_abc", 1_250_000_000)
 	if !errors.Is(err, ErrBitcartUnconfirmedPayments) {
 		t.Fatalf("err = %v, want ErrBitcartUnconfirmedPayments", err)
+	}
+}
+
+func TestBitcartCreateInvoice_RequiresFiveConfirmationsForXMR(t *testing.T) {
+	for _, xmrConfs := range []int{0, 1, 4} {
+		fb, srv := newFakeBitcart(t)
+		fb.createPayments = []interface{}{
+			map[string]interface{}{"id": "pm_btc", "currency": "btc", "lightning": false, "required_confirmations": 1},
+			map[string]interface{}{"id": "pm_xmr", "currency": "xmr", "lightning": false, "required_confirmations": xmrConfs},
+		}
+		p := newTestBitcartProvider(t, srv)
+		_, err := p.CreateInvoice(context.Background(), "inv_abc", 1_250_000_000)
+		if !errors.Is(err, ErrBitcartUnconfirmedPayments) {
+			t.Fatalf("xmr required_confirmations=%d: err = %v, want ErrBitcartUnconfirmedPayments", xmrConfs, err)
+		}
+	}
+
+	for _, xmrConfs := range []int{5, 10} {
+		fb, srv := newFakeBitcart(t)
+		fb.createPayments = []interface{}{
+			map[string]interface{}{"id": "pm_btc", "currency": "btc", "lightning": false, "required_confirmations": 1},
+			map[string]interface{}{"id": "pm_xmr", "currency": "XMR", "lightning": false, "required_confirmations": xmrConfs},
+		}
+		p := newTestBitcartProvider(t, srv)
+		if _, err := p.CreateInvoice(context.Background(), "inv_abc", 1_250_000_000); err != nil {
+			t.Fatalf("xmr required_confirmations=%d: unexpected error %v", xmrConfs, err)
+		}
+	}
+
+	// Pre-existing invoices created before the 5-confirmation XMR floor must
+	// still settle cleanly on reconciliation as long as they required >= 1 confirmation.
+	fb, srv := newFakeBitcart(t)
+	fb.createPayments = []interface{}{
+		map[string]interface{}{"id": "pm_xmr", "currency": "xmr", "lightning": false, "required_confirmations": 5},
+	}
+	p := newTestBitcartProvider(t, srv)
+	if _, err := p.CreateInvoice(context.Background(), "inv_abc", 1_250_000_000); err != nil {
+		t.Fatal(err)
+	}
+	fb.set("bc_inv_1", "status", "complete")
+	fb.set("bc_inv_1", "payment_id", "pm_xmr")
+	fb.set("bc_inv_1", "payments", []interface{}{
+		map[string]interface{}{"id": "pm_xmr", "currency": "xmr", "lightning": false, "required_confirmations": 1},
+	})
+	got, err := p.GetInvoiceStatus(context.Background(), localInvoice("bc_inv_1"))
+	if err != nil || got != models.PaymentStatusPaid {
+		t.Fatalf("legacy 1-conf xmr invoice: got %q, %v; want paid", got, err)
 	}
 }
 

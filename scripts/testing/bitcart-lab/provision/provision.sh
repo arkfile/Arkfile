@@ -38,6 +38,15 @@ if [ "$speed" -lt 1 ]; then
     exit 1
 fi
 
+xmr_speed=${XMR_TX_SPEED:-5}
+case "$xmr_speed" in
+    ''|*[!0-9]*) echo "XMR_TX_SPEED must be a positive integer" >&2; exit 1 ;;
+esac
+if [ "$xmr_speed" -lt 5 ]; then
+    echo "XMR_TX_SPEED must be at least 5" >&2
+    exit 1
+fi
+
 cryptos=$(printf '%s' "${BITCART_CRYPTOS:-btc}" | tr '[:upper:]' '[:lower:]')
 want_xmr=0
 case ",$cryptos," in
@@ -95,10 +104,19 @@ settings_ok() {
 
 wait_api
 
+XMR_SPEED_FILE=/lab-config/xmr-tx-speed
+
 if [ -f "$ENV_FILE" ]; then
     # shellcheck disable=SC1090
     . "$ENV_FILE"
-    if [ -n "${ARKFILE_BITCART_STORE_ID:-}" ] && [ -n "${ARKFILE_BITCART_API_TOKEN:-}" ]; then
+    xmr_speed_ok=1
+    if [ "$want_xmr" -eq 1 ]; then
+        prev_xmr_speed=$(cat "$XMR_SPEED_FILE" 2>/dev/null || true)
+        if [ "$prev_xmr_speed" != "$xmr_speed" ]; then
+            xmr_speed_ok=0
+        fi
+    fi
+    if [ -n "${ARKFILE_BITCART_STORE_ID:-}" ] && [ -n "${ARKFILE_BITCART_API_TOKEN:-}" ] && [ "$xmr_speed_ok" -eq 1 ]; then
         code=$(curl -sS -o /tmp/store.json -w '%{http_code}' --cacert "$CACERT" \
             -H "Authorization: Bearer ${ARKFILE_BITCART_API_TOKEN}" \
             "$API/stores/${ARKFILE_BITCART_STORE_ID}" || true)
@@ -177,20 +195,28 @@ if [ "$want_xmr" -eq 1 ]; then
         if [ -n "${XMR_RESTORE_HEIGHT:-}" ]; then
             extra=$(printf '%s' "$extra" | jq --argjson h "$XMR_RESTORE_HEIGHT" '. + {restore_height:$h}')
         fi
-        created=$(auth -d "$(jq -nc --arg key "$XMR_PRIVATE_VIEW_KEY" --argjson extra "$extra" \
-            '{name:"lab-xmr",xpub:$key,currency:"xmr",additional_xpub_data:$extra}')" \
+        created=$(auth -d "$(jq -nc --arg key "$XMR_PRIVATE_VIEW_KEY" --argjson extra "$extra" --argjson xmr_speed "$xmr_speed" \
+            '{name:"lab-xmr",xpub:$key,currency:"xmr",transaction_speed:$xmr_speed,additional_xpub_data:$extra}')" \
             "$API/wallets" || true)
         xmr_id=$(json_id_of "$created")
         if [ -z "$xmr_id" ] && [ -n "${XMR_RESTORE_HEIGHT:-}" ]; then
             echo "retrying monero wallet without restore_height"
-            created=$(auth -d "$(jq -nc --arg key "$XMR_PRIVATE_VIEW_KEY" --arg address "$XMR_ADDRESS" \
-                '{name:"lab-xmr",xpub:$key,currency:"xmr",additional_xpub_data:{address:$address}}')" \
+            created=$(auth -d "$(jq -nc --arg key "$XMR_PRIVATE_VIEW_KEY" --arg address "$XMR_ADDRESS" --argjson xmr_speed "$xmr_speed" \
+                '{name:"lab-xmr",xpub:$key,currency:"xmr",transaction_speed:$xmr_speed,additional_xpub_data:{address:$address}}')" \
                 "$API/wallets" || true)
             xmr_id=$(json_id_of "$created")
         fi
         if [ -z "$xmr_id" ]; then
             echo "monero wallet was not created" >&2
             echo "$created" >&2
+            exit 1
+        fi
+    else
+        updated_xmr=$(auth -X PATCH -d "$(jq -nc --argjson xmr_speed "$xmr_speed" '{transaction_speed:$xmr_speed}')" \
+            "$API/wallets/${xmr_id}" || true)
+        if [ -z "$(json_id_of "$updated_xmr")" ]; then
+            echo "monero wallet transaction_speed was not updated" >&2
+            echo "$updated_xmr" >&2
             exit 1
         fi
     fi
@@ -259,4 +285,8 @@ ARKFILE_BITCART_API_TOKEN=${invoice_token}
 EOF
 chmod 0600 "$tmp"
 mv "$tmp" "$ENV_FILE"
+if [ "$want_xmr" -eq 1 ]; then
+    printf '%s\n' "$xmr_speed" > "$XMR_SPEED_FILE"
+    chmod 0600 "$XMR_SPEED_FILE"
+fi
 echo "bitcart store ${store_id} is ready"

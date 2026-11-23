@@ -18,10 +18,11 @@ import (
 )
 
 const (
-	bitcartProviderName  = "bitcart"
-	bitcartCurrency      = "USD"
-	bitcartMaxBodyBytes  = 1 << 20
-	bitcartClientTimeout = 20 * time.Second
+	bitcartProviderName        = "bitcart"
+	bitcartCurrency            = "USD"
+	bitcartMinXMRConfirmations = 5
+	bitcartMaxBodyBytes        = 1 << 20
+	bitcartClientTimeout       = 20 * time.Second
 )
 
 // ErrBitcartInvoiceMismatch means the Bitcart invoice does not match the local
@@ -89,6 +90,7 @@ type bitcartInvoice struct {
 // invoice payment_id to the method that was paid.
 type bitcartPaymentMethod struct {
 	ID                    string `json:"id"`
+	Currency              string `json:"currency"`
 	Lightning             bool   `json:"lightning"`
 	RequiredConfirmations int    `json:"required_confirmations"`
 }
@@ -97,12 +99,27 @@ func (m bitcartPaymentMethod) confirmed() bool {
 	return m.Lightning || m.RequiredConfirmations >= 1
 }
 
+func (m bitcartPaymentMethod) minCreateConfirmations() int {
+	if m.Lightning {
+		return 0
+	}
+	if strings.EqualFold(m.Currency, "xmr") {
+		return bitcartMinXMRConfirmations
+	}
+	return 1
+}
+
 // requireConfirmedMethods rejects an invoice offering any on-chain method that
-// completes without a block confirmation.
+// completes below Arkfile's confirmation floor (1 for Bitcoin/default, 5 for Monero).
 func requireConfirmedMethods(remote *bitcartInvoice) error {
 	for _, m := range remote.Payments {
-		if !m.confirmed() {
-			return fmt.Errorf("%w: a payment method requires 0 confirmations", ErrBitcartUnconfirmedPayments)
+		minConfs := m.minCreateConfirmations()
+		if m.RequiredConfirmations < minConfs {
+			if m.RequiredConfirmations < 1 {
+				return fmt.Errorf("%w: a payment method requires 0 confirmations", ErrBitcartUnconfirmedPayments)
+			}
+			return fmt.Errorf("%w: %s payment method requires %d confirmation(s), need at least %d",
+				ErrBitcartUnconfirmedPayments, strings.ToLower(m.Currency), m.RequiredConfirmations, minConfs)
 		}
 	}
 	return nil

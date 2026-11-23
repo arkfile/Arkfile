@@ -24,7 +24,7 @@ Create the Bitcart admin account, then turn on two-factor authentication for it 
 
 Add your wallets as watch-only wallets: an extended public key (xpub, ypub or zpub) for Bitcoin, and for Monero the view-only wallet details that the Bitcart documentation lists for your version. A watch-only wallet lets Bitcart generate addresses and detect payments, but a compromise of the Bitcart host cannot spend the funds. Keep the spending keys offline.
 
-If you set a "transaction speed" on a wallet, keep it at 1 or higher, or leave it unset. A wallet value overrides the store value from step 3.
+If you accept Monero, set "Transaction speed" on the Monero wallet to `5` or higher (around 10 minutes at Monero's 2-minute block target, matching the confirmation window of a single Bitcoin block). For Bitcoin, leave the wallet's transaction speed unset (so it inherits `1` from the store in step 3) or set it to `1` or higher. A wallet value overrides the store value from step 3.
 
 ## 3. Create the store and set its checkout settings
 
@@ -38,7 +38,7 @@ Create a store, set its default currency to USD, and attach the wallets. Arkfile
 | Allow anonymous invoice creation | Off | When on, anyone who learns the store id can create invoices on your store, and Bitcart does not check the API token on invoice creation. |
 | Expiration | Your choice | Default is 15 minutes. A longer window, such as 60 minutes, helps users whose wallet is slow to broadcast. |
 
-Arkfile enforces the confirmation rule on its own as well. It refuses to create an invoice when Bitcart offers an on-chain payment method that requires zero confirmations, and it refuses to credit a `complete` invoice unless the method that was paid required at least one confirmation or was Lightning. Lightning payments settle on their own network and Bitcart always completes them at zero confirmations.
+Arkfile enforces the confirmation rule on its own as well. On invoice creation it refuses an invoice when Bitcart offers an on-chain payment method below Arkfile's confirmation floor (at least 1 confirmation for Bitcoin and other on-chain methods, and at least 5 confirmations for Monero), and on settlement it refuses to credit a `complete` invoice unless the method that was paid required at least one confirmation or was Lightning. Lightning payments settle on their own network and Bitcart always completes them at zero confirmations.
 
 ## 4. Create the API token
 
@@ -64,7 +64,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' -X POST https://pay.example.com/api/in
   -d '{"price":"0.50","currency":"USD","store_id":"'"$STORE"'","order_id":"inv_manualcheck2"}'
 
 # Read the invoice back. Check that "payments" lists your coins and that
-# on-chain entries show "required_confirmations" of 1 or more.
+# Bitcoin shows "required_confirmations" >= 1 and Monero shows >= 5.
 curl -sS https://pay.example.com/api/invoices/<id from the first request>
 ```
 
