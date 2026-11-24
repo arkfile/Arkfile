@@ -106,9 +106,9 @@ json_rows_of() {
     printf '%s' "$rows"
 }
 
-settings_ok() {
+public_store_ok() {
     body=$1
-    printf '%s' "$body" | jq -e --argjson speed "$speed" --argjson want_xmr "$want_xmr" '
+    printf '%s' "$body" | jq -e --argjson speed "$speed" '
         type == "object"
         and .checkout_settings.expiration == 60
         and .checkout_settings.transaction_speed == $speed
@@ -116,8 +116,27 @@ settings_ok() {
         and .checkout_settings.email_required == false
         and .checkout_settings.allow_anonymous_invoice_creation == false
         and (.default_currency | ascii_upcase) == "USD"
-        and (((.currency_data // {}) | to_entries | map(select((.key | ascii_downcase) == "btc" and (.value > 0))) | length) > 0)
-        and ($want_xmr == 0 or (((.currency_data // {}) | to_entries | map(select((.key | ascii_downcase) == "xmr" and (.value > 0))) | length) > 0))
+    ' >/dev/null 2>&1
+}
+
+display_store_ok() {
+    body=$1
+    want_btc_id=$2
+    want_xmr_id=$3
+    public_store_ok "$body" || return 1
+    printf '%s' "$body" | jq -e --arg btc "$want_btc_id" --arg xmr "$want_xmr_id" '
+        (.wallets | type == "array")
+        and (.wallets | index($btc) != null)
+        and ($xmr == "" or (.wallets | index($xmr) != null))
+    ' >/dev/null 2>&1
+}
+
+cryptos_ok() {
+    body=$1
+    printf '%s' "$body" | jq -e --argjson want_xmr "$want_xmr" '
+        (if type == "array" then . elif (type == "object" and (.result | type == "array")) then .result else [] end)
+        | [.[] | ascii_downcase]
+        | (index("btc") != null) and ($want_xmr == 0 or index("xmr") != null)
     ' >/dev/null 2>&1
 }
 
@@ -140,7 +159,10 @@ if [ -f "$ENV_FILE" ] && [ -f "$MERCHANT_MARKER" ]; then
         count=$(curl -sS -o /dev/null -w '%{http_code}' --cacert "$CACERT" \
             -H "Authorization: Bearer ${ARKFILE_BITCART_API_TOKEN}" \
             "$PUBLIC_API/invoices/count" || true)
-        if [ "$code" = "200" ] && [ "$count" = "200" ] && settings_ok "$(cat /tmp/store.json)"; then
+        cryptos_code=$(curl -sS -o /tmp/cryptos.json -w '%{http_code}' --cacert "$CACERT" \
+            "$PUBLIC_API/cryptos" || true)
+        if [ "$code" = "200" ] && [ "$count" = "200" ] && [ "$cryptos_code" = "200" ] \
+            && public_store_ok "$(cat /tmp/store.json)" && cryptos_ok "$(cat /tmp/cryptos.json)"; then
             chmod 0600 "$ENV_FILE"
             echo "[OK] existing non-superuser merchant invoice token and store are valid"
             exit 0
@@ -362,6 +384,14 @@ else
     echo "[OK] updated merchant USD store lab (${store_id})"
 fi
 
+# Verify DisplayStore via merchant full_control token confirms expected wallets are attached.
+display_store=$(auth_as "$merchant_token" "$ADMIN_API/stores/${store_id}" || true)
+if ! display_store_ok "$display_store" "$btc_id" "$xmr_id"; then
+    echo "[X] merchant DisplayStore check failed (missing expected wallets or checkout settings): ${display_store}" >&2
+    exit 1
+fi
+echo "[OK] verified merchant store wallets and checkout_settings"
+
 # Step 6: Preserve existing valid merchant token if possible, otherwise mint a scoped invoice_management token.
 invoice_token=""
 if [ -f "$ENV_FILE" ] && [ -f "$MERCHANT_MARKER" ]; then
@@ -406,8 +436,15 @@ fi
 
 store_code=$(curl -sS -o /tmp/store.json -w '%{http_code}' --cacert "$CACERT" \
     -H "Authorization: Bearer ${invoice_token}" "$PUBLIC_API/stores/${store_id}" || true)
-if [ "$store_code" != "200" ] || ! settings_ok "$(cat /tmp/store.json)"; then
+if [ "$store_code" != "200" ] || ! public_store_ok "$(cat /tmp/store.json)"; then
     echo "[X] public gateway store check failed (HTTP ${store_code}): $(cat /tmp/store.json)" >&2
+    exit 1
+fi
+
+cryptos_code=$(curl -sS -o /tmp/cryptos.json -w '%{http_code}' --cacert "$CACERT" \
+    "$PUBLIC_API/cryptos" || true)
+if [ "$cryptos_code" != "200" ] || ! cryptos_ok "$(cat /tmp/cryptos.json)"; then
+    echo "[X] public gateway /api/cryptos check failed (HTTP ${cryptos_code}): $(cat /tmp/cryptos.json)" >&2
     exit 1
 fi
 

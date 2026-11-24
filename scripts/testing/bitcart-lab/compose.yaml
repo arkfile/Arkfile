@@ -119,7 +119,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--protected-mode", "yes", "--save", "", "--appendonly", "no"]
+    command: ["redis-server", "--protected-mode", "no", "--save", "", "--appendonly", "no"]
     networks:
       - bitcart-data
     healthcheck:

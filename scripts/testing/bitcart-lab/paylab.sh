@@ -384,20 +384,30 @@ EOF
         verify_fail "Unauthenticated GET /api/invoices/count returned HTTP ${http_status} (expected 401)."
     fi
 
-    # 2. Store checkout settings and connected wallets
+    # 2. Store checkout settings (PublicStore) and enabled cryptos
     lab_public_request "GET" "/api/stores/${store_id}" "$api_token"
-    if [ "$http_status" = "200" ] && jq -e --argjson want_xmr "$want_xmr" '
+    if [ "$http_status" = "200" ] && jq -e '
+        (.default_currency | ascii_upcase) == "USD" and
         (.checkout_settings.expiration == 60) and
         (.checkout_settings.transaction_speed >= 1) and
         (.checkout_settings.underpaid_percentage == 0) and
         (.checkout_settings.email_required == false) and
-        (.checkout_settings.allow_anonymous_invoice_creation == false) and
-        (((.currency_data // {}) | to_entries | map(select((.key | ascii_downcase) == "btc" and (.value > 0))) | length) > 0) and
-        ($want_xmr == 0 or (((.currency_data // {}) | to_entries | map(select((.key | ascii_downcase) == "xmr" and (.value > 0))) | length) > 0))
+        (.checkout_settings.allow_anonymous_invoice_creation == false)
     ' >/dev/null <<< "$http_body"; then
-        verify_pass "Store ${store_id} settings and connected currency_data verified."
+        verify_pass "Store ${store_id} USD and checkout_settings verified."
     else
         verify_fail "Store ${store_id} check failed (HTTP ${http_status})."
+    fi
+
+    lab_public_request "GET" "/api/cryptos"
+    if [ "$http_status" = "200" ] && jq -e --argjson want_xmr "$want_xmr" '
+        (if type == "array" then . elif (type == "object" and (.result | type == "array")) then .result else [] end)
+        | [.[] | ascii_downcase]
+        | (index("btc") != null) and ($want_xmr == 0 or index("xmr") != null)
+    ' >/dev/null <<< "$http_body"; then
+        verify_pass "GET /api/cryptos reports enabled coin daemon(s)."
+    else
+        verify_fail "GET /api/cryptos check failed (HTTP ${http_status}): ${http_body}"
     fi
 
     # 3. Anonymous invoice creation blocked
