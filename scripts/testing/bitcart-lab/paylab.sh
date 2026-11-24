@@ -263,11 +263,227 @@ Commands:
   ps                         Show lab container status
   logs [args...]             View lab logs (for example: logs -f provision arkfile worker)
   export-ca                  Copy the lab CA certificate to /tmp/arkfile-bitcart-lab/ca.crt
+  verify [--check-invoice]   Verify strict public gateway routes, security headers, store settings, and Electrum auto_connect=false
   bootstrap-admin [username] Bootstrap the lab admin via host arkfile-admin over loopback tunnel (default: paylab-admin)
   admin <args...>            Run host arkfile-admin against the lab over an ephemeral loopback tunnel
   client <args...>           Run host arkfile-client against https://arkfile.lab:18443 with isolated HOME and SSL_CERT_FILE
   compose <args...>          Run an arbitrary podman compose command under rootless enforcement
 EOF
+}
+
+run_verify() {
+    local check_invoice=false
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --check-invoice) check_invoice=true ;;
+            -h|--help)
+                cat <<'EOF'
+Usage: bash scripts/testing/bitcart-lab/paylab.sh verify [--check-invoice]
+  --check-invoice  Create one live test invoice to verify per-coin confirmation floors and /i/<id> checkout rendering
+EOF
+                return 0
+                ;;
+            *)
+                echo "[X] Unknown verify option: $1" >&2
+                return 1
+                ;;
+        esac
+        shift
+    done
+
+    if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+        echo "[X] curl and jq are required on the host to run paylab.sh verify." >&2
+        return 1
+    fi
+
+    ensure_lab_ca
+    local arkfile_cid bitcoin_cid
+    arkfile_cid="$(require_arkfile_cid)"
+    bitcoin_cid="$(run_compose ps -q bitcoin 2>/dev/null | head -n 1 || true)"
+
+    local bitcart_env store_id api_token
+    bitcart_env="$(env -u CONTAINER_HOST -u DOCKER_HOST podman exec "$arkfile_cid" cat /lab-config/bitcart.env 2>/dev/null || true)"
+    store_id="$(printf '%s\n' "$bitcart_env" | awk -F= '$1 == "ARKFILE_BITCART_STORE_ID" { print substr($0, index($0, "=") + 1); exit }')"
+    api_token="$(printf '%s\n' "$bitcart_env" | awk -F= '$1 == "ARKFILE_BITCART_API_TOKEN" { print substr($0, index($0, "=") + 1); exit }')"
+    if [ -z "$store_id" ] || [ -z "$api_token" ]; then
+        echo "[X] Could not read ARKFILE_BITCART_STORE_ID / ARKFILE_BITCART_API_TOKEN from arkfile:/lab-config/bitcart.env." >&2
+        return 1
+    fi
+
+    local want_xmr=0
+    if [ -f "$ENV_FILE" ] && grep -Eq '^[[:space:]]*BITCART_CRYPTOS=.*xmr' "$ENV_FILE"; then
+        want_xmr=1
+    fi
+
+    local failures=0
+    local http_status="" http_body="" http_headers=""
+
+    verify_pass() { echo "[OK] $*"; }
+    verify_fail() { echo "[X] $*" >&2; failures=$((failures + 1)); }
+
+    lab_public_request() {
+        local method="$1"
+        local path="$2"
+        local token="${3:-}"
+        local body="${4:-}"
+        local tmp_body tmp_hdr tmp_cfg
+        tmp_body="$(mktemp "${LAB_TMP_DIR}/verify-body.XXXXXX")"
+        tmp_hdr="$(mktemp "${LAB_TMP_DIR}/verify-hdr.XXXXXX")"
+        tmp_cfg="$(mktemp "${LAB_TMP_DIR}/verify-cfg.XXXXXX")"
+        chmod 0600 "$tmp_body" "$tmp_hdr" "$tmp_cfg"
+
+        {
+            printf 'silent\n'
+            printf 'show-error\n'
+            printf 'max-time = 20\n'
+            printf 'cacert = "%s"\n' "$LAB_CA_PATH"
+            printf 'resolve = "bitcart.lab:19080:127.0.0.1"\n'
+            printf 'request = "%s"\n' "$method"
+            printf 'url = "https://bitcart.lab:19080%s"\n' "$path"
+            printf 'dump-header = "%s"\n' "$tmp_hdr"
+            if [ -n "$token" ]; then
+                printf 'header = "Authorization: Bearer %s"\n' "$token"
+            fi
+            if [ -n "$body" ]; then
+                printf 'header = "Content-Type: application/json"\n'
+            fi
+        } > "$tmp_cfg"
+
+        if [ -n "$body" ]; then
+            http_status="$(printf '%s' "$body" | curl -K "$tmp_cfg" --data-binary @- -o "$tmp_body" -w '%{http_code}' || printf '000')"
+        else
+            http_status="$(curl -K "$tmp_cfg" -o "$tmp_body" -w '%{http_code}' || printf '000')"
+        fi
+        http_body="$(cat "$tmp_body")"
+        http_headers="$(cat "$tmp_hdr")"
+        rm -f "$tmp_body" "$tmp_hdr" "$tmp_cfg"
+    }
+
+    check_blocked() {
+        local method="$1" path="$2" token="$3" body="$4" label="$5"
+        lab_public_request "$method" "$path" "$token" "$body"
+        if [ "$http_status" = "404" ]; then
+            verify_pass "Blocked public route returns 404: ${label}"
+        else
+            verify_fail "Blocked public route ${label} returned HTTP ${http_status} (expected 404)."
+        fi
+    }
+
+    # 1. Token auth checks on /api/invoices/count
+    lab_public_request "GET" "/api/invoices/count" "$api_token"
+    if [ "$http_status" = "200" ]; then
+        verify_pass "GET /api/invoices/count with merchant token returned 200."
+    else
+        verify_fail "GET /api/invoices/count with merchant token returned HTTP ${http_status} (expected 200)."
+    fi
+
+    lab_public_request "GET" "/api/invoices/count"
+    if [ "$http_status" = "401" ]; then
+        verify_pass "Unauthenticated GET /api/invoices/count returned 401."
+    else
+        verify_fail "Unauthenticated GET /api/invoices/count returned HTTP ${http_status} (expected 401)."
+    fi
+
+    # 2. Store checkout settings and connected wallets
+    lab_public_request "GET" "/api/stores/${store_id}" "$api_token"
+    if [ "$http_status" = "200" ] && jq -e --argjson want_xmr "$want_xmr" '
+        (.checkout_settings.expiration == 60) and
+        (.checkout_settings.transaction_speed >= 1) and
+        (.checkout_settings.underpaid_percentage == 0) and
+        (.checkout_settings.email_required == false) and
+        (.checkout_settings.allow_anonymous_invoice_creation == false) and
+        (((.currency_data // {}) | to_entries | map(select((.key | ascii_downcase) == "btc" and (.value > 0))) | length) > 0) and
+        ($want_xmr == 0 or (((.currency_data // {}) | to_entries | map(select((.key | ascii_downcase) == "xmr" and (.value > 0))) | length) > 0))
+    ' >/dev/null <<< "$http_body"; then
+        verify_pass "Store ${store_id} settings and connected currency_data verified."
+    else
+        verify_fail "Store ${store_id} check failed (HTTP ${http_status})."
+    fi
+
+    # 3. Anonymous invoice creation blocked
+    local anon_payload
+    anon_payload="$(jq -n --arg sid "$store_id" '{price: 1, currency: "USD", store_id: $sid}')"
+    lab_public_request "POST" "/api/invoices" "" "$anon_payload"
+    if [ "$http_status" = "403" ]; then
+        verify_pass "Unauthenticated POST /api/invoices returned 403."
+    else
+        verify_fail "Unauthenticated POST /api/invoices returned HTTP ${http_status} (expected 403)."
+    fi
+
+    # 4. Strict public gateway route blocks on :19080
+    local batch_payload
+    batch_payload='{"ids":["00000000000000000000000000"],"command":"mark_complete"}'
+    check_blocked "GET" "/" "" "" "GET /"
+    check_blocked "POST" "/api/token" "" '{"email":"x@y.z","password":"z"}' "POST /api/token"
+    check_blocked "POST" "/api/invoices/batch" "$api_token" "$batch_payload" "POST /api/invoices/batch (with valid merchant token)"
+    check_blocked "GET" "/api/invoices/export" "$api_token" "" "GET /api/invoices/export"
+    check_blocked "PATCH" "/api/invoices/00000000000000000000000000/customer" "" '{"buyer_email":"a@b.c"}' "PATCH /api/invoices/{id}/customer"
+    check_blocked "GET" "/api/wallets" "$api_token" "" "GET /api/wallets"
+
+    # 5. Security headers on :19080
+    lab_public_request "GET" "/api/manage/policies"
+    if [ "$http_status" = "200" ]; then
+        verify_pass "GET /api/manage/policies returned 200."
+    else
+        verify_fail "GET /api/manage/policies returned HTTP ${http_status} (expected 200)."
+    fi
+    for hdr in "strict-transport-security:" "referrer-policy:[[:space:]]*no-referrer" "x-content-type-options:[[:space:]]*nosniff" "x-frame-options:[[:space:]]*DENY"; do
+        if grep -iq "^${hdr}" <<< "$http_headers"; then
+            verify_pass "Public gateway header present: ${hdr}"
+        else
+            verify_fail "Public gateway header missing: ${hdr}"
+        fi
+    done
+
+    # 6. Electrum auto_connect=false check inside bitcoin container
+    if [ -n "$bitcoin_cid" ]; then
+        local btc_cfg
+        btc_cfg="$(env -u CONTAINER_HOST -u DOCKER_HOST podman exec "$bitcoin_cid" cat /data/config 2>/dev/null || true)"
+        if jq -e '.auto_connect == false' >/dev/null 2>&1 <<< "$btc_cfg"; then
+            verify_pass "Electrum /data/config has auto_connect=false."
+        else
+            verify_fail "Electrum /data/config missing auto_connect=false."
+        fi
+    else
+        verify_fail "bitcoin container is not running."
+    fi
+
+    # 7. Optional live invoice verification (--check-invoice)
+    if [ "$check_invoice" = "true" ]; then
+        local inv_payload inv_id
+        inv_payload="$(jq -n --arg sid "$store_id" --arg oid "paylab-verify-$(date +%s)" '{price: 1, currency: "USD", store_id: $sid, order_id: $oid}')"
+        lab_public_request "POST" "/api/invoices" "$api_token" "$inv_payload"
+        inv_id="$(jq -r '.id // empty' <<< "$http_body" 2>/dev/null || true)"
+        if [ "$http_status" = "200" ] && [ -n "$inv_id" ]; then
+            verify_pass "Live invoice created via :19080 (${inv_id})."
+            if jq -e '[.payments[] | select((.currency // "" | ascii_downcase) == "btc") | (.required_confirmations // 0)] | length > 0 and all(. >= 1)' >/dev/null <<< "$http_body"; then
+                verify_pass "BTC payment method requires >= 1 confirmation."
+            else
+                verify_fail "BTC payment method missing or required_confirmations < 1."
+            fi
+            if [ "$want_xmr" -eq 1 ]; then
+                if jq -e '[.payments[] | select((.currency // "" | ascii_downcase) == "xmr") | (.required_confirmations // 0)] | length > 0 and all(. >= 5)' >/dev/null <<< "$http_body"; then
+                    verify_pass "XMR payment method requires >= 5 confirmations."
+                else
+                    verify_fail "XMR payment method missing or required_confirmations < 5."
+                fi
+            fi
+            lab_public_request "GET" "/i/${inv_id}"
+            if [ "$http_status" = "200" ]; then
+                verify_pass "Checkout page GET /i/${inv_id} returned 200."
+            else
+                verify_fail "Checkout page GET /i/${inv_id} returned HTTP ${http_status} (expected 200)."
+            fi
+        else
+            verify_fail "Live invoice creation failed (HTTP ${http_status})."
+        fi
+    fi
+
+    if [ "$failures" -gt 0 ]; then
+        echo "[X] Lab verification failed with ${failures} error(s)." >&2
+        return 1
+    fi
+    echo "[OK] All Bitcart lab parity and security checks passed."
 }
 
 cmd="${1:-help}"
@@ -298,6 +514,9 @@ case "$cmd" in
     export-ca)
         ensure_lab_ca force
         echo "[OK] Lab CA written to ${LAB_CA_PATH}"
+        ;;
+    verify)
+        run_verify "$@"
         ;;
     bootstrap-admin)
         admin_user="${1:-paylab-admin}"

@@ -1,12 +1,14 @@
 # Isolated Arkfile and Bitcart lab. Project name arkfile-paylab.
-# Service names database, redis, bitcoin, monero, backend, and worker match
-# the hostnames Bitcart connects to. Postgres uses trust authentication on
-# this private network because that is what the pinned Bitcart component does.
+# Mirrors arkfile-bitcart production hardening patterns: three-network Bitcart
+# segmentation (edge, internal data, coins), passworded Postgres and coin RPC
+# daemons, Electrum auto_connect=false seeding, Nginx checkout access_log off,
+# strict public method/path gateway on :19080, and separate admin API/UI on :19081.
 
 name: arkfile-paylab
 
 x-bitcart-common: &bitcart-common
   BITCART_ENV: production
+  LOG_LEVEL: INFO
   LOG_FILE: bitcart.log
   BITCART_DATADIR: /datadir
   BITCART_BACKUPS_DIR: /backups
@@ -33,6 +35,8 @@ x-bitcart-common: &bitcart-common
   DB_HOST: database
   DB_PORT: "5432"
   REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
   BTC_HOST: bitcoin
   XMR_HOST: monero
 
@@ -46,6 +50,8 @@ services:
       - lab-ca-public:/ca-public
       - lab-tls-arkfile:/tls-arkfile
       - lab-tls-bitcart:/tls-bitcart
+    networks:
+      - arkfile-net
 
   secrets-init:
     image: alpine:3.21
@@ -54,6 +60,9 @@ services:
     volumes:
       - ./secrets-init.sh:/secrets-init.sh:ro
       - lab-config:/lab-config
+      - bitcart-secrets:/bitcart-secrets
+    networks:
+      - arkfile-net
 
   rqlite:
     image: rqlite/rqlite:8.36.18
@@ -64,6 +73,8 @@ services:
     volumes:
       - arkfile-rqlite:/rqlite/file
       - lab-config:/auth:ro
+    networks:
+      - arkfile-net
     depends_on:
       secrets-init:
         condition: service_completed_successfully
@@ -79,19 +90,27 @@ services:
     volumes:
       - arkfile-seaweedfs:/data
       - lab-config:/config:ro
+    networks:
+      - arkfile-net
     depends_on:
       secrets-init:
         condition: service_completed_successfully
 
   database:
     image: pgautoupgrade/pgautoupgrade:17-alpine
-    command: ["-c", "random_page_cost=1.0"]
+    command: ["-c", "shared_buffers=128MB", "-c", "random_page_cost=1.1", "-c", "max_connections=50"]
     environment:
       POSTGRES_USER: postgres
       POSTGRES_DB: bitcart
-      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_PASSWORD_FILE: /bitcart-secrets/pg-password
     volumes:
       - bitcart-db-data:/var/lib/postgresql/data
+      - bitcart-secrets:/bitcart-secrets:ro
+    networks:
+      - bitcart-data
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d bitcart"]
       interval: 5s
@@ -100,6 +119,9 @@ services:
 
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "--protected-mode", "yes", "--save", "", "--appendonly", "no"]
+    networks:
+      - bitcart-data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -108,37 +130,62 @@ services:
 
   bitcoin:
     image: bitcart/bitcart-btc:stable
+    command: ["/bin/sh", "-c", "/bin/sh /seed-btc-config.sh && set -a && . /bitcart-secrets/btc-rpc.env && set +a && exec just daemon btc"]
     environment:
+      IN_DOCKER: "true"
       BTC_NETWORK: ${BTC_NETWORK:-mainnet}
       BTC_LIGHTNING: "false"
       BTC_SERVER: ${BTC_SERVER:-}
+      BTC_ONESERVER: ${BTC_ONESERVER:-false}
     volumes:
       - bitcart-btc-data:/data
+      - ./seed-btc-config.sh:/seed-btc-config.sh:ro
+      - bitcart-secrets:/bitcart-secrets:ro
+    networks:
+      - bitcart-coins
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
 
   monero:
     profiles: ["xmr"]
     image: bitcart/bitcart-xmr:stable
+    command: ["/bin/sh", "-c", "set -a && . /bitcart-secrets/xmr-rpc.env && set +a && exec just daemon xmr"]
     environment:
+      IN_DOCKER: "true"
       XMR_NETWORK: ${XMR_NETWORK:-mainnet}
-      XMR_SERVER: ${XMR_SERVER:-https://seed-server.bitcart.ai}
+      XMR_SERVER: ${XMR_SERVER:-https://xmr-node.cakewallet.com:18081}
+      XMR_SEED_SERVER: ""
     volumes:
       - bitcart-xmr-data:/data
+      - bitcart-secrets:/bitcart-secrets:ro
+    networks:
+      - bitcart-coins
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
 
   backend:
     image: bitcart/bitcart:stable
-    command: ["just", "prod-api-up"]
+    command: ["/bin/sh", "-c", "set -a && . /bitcart-secrets/backend-secrets.env && set +a && exec just prod-api-up"]
     environment:
       <<: *bitcart-common
-      FORWARDED_ALLOW_IPS: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
       SSL_CERT_FILE: /ca/ca-bundle.crt
       REQUESTS_CA_BUNDLE: /ca/ca-bundle.crt
     volumes:
       - bitcart-datadir:/datadir
       - bitcart-backups:/backups
       - bitcart-plugins:/plugins
+      - bitcart-secrets:/bitcart-secrets:ro
       - lab-ca-public:/ca:ro
+    networks:
+      - bitcart-edge
+      - bitcart-data
+      - bitcart-coins
     depends_on:
       ca:
+        condition: service_completed_successfully
+      secrets-init:
         condition: service_completed_successfully
       database:
         condition: service_healthy
@@ -158,7 +205,7 @@ services:
 
   worker:
     image: bitcart/bitcart:stable
-    command: ["just", "worker"]
+    command: ["/bin/sh", "-c", "set -a && . /bitcart-secrets/backend-secrets.env && set +a && exec just worker"]
     environment:
       <<: *bitcart-common
       SSL_CERT_FILE: /ca/ca-bundle.crt
@@ -167,9 +214,16 @@ services:
       - bitcart-datadir:/datadir
       - bitcart-backups:/backups
       - bitcart-plugins:/plugins
+      - bitcart-secrets:/bitcart-secrets:ro
       - lab-ca-public:/ca:ro
+    networks:
+      - arkfile-net
+      - bitcart-data
+      - bitcart-coins
     depends_on:
       ca:
+        condition: service_completed_successfully
+      secrets-init:
         condition: service_completed_successfully
       database:
         condition: service_healthy
@@ -187,8 +241,10 @@ services:
     environment:
       ONE_DOMAIN_MODE: "true"
       BITCART_ADMIN_ROOTPATH: /
-      BITCART_ADMIN_API_URL: https://bitcart.lab:19080/api
+      BITCART_ADMIN_API_URL: https://bitcart.lab:19081/api
       BITCART_ADMIN_SERVER_API_URL: http://backend:8000
+    networks:
+      - bitcart-edge
     depends_on:
       backend:
         condition: service_healthy
@@ -199,6 +255,10 @@ services:
       ONE_DOMAIN_MODE: "true"
       BITCART_API_URL: https://bitcart.lab:19080/api
       BITCART_CHECKOUT_URL: https://bitcart.lab:19080
+    volumes:
+      - ./checkout-privacy.conf:/etc/nginx/conf.d/00-privacy.conf:ro
+    networks:
+      - bitcart-edge
     depends_on:
       backend:
         condition: service_healthy
@@ -207,11 +267,15 @@ services:
     image: caddy:2.11.4-alpine
     ports:
       - "127.0.0.1:19080:19080"
+      - "127.0.0.1:19081:19081"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - lab-tls-bitcart:/certs:ro
     networks:
-      default:
+      arkfile-net:
+        aliases:
+          - bitcart.lab
+      bitcart-edge:
         aliases:
           - bitcart.lab
     depends_on:
@@ -229,6 +293,8 @@ services:
     restart: "no"
     command: ["/bin/sh", "/provision/provision.sh"]
     environment:
+      BITCART_ADMIN_API: https://bitcart.lab:19081/api
+      BITCART_PUBLIC_API: https://bitcart.lab:19080/api
       BITCART_ADMIN_PASSWORD: ${BITCART_ADMIN_PASSWORD:-}
       BTC_XPUB: ${BTC_XPUB:-}
       BITCART_CRYPTOS: ${BITCART_CRYPTOS:-btc}
@@ -237,11 +303,16 @@ services:
       XMR_ADDRESS: ${XMR_ADDRESS:-}
       XMR_PRIVATE_VIEW_KEY: ${XMR_PRIVATE_VIEW_KEY:-}
       XMR_RESTORE_HEIGHT: ${XMR_RESTORE_HEIGHT:-}
+      BITCART_LOG_RETENTION_DAYS: ${BITCART_LOG_RETENTION_DAYS:-21}
     volumes:
       - ./provision/provision.sh:/provision/provision.sh:ro
       - lab-config:/lab-config
       - lab-ca-public:/ca:ro
+    networks:
+      - bitcart-edge
     depends_on:
+      secrets-init:
+        condition: service_completed_successfully
       bitcart-proxy:
         condition: service_started
       worker:
@@ -300,7 +371,7 @@ services:
       - arkfile-keys:/opt/arkfile/etc/keys
       - arkfile-var:/opt/arkfile/var
     networks:
-      default:
+      arkfile-net:
         aliases:
           - arkfile.lab
     depends_on:
@@ -318,14 +389,22 @@ services:
       start_period: 30s
 
 networks:
-  default:
-    name: arkfile-paylab
+  arkfile-net:
+    name: arkfile-paylab-arkfile
+  bitcart-edge:
+    name: arkfile-paylab-edge
+  bitcart-data:
+    name: arkfile-paylab-data
+    internal: true
+  bitcart-coins:
+    name: arkfile-paylab-coins
 
 volumes:
   lab-ca-public:
   lab-tls-arkfile:
   lab-tls-bitcart:
   lab-config:
+  bitcart-secrets:
   arkfile-rqlite:
   arkfile-seaweedfs:
   arkfile-keys:

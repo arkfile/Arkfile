@@ -1,38 +1,153 @@
+# Bitcart payment lab reverse proxy mirroring arkfile-bitcart's production split:
+#   :19080 -- Public checkout and strictly scoped public_api_paths (used by Arkfile and checkout)
+#   :19081 -- Loopback-only full API and Bitcart Admin UI (used by provision and operator inspection)
+
 {
 	auto_https off
 	admin off
 }
 
+(strip_ip_headers) {
+	header_up -X-Forwarded-For
+	header_up -X-Real-IP
+	header_up -Forwarded
+}
+
+(proxy_public_api) {
+	uri strip_prefix /api
+	reverse_proxy backend:8000 {
+		import strip_ip_headers
+	}
+}
+
 :19080 {
-	tls /certs/bitcart.crt /certs/bitcart.key
+	tls /certs/bitcart.crt /certs/bitcart.key {
+		protocols tls1.3
+	}
 
-	redir /api /api/ 308
-	# With the Ready Store omitted, bitcart-admin serves at /; redirect /admin there.
-	redir /admin / 302
-	redir /admin/ / 302
+	log {
+		output discard
+	}
 
-	# Bitcart's API process serves / without the public /api prefix.
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		Referrer-Policy "no-referrer"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	# Permitted checkout static routes (GET and HEAD only).
+	@checkout_static {
+		method GET HEAD
+		path /i/* /checkout/* /embed/* /modal/* /refunds/*
+	}
+
+	# Permitted public_api_paths (strict positive method-and-path matching).
+	@api_invoices_create {
+		method POST
+		path /api/invoices
+	}
+
+	@api_invoices_count {
+		method GET
+		path /api/invoices/count
+	}
+
+	@api_invoices_get_one {
+		method GET
+		path_regexp ^/api/invoices/[A-Za-z0-9_-]+$
+		not path /api/invoices/batch /api/invoices/export /api/invoices/order_id
+	}
+
+	@api_stores_get {
+		method GET
+		path_regexp ^/api/stores/[A-Za-z0-9_-]+(/rates)?$
+		not path /api/stores/batch /api/stores/export /api/stores/count
+	}
+
+	@api_ws_invoice {
+		method GET
+		path_regexp ^/api/ws/invoices/[A-Za-z0-9_-]+$
+	}
+
+	@api_manage_policies {
+		method GET
+		path /api/manage/policies
+	}
+
+	@api_cryptos_and_tor {
+		method GET
+		path /api/cryptos /api/cryptos/* /api/tor/services
+	}
+
+	handle @checkout_static {
+		reverse_proxy checkout:80 {
+			import strip_ip_headers
+		}
+	}
+
+	handle @api_invoices_create {
+		import proxy_public_api
+	}
+
+	handle @api_invoices_count {
+		import proxy_public_api
+	}
+
+	handle @api_invoices_get_one {
+		import proxy_public_api
+	}
+
+	handle @api_stores_get {
+		import proxy_public_api
+	}
+
+	handle @api_ws_invoice {
+		import proxy_public_api
+	}
+
+	handle @api_manage_policies {
+		import proxy_public_api
+	}
+
+	handle @api_cryptos_and_tor {
+		import proxy_public_api
+	}
+
+	# Return 404 for all other paths and HTTP methods (/, /admin*, /api/token*,
+	# /api/users*, /api/wallets*, /api/invoices/batch, /api/invoices/export,
+	# PATCH /api/invoices/*/customer, /api/backups*, /api/plugins*, etc.).
+	handle {
+		respond 404
+	}
+}
+
+:19081 {
+	tls /certs/bitcart.crt /certs/bitcart.key {
+		protocols tls1.3
+	}
+
+	log {
+		output discard
+	}
+
+	header {
+		Referrer-Policy "no-referrer"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		-Server
+	}
+
 	handle_path /api/* {
-		reverse_proxy backend:8000
-	}
-
-	handle /i/* {
-		reverse_proxy checkout:80
-	}
-	handle /refunds/* {
-		reverse_proxy checkout:80
-	}
-	handle /checkout/* {
-		reverse_proxy checkout:80
-	}
-	handle /embed/* {
-		reverse_proxy checkout:80
-	}
-	handle /modal/bitcart.js {
-		reverse_proxy checkout:80
+		reverse_proxy backend:8000 {
+			import strip_ip_headers
+		}
 	}
 
 	handle {
-		reverse_proxy admin:4000
+		reverse_proxy admin:4000 {
+			import strip_ip_headers
+		}
 	}
 }
