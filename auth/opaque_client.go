@@ -34,6 +34,7 @@ func ClientCreateRegistrationRequest(password []byte) ([]byte, []byte, error) {
 	// Convert Go slices to C pointers
 	cPassword := C.CBytes(password)
 	defer C.free(cPassword)
+	defer zeroCBytes(cPassword, len(password))
 
 	// Call C function
 	ret := C.wrap_opaque_create_registration_request(
@@ -44,6 +45,7 @@ func ClientCreateRegistrationRequest(password []byte) ([]byte, []byte, error) {
 	)
 
 	if ret != 0 {
+		zeroBytes(usrCtx)
 		return nil, nil, fmt.Errorf("registration request creation failed: error code %d", ret)
 	}
 
@@ -74,7 +76,7 @@ func ClientFinalizeRegistration(usrCtx []byte, serverResponse []byte, username s
 
 	// Allocate buffers
 	rrec := make([]byte, OPAQUE_REGISTRATION_RECORD_LEN)
-	exportKey := make([]byte, 32) // crypto_hash_sha256_BYTES
+	exportKey := make([]byte, OPAQUE_EXPORT_KEY_LEN)
 
 	// Prepare IDs
 	idU := []byte(username)
@@ -85,9 +87,10 @@ func ClientFinalizeRegistration(usrCtx []byte, serverResponse []byte, username s
 	idS := []byte(serverID)
 	idSLen := uint16(len(idS))
 
-	// Convert Go slices to C pointers
+	// Convert Go slices to C pointers (usrCtx contains plaintext password bytes)
 	cUsrCtx := C.CBytes(usrCtx)
 	defer C.free(cUsrCtx)
+	defer zeroCBytes(cUsrCtx, len(usrCtx))
 
 	cServerResponse := C.CBytes(serverResponse)
 	defer C.free(cServerResponse)
@@ -111,6 +114,8 @@ func ClientFinalizeRegistration(usrCtx []byte, serverResponse []byte, username s
 	)
 
 	if ret != 0 {
+		zeroBytes(rrec)
+		zeroBytes(exportKey)
 		return nil, nil, fmt.Errorf("registration finalization failed: error code %d", ret)
 	}
 
@@ -135,6 +140,7 @@ func ClientCreateCredentialRequest(password []byte) ([]byte, []byte, error) {
 	// Convert Go slices to C pointers
 	cPassword := C.CBytes(password)
 	defer C.free(cPassword)
+	defer zeroCBytes(cPassword, len(password))
 
 	// Call C function
 	ret := C.wrap_opaque_create_credential_request(
@@ -145,6 +151,7 @@ func ClientCreateCredentialRequest(password []byte) ([]byte, []byte, error) {
 	)
 
 	if ret != 0 {
+		zeroBytes(sec)
 		return nil, nil, fmt.Errorf("credential request creation failed: error code %d", ret)
 	}
 
@@ -175,8 +182,8 @@ func ClientRecoverCredentials(sec []byte, serverResponse []byte, username string
 
 	// Allocate buffers
 	sk := make([]byte, OPAQUE_SHARED_SECRETBYTES)
-	authU := make([]byte, 64)     // crypto_auth_hmacsha512_BYTES
-	exportKey := make([]byte, 32) // crypto_hash_sha256_BYTES
+	authU := make([]byte, OPAQUE_AUTH_U_LEN)
+	exportKey := make([]byte, OPAQUE_EXPORT_KEY_LEN)
 
 	// Prepare IDs
 	idU := []byte(username)
@@ -191,9 +198,10 @@ func ClientRecoverCredentials(sec []byte, serverResponse []byte, username string
 	context := []byte("arkfile_auth")
 	contextLen := uint16(len(context))
 
-	// Convert Go slices to C pointers
+	// Convert Go slices to C pointers (sec contains plaintext password bytes)
 	cSec := C.CBytes(sec)
 	defer C.free(cSec)
+	defer zeroCBytes(cSec, len(sec))
 
 	cServerResponse := C.CBytes(serverResponse)
 	defer C.free(cServerResponse)
@@ -223,6 +231,9 @@ func ClientRecoverCredentials(sec []byte, serverResponse []byte, username string
 	)
 
 	if ret != 0 {
+		zeroBytes(sk)
+		zeroBytes(authU)
+		zeroBytes(exportKey)
 		return nil, nil, nil, fmt.Errorf("incorrect password or account not found")
 	}
 

@@ -9,6 +9,9 @@
 
 // Arkfile OPAQUE wrapper functions for libopaque
 
+// Library initialization
+int wrap_sodium_init(void);
+
 // Registration functions
 int wrap_opaque_register_user(const uint8_t* password, uint16_t pwd_len,
                                const uint8_t* server_private_key,

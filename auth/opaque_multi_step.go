@@ -17,17 +17,25 @@ import (
 	"github.com/google/uuid"
 )
 
+func init() {
+	if C.wrap_sodium_init() < 0 {
+		panic("FATAL: libsodium initialization failed")
+	}
+}
+
+// sodiumInitStatus exposes wrap_sodium_init for unit tests.
+func sodiumInitStatus() int {
+	return int(C.wrap_sodium_init())
+}
+
 // zeroCBytes overwrites a C-heap buffer of the given length with zeros before
-// it is freed, so sensitive material (server secrets, user records) does not
-// linger in process memory after use.
+// it is freed, so sensitive material (passwords, server secrets, user records)
+// does not linger in process memory after use.
 func zeroCBytes(p unsafe.Pointer, n int) {
 	if p == nil || n <= 0 {
 		return
 	}
-	b := (*[1 << 30]byte)(p)[:n:n]
-	for i := range b {
-		b[i] = 0
-	}
+	C.sodium_memzero(p, C.size_t(n))
 }
 
 // zeroBytes overwrites a Go byte slice with zeros. Used to scrub sensitive
@@ -65,6 +73,7 @@ func CreateRegistrationResponse(requestData []byte) ([]byte, []byte, error) {
 
 	cServerPrivateKey := C.CBytes(serverPrivateKey)
 	defer C.free(cServerPrivateKey)
+	defer zeroCBytes(cServerPrivateKey, len(serverPrivateKey))
 
 	// Call C function
 	ret := C.wrap_opaque_create_registration_response(
@@ -75,6 +84,7 @@ func CreateRegistrationResponse(requestData []byte) ([]byte, []byte, error) {
 	)
 
 	if ret != 0 {
+		zeroBytes(responseSecret)
 		return nil, nil, fmt.Errorf("registration response creation failed: error code %d", ret)
 	}
 
@@ -150,7 +160,7 @@ func CreateCredentialResponse(credentialRequest []byte, userRecord []byte, usern
 	resp := make([]byte, OPAQUE_SERVER_SESSION_LEN)
 	sk := make([]byte, OPAQUE_SHARED_SECRETBYTES)
 	defer zeroBytes(sk)
-	authU := make([]byte, 64) // crypto_auth_hmacsha512_BYTES
+	authU := make([]byte, OPAQUE_AUTH_U_LEN)
 
 	// Prepare context
 	context := []byte("arkfile_auth")
@@ -172,6 +182,7 @@ func CreateCredentialResponse(credentialRequest []byte, userRecord []byte, usern
 
 	cUserRecord := C.CBytes(userRecord)
 	defer C.free(cUserRecord)
+	defer zeroCBytes(cUserRecord, len(userRecord))
 
 	cContext := C.CBytes(context)
 	defer C.free(cContext)
@@ -198,6 +209,7 @@ func CreateCredentialResponse(credentialRequest []byte, userRecord []byte, usern
 	)
 
 	if ret != 0 {
+		zeroBytes(authU)
 		return nil, nil, fmt.Errorf("credential response creation failed: error code %d", ret)
 	}
 
@@ -209,16 +221,18 @@ func CreateCredentialResponse(credentialRequest []byte, userRecord []byte, usern
 // UserAuth validates the client's authentication token
 // Takes server's authU and client's authU, returns true if they match
 func UserAuth(authUServer []byte, authUClient []byte) error {
-	if len(authUServer) != 64 || len(authUClient) != 64 {
-		return fmt.Errorf("invalid authU length: expected 64 bytes")
+	if len(authUServer) != OPAQUE_AUTH_U_LEN || len(authUClient) != OPAQUE_AUTH_U_LEN {
+		return fmt.Errorf("invalid authU length: expected %d bytes", OPAQUE_AUTH_U_LEN)
 	}
 
 	// Convert Go slices to C pointers
 	cAuthUServer := C.CBytes(authUServer)
 	defer C.free(cAuthUServer)
+	defer zeroCBytes(cAuthUServer, len(authUServer))
 
 	cAuthUClient := C.CBytes(authUClient)
 	defer C.free(cAuthUClient)
+	defer zeroCBytes(cAuthUClient, len(authUClient))
 
 	// Call C function
 	ret := C.wrap_opaque_user_auth(

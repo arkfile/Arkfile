@@ -5,6 +5,11 @@
 
 // Arkfile OPAQUE wrapper functions for libopaque - Multi-step protocol only
 
+// Initialize libsodium (idempotent: 0 on first init, 1 if already initialized, -1 on failure)
+int wrap_sodium_init(void) {
+    return sodium_init();
+}
+
 // Helper for error logging
 static void log_opaque_error(const char* func_name, int ret) {
     if (ret != 0) {

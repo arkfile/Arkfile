@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/arkfile/Arkfile/config"
 )
@@ -66,5 +67,55 @@ func TestOpaqueServerID(t *testing.T) {
 
 			assert.Equal(t, tc.want, OpaqueServerID())
 		})
+	}
+}
+
+func TestSodiumInitializedAtPackageInit(t *testing.T) {
+	// sodium_init returns 1 when already initialized by auth.init(), never -1.
+	assert.Equal(t, 1, sodiumInitStatus())
+}
+
+func TestOpaqueClientRoundTripAndExportKeyLength(t *testing.T) {
+	ResetOpaqueServerKeysForTest()
+	require.NoError(t, SetupServerKeys(nil))
+	t.Cleanup(ResetOpaqueServerKeysForTest)
+
+	const username = "opaque.client.user"
+	serverID := OpaqueServerID()
+	password := []byte("CorrectHorseBatteryStaple-2026!")
+
+	usrCtx, regReq, err := ClientCreateRegistrationRequest(password)
+	require.NoError(t, err)
+	regResp, regSec, err := CreateRegistrationResponse(regReq)
+	require.NoError(t, err)
+	regRec, regExportKey, err := ClientFinalizeRegistration(usrCtx, regResp, username, serverID)
+	require.NoError(t, err)
+	require.Len(t, regExportKey, OPAQUE_EXPORT_KEY_LEN)
+
+	userRecord, err := StoreUserRecord(regSec, regRec)
+	require.NoError(t, err)
+
+	// Successful login recovers the full 64-byte export key matching registration.
+	clientSec, credReq, err := ClientCreateCredentialRequest(password)
+	require.NoError(t, err)
+	credResp, serverAuth, err := CreateCredentialResponse(credReq, userRecord, username)
+	require.NoError(t, err)
+	sk, clientAuth, loginExportKey, err := ClientRecoverCredentials(clientSec, credResp, username, serverID)
+	require.NoError(t, err)
+	require.Len(t, sk, OPAQUE_SHARED_SECRETBYTES)
+	require.Len(t, clientAuth, OPAQUE_AUTH_U_LEN)
+	require.Len(t, loginExportKey, OPAQUE_EXPORT_KEY_LEN)
+	assert.Equal(t, regExportKey, loginExportKey)
+	require.NoError(t, UserAuth(serverAuth, clientAuth))
+
+	// Wrong password fails cleanly without corrupting heap across repeated attempts.
+	wrongPassword := []byte("WrongPasswordForHeapCheck-2026!")
+	for i := 0; i < 32; i++ {
+		badSec, badReq, err := ClientCreateCredentialRequest(wrongPassword)
+		require.NoError(t, err)
+		badResp, _, err := CreateCredentialResponse(badReq, userRecord, username)
+		require.NoError(t, err)
+		_, _, _, err = ClientRecoverCredentials(badSec, badResp, username, serverID)
+		require.Error(t, err)
 	}
 }
